@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Advance_Clearance
 
 
@@ -91,3 +92,66 @@ For open source projects, say how it is licensed.
 
 ## Project status
 If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+=======
+# Advance → Clearance System (MVP)
+
+Includes:
+- PostgreSQL schema
+- Node.js (Express + TS) API
+- React (Vite) UI
+- Approval Inbox per role (Countersign, Manager, Authorising Officer, Chief Officer, Finance)
+- Office365 email notifications to requester/claimant on key workflow events
+
+## 1) Start database
+
+```bash
+docker compose up -d
+```
+
+## 2) Backend
+
+```bash
+cd backend
+cp .env.example .env
+# edit .env with your Office365 SMTP sender mailbox
+npm install
+npm run seed
+npm run dev
+```
+
+API runs on `http://localhost:4000`
+
+## 3) Frontend
+
+```bash
+cd ../frontend
+npm install
+npm run dev
+```
+
+UI runs on `http://localhost:5173`
+
+## 4) Test Office365 email
+
+1. Login in the UI to get a token.
+2. Call:
+
+```bash
+curl -X POST http://localhost:4000/test-mail/send \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"to":"youraddress@yourdomain.com"}'
+```
+
+## Demo users
+- employee@example.com
+- countersign@example.com
+- manager@example.com
+- auth@example.com
+- chief@example.com
+- finance@example.com
+
+Password for all: `pass123`
+
+> Replace demo emails in the database with real addresses to receive notifications.
+>>>>>>> 2388154 (Add admin group assignment support and group route aliases)
