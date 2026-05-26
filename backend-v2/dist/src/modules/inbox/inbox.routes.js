@@ -1,33 +1,32 @@
 import { Router } from "express";
 import { requireAuth } from "../../lib/auth.js";
 import { query } from "../../lib/db.js";
+import { getActiveManagerDelegation } from "../../lib/delegations.js";
 function allowedInboxForRole(role) {
     switch (role) {
-        case "COUNTERSIGN":
-            return { doc_type: "ADVANCE", status: "SUBMITTED", advance_type: "TRAVEL_SUBSISTENCE" };
         case "MANAGER":
             return [
-                { doc_type: "ADVANCE", status: "COUNTERSIGNED", advance_type: "TRAVEL_SUBSISTENCE" },
+                { doc_type: "ADVANCE", status: "SUBMITTED" },
                 { doc_type: "CLAIM", status: "SUBMITTED" }
             ];
         case "HR_MANAGER":
-            return { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW", advance_type: "TRAVEL_SUBSISTENCE" };
+            return { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" };
         case "AUTH_OFFICER":
             return [
-                { doc_type: "ADVANCE", status: "SUBMITTED", advance_type: "LOAN" },
-                { doc_type: "ADVANCE", status: "SUBMITTED", advance_type: "SALARY" },
-                { doc_type: "ADVANCE", status: "APPROVED", advance_type: "TRAVEL_SUBSISTENCE" },
-                { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
+                { doc_type: "ADVANCE", status: "HR_REVIEW" },
                 { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" }
             ];
         case "CHIEF_OFFICER":
-            return { doc_type: "CLAIM", status: "MANAGER_APPROVED" };
+            return [
+                { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
+                { doc_type: "ADVANCE", status: "CHIEF_OFFICER_REVIEW" }
+            ];
         case "FINANCE":
             return [
-                { doc_type: "ADVANCE", status: "AUTH_OFFICER_APPROVED", advance_type: "SALARY" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
                 { doc_type: "ADVANCE", status: "APPROVED" },
                 { doc_type: "ACCOMMODATION", status: "SUBMITTED" },
-                { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
+                { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
             ];
         case "ADMIN":
@@ -84,7 +83,9 @@ inboxRouter.get("/my-actions", async (req, res, next) => {
 inboxRouter.get("/", async (req, res, next) => {
     try {
         const role = req.user.role;
-        const rule = allowedInboxForRole(role);
+        const delegation = await getActiveManagerDelegation(req.user.userId);
+        const effectiveRole = delegation && role !== "MANAGER" ? "MANAGER" : role;
+        const rule = allowedInboxForRole(effectiveRole);
         if (!rule)
             return res.json({ items: [] });
         const items = [];
@@ -162,14 +163,16 @@ inboxRouter.get("/", async (req, res, next) => {
         };
         if (rule === "ALL") {
             await loadAdvanceByStatus("SUBMITTED");
-            await loadAdvanceByStatus("COUNTERSIGNED");
+            await loadAdvanceByStatus("CHIEF_OFFICER_REVIEW");
             await loadAdvanceByStatus("HR_MANAGER_REVIEW");
-            await loadAdvanceByStatus("AUTH_OFFICER_APPROVED");
+            await loadAdvanceByStatus("HR_REVIEW");
+            await loadAdvanceByStatus("HR_OFFICER");
             await loadAdvanceByStatus("APPROVED");
             await loadAccommodationByStatus("SUBMITTED");
             await loadClaimByStatus("SUBMITTED");
             await loadClaimByStatus("MANAGER_APPROVED");
             await loadClaimByStatus("CHIEF_OFFICER_APPROVED");
+            await loadClaimByStatus("HR_OFFICER");
             await loadClaimByStatus("FINANCE_VERIFIED");
             return res.json({ items });
         }

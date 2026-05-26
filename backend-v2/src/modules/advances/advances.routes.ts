@@ -188,13 +188,11 @@ export function canViewAdvance(args: { role: string; requesterId: string; create
   if (args.role === "ADMIN") return true;
   if (args.requesterId === args.userId) return true;
   if (args.createdById === args.userId) return true;
-  if (args.role === "COUNTERSIGN" && args.status === "SUBMITTED" && args.type === "TRAVEL_SUBSISTENCE") return true;
-  if (args.role === "MANAGER" && args.status === "SUBMITTED" && args.type === "TRAVEL_SUBSISTENCE") return true;
-  if (args.role === "MANAGER" && args.status === "COUNTERSIGNED" && args.type === "TRAVEL_SUBSISTENCE") return true;
-  if (args.role === "HR_MANAGER" && args.status === "HR_MANAGER_REVIEW" && args.type === "TRAVEL_SUBSISTENCE") return true;
-  if (args.role === "AUTH_OFFICER" && args.status === "SUBMITTED" && ["SALARY", "LOAN"].includes(args.type)) return true;
-  if (args.role === "AUTH_OFFICER" && ["APPROVED", "PAID"].includes(args.status) && args.type === "TRAVEL_SUBSISTENCE") return true;
-  if (args.role === "FINANCE" && ["AUTH_OFFICER_APPROVED", "APPROVED"].includes(args.status)) return true;
+  if (args.role === "MANAGER" && args.status === "SUBMITTED") return true;
+  if (args.role === "CHIEF_OFFICER" && args.status === "CHIEF_OFFICER_REVIEW") return true;
+  if (args.role === "HR_MANAGER" && args.status === "HR_MANAGER_REVIEW") return true;
+  if (args.role === "AUTH_OFFICER" && ["HR_REVIEW", "HR_OFFICER"].includes(args.status)) return true;
+  if (args.role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(args.status)) return true;
   return false;
 }
 
@@ -306,7 +304,7 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
     if (adv.created_by_id !== req.user!.userId) throw forbidden("Only the creator can edit");
-    if (!["DRAFT", "SUBMITTED"].includes(adv.status)) throw badRequest("Cannot edit after countersign");
+    if (!["DRAFT", "SUBMITTED"].includes(adv.status)) throw badRequest("Cannot edit after manager review");
 
     const parsed = UpdateAdvanceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -353,7 +351,7 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
     if (adv.created_by_id !== req.user!.userId) throw forbidden("Only the creator can edit lines");
-    if (!["DRAFT", "SUBMITTED"].includes(adv.status)) throw badRequest("Cannot edit lines after countersign");
+    if (!["DRAFT", "SUBMITTED"].includes(adv.status)) throw badRequest("Cannot edit lines after manager review");
 
     const parsed = LinesSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -402,7 +400,17 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       if (Number(adv.requested_total) <= 0) throw badRequest("requested_total must be > 0");
     }
 
-    const nextStatus = adv.status === "SUBMITTED" ? "SUBMITTED" : nextStatusOrThrow(adv.status, "SUBMIT");
+    const creatorRole = (
+      await query<{ role: string }>(`SELECT role FROM users WHERE id = $1`, [adv.created_by_id])
+    )[0]?.role;
+    const nextStatus =
+      adv.status === "SUBMITTED"
+        ? "SUBMITTED"
+        : adv.status === "DRAFT"
+          ? ["HR_MANAGER", "MANAGER"].includes(creatorRole)
+            ? "CHIEF_OFFICER_REVIEW"
+            : "HR_MANAGER_REVIEW"
+          : nextStatusOrThrow(adv.status, "SUBMIT");
     await setAdvanceStatus(adv.id, nextStatus);
     await writeAdvanceAudit({
       actorId: req.user!.userId,
@@ -428,22 +436,31 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
   }
 });
 
-advancesRouter.post("/:id/countersign", requireRole(["COUNTERSIGN", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+advancesRouter.post("/:id/rollback", requireRole(["MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
+    const parsed = ActionCommentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Comments are required for rollback", parsed.error.flatten());
+
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
-    if (req.user!.role !== "ADMIN" && adv.requester_id === req.user!.userId) {
-      throw forbidden("Requesters cannot countersign their own advance");
+    if (req.user!.role === "AUTH_OFFICER" && adv.status !== "HR_REVIEW") {
+      throw forbidden("HR can only roll back advances pending HR review");
+    }
+    if (req.user!.role === "HR_MANAGER" && adv.status !== "HR_MANAGER_REVIEW") {
+      throw forbidden("HR Manager can only roll back advances pending HR Manager review");
+    }
+    if (req.user!.role === "CHIEF_OFFICER" && adv.status !== "CHIEF_OFFICER_REVIEW") {
+      throw forbidden("Chief Officer can only roll back advances pending Chief Officer review");
     }
 
-    const status = nextStatusOrThrow(adv.status, "COUNTERSIGN");
+    const status = nextStatusOrThrow(adv.status, "ROLLBACK");
     await setAdvanceStatus(adv.id, status);
     await writeAdvanceAudit({
       actorId: req.user!.userId,
       advanceId: adv.id,
-      action: "ADVANCE_COUNTERSIGN",
+      action: "ADVANCE_ROLLBACK",
       before: { status: adv.status },
-      after: { status }
+      after: { status, comments: parsed.data.comments }
     });
     const notificationContext = await getAdvanceNotificationContext(adv.id);
     if (notificationContext) {
@@ -462,56 +479,27 @@ advancesRouter.post("/:id/countersign", requireRole(["COUNTERSIGN", "ADMIN"]), a
   }
 });
 
-advancesRouter.post("/:id/rollback", requireRole(["COUNTERSIGN", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
-  try {
-    const parsed = ActionCommentSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Comments are required for rollback", parsed.error.flatten());
-
-    const adv = await getAdvanceById(req.params.id);
-    if (!adv) throw notFound();
-    if (req.user!.role === "AUTH_OFFICER" && !(["LOAN", "SALARY"].includes(adv.type) && adv.status === "SUBMITTED")) {
-      throw forbidden("HR can only roll back submitted salary or loan advances");
-    }
-    if (req.user!.role === "HR_MANAGER" && !(adv.type === "TRAVEL_SUBSISTENCE" && adv.status === "HR_MANAGER_REVIEW")) {
-      throw forbidden("HR Manager can only roll back travel advances pending HR Manager review");
-    }
-
-    const status = nextStatusOrThrow(adv.status, "ROLLBACK");
-    await setAdvanceStatus(adv.id, status);
-    await writeAdvanceAudit({
-      actorId: req.user!.userId,
-      advanceId: adv.id,
-      action: "ADVANCE_ROLLBACK",
-      before: { status: adv.status },
-      after: { status, comments: parsed.data.comments }
-    });
-    return res.json({ ok: true, status });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-advancesRouter.post("/:id/reject", requireRole(["COUNTERSIGN", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+advancesRouter.post("/:id/reject", requireRole(["MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ActionCommentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for reject", parsed.error.flatten());
 
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
-    if (req.user!.role === "AUTH_OFFICER" && !(["LOAN", "SALARY"].includes(adv.type) && adv.status === "SUBMITTED")) {
-      throw forbidden("HR can only reject submitted salary or loan advances");
+    if (req.user!.role === "AUTH_OFFICER" && adv.status !== "HR_REVIEW") {
+      throw forbidden("HR can only reject advances pending HR review");
     }
-    if (req.user!.role === "HR_MANAGER" && !(adv.type === "TRAVEL_SUBSISTENCE" && adv.status === "HR_MANAGER_REVIEW")) {
-      throw forbidden("HR Manager can only reject travel advances pending HR Manager review");
+    if (req.user!.role === "HR_MANAGER" && adv.status !== "HR_MANAGER_REVIEW") {
+      throw forbidden("HR Manager can only reject advances pending HR Manager review");
+    }
+    if (req.user!.role === "CHIEF_OFFICER" && adv.status !== "CHIEF_OFFICER_REVIEW") {
+      throw forbidden("Chief Officer can only reject advances pending Chief Officer review");
     }
     if (
       req.user!.role === "FINANCE" &&
-      !(
-        (adv.type === "SALARY" && adv.status === "AUTH_OFFICER_APPROVED") ||
-        adv.status === "APPROVED"
-      )
+      !["HR_OFFICER", "APPROVED"].includes(adv.status)
     ) {
-      throw forbidden("Finance can only reject HR-approved salary advances or approved advances pending payment");
+      throw forbidden("Finance can only reject HR-approved advances pending payment");
     }
 
     const status = nextStatusOrThrow(adv.status, "REJECT");
@@ -523,6 +511,17 @@ advancesRouter.post("/:id/reject", requireRole(["COUNTERSIGN", "MANAGER", "HR_MA
       before: { status: adv.status },
       after: { status, comments: parsed.data.comments }
     });
+    const notificationContext = await getAdvanceNotificationContext(adv.id);
+    if (notificationContext) {
+      await notifyAdvanceTask({
+        advanceId: adv.id,
+        status,
+        advanceType: notificationContext.type,
+        requesterName: notificationContext.full_name,
+        department: notificationContext.department,
+        requestedTotal: Number(notificationContext.requested_total)
+      });
+    }
     return res.json({ ok: true, status });
   } catch (err) {
     return next(err);
@@ -539,32 +538,40 @@ advancesRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res,
 
     const delegated = await getActiveManagerDelegation(req.user!.userId);
     const hasManagerPrivilege = req.user!.role === "MANAGER" || Boolean(delegated);
-    if (!hasManagerPrivilege && !["HR_MANAGER", "AUTH_OFFICER", "FINANCE", "ADMIN"].includes(req.user!.role)) {
+    if (!hasManagerPrivilege && !["HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "ADMIN"].includes(req.user!.role)) {
       throw forbidden("Not authorized to approve this advance");
     }
 
+    const creatorRole = (
+      await query<{ role: string }>(`SELECT role FROM users WHERE id = $1`, [adv.created_by_id])
+    )[0]?.role;
+
     let status: AdvanceStatus;
     if (req.user!.role === "AUTH_OFFICER") {
-      if (!(["LOAN", "SALARY"].includes(adv.type) && adv.status === "SUBMITTED")) {
-        throw forbidden("HR can only approve submitted salary or loan advances");
-      }
-      status = adv.type === "SALARY" ? "AUTH_OFFICER_APPROVED" : "APPROVED";
-    } else if (req.user!.role === "HR_MANAGER") {
-      if (!(adv.type === "TRAVEL_SUBSISTENCE" && adv.status === "HR_MANAGER_REVIEW")) {
-        throw forbidden("HR Manager can only approve travel advances pending HR Manager review");
+      if (adv.status !== "HR_REVIEW") {
+        throw forbidden("HR can only approve advances pending HR review");
       }
       status = nextStatusOrThrow(adv.status, "APPROVE");
-    } else if (req.user!.role === "FINANCE") {
-      if (!(adv.type === "SALARY" && adv.status === "AUTH_OFFICER_APPROVED")) {
-        throw forbidden("Finance can only approve HR-approved salary advances");
+    } else if (req.user!.role === "HR_MANAGER") {
+      if (adv.status !== "HR_MANAGER_REVIEW") {
+        throw forbidden("HR Manager can only approve advances pending HR Manager review");
       }
+      status = nextStatusOrThrow(adv.status, "APPROVE");
+    } else if (req.user!.role === "CHIEF_OFFICER") {
+      if (adv.status !== "CHIEF_OFFICER_REVIEW") {
+        throw forbidden("Chief Officer can only approve advances pending Chief Officer review");
+      }
+      status = nextStatusOrThrow(adv.status, "APPROVE");
+      if (creatorRole === "HR_MANAGER") {
+        status = "HR_REVIEW";
+      }
+    } else if (req.user!.role === "ADMIN") {
       status = nextStatusOrThrow(adv.status, "APPROVE");
     } else {
-      if (req.user!.role === "MANAGER" && adv.type === "TRAVEL_SUBSISTENCE" && adv.status === "SUBMITTED") {
-        status = "HR_MANAGER_REVIEW";
-      } else {
-        status = nextStatusOrThrow(adv.status, "APPROVE");
+      if (adv.status !== "SUBMITTED") {
+        throw forbidden("Managers can only approve submitted advances");
       }
+      status = nextStatusOrThrow(adv.status, "APPROVE");
     }
     await setAdvanceStatus(adv.id, status, { approvedTotal: parsed.data.approved_total });
     await writeAdvanceAudit({

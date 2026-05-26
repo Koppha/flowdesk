@@ -1,4 +1,4 @@
-const API = (import.meta.env.VITE_API as string) || "http://localhost:4000";
+const API = (import.meta.env.VITE_API as string) || window.location.origin;
 
 export function getToken() {
   return localStorage.getItem("token");
@@ -64,10 +64,14 @@ async function req(path: string, options: RequestInit = {}) {
   if (!isForm) headers["Content-Type"] = "application/json";
 
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${API}${path}`, { ...options, headers });
+  const res = await fetch(`${API}${path}`, { ...options, headers, cache: options.cache ?? "no-store" });
 
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(formatApiError(json, res.statusText));
+  if (!res.ok) {
+    const error = new Error(formatApiError(json, res.statusText));
+    (error as any).status = res.status;
+    throw error;
+  }
   return json;
 }
 
@@ -134,7 +138,6 @@ export const api = {
   advanceHistory: (id: string) => req(`/advances/${id}/history`),
   claimDetail: (id: string) => req(`/claims/${id}`),
 
-  countersignAdvance: (id: string, comments?: string) => req(`/advances/${id}/countersign`, { method: "POST", body: JSON.stringify({ comments }) }),
   rollbackAdvance: (id: string, comments?: string) => req(`/advances/${id}/rollback`, { method: "POST", body: JSON.stringify({ comments }) }),
   rejectAdvance: (id: string, comments: string) => req(`/advances/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   approveAdvance: (id: string, approved_total: number, comments?: string) =>

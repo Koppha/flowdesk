@@ -3,10 +3,10 @@ import jwt from "jsonwebtoken";
 import { NextFunction, Request, Response } from "express";
 import { env } from "../config/env.js";
 import { forbidden, unauthorized } from "./errors.js";
+import { query } from "./db.js";
 
 export type Role =
   | "EMPLOYEE"
-  | "COUNTERSIGN"
   | "MANAGER"
   | "HR_MANAGER"
   | "AUTH_OFFICER"
@@ -46,11 +46,27 @@ export async function comparePassword(password: string, hash: string) {
   return bcrypt.compare(password, hash);
 }
 
-export function requireAuth(req: AuthedRequest, _res: Response, next: NextFunction) {
+export async function requireAuth(req: AuthedRequest, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) return next(unauthorized("Missing bearer token"));
   try {
-    req.user = verifyToken(header.slice("Bearer ".length));
+    const token = header.slice("Bearer ".length);
+    const payload = verifyToken(token);
+    req.user = payload;
+
+    // Invalidate tokens issued before the global sessions_cleared_at timestamp
+    try {
+      const rows = await query<{ value: string }>(`SELECT value FROM system_state WHERE key='sessions_cleared_at' LIMIT 1`);
+      const row = rows[0];
+      if (row && row.value) {
+        const clearedAt = Date.parse(row.value) / 1000; // seconds
+        const iat = (payload as any).iat || 0;
+        if (iat <= clearedAt) return next(unauthorized("Session expired"));
+      }
+    } catch (err) {
+      // ignore if system_state table missing
+    }
+
     return next();
   } catch {
     return next(unauthorized("Invalid token"));

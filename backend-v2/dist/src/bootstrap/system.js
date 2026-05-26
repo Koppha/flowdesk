@@ -1,18 +1,23 @@
 import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
 import { env } from "../config/env.js";
+import { ensureDepartmentGroups } from "../lib/departments.js";
 const DEFAULT_ADMIN_EMAIL = env.ADMIN_SEED_EMAIL || "admin@example.com";
 const DEFAULT_ADMIN_PASSWORD = env.ADMIN_SEED_PASSWORD || "pass123";
 export async function bootstrapSystem() {
     await ensureUserSchema();
+    await ensureDepartmentGroups();
     await ensureFeatureSchema();
     await ensureAdminAccount();
 }
 async function ensureUserSchema() {
     await ensureEnumColumnValue("users", "role", "HR_MANAGER");
-    await ensureEnumColumnValue("advance_requests", "status", "AUTH_OFFICER_APPROVED");
+    await ensureEnumColumnValue("advance_requests", "status", "HR_OFFICER");
     await ensureEnumColumnValue("advance_requests", "status", "HR_MANAGER_REVIEW");
+    await ensureEnumColumnValue("advance_requests", "status", "HR_REVIEW");
+    await ensureEnumColumnValue("advance_requests", "status", "CHIEF_OFFICER_REVIEW");
     await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
+    await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");
     await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
     await query(`ALTER TABLE users ALTER COLUMN employment_type SET DEFAULT 'PERMANENT'`);
@@ -60,13 +65,13 @@ async function ensureUserSchema() {
     )
   `);
     await query(`UPDATE advance_requests SET created_by_id = requester_id WHERE created_by_id IS NULL`);
+    await query(`UPDATE advance_requests SET status='SUBMITTED', updated_at=now() WHERE status::text='COUNTERSIGNED'`);
     await query(`UPDATE users
         SET employment_type = COALESCE(NULLIF(employment_type, ''), 'PERMANENT')`);
     await query(`UPDATE users
-        SET role='COUNTERSIGN',
+        SET role='EMPLOYEE',
             updated_at=now()
-      WHERE employment_type='PERMANENT'
-        AND role='EMPLOYEE'`);
+      WHERE role::text='COUNTERSIGN'`);
     await query(`UPDATE users
         SET profile_completed =
           CASE
@@ -150,6 +155,19 @@ async function ensureFeatureSchema() {
   `);
     await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique_month ON attendance_records(employee_id, month, year)`);
     await query(`
+    CREATE TABLE IF NOT EXISTS manager_delegations (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      manager_id uuid NOT NULL REFERENCES users(id),
+      delegate_id uuid NOT NULL REFERENCES users(id),
+      department text NOT NULL,
+      from_date date,
+      to_date date,
+      active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`
     CREATE TABLE IF NOT EXISTS overtime_requests (
       id uuid PRIMARY KEY,
       employee_id uuid NOT NULL REFERENCES users(id),
@@ -196,4 +214,14 @@ async function ensureFeatureSchema() {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+    // lightweight key/value for system state (used to expire sessions)
+    await query(`
+    CREATE TABLE IF NOT EXISTS system_state (
+      key text PRIMARY KEY,
+      value text
+    )
+  `);
+    // Force-clear sessions so users must login from scratch
+    await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
 }

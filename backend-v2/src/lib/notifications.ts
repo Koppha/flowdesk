@@ -3,7 +3,7 @@ import { env } from "../config/env.js";
 import { query } from "./db.js";
 import { logger, serializeError } from "./logger.js";
 
-type Role = "COUNTERSIGN" | "MANAGER" | "HR_MANAGER" | "AUTH_OFFICER" | "CHIEF_OFFICER" | "FINANCE";
+type Role = "MANAGER" | "HR_MANAGER" | "AUTH_OFFICER" | "CHIEF_OFFICER" | "FINANCE";
 
 let transporter: nodemailer.Transporter | null = null;
 
@@ -56,19 +56,16 @@ export async function notifyAdvanceTask(args: {
   const department = args.department || null;
 
   let role: Role | null = null;
-  if (args.status === "SUBMITTED" && args.advanceType === "TRAVEL_SUBSISTENCE") role = "COUNTERSIGN";
-  if (args.status === "SUBMITTED" && ["SALARY", "LOAN"].includes(args.advanceType)) role = "AUTH_OFFICER";
-  if (args.status === "COUNTERSIGNED") role = "MANAGER";
+  if (args.status === "SUBMITTED") role = "MANAGER";
+  if (args.status === "CHIEF_OFFICER_REVIEW") role = "CHIEF_OFFICER";
   if (args.status === "HR_MANAGER_REVIEW") role = "HR_MANAGER";
-  if (args.status === "AUTH_OFFICER_APPROVED") role = "FINANCE";
-  if (args.status === "APPROVED") role = args.advanceType === "TRAVEL_SUBSISTENCE" ? "AUTH_OFFICER" : "FINANCE";
+  if (args.status === "HR_REVIEW") role = "AUTH_OFFICER";
+  if (args.status === "HR_OFFICER") role = "FINANCE";
+  if (args.status === "APPROVED") role = "FINANCE";
   if (!role) return;
 
   try {
-    const recipientDepartment =
-      role === "FINANCE" || role === "HR_MANAGER" || (role === "AUTH_OFFICER" && args.status === "APPROVED" && args.advanceType === "TRAVEL_SUBSISTENCE")
-        ? null
-        : department;
+    const recipientDepartment = ["HR_MANAGER", "AUTH_OFFICER", "FINANCE"].includes(role) ? null : department;
     const recipients = await getRecipients(role, recipientDepartment);
     await sendMail({
       to: recipients.map((recipient) => recipient.email),
@@ -90,22 +87,44 @@ export async function notifyClaimTask(args: {
   claimId: string;
   status: string;
   claimantName: string | null;
+  claimantEmail?: string | null;
   department: string | null;
   claimTotal: number;
 }) {
   const claimant = args.claimantName || "Claimant";
   const department = args.department || null;
 
+  if (args.status === "SETTLED") {
+    if (!args.claimantEmail) return;
+    try {
+      await sendMail({
+        to: [args.claimantEmail],
+        subject: "Clearance claim settled",
+        text:
+          `Your clearance claim has been settled.\n\n` +
+          `Claimant: ${claimant}\n` +
+          `Department: ${department || "—"}\n` +
+          `Amount: M${Number(args.claimTotal || 0).toFixed(2)}\n` +
+          `Status: ${args.status}\n`
+      });
+    } catch (error) {
+      logger.warn("claim_task_notification_failed", { claim_id: args.claimId, status: args.status, error: serializeError(error) });
+    }
+    return;
+  }
+
   let roles: Role[] = [];
   if (args.status === "SUBMITTED") roles = ["MANAGER"];
   if (args.status === "MANAGER_APPROVED") roles = ["CHIEF_OFFICER"];
-  if (args.status === "CHIEF_OFFICER_APPROVED") roles = ["AUTH_OFFICER", "FINANCE"];
+  if (args.status === "CHIEF_OFFICER_APPROVED") roles = ["AUTH_OFFICER"];
+  if (args.status === "HR_OFFICER") roles = ["FINANCE"];
+  if (args.status === "FINANCE_VERIFIED") roles = ["FINANCE"];
   if (roles.length === 0) return;
 
   try {
     const recipients = (
       await Promise.all(
-        roles.map((role) => getRecipients(role, role === "FINANCE" ? null : department))
+        roles.map((role) => getRecipients(role, role === "AUTH_OFFICER" || role === "FINANCE" ? null : department))
       )
     ).flat();
     const uniqueRecipients = Array.from(new Map(recipients.map((recipient) => [recipient.email, recipient])).values());

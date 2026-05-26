@@ -125,8 +125,8 @@ accommodationRouter.post("/", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req
             throw badRequest("Linked advance not found");
         if (advance.type !== "TRAVEL_SUBSISTENCE")
             throw badRequest("Accommodation requests can only be linked to travel advances");
-        if (!["APPROVED", "PAID"].includes(advance.status)) {
-            throw badRequest("Travel advance must be approved before HR can request accommodation");
+        if (advance.status !== "HR_REVIEW") {
+            throw badRequest("Travel advance must be in HR review stage before accommodation can be booked");
         }
         const rows = await query(`INSERT INTO accommodation_requests
         (advance_request_id, requester_id, created_by_id, location, provider, check_in, check_out, amount, notes, status)
@@ -197,8 +197,6 @@ accommodationRouter.post("/:id/send-to-finance", requireRole(["AUTH_OFFICER", "A
         }
         if (row.status !== "DRAFT")
             throw badRequest("Only draft accommodation requests can be sent to finance");
-        if (!row.quotation_path)
-            throw badRequest("Upload a quotation before sending the request to finance");
         await query(`UPDATE accommodation_requests
           SET status='SUBMITTED',
               updated_at=now()

@@ -2,33 +2,33 @@ import { describe, expect, it } from "vitest";
 import { canViewAdvance } from "../src/modules/advances/advances.routes.js";
 
 describe("advance view access", () => {
-  it("allows countersign users to view submitted travel advances", () => {
-    expect(
-      canViewAdvance({
-        role: "COUNTERSIGN",
-        requesterId: "requester-1",
-        createdById: "creator-2",
-        userId: "countersign-1",
-        status: "SUBMITTED",
-        type: "TRAVEL_SUBSISTENCE"
-      })
-    ).toBe(true);
-  });
-
-  it("allows managers to view counter-signed travel advances", () => {
+  it("allows managers to view submitted advances", () => {
     expect(
       canViewAdvance({
         role: "MANAGER",
         requesterId: "requester-1",
         createdById: "creator-2",
         userId: "manager-1",
-        status: "COUNTERSIGNED",
+        status: "SUBMITTED",
         type: "TRAVEL_SUBSISTENCE"
       })
     ).toBe(true);
   });
 
-  it("allows HR managers to view travel advances awaiting HR Manager review", () => {
+  it("allows managers to view submitted salary advances", () => {
+    expect(
+      canViewAdvance({
+        role: "MANAGER",
+        requesterId: "requester-1",
+        createdById: "creator-2",
+        userId: "manager-1",
+        status: "SUBMITTED",
+        type: "SALARY"
+      })
+    ).toBe(true);
+  });
+
+  it("allows HR managers to view advances awaiting HR Manager review", () => {
     expect(
       canViewAdvance({
         role: "HR_MANAGER",
@@ -41,16 +41,29 @@ describe("advance view access", () => {
     ).toBe(true);
   });
 
-  it("does not allow managers to view counter-signed salary advances", () => {
+  it("allows chief officers to view advances awaiting Chief Officer review", () => {
     expect(
       canViewAdvance({
-        role: "MANAGER",
+        role: "CHIEF_OFFICER",
         requesterId: "requester-1",
         createdById: "creator-2",
-        userId: "manager-1",
-        status: "COUNTERSIGNED",
+        userId: "chief-officer-1",
+        status: "CHIEF_OFFICER_REVIEW",
+        type: "TRAVEL_SUBSISTENCE"
+      })
+    ).toBe(true);
+  });
+
+  it("allows HR to view company-wide advances awaiting HR review", () => {
+    expect(
+      canViewAdvance({
+        role: "AUTH_OFFICER",
+        requesterId: "requester-1",
+        createdById: "creator-2",
+        userId: "hr-1",
+        status: "HR_REVIEW",
         type: "SALARY"
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 });

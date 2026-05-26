@@ -48,6 +48,38 @@ function emptyClearanceTripRow(date?: string): ClearanceTripRow {
   };
 }
 
+const STARTUP_REQUEST_TIMEOUT_MS = 10000;
+
+function withStartupTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timeoutId = 0;
+  const timeout = new Promise<T>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(`${label} timed out`)), STARTUP_REQUEST_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
+}
+
+async function optionalStartupData<T>(promise: Promise<T>, fallback: T, label: string): Promise<T> {
+  try {
+    return await withStartupTimeout(promise, label);
+  } catch (error) {
+    console.warn(`${label} failed during startup`, error);
+    return fallback;
+  }
+}
+
+function isAuthOrTimeoutError(error: unknown) {
+  const message = String((error as any)?.message || "").toLowerCase();
+  return (
+    message.includes("timed out") ||
+    message.includes("invalid token") ||
+    message.includes("unauthorized") ||
+    message.includes("not authorized") ||
+    message.includes("not authenticated") ||
+    (error as any)?.status === 401
+  );
+}
+
 export default function App() {
   const [token, setTok] = useState(getToken());
   const [email, setEmail] = useState("employee@example.com");
@@ -118,8 +150,6 @@ export default function App() {
         return "HR Manager";
       case "CHIEF_OFFICER":
         return "Chief Officer";
-      case "COUNTERSIGN":
-        return "Countersign";
       default:
         return value || "Unknown";
     }
@@ -147,12 +177,17 @@ export default function App() {
   }
 
   function isApproverRole(value: string | null | undefined) {
-    return ["COUNTERSIGN", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"].includes(String(value || "").trim().toUpperCase());
+    return ["MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"].includes(String(value || "").trim().toUpperCase());
   }
 
   function formatPersonLabel(user: { full_name: string | null; email?: string; employee_no?: string | null }) {
     const base = user.full_name || user.email || "Unknown user";
     return user.employee_no ? `${base} (${user.employee_no})` : base;
+  }
+
+  function isKnownDepartment(value: string) {
+    const department = value.trim().toLowerCase();
+    return Boolean(department) && departmentOptions.some((option) => option.trim().toLowerCase() === department);
   }
 
   // advance request form fields
@@ -174,7 +209,19 @@ export default function App() {
   const [bankBranch, setBankBranch] = useState("");
   const [purpose, setPurpose] = useState("");
   const [requestDate, setRequestDate] = useState(new Date().toISOString().slice(0, 10));
-  const [rows, setRows] = useState<Array<{ date: string; location: string; meals: number }>>([]);
+  const districts = [
+    "Butha-Buthe",
+    "Leribe",
+    "Berea",
+    "Maseru",
+    "Mafeteng",
+    "Mohale's Hoek",
+    "Quthing",
+    "Qacha's Nek",
+    "Mokhotlong",
+    "Thaba-Tseka"
+  ];
+  const [rows, setRows] = useState<Array<{ date: string; startDistrict: string; destinationDistrict: string; meals: number }>>([]);
   const [amountInWords, setAmountInWords] = useState("");
   const [clearanceMonth, setClearanceMonth] = useState("");
   const [clearanceDutyStation, setClearanceDutyStation] = useState("");
@@ -195,19 +242,19 @@ export default function App() {
       lastDate.setDate(lastDate.getDate() + 1);
       newDate = lastDate.toISOString().split('T')[0];
     }
-    setRows([...rows, { date: newDate, location: "", meals: 0 }]);
+    setRows([...rows, { date: newDate, startDistrict: "", destinationDistrict: "", meals: 0 }]);
   };
   const deleteRow = (index: number) => {
     setRows(rows.filter((_, i) => i !== index));
   };
   const updateRow = (index: number, field: string, value: any) => {
     const copy = [...rows];
-    (copy[index] as any)[field] = value;
+    (copy[index] as any)[field] = field === "meals" ? (Number(value) || 0) : value;
     setRows(copy);
   };
   const rowTotals = rows.reduce(
     (acc, r) => ({
-      meals: acc.meals + (Number(r.meals) || 0),
+      meals: acc.meals + (Number.isFinite(Number(r.meals)) ? Number(r.meals) : 0),
     }),
     { meals: 0 }
   );
@@ -299,6 +346,14 @@ export default function App() {
   }, [rows, advanceType]);
 
   const me = getUserFromToken();
+
+  useEffect(() => {
+    if (!token) return;
+    if (!me) {
+      void doLogout();
+    }
+  }, [token]);
+
   const role = profile?.role || me?.role || "UNKNOWN";
   const userName = displayUserLabel(profile?.full_name || me?.fullName || me?.username || "User", role);
   const userDepartment = profile?.department || me?.department || "No Department";
@@ -340,19 +395,20 @@ export default function App() {
 
   async function refresh() {
     setError(null);
-    const [meResp, departmentsResp, directoryResp, a, c, i] = await Promise.all([
-      api.me(),
-      api.departments(),
-      api.requestDirectory(),
-      api.advances(),
-      api.claims(),
-      api.inbox()
-    ]);
+    const meResp = await withStartupTimeout(api.me(), "Profile");
     setProfile(meResp);
+
+    const [departmentsResp, directoryResp, a, c, i] = await Promise.all([
+      optionalStartupData<string[]>(api.departments(), [], "Departments"),
+      optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
+      optionalStartupData<any[]>(api.advances(), [], "Advances"),
+      optionalStartupData<any[]>(api.claims(), [], "Claims"),
+      optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox")
+    ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
-    setAdvances(a);
-    setClaims(c);
+    setAdvances(Array.isArray(a) ? a : []);
+    setClaims(Array.isArray(c) ? c : []);
     setInboxCount(i.items?.length || 0);
     if (token) {
       try {
@@ -368,7 +424,13 @@ export default function App() {
     if (!token) return;
     setProfileLoading(true);
     refresh()
-      .catch((e) => alert("Error loading data: " + String(e.message)))
+      .catch((e) => {
+        if (isAuthOrTimeoutError(e)) {
+          void doLogout();
+        } else {
+          alert("Error loading data: " + String((e as any)?.message || e));
+        }
+      })
       .finally(() => setProfileLoading(false));
   }, [token]);
 
@@ -443,12 +505,25 @@ export default function App() {
   }
 
   async function submitProfile() {
+    if (!profileName.trim()) {
+      alert("Enter your full name.");
+      return;
+    }
+    if (!isKnownDepartment(profileDepartment)) {
+      alert("Choose your department from the department groups list.");
+      return;
+    }
+    if (profileEmploymentType === "PERMANENT" && !profileEmployeeNo.trim()) {
+      alert("Enter your employment number.");
+      return;
+    }
+
     try {
       const result: any = await api.completeProfile({
-        full_name: profileName,
-        department: profileDepartment,
+        full_name: profileName.trim(),
+        department: profileDepartment.trim(),
         employment_type: profileEmploymentType,
-        employee_no: profileEmployeeNo || undefined
+        employee_no: profileEmployeeNo.trim() || undefined
       });
       setToken(result.token);
       setTok(result.token);
@@ -576,7 +651,7 @@ export default function App() {
       return;
     }
     if (!groupAssignDepartment) {
-      alert("Choose a group first.");
+      alert("Choose a department group first.");
       return;
     }
     try {
@@ -589,7 +664,7 @@ export default function App() {
       }
       setGroupAssignDepartment("");
       setGroupAssignUserId("");
-      alert(`Assigned ${updated.full_name || updated.email} to group ${updated.department}.`);
+      alert(`Assigned ${updated.full_name || updated.email} to department group ${updated.department}.`);
     } catch (e: any) {
       alert("Error assigning group: " + e.message);
     }
@@ -619,14 +694,14 @@ export default function App() {
   async function createDepartment() {
     const name = newDepartmentName.trim();
     if (!name) {
-      alert("Enter a department name.");
+      alert("Enter a department group name.");
       return;
     }
     try {
       const created: any = await api.createDepartment(name);
       setDepartmentOptions((current) => Array.from(new Set([...(current || []), created.name])).sort((a, b) => a.localeCompare(b)));
       setNewDepartmentName("");
-      alert(`Department ${created.name} created.`);
+      alert(`Department group ${created.name} created.`);
     } catch (e: any) {
       alert("Error creating department: " + e.message);
     }
@@ -701,15 +776,15 @@ export default function App() {
       case "DRAFT":
         return "Draft (not submitted)";
       case "SUBMITTED":
-        return "Waiting Countersign / HR";
-      case "COUNTERSIGNED":
         return "Waiting Manager Approval";
       case "HR_MANAGER_REVIEW":
         return "Waiting HR Manager Approval";
-      case "AUTH_OFFICER_APPROVED":
-        return "Waiting Finance Approval";
+      case "HR_REVIEW":
+        return "Waiting HR Approval";
+      case "HR_OFFICER":
+        return "Waiting Finance Payment";
       case "APPROVED":
-        return type === "TRAVEL_SUBSISTENCE" ? "Waiting HR Accommodation / Finance Payment" : "Waiting Finance Payment";
+        return "Waiting Finance Payment";
       case "PAID":
         return "Completed";
       case "CANCELLED":
@@ -730,9 +805,11 @@ export default function App() {
       case "MANAGER_APPROVED":
         return "Waiting Chief Officer";
       case "CHIEF_OFFICER_APPROVED":
-        return "Waiting HR and Finance";
+        return "Waiting HR Approval";
+      case "HR_OFFICER":
+        return "Waiting Finance Verification";
       case "FINANCE_VERIFIED":
-        return "Waiting Settlement";
+        return "Waiting Finance Settlement";
       case "SETTLED":
         return "Cleared";
       case "REJECTED":
@@ -753,12 +830,12 @@ export default function App() {
     return { bank_name: "", bank_account_number: "", bank_branch: "", ecocash_number: raw || "" };
   }
 
-  function isAtLeastCountersigned(status: string | null) {
-    return status === "COUNTERSIGNED" || status === "HR_MANAGER_REVIEW" || status === "AUTH_OFFICER_APPROVED" || status === "APPROVED" || status === "PAID";
+  function isAtLeastManagerReviewed(status: string | null) {
+    return status === "HR_MANAGER_REVIEW" || status === "HR_REVIEW" || status === "HR_OFFICER" || status === "APPROVED" || status === "PAID";
   }
 
   function isAtLeastApproved(status: string | null) {
-    return status === "AUTH_OFFICER_APPROVED" || status === "APPROVED" || status === "PAID";
+    return status === "HR_OFFICER" || status === "APPROVED" || status === "PAID";
   }
 
   function resetClearanceForm() {
@@ -882,7 +959,7 @@ export default function App() {
   }
 
   // helper summaries
-  const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "AUTH_OFFICER_APPROVED", "APPROVED"].includes(a.status)).length;
+  const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
   const pendingClaimCount = claims.filter((c) => !["SETTLED", "REJECTED"].includes(c.status)).length;
   const monthlySpend = claims.reduce((sum, c) => sum + Number(c.claim_total || 0), 0) + advances.reduce((sum, a) => sum + Number(a.approved_total || 0), 0);
   const advancesByType = advances.reduce<Record<string, number>>((acc, advance) => {
@@ -941,8 +1018,6 @@ export default function App() {
             <br />
             employee@example.com
             <br />
-            countersign@example.com
-            <br />
             manager@example.com
             <br />
             hr@example.com
@@ -982,18 +1057,19 @@ export default function App() {
             <input className="login-input" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="Full name" />
           </div>
           <div className="form-group">
-            <input
+            <select
               className="login-input"
-              list="department-options"
               value={profileDepartment}
               onChange={(e) => setProfileDepartment(e.target.value)}
-              placeholder="Department"
-            />
-            <datalist id="department-options">
+              disabled={departmentOptions.length === 0}
+            >
+              <option value="">{departmentOptions.length === 0 ? "Loading departments..." : "Choose department"}</option>
               {departmentOptions.map((department) => (
-                <option key={department} value={department} />
+                <option key={department} value={department}>
+                  {department}
+                </option>
               ))}
-            </datalist>
+            </select>
           </div>
           <div className="form-group">
             <select className="login-input" value={profileEmploymentType} onChange={(e) => setProfileEmploymentType(e.target.value as "PERMANENT" | "INTERN" | "TEMPORARY")}>
@@ -1016,7 +1092,7 @@ export default function App() {
             </p>
           )}
 
-          <button className="button login-button" onClick={submitProfile}>Save Profile</button>
+          <button className="button login-button" onClick={submitProfile} disabled={departmentOptions.length === 0}>Save Profile</button>
           <button className="button small-button" onClick={doLogout} style={{ marginTop: 12 }}>Logout</button>
         </div>
       </div>
@@ -1371,9 +1447,9 @@ export default function App() {
                 />
               </div>
 
-              {isAtLeastCountersigned(editingAdvanceStatus) && (
+              {isAtLeastManagerReviewed(editingAdvanceStatus) && (
                 <div className="field-row">
-                  <label>Countersigned by:</label><span>________________</span>
+                  <label>Reviewed by:</label><span>________________</span>
                   <label>Date:</label><span>__________</span>
                 </div>
               )}
@@ -1467,7 +1543,8 @@ export default function App() {
                     <thead>
                       <tr>
                         <th>Date</th>
-                        <th>Location</th>
+                        <th>Starting District</th>
+                        <th>Destination District</th>
                         <th>Meals</th>
                         <th>Actions</th>
                       </tr>
@@ -1483,18 +1560,33 @@ export default function App() {
                             />
                           </td>
                           <td>
-                            <input
-                              type="text"
-                              value={r.location || ""}
-                              onChange={e => updateRow(idx, "location", e.target.value)}
-                              placeholder="Location"
-                            />
+                            <select
+                              value={r.startDistrict || ""}
+                              onChange={e => updateRow(idx, "startDistrict", e.target.value)}
+                            >
+                              <option value="">Start district</option>
+                              {districts.map((district) => (
+                                <option key={district} value={district}>{district}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td>
+                            <select
+                              value={r.destinationDistrict || ""}
+                              onChange={e => updateRow(idx, "destinationDistrict", e.target.value)}
+                            >
+                              <option value="">Destination district</option>
+                              {districts.map((district) => (
+                                <option key={district} value={district}>{district}</option>
+                              ))}
+                            </select>
                           </td>
                           <td>
                             <input
                               type="number"
-                              value={String(r.meals || 0)}
-                              onChange={e => updateRow(idx, "meals", Number(e.target.value))}
+                              min="0"
+                              value={String(Number.isFinite(Number(r.meals)) ? r.meals : 0)}
+                              onChange={e => updateRow(idx, "meals", e.target.value === "" ? 0 : Number(e.target.value))}
                               style={{ width: 80 }}
                             />
                           </td>
@@ -1522,14 +1614,15 @@ export default function App() {
                           <tr>
                             <td>Sub-total</td>
                             <td></td>
+                            <td></td>
                             <td>{fmtMoney(rowTotals.meals)}</td>
                             <td></td>
                           </tr>
                           <tr>
                             <td>Total</td>
                             <td></td>
-                            <td colSpan={2}>{fmtMoney(totalRequested())}</td>
                             <td></td>
+                            <td colSpan={2}>{fmtMoney(totalRequested())}</td>
                           </tr>
                         </>
                       )}
@@ -1665,11 +1758,12 @@ export default function App() {
                       if (advanceType === "TRAVEL_SUBSISTENCE") {
                         const hasInvalidRow = rows.some((r) =>
                           !r.date ||
-                          !String(r.location || "").trim() ||
-                          (Number(r.meals) || 0) < 0
+                          !String(r.startDistrict || "").trim() ||
+                          !String(r.destinationDistrict || "").trim() ||
+                          !(Number.isFinite(Number(r.meals)) && Number(r.meals) >= 0)
                         );
                         if (hasInvalidRow) {
-                          alert("Each travel row must have date, location, and non-negative meal amounts.");
+                          alert("Each travel row must have date, starting district, destination district, and a non-negative meal amount.");
                           return;
                         }
                         if ((Number(totalRequested()) || 0) <= 0) {
@@ -1716,7 +1810,7 @@ export default function App() {
                         if (advanceType === "TRAVEL_SUBSISTENCE") {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
-                            location: r.location,
+                            location: `${r.startDistrict} → ${r.destinationDistrict}`,
                             lunch: r.meals,
                             dinner: 0
                           }));
@@ -1732,7 +1826,7 @@ export default function App() {
                         if (advanceType === "TRAVEL_SUBSISTENCE") {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
-                            location: r.location,
+                            location: `${r.startDistrict} → ${r.destinationDistrict}`,
                             lunch: r.meals,
                             dinner: 0
                           }));
@@ -1920,8 +2014,8 @@ export default function App() {
                 <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
                   <div>1. Employee captures actual trip expenditure and links the paid advance.</div>
                   <div>2. Manager certifies the trip was duly ordered.</div>
-                  <div>3. HR confirms the trip was duly authorised.</div>
-                  <div>4. Chief Officer approves the clearance.</div>
+                  <div>3. Chief Officer approves the clearance.</div>
+                  <div>4. HR confirms the trip was duly authorised.</div>
                   <div>5. Finance verifies and settles any amount due or refund reference.</div>
                 </div>
               </div>
@@ -1989,11 +2083,18 @@ export default function App() {
                                     setTravelAmount(detail.type === "TRAVEL_SUBSISTENCE" ? String(detail.requested_total || 0) : "");
                                     setRows(
                                       detail.lines
-                                        ? detail.lines.map((l: any) => ({
-                                            date: normalizeDateInputValue(l.line_date),
-                                            location: l.location || "",
-                                            meals: Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0)
-                                          }))
+                                        ? detail.lines.map((l: any) => {
+                                            const rawLocation = String(l.location || "").trim();
+                                            const parts = rawLocation.includes("→")
+                                              ? rawLocation.split("→").map((part) => part.trim())
+                                              : [rawLocation, rawLocation];
+                                            return {
+                                              date: normalizeDateInputValue(l.line_date),
+                                              startDistrict: parts[0] || "",
+                                              destinationDistrict: parts[1] || parts[0] || "",
+                                              meals: Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0)
+                                            };
+                                          })
                                         : []
                                     );
                                     setMonthField(detail.salary_month || "");
@@ -2132,7 +2233,7 @@ export default function App() {
               {role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER" ? (
                 <div className="card" style={{ padding: 20 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                    <h3 style={{ margin: 0 }}>User Role Assignment</h3>
+                    <h3 style={{ margin: 0 }}>User Department Groups and Roles</h3>
                     <button className="button small-button" onClick={() => void loadAdminUsers()} disabled={adminUsersLoading}>
                       {adminUsersLoading ? "Loading..." : "Refresh"}
                     </button>
@@ -2143,10 +2244,10 @@ export default function App() {
                         <input
                           value={newDepartmentName}
                           onChange={(e) => setNewDepartmentName(e.target.value)}
-                          placeholder="Create new department"
+                          placeholder="Create new department group"
                         />
                         <button className="button small-button" onClick={() => void createDepartment()}>
-                          Add Department
+                          Add Department Group
                         </button>
                       </div>
                       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
@@ -2154,7 +2255,7 @@ export default function App() {
                           value={groupAssignUserId}
                           onChange={(e) => setGroupAssignUserId(e.target.value)}
                         >
-                          <option value="">Select user to assign group</option>
+                          <option value="">Select user to assign department group</option>
                           {adminUsers.map((user) => (
                             <option key={user.id} value={user.id}>
                               {(user.full_name || user.email) + (user.employee_no ? ` (${user.employee_no})` : "")}
@@ -2166,7 +2267,7 @@ export default function App() {
                           onChange={(e) => setGroupAssignDepartment(e.target.value)}
                           disabled={!groupAssignUserId}
                         >
-                          <option value="">Select group</option>
+                          <option value="">Select department group</option>
                           {departmentOptions.map((department) => (
                             <option key={department} value={department}>
                               {department}
@@ -2174,14 +2275,14 @@ export default function App() {
                           ))}
                         </select>
                         <button className="button small-button" onClick={() => void assignUserToGroup()}>
-                          Assign Group
+                          Assign Department Group
                         </button>
                       </div>
                     </>
                   )}
                   <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
                     <select value={departmentRoleDepartment} onChange={(e) => setDepartmentRoleDepartment(e.target.value)}>
-                      <option value="">Select department</option>
+                      <option value="">Select department group</option>
                       {departmentOptions.map((department) => (
                         <option key={department} value={department}>{department}</option>
                       ))}
@@ -2202,7 +2303,6 @@ export default function App() {
                     </select>
                     <select value={departmentRoleValue} onChange={(e) => setDepartmentRoleValue(e.target.value)}>
                       <option value="EMPLOYEE">Employee</option>
-                      <option value="COUNTERSIGN">Countersign</option>
                       <option value="MANAGER">Manager</option>
                       <option value="HR_MANAGER">HR Manager</option>
                       <option value="AUTH_OFFICER">HR</option>
@@ -2230,7 +2330,7 @@ export default function App() {
                           <div style={{ fontSize: 13, opacity: 0.8 }}>HR: {hrUsers.length ? hrUsers.join(", ") : "None assigned"}</div>
                           <div style={{ fontSize: 13, opacity: 0.8 }}>Chief Officers: {chiefs.length ? chiefs.join(", ") : "None assigned"}</div>
                           <div style={{ fontSize: 13, opacity: 0.8 }}>Finance: {financeUsers.length ? financeUsers.join(", ") : "None assigned"}</div>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>Permanent employees default to Countersign before manager approval.</div>
+                          <div style={{ fontSize: 13, opacity: 0.8 }}>Requests go directly to Manager before HR Manager, HR, and Finance.</div>
                         </div>
                       );
                     })}
@@ -2398,13 +2498,25 @@ export default function App() {
                           <tr key={user.id}>
                             <td>{user.full_name || "—"}</td>
                             <td>{user.email}</td>
-                            <td>{user.department || "—"}</td>
+                            <td>
+                              {role === "ADMIN" ? (
+                                <select value={user.department || ""} onChange={(e) => void updateUserDepartment(user.id, e.target.value)}>
+                                  <option value="" disabled>Unassigned</option>
+                                  {departmentOptions.map((department) => (
+                                    <option key={department} value={department}>
+                                      {department}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                user.department || "—"
+                              )}
+                            </td>
                             <td>{fmtEmploymentType(user.employment_type)}</td>
                             <td>{user.employee_no || "—"}</td>
                             <td>
                               <select value={user.role} onChange={(e) => void updateAdminUserRole(user.id, e.target.value)}>
                                 <option value="EMPLOYEE">Employee</option>
-                                <option value="COUNTERSIGN">Countersign</option>
                                 <option value="MANAGER">Manager</option>
                                 <option value="HR_MANAGER">HR Manager</option>
                                 <option value="AUTH_OFFICER">HR</option>
@@ -2555,11 +2667,18 @@ export default function App() {
                                   setTravelAmount(detail.type === "TRAVEL_SUBSISTENCE" ? String(detail.requested_total || 0) : "");
                                   setRows(
                                     detail.lines
-                                      ? detail.lines.map((l: any) => ({
-                                          date: normalizeDateInputValue(l.line_date),
-                                          location: l.location || "",
-                                          meals: Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0)
-                                        }))
+                                      ? detail.lines.map((l: any) => {
+                                          const rawLocation = String(l.location || "").trim();
+                                          const parts = rawLocation.includes("→")
+                                            ? rawLocation.split("→").map((part) => part.trim())
+                                            : [rawLocation, rawLocation];
+                                          return {
+                                            date: normalizeDateInputValue(l.line_date),
+                                            startDistrict: parts[0] || "",
+                                            destinationDistrict: parts[1] || parts[0] || "",
+                                            meals: Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0)
+                                          };
+                                        })
                                       : []
                                   );
                                   setMonthField(detail.salary_month || "");

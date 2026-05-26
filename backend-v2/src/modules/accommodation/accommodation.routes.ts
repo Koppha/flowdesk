@@ -41,6 +41,50 @@ const upload = multer({ storage });
 export const accommodationRouter = Router();
 accommodationRouter.use(requireAuth);
 
+// Hotels CRUD - HR Managers can onboard hotels
+accommodationRouter.get("/hotels", async (_req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY name`);
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const body = z.object({ name: z.string().trim().min(1), address: z.string().optional(), contact: z.string().optional(), department: z.string().optional() }).safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
+    const rows = await query<{ id: string }>(
+      `INSERT INTO accommodation_hotels (name, address, contact, department, created_by_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [body.data.name, body.data.address ?? null, body.data.contact ?? null, body.data.department ?? null, req.user!.userId]
+    );
+    return res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const body = z.object({ name: z.string().trim().min(1).optional(), address: z.string().optional(), contact: z.string().optional(), department: z.string().optional() }).safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    for (const [k, v] of Object.entries(body.data)) {
+      if (v === undefined) continue;
+      params.push(v);
+      updates.push(`${k}=$${params.length}`);
+    }
+    if (updates.length === 0) return res.json({ ok: true });
+    params.push(req.params.id);
+    await query(`UPDATE accommodation_hotels SET ${updates.join(",")}, updated_at=now() WHERE id=$${params.length}`, params);
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 async function writeAccommodationAudit(args: {
   actorId: string;
   accommodationId: string;
@@ -151,8 +195,8 @@ accommodationRouter.post("/", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req
     )[0];
     if (!advance) throw badRequest("Linked advance not found");
     if (advance.type !== "TRAVEL_SUBSISTENCE") throw badRequest("Accommodation requests can only be linked to travel advances");
-    if (!["APPROVED", "PAID"].includes(advance.status)) {
-      throw badRequest("Travel advance must be approved before HR can request accommodation");
+    if (advance.status !== "HR_REVIEW") {
+      throw badRequest("Travel advance must be in HR review stage before accommodation can be booked");
     }
 
     const rows = await query<{ id: string }>(
@@ -234,7 +278,6 @@ accommodationRouter.post("/:id/send-to-finance", requireRole(["AUTH_OFFICER", "A
       throw forbidden("Only the requesting HR user can send this accommodation request to finance");
     }
     if (row.status !== "DRAFT") throw badRequest("Only draft accommodation requests can be sent to finance");
-    if (!row.quotation_path) throw badRequest("Upload a quotation before sending the request to finance");
 
     await query(
       `UPDATE accommodation_requests

@@ -66,8 +66,6 @@ function displayRoleLabel(value: string | null | undefined) {
       return "HR Manager";
     case "CHIEF_OFFICER":
       return "Chief Officer";
-    case "COUNTERSIGN":
-      return "Countersign";
     default:
       return value || "Unknown";
   }
@@ -275,43 +273,40 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     })();
   }, [item.id]);
 
-  const isSalaryAdvance = item.doc_type === "ADVANCE" && detail?.type === "SALARY";
-  const isLoanAdvance = item.doc_type === "ADVANCE" && detail?.type === "LOAN";
   const isTravelAdvance = item.doc_type === "ADVANCE" && detail?.type === "TRAVEL_SUBSISTENCE";
 
-  const canCountersign = item.doc_type === "ADVANCE" && role === "COUNTERSIGN" && item.status === "SUBMITTED" && isTravelAdvance;
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
-    ((role === "COUNTERSIGN" && item.status === "SUBMITTED" && isTravelAdvance) ||
-      (role === "MANAGER" && item.status === "COUNTERSIGNED" && isTravelAdvance) ||
-      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW" && isTravelAdvance) ||
-      (role === "AUTH_OFFICER" && item.status === "SUBMITTED" && (isLoanAdvance || isSalaryAdvance)));
+    ((role === "MANAGER" && item.status === "SUBMITTED") ||
+      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+      (role === "AUTH_OFFICER" && item.status === "HR_REVIEW") ||
+      (role === "CHIEF_OFFICER" && item.status === "CHIEF_OFFICER_REVIEW"));
   const canRejectAdvance =
     item.doc_type === "ADVANCE" &&
-    ((role === "MANAGER" && item.status === "COUNTERSIGNED" && isTravelAdvance) ||
-      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW" && isTravelAdvance) ||
-      (role === "AUTH_OFFICER" && item.status === "SUBMITTED" && (isLoanAdvance || isSalaryAdvance)) ||
-      (role === "FINANCE" && item.status === "AUTH_OFFICER_APPROVED" && isSalaryAdvance) ||
-      (role === "ADMIN" && ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "AUTH_OFFICER_APPROVED"].includes(item.status)));
+    ((role === "MANAGER" && item.status === "SUBMITTED") ||
+      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+      (role === "AUTH_OFFICER" && item.status === "HR_REVIEW") ||
+      (role === "CHIEF_OFFICER" && item.status === "CHIEF_OFFICER_REVIEW") ||
+      (role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(item.status)) ||
+      (role === "ADMIN" && ["SUBMITTED", "CHIEF_OFFICER_REVIEW", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status)));
   const canApproveAdvance =
     item.doc_type === "ADVANCE" &&
-    ((role === "MANAGER" && item.status === "COUNTERSIGNED" && isTravelAdvance) ||
-      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW" && isTravelAdvance) ||
-      (role === "AUTH_OFFICER" && item.status === "SUBMITTED" && (isLoanAdvance || isSalaryAdvance)) ||
-      (role === "FINANCE" && item.status === "AUTH_OFFICER_APPROVED" && isSalaryAdvance));
-  const canMarkPaid = item.doc_type === "ADVANCE" && role === "FINANCE" && item.status === "APPROVED";
+    ((role === "MANAGER" && item.status === "SUBMITTED") ||
+      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+      (role === "CHIEF_OFFICER" && item.status === "CHIEF_OFFICER_REVIEW"));
+  const canMarkPaid = item.doc_type === "ADVANCE" && role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(item.status);
   const canCreateAccommodation =
     item.doc_type === "ADVANCE" &&
     role === "AUTH_OFFICER" &&
-    item.status === "APPROVED" &&
+    item.status === "HR_REVIEW" &&
     isTravelAdvance;
   const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
   const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
 
   const canManagerApprove = item.doc_type === "CLAIM" && role === "MANAGER" && item.status === "SUBMITTED";
-  const canAuthApproveClaim = item.doc_type === "CLAIM" && role === "AUTH_OFFICER" && item.status === "MANAGER_APPROVED";
-  const canChiefApprove = item.doc_type === "CLAIM" && role === "CHIEF_OFFICER" && item.status === "AUTH_OFFICER_APPROVED";
-  const canFinanceVerify = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "CHIEF_OFFICER_APPROVED";
+  const canChiefApprove = item.doc_type === "CLAIM" && role === "CHIEF_OFFICER" && item.status === "MANAGER_APPROVED";
+  const canAuthApproveClaim = item.doc_type === "CLAIM" && role === "AUTH_OFFICER" && item.status === "CHIEF_OFFICER_APPROVED";
+  const canFinanceVerify = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "HR_OFFICER";
   const canSettle = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "FINANCE_VERIFIED";
 
   async function act(fn: () => Promise<any>) {
@@ -359,10 +354,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       setError("Accommodation amount must be greater than 0.");
       return;
     }
-    if (!accommodationQuotation) {
-      setError("Upload a quotation file before sending the accommodation request to finance.");
-      return;
-    }
 
     void act(async () => {
       const createResp = await api.createAccommodationRequest({
@@ -374,10 +365,14 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
         amount,
         notes: accommodationNotes.trim() || undefined
       });
-      const form = new FormData();
-      form.append("file", accommodationQuotation);
-      await api.uploadAccommodationQuotation(createResp.id, form);
+      if (accommodationQuotation) {
+        const form = new FormData();
+        form.append("file", accommodationQuotation);
+        await api.uploadAccommodationQuotation(createResp.id, form);
+      }
       await api.sendAccommodationToFinance(createResp.id);
+      const requestedTotal = item.doc_type === "ADVANCE" ? item.requested_total : 0;
+      await api.approveAdvance(item.id, Number(detail?.requested_total || requestedTotal || 0), comments);
     });
   }
 
@@ -655,17 +650,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               </div>
 
               <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {canCountersign && (
-                  <button className="button small-button" disabled={busy} onClick={() => act(() => api.countersignAdvance(item.id, comments))} style={{ padding: "8px 12px" }}>
-                    Countersign Advance
-                  </button>
-                )}
-
                 {(canApproveAdvance || canRejectAdvance || canRollbackAdvance) && (
                   <>
                     {canApproveAdvance && (
                       <button className="button small-button" disabled={busy} onClick={handleApproveAdvance} style={{ padding: "8px 12px" }}>
-                        {role === "HR_MANAGER" ? "Approve for HR Accommodation" : "Approve Advance"}
+                        {role === "HR_MANAGER" ? "Send to HR" : role === "CHIEF_OFFICER" ? "Chief Officer Approve" : "Approve Advance"}
                       </button>
                     )}
                     {canRejectAdvance && (
@@ -695,11 +684,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 {canCreateAccommodation && (
                   <button
                     className="button small-button"
-                    disabled={busy || !accommodationQuotation}
+                    disabled={busy}
                     onClick={handleCreateAccommodation}
                     style={{ padding: "8px 12px" }}
                   >
-                    Upload quotation and send to Finance
+                    Send to Finance
                   </button>
                 )}
 
@@ -726,15 +715,15 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {canAuthApproveClaim && (
-                  <button className="button small-button" disabled={busy} onClick={() => act(() => api.authApproveClaim(item.id, comments))} style={{ padding: "8px 12px" }}>
-                    HR Approve
-                  </button>
-                )}
-
                 {canChiefApprove && (
                   <button className="button small-button" disabled={busy} onClick={() => act(() => api.chiefApproveClaim(item.id, comments))} style={{ padding: "8px 12px" }}>
                     Chief Officer Approve
+                  </button>
+                )}
+
+                {canAuthApproveClaim && (
+                  <button className="button small-button" disabled={busy} onClick={() => act(() => api.authApproveClaim(item.id, comments))} style={{ padding: "8px 12px" }}>
+                    HR Approve
                   </button>
                 )}
 
@@ -750,7 +739,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {!((canCountersign || canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canManagerApprove || canAuthApproveClaim || canChiefApprove || canFinanceVerify || canSettle)) && (
+                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canManagerApprove || canAuthApproveClaim || canChiefApprove || canFinanceVerify || canSettle)) && (
                   <div style={{ opacity: 0.75 }}>No action available for your role on this item.</div>
                 )}
               </div>

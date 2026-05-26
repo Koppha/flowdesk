@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { forbidden, unauthorized } from "./errors.js";
+import { query } from "./db.js";
 export function signToken(payload) {
     return jwt.sign(payload, env.JWT_SECRET, { expiresIn: "12h" });
 }
@@ -14,12 +15,28 @@ export async function hashPassword(password) {
 export async function comparePassword(password, hash) {
     return bcrypt.compare(password, hash);
 }
-export function requireAuth(req, _res, next) {
+export async function requireAuth(req, _res, next) {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer "))
         return next(unauthorized("Missing bearer token"));
     try {
-        req.user = verifyToken(header.slice("Bearer ".length));
+        const token = header.slice("Bearer ".length);
+        const payload = verifyToken(token);
+        req.user = payload;
+        // Invalidate tokens issued before the global sessions_cleared_at timestamp
+        try {
+            const rows = await query(`SELECT value FROM system_state WHERE key='sessions_cleared_at' LIMIT 1`);
+            const row = rows[0];
+            if (row && row.value) {
+                const clearedAt = Date.parse(row.value) / 1000; // seconds
+                const iat = payload.iat || 0;
+                if (iat <= clearedAt)
+                    return next(unauthorized("Session expired"));
+            }
+        }
+        catch (err) {
+            // ignore if system_state table missing
+        }
         return next();
     }
     catch {

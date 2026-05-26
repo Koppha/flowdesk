@@ -5,8 +5,8 @@
 DO $$ BEGIN
   CREATE TYPE role_type AS ENUM (
     'EMPLOYEE',
-    'COUNTERSIGN',
     'MANAGER',
+    'HR_MANAGER',
     'AUTH_OFFICER',
     'CHIEF_OFFICER',
     'FINANCE',
@@ -32,21 +32,21 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE advance_status AS ENUM (
-    'DRAFT','SUBMITTED','COUNTERSIGNED','AUTH_OFFICER_APPROVED','APPROVED','PAID','CLOSED','REJECTED'
+    'DRAFT','SUBMITTED','CHIEF_OFFICER_REVIEW','HR_MANAGER_REVIEW','HR_REVIEW','HR_OFFICER','APPROVED','PAID','CLOSED','REJECTED','CANCELLED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE claim_status AS ENUM (
     'DRAFT','SUBMITTED',
-    'MANAGER_APPROVED','AUTH_OFFICER_APPROVED','CHIEF_OFFICER_APPROVED',
+    'MANAGER_APPROVED','CHIEF_OFFICER_APPROVED','HR_OFFICER',
     'FINANCE_VERIFIED','SETTLED','CLOSED','REJECTED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE approval_step AS ENUM (
-    'COUNTERSIGN','MANAGER','AUTH_OFFICER','CHIEF_OFFICER','FINANCE'
+    'MANAGER','HR_MANAGER','AUTH_OFFICER','CHIEF_OFFICER','FINANCE'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -85,7 +85,6 @@ CREATE TABLE IF NOT EXISTS advance_requests (
   status advance_status NOT NULL DEFAULT 'DRAFT',
 
   submitted_at timestamptz,
-  countersigned_at timestamptz,
   approved_at timestamptz,
   paid_at timestamptz,
   paid_reference text,

@@ -4,27 +4,24 @@ import { nextStatusOrThrow } from "../src/modules/advances/advances.service.js";
 describe("advance transitions", () => {
   it("follows happy path", () => {
     const submitted = nextStatusOrThrow("DRAFT", "SUBMIT");
-    const countersigned = nextStatusOrThrow(submitted, "COUNTERSIGN");
-    const hrManagerReview = nextStatusOrThrow(countersigned, "APPROVE");
-    const approved = nextStatusOrThrow(hrManagerReview, "APPROVE");
-    const paid = nextStatusOrThrow(approved, "MARK_PAID");
-
-    expect(submitted).toBe("SUBMITTED");
-    expect(countersigned).toBe("COUNTERSIGNED");
-    expect(hrManagerReview).toBe("HR_MANAGER_REVIEW");
-    expect(approved).toBe("APPROVED");
-    expect(paid).toBe("PAID");
-  });
-
-  it("routes salary advances through HR then finance approval", () => {
-    const hrApproved = nextStatusOrThrow("AUTH_OFFICER_APPROVED", "APPROVE");
+    const hrManagerReview = nextStatusOrThrow(submitted, "APPROVE");
+    const hrReview = nextStatusOrThrow(hrManagerReview, "APPROVE");
+    const hrApproved = nextStatusOrThrow(hrReview, "APPROVE");
     const paid = nextStatusOrThrow(hrApproved, "MARK_PAID");
 
-    expect(hrApproved).toBe("APPROVED");
+    expect(submitted).toBe("SUBMITTED");
+    expect(hrManagerReview).toBe("HR_MANAGER_REVIEW");
+    expect(hrReview).toBe("HR_REVIEW");
+    expect(hrApproved).toBe("HR_OFFICER");
     expect(paid).toBe("PAID");
   });
 
   it("blocks invalid transition", () => {
     expect(() => nextStatusOrThrow("DRAFT", "APPROVE")).toThrow("Invalid transition");
+  });
+
+  it("uses chief officer review before HR manager review", () => {
+    const next = nextStatusOrThrow("CHIEF_OFFICER_REVIEW", "APPROVE");
+    expect(next).toBe("HR_MANAGER_REVIEW");
   });
 });

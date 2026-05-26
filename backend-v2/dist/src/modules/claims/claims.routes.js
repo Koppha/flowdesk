@@ -7,6 +7,7 @@ import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
+import { getActiveManagerDelegation } from "../../lib/delegations.js";
 export const claimsRouter = Router();
 claimsRouter.use(requireAuth);
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
@@ -17,12 +18,13 @@ const storage = multer.diskStorage({
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replaceAll(" ", "_")}`)
 });
 const upload = multer({ storage });
-function nextClaimStatus(current, action) {
+export function nextClaimStatus(current, action) {
     const map = {
         DRAFT: {},
         SUBMITTED: { MANAGER_APPROVE: "MANAGER_APPROVED" },
         MANAGER_APPROVED: { CHIEF_APPROVE: "CHIEF_OFFICER_APPROVED" },
-        CHIEF_OFFICER_APPROVED: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
+        CHIEF_OFFICER_APPROVED: { AUTH_OFFICER_APPROVE: "HR_OFFICER" },
+        HR_OFFICER: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
         FINANCE_VERIFIED: { SETTLE: "SETTLED" },
         SETTLED: {},
         REJECTED: {}
@@ -37,7 +39,7 @@ async function getClaimById(id) {
     return claim ?? null;
 }
 async function getClaimNotificationContext(claimId) {
-    return (await query(`SELECT u.full_name, u.department, c.claim_total, c.status
+    return (await query(`SELECT u.full_name, u.email, u.department, c.claim_total, c.status
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
         WHERE c.id = $1`, [claimId]))[0] ?? null;
@@ -88,9 +90,9 @@ function canViewClaim(args) {
         return true;
     if (args.role === "CHIEF_OFFICER" && args.status === "MANAGER_APPROVED")
         return true;
-    if (args.role === "AUTH_OFFICER" && ["CHIEF_OFFICER_APPROVED", "FINANCE_VERIFIED"].includes(args.status))
+    if (args.role === "AUTH_OFFICER" && ["CHIEF_OFFICER_APPROVED", "HR_OFFICER"].includes(args.status))
         return true;
-    if (args.role === "FINANCE" && ["CHIEF_OFFICER_APPROVED", "FINANCE_VERIFIED"].includes(args.status))
+    if (args.role === "FINANCE" && ["HR_OFFICER", "FINANCE_VERIFIED"].includes(args.status))
         return true;
     return false;
 }
@@ -381,6 +383,7 @@ claimsRouter.post("/:id/submit", async (req, res, next) => {
                 claimId: req.params.id,
                 status: "SUBMITTED",
                 claimantName: notificationContext.full_name,
+                claimantEmail: notificationContext.email,
                 department: notificationContext.department,
                 claimTotal: Number(notificationContext.claim_total)
             });
@@ -391,11 +394,15 @@ claimsRouter.post("/:id/submit", async (req, res, next) => {
         return next(err);
     }
 });
-claimsRouter.post("/:id/manager-approve", requireRole(["MANAGER", "ADMIN"]), async (req, res, next) => {
+claimsRouter.post("/:id/manager-approve", async (req, res, next) => {
     try {
         const claim = await getClaimById(req.params.id);
         if (!claim)
             throw notFound();
+        const delegated = await getActiveManagerDelegation(req.user.userId);
+        if (req.user.role !== "MANAGER" && !delegated) {
+            throw forbidden("Only managers or delegated users can approve claims");
+        }
         const status = nextClaimStatus(claim.status, "MANAGER_APPROVE");
         await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
         const notificationContext = await getClaimNotificationContext(claim.id);
@@ -404,6 +411,7 @@ claimsRouter.post("/:id/manager-approve", requireRole(["MANAGER", "ADMIN"]), asy
                 claimId: claim.id,
                 status,
                 claimantName: notificationContext.full_name,
+                claimantEmail: notificationContext.email,
                 department: notificationContext.department,
                 claimTotal: Number(notificationContext.claim_total)
             });
@@ -427,6 +435,31 @@ claimsRouter.post("/:id/chief-officer-approve", requireRole(["CHIEF_OFFICER", "A
                 claimId: claim.id,
                 status,
                 claimantName: notificationContext.full_name,
+                claimantEmail: notificationContext.email,
+                department: notificationContext.department,
+                claimTotal: Number(notificationContext.claim_total)
+            });
+        }
+        return res.json({ ok: true, status });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+claimsRouter.post("/:id/auth-officer-approve", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+    try {
+        const claim = await getClaimById(req.params.id);
+        if (!claim)
+            throw notFound();
+        const status = nextClaimStatus(claim.status, "AUTH_OFFICER_APPROVE");
+        await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
+        const notificationContext = await getClaimNotificationContext(claim.id);
+        if (notificationContext) {
+            await notifyClaimTask({
+                claimId: claim.id,
+                status,
+                claimantName: notificationContext.full_name,
+                claimantEmail: notificationContext.email,
                 department: notificationContext.department,
                 claimTotal: Number(notificationContext.claim_total)
             });
@@ -444,6 +477,17 @@ claimsRouter.post("/:id/finance-verify", requireRole(["FINANCE", "ADMIN"]), asyn
             throw notFound();
         const status = nextClaimStatus(claim.status, "FINANCE_VERIFY");
         await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
+        const notificationContext = await getClaimNotificationContext(claim.id);
+        if (notificationContext) {
+            await notifyClaimTask({
+                claimId: claim.id,
+                status,
+                claimantName: notificationContext.full_name,
+                claimantEmail: notificationContext.email,
+                department: notificationContext.department,
+                claimTotal: Number(notificationContext.claim_total)
+            });
+        }
         return res.json({ ok: true, status });
     }
     catch (err) {
@@ -462,6 +506,17 @@ claimsRouter.post("/:id/settle", requireRole(["FINANCE", "ADMIN"]), async (req, 
         await query(`UPDATE clearance_claims
        SET status=$2, settled_method=$3, settled_reference=$4, settled_at=now(), updated_at=now()
        WHERE id=$1`, [claim.id, status, body.data.settled_method, body.data.settled_reference]);
+        const notificationContext = await getClaimNotificationContext(claim.id);
+        if (notificationContext) {
+            await notifyClaimTask({
+                claimId: claim.id,
+                status,
+                claimantName: notificationContext.full_name,
+                claimantEmail: notificationContext.email,
+                department: notificationContext.department,
+                claimTotal: Number(notificationContext.claim_total)
+            });
+        }
         return res.json({ ok: true, status });
     }
     catch (err) {

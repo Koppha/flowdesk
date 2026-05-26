@@ -8,6 +8,7 @@ import { query } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
+import { createDepartmentGroup, listDepartmentGroups, resolveDepartmentGroup } from "../../lib/departments.js";
 const LoginSchema = z
     .object({
     email: z.string().min(1).optional(),
@@ -48,21 +49,21 @@ const ProfileSchema = z
     }
 });
 const UpdateUserRoleSchema = z.object({
-    role: z.enum(["EMPLOYEE", "COUNTERSIGN", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"]),
+    role: z.enum(["EMPLOYEE", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"]),
     is_active: z.boolean().optional()
+});
+const UpdateUserDepartmentSchema = z.object({
+    department: z.string().trim().min(1, "Department is required")
+});
+const CreateDelegationSchema = z.object({
+    manager_id: z.string().uuid().optional(),
+    delegate_id: z.string().uuid(),
+    from_date: z.string().optional(),
+    to_date: z.string().optional()
 });
 const CreateDepartmentSchema = z.object({
     name: z.string().trim().min(2, "Department name is required")
 });
-async function ensureDepartmentsTable() {
-    await query(`
-    CREATE TABLE IF NOT EXISTS departments (
-      id uuid PRIMARY KEY,
-      name text UNIQUE NOT NULL,
-      created_at timestamptz NOT NULL DEFAULT now()
-    )
-  `);
-}
 function maskEmail(email) {
     const [local, domain] = email.split("@");
     if (!local || !domain)
@@ -224,39 +225,20 @@ authRouter.get("/me", async (req, res, next) => {
         return next(err);
     }
 });
-authRouter.get("/departments", async (_req, res, next) => {
+authRouter.get(["/departments", "/groups"], async (_req, res, next) => {
     try {
-        await ensureDepartmentsTable();
-        const rows = await query(`SELECT department
-         FROM (
-           SELECT DISTINCT trim(department) AS department
-             FROM users
-            WHERE department IS NOT NULL
-              AND trim(department) <> ''
-              AND lower(trim(department)) NOT IN ('administration', 'administrator')
-           UNION
-           SELECT trim(name) AS department
-             FROM departments
-            WHERE trim(name) <> ''
-         ) departments
-        ORDER BY department`);
-        return res.json(rows.map((row) => row.department));
+        return res.json(await listDepartmentGroups());
     }
     catch (err) {
         return next(err);
     }
 });
-authRouter.post("/departments", requireRole(["ADMIN"]), async (req, res, next) => {
+authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req, res, next) => {
     try {
         const parsed = CreateDepartmentSchema.safeParse(req.body);
         if (!parsed.success)
             throw badRequest("Invalid department payload", parsed.error.flatten());
-        await ensureDepartmentsTable();
-        const rows = await query(`INSERT INTO departments (id, name)
-       VALUES ($1, $2)
-       ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-       RETURNING id, name`, [randomUUID(), parsed.data.name]);
-        return res.status(201).json(rows[0]);
+        return res.status(201).json(await createDepartmentGroup(parsed.data.name));
     }
     catch (err) {
         return next(err);
@@ -268,21 +250,16 @@ authRouter.post("/complete-profile", async (req, res, next) => {
         if (!parsed.success)
             throw badRequest("Invalid profile payload", parsed.error.flatten());
         const employeeNo = String(parsed.data.employee_no || "").trim() || null;
+        const department = await resolveDepartmentGroup(parsed.data.department);
         const rows = await query(`UPDATE users
           SET full_name=$2,
               department=$3,
               employment_type=$4,
               employee_no=$5,
-              role=
-                CASE
-                  WHEN role='EMPLOYEE' AND $4='PERMANENT' THEN 'COUNTERSIGN'
-                  WHEN role='COUNTERSIGN' AND $4<>'PERMANENT' THEN 'EMPLOYEE'
-                  ELSE role
-                END,
               profile_completed=true,
               updated_at=now()
         WHERE id=$1
-        RETURNING id, role, full_name, employee_no, department, employment_type, profile_completed`, [req.user.userId, parsed.data.full_name, parsed.data.department, parsed.data.employment_type, employeeNo]);
+        RETURNING id, role, full_name, employee_no, department, employment_type, profile_completed`, [req.user.userId, parsed.data.full_name, department, parsed.data.employment_type, employeeNo]);
         return res.json(toAuthResponse(rows[0], req.user?.username || req.user?.fullName || "user"));
     }
     catch (err) {
@@ -318,6 +295,110 @@ authRouter.get("/request-directory", async (req, res, next) => {
         return next(err);
     }
 });
+authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = UpdateUserDepartmentSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid department payload", parsed.error.flatten());
+        const department = await resolveDepartmentGroup(parsed.data.department);
+        const rows = await query(`UPDATE users
+          SET department=$2,
+              profile_completed =
+                CASE
+                  WHEN coalesce(nullif(trim(full_name), ''), '') = '' THEN false
+                  WHEN coalesce(nullif(trim($2::text), ''), '') = '' THEN false
+                  WHEN coalesce(nullif(employment_type, ''), 'PERMANENT') IN ('INTERN', 'TEMPORARY') THEN true
+                  WHEN coalesce(nullif(trim(employee_no), ''), '') = '' THEN false
+                  ELSE true
+                END,
+              updated_at=now()
+        WHERE id=$1
+        RETURNING id, full_name, email, employee_no, department, employment_type, role, profile_completed, is_active, created_at, updated_at`, [req.params.id, department]);
+        if (!rows[0])
+            throw notFound();
+        return res.json(rows[0]);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req, res, next) => {
+    try {
+        const isAdmin = req.user.role === "ADMIN";
+        const condition = isAdmin ? `` : `WHERE md.manager_id = $1`;
+        const params = isAdmin ? [] : [req.user.userId];
+        const rows = await query(`SELECT md.id,
+              md.manager_id,
+              manager.full_name AS manager_name,
+              md.delegate_id,
+              delegate.full_name AS delegate_name,
+              md.department,
+              md.from_date,
+              md.to_date,
+              md.active,
+              md.created_at,
+              md.updated_at
+         FROM manager_delegations md
+         JOIN users manager ON manager.id = md.manager_id
+         JOIN users delegate ON delegate.id = md.delegate_id
+         ${condition}
+        ORDER BY md.created_at DESC`, params);
+        return res.json(rows);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req, res, next) => {
+    try {
+        const parsed = CreateDelegationSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid delegation payload", parsed.error.flatten());
+        const managerId = req.user.role === "MANAGER" ? req.user.userId : parsed.data.manager_id;
+        if (!managerId)
+            throw badRequest("Manager is required for delegation");
+        const users = await query(`SELECT id, role, department FROM users WHERE id IN ($1, $2)`, [managerId, parsed.data.delegate_id]);
+        const manager = users.find((user) => user.id === managerId);
+        const delegate = users.find((user) => user.id === parsed.data.delegate_id);
+        if (!manager || manager.role !== "MANAGER")
+            throw badRequest("Manager user not found or not a manager");
+        if (!delegate)
+            throw badRequest("Delegate user not found");
+        if (delegate.id === manager.id)
+            throw badRequest("Delegate cannot be the same user");
+        const managerDept = String(manager.department || "").trim();
+        const delegateDept = String(delegate.department || "").trim();
+        if (!managerDept || managerDept !== delegateDept) {
+            throw badRequest("Delegate must be in the same department as the manager");
+        }
+        const rows = await query(`INSERT INTO manager_delegations (id, manager_id, delegate_id, department, from_date, to_date)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at`, [randomUUID(), manager.id, delegate.id, managerDept, parsed.data.from_date ?? null, parsed.data.to_date ?? null]);
+        return res.status(201).json(rows[0]);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER"]), async (req, res, next) => {
+    try {
+        const delegation = (await query(`SELECT id, manager_id FROM manager_delegations WHERE id=$1`, [req.params.id]))[0];
+        if (!delegation)
+            throw notFound();
+        if (req.user.role === "MANAGER" && delegation.manager_id !== req.user.userId) {
+            throw forbidden("Managers can only end their own delegations");
+        }
+        const rows = await query(`UPDATE manager_delegations
+          SET active=false,
+              updated_at=now()
+        WHERE id=$1
+        RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at`, [req.params.id]);
+        return res.json(rows[0]);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
 authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (req, res, next) => {
     try {
         const parsed = UpdateUserRoleSchema.safeParse(req.body);
@@ -348,9 +429,7 @@ authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER"
         const parsed = UpdateUserRoleSchema.safeParse(req.body);
         if (!parsed.success)
             throw badRequest("Invalid department role payload", parsed.error.flatten());
-        const department = String(req.params.department || "").trim();
-        if (!department)
-            throw badRequest("Department is required");
+        const department = await resolveDepartmentGroup(String(req.params.department || ""));
         assertRoleAssignmentAllowed(req, { department }, parsed.data.role);
         const rows = await query(`UPDATE users
           SET role=$2,

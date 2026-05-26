@@ -8,6 +8,7 @@ import { query } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
+import { createDepartmentGroup, listDepartmentGroups, resolveDepartmentGroup } from "../../lib/departments.js";
 
 const LoginSchema = z
   .object({
@@ -53,7 +54,7 @@ const ProfileSchema = z
   });
 
 const UpdateUserRoleSchema = z.object({
-  role: z.enum(["EMPLOYEE", "COUNTERSIGN", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"]),
+  role: z.enum(["EMPLOYEE", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"]),
   is_active: z.boolean().optional()
 });
 
@@ -71,16 +72,6 @@ const CreateDelegationSchema = z.object({
 const CreateDepartmentSchema = z.object({
   name: z.string().trim().min(2, "Department name is required")
 });
-
-async function ensureDepartmentsTable() {
-  await query(`
-    CREATE TABLE IF NOT EXISTS departments (
-      id uuid PRIMARY KEY,
-      name text UNIQUE NOT NULL,
-      created_at timestamptz NOT NULL DEFAULT now()
-    )
-  `);
-}
 
 function maskEmail(email: string) {
   const [local, domain] = email.split("@");
@@ -292,25 +283,9 @@ authRouter.get("/me", async (req: AuthedRequest, res, next) => {
   }
 });
 
-const departmentQuery = `SELECT department
-         FROM (
-           SELECT DISTINCT trim(department) AS department
-             FROM users
-            WHERE department IS NOT NULL
-              AND trim(department) <> ''
-              AND lower(trim(department)) NOT IN ('administration', 'administrator')
-           UNION
-           SELECT trim(name) AS department
-             FROM departments
-            WHERE trim(name) <> ''
-         ) departments
-        ORDER BY department`;
-
 authRouter.get(["/departments", "/groups"], async (_req: AuthedRequest, res, next) => {
   try {
-    await ensureDepartmentsTable();
-    const rows = await query<{ department: string }>(departmentQuery);
-    return res.json(rows.map((row) => row.department));
+    return res.json(await listDepartmentGroups());
   } catch (err) {
     return next(err);
   }
@@ -320,15 +295,17 @@ authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req:
   try {
     const parsed = CreateDepartmentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
-    await ensureDepartmentsTable();
-    const rows = await query<{ id: string; name: string }>(
-      `INSERT INTO departments (id, name)
-       VALUES ($1, $2)
-       ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-       RETURNING id, name`,
-      [randomUUID(), parsed.data.name]
-    );
-    return res.status(201).json(rows[0]);
+    return res.status(201).json(await createDepartmentGroup(parsed.data.name));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Admin: clear all sessions (force logout)
+authRouter.post("/admin/clear-sessions", requireRole(["ADMIN"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }
@@ -340,6 +317,7 @@ authRouter.post("/complete-profile", async (req: AuthedRequest, res, next) => {
     if (!parsed.success) throw badRequest("Invalid profile payload", parsed.error.flatten());
 
     const employeeNo = String(parsed.data.employee_no || "").trim() || null;
+    const department = await resolveDepartmentGroup(parsed.data.department);
 
     const rows = await query<{
       id: string;
@@ -355,17 +333,11 @@ authRouter.post("/complete-profile", async (req: AuthedRequest, res, next) => {
               department=$3,
               employment_type=$4,
               employee_no=$5,
-              role=
-                CASE
-                  WHEN role='EMPLOYEE' AND $4='PERMANENT' THEN 'COUNTERSIGN'
-                  WHEN role='COUNTERSIGN' AND $4<>'PERMANENT' THEN 'EMPLOYEE'
-                  ELSE role
-                END,
               profile_completed=true,
               updated_at=now()
         WHERE id=$1
         RETURNING id, role, full_name, employee_no, department, employment_type, profile_completed`,
-      [req.user!.userId, parsed.data.full_name, parsed.data.department, parsed.data.employment_type, employeeNo]
+      [req.user!.userId, parsed.data.full_name, department, parsed.data.employment_type, employeeNo]
     );
 
     return res.json(toAuthResponse(rows[0], req.user?.username || req.user?.fullName || "user"));
@@ -412,14 +384,23 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
   try {
     const parsed = UpdateUserDepartmentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
+    const department = await resolveDepartmentGroup(parsed.data.department);
 
     const rows = await query(
       `UPDATE users
           SET department=$2,
+              profile_completed =
+                CASE
+                  WHEN coalesce(nullif(trim(full_name), ''), '') = '' THEN false
+                  WHEN coalesce(nullif(trim($2::text), ''), '') = '' THEN false
+                  WHEN coalesce(nullif(employment_type, ''), 'PERMANENT') IN ('INTERN', 'TEMPORARY') THEN true
+                  WHEN coalesce(nullif(trim(employee_no), ''), '') = '' THEN false
+                  ELSE true
+                END,
               updated_at=now()
         WHERE id=$1
         RETURNING id, full_name, email, employee_no, department, employment_type, role, profile_completed, is_active, created_at, updated_at`,
-      [req.params.id, parsed.data.department]
+      [req.params.id, department]
     );
     if (!rows[0]) throw notFound();
     return res.json(rows[0]);
@@ -551,8 +532,7 @@ authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER"
     const parsed = UpdateUserRoleSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid department role payload", parsed.error.flatten());
 
-    const department = String(req.params.department || "").trim();
-    if (!department) throw badRequest("Department is required");
+    const department = await resolveDepartmentGroup(String(req.params.department || ""));
     assertRoleAssignmentAllowed(req, { department }, parsed.data.role);
 
     const rows = await query(

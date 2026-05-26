@@ -26,16 +26,20 @@ type ClaimStatus =
   | "SUBMITTED"
   | "MANAGER_APPROVED"
   | "CHIEF_OFFICER_APPROVED"
+  | "HR_OFFICER"
   | "FINANCE_VERIFIED"
   | "SETTLED"
   | "REJECTED";
 
-function nextClaimStatus(current: ClaimStatus, action: "MANAGER_APPROVE" | "CHIEF_APPROVE" | "FINANCE_VERIFY" | "SETTLE") {
-  const map: Record<ClaimStatus, Partial<Record<typeof action, ClaimStatus>>> = {
+type ClaimAction = "MANAGER_APPROVE" | "CHIEF_APPROVE" | "AUTH_OFFICER_APPROVE" | "FINANCE_VERIFY" | "SETTLE";
+
+export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
+  const map: Record<ClaimStatus, Partial<Record<ClaimAction, ClaimStatus>>> = {
     DRAFT: {},
     SUBMITTED: { MANAGER_APPROVE: "MANAGER_APPROVED" },
     MANAGER_APPROVED: { CHIEF_APPROVE: "CHIEF_OFFICER_APPROVED" },
-    CHIEF_OFFICER_APPROVED: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
+    CHIEF_OFFICER_APPROVED: { AUTH_OFFICER_APPROVE: "HR_OFFICER" },
+    HR_OFFICER: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
     FINANCE_VERIFIED: { SETTLE: "SETTLED" },
     SETTLED: {},
     REJECTED: {}
@@ -52,8 +56,8 @@ async function getClaimById(id: string) {
 
 async function getClaimNotificationContext(claimId: string) {
   return (
-    await query<{ full_name: string | null; department: string | null; claim_total: string; status: ClaimStatus }>(
-      `SELECT u.full_name, u.department, c.claim_total, c.status
+    await query<{ full_name: string | null; email: string | null; department: string | null; claim_total: string; status: ClaimStatus }>(
+      `SELECT u.full_name, u.email, u.department, c.claim_total, c.status
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
         WHERE c.id = $1`,
@@ -117,8 +121,8 @@ function canViewClaim(args: { role: string; claimantId: string; userId: string; 
   if (args.claimantId === args.userId) return true;
   if (args.role === "MANAGER" && args.status === "SUBMITTED") return true;
   if (args.role === "CHIEF_OFFICER" && args.status === "MANAGER_APPROVED") return true;
-  if (args.role === "AUTH_OFFICER" && ["CHIEF_OFFICER_APPROVED", "FINANCE_VERIFIED"].includes(args.status)) return true;
-  if (args.role === "FINANCE" && ["CHIEF_OFFICER_APPROVED", "FINANCE_VERIFIED"].includes(args.status)) return true;
+  if (args.role === "AUTH_OFFICER" && ["CHIEF_OFFICER_APPROVED", "HR_OFFICER"].includes(args.status)) return true;
+  if (args.role === "FINANCE" && ["HR_OFFICER", "FINANCE_VERIFIED"].includes(args.status)) return true;
   return false;
 }
 
@@ -447,6 +451,7 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         claimId: req.params.id,
         status: "SUBMITTED",
         claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total)
       });
@@ -475,6 +480,7 @@ claimsRouter.post("/:id/manager-approve", async (req: AuthedRequest, res, next) 
         claimId: claim.id,
         status,
         claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total)
       });
@@ -497,6 +503,30 @@ claimsRouter.post("/:id/chief-officer-approve", requireRole(["CHIEF_OFFICER", "A
         claimId: claim.id,
         status,
         claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total)
+      });
+    }
+    return res.json({ ok: true, status });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+claimsRouter.post("/:id/auth-officer-approve", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+    const status = nextClaimStatus(claim.status, "AUTH_OFFICER_APPROVE");
+    await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyClaimTask({
+        claimId: claim.id,
+        status,
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total)
       });
@@ -513,6 +543,17 @@ claimsRouter.post("/:id/finance-verify", requireRole(["FINANCE", "ADMIN"]), asyn
     if (!claim) throw notFound();
     const status = nextClaimStatus(claim.status, "FINANCE_VERIFY");
     await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyClaimTask({
+        claimId: claim.id,
+        status,
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total)
+      });
+    }
     return res.json({ ok: true, status });
   } catch (err) {
     return next(err);
@@ -533,6 +574,17 @@ claimsRouter.post("/:id/settle", requireRole(["FINANCE", "ADMIN"]), async (req: 
        WHERE id=$1`,
       [claim.id, status, body.data.settled_method, body.data.settled_reference]
     );
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyClaimTask({
+        claimId: claim.id,
+        status,
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total)
+      });
+    }
     return res.json({ ok: true, status });
   } catch (err) {
     return next(err);
