@@ -150,4 +150,9 @@ export const api = {
   financeVerifyClaim: (id: string, comments?: string) => req(`/claims/${id}/finance-verify`, { method: "POST", body: JSON.stringify({ comments }) }),
   settleClaim: (id: string, settled_method: "ECOCASH" | "BANK" | "CASH" | "OTHER", settled_reference: string) =>
     req(`/claims/${id}/settle`, { method: "POST", body: JSON.stringify({ settled_method, settled_reference }) })
+  ,
+  // Hotels (accommodation)
+  hotels: () => req("/accommodation/hotels"),
+  createHotel: (data: any) => req("/accommodation/hotels", { method: "POST", body: JSON.stringify(data) }),
+  updateHotel: (id: string, data: any) => req(`/accommodation/hotels/${id}`, { method: "PUT", body: JSON.stringify(data) })
 };

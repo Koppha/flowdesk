@@ -88,6 +88,8 @@ export default function App() {
   const [profile, setProfile] = useState<any>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileName, setProfileName] = useState("");
+  const [profileFirstName, setProfileFirstName] = useState("");
+  const [profileLastName, setProfileLastName] = useState("");
   const [profileDepartment, setProfileDepartment] = useState("");
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [profileEmploymentType, setProfileEmploymentType] = useState<"PERMANENT" | "INTERN" | "TEMPORARY">("PERMANENT");
@@ -95,6 +97,12 @@ export default function App() {
   const [requestDirectory, setRequestDirectory] = useState<RequestDirectoryUser[]>([]);
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [hotels, setHotels] = useState<any[]>([]);
+  const [hotelsLoading, setHotelsLoading] = useState(false);
+  const [newHotelName, setNewHotelName] = useState("");
+  const [newHotelAddress, setNewHotelAddress] = useState("");
+  const [newHotelContact, setNewHotelContact] = useState("");
+  const [newHotelDepartment, setNewHotelDepartment] = useState("");
   const [departmentRoleDepartment, setDepartmentRoleDepartment] = useState("");
   const [departmentRoleUserId, setDepartmentRoleUserId] = useState("");
   const [departmentRoleValue, setDepartmentRoleValue] = useState("EMPLOYEE");
@@ -435,7 +443,11 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
-    setProfileName(profile?.full_name || "");
+    const full = profile?.full_name || "";
+    const parts = full.split(" ").filter(Boolean);
+    setProfileFirstName(parts.shift() || "");
+    setProfileLastName(parts.join(" ") || "");
+    setProfileName(full);
     setProfileDepartment(profile?.department || "");
     setProfileEmploymentType((profile?.employment_type || "PERMANENT") as "PERMANENT" | "INTERN" | "TEMPORARY");
     setProfileEmployeeNo(profile?.employee_no || "");
@@ -473,11 +485,41 @@ export default function App() {
   }, [page, clearanceLinkedAdvanceId]);
 
   useEffect(() => {
-    if (token && page === "SETTINGS" && (role === "ADMIN" || role === "MANAGER")) {
-      void loadAdminUsers();
-      void loadDelegations();
+    if (token && page === "SETTINGS") {
+      if (role === "ADMIN" || role === "MANAGER") {
+        void loadAdminUsers();
+        void loadDelegations();
+      }
+      void loadHotels();
     }
   }, [token, page, role]);
+
+  async function loadHotels() {
+    setHotelsLoading(true);
+    try {
+      const rows: any[] = await api.hotels();
+      setHotels(rows || []);
+    } catch (e: any) {
+      alert("Error loading hotels: " + e.message);
+    } finally {
+      setHotelsLoading(false);
+    }
+  }
+
+  async function createHotel() {
+    if (!newHotelName.trim()) return alert("Enter hotel name");
+    try {
+      await api.createHotel({ name: newHotelName.trim(), address: newHotelAddress.trim() || undefined, contact: newHotelContact.trim() || undefined, department: newHotelDepartment || undefined });
+      setNewHotelName("");
+      setNewHotelAddress("");
+      setNewHotelContact("");
+      setNewHotelDepartment("");
+      void loadHotels();
+      alert("Hotel added");
+    } catch (e: any) {
+      alert("Error creating hotel: " + e.message);
+    }
+  }
 
   async function doLogin() {
     setError(null);
@@ -505,8 +547,8 @@ export default function App() {
   }
 
   async function submitProfile() {
-    if (!profileName.trim()) {
-      alert("Enter your full name.");
+    if (!profileFirstName.trim() || !profileLastName.trim()) {
+      alert("Enter your first name and last name.");
       return;
     }
     if (!isKnownDepartment(profileDepartment)) {
@@ -519,8 +561,9 @@ export default function App() {
     }
 
     try {
+      const full = `${profileFirstName.trim()} ${profileLastName.trim()}`;
       const result: any = await api.completeProfile({
-        full_name: profileName.trim(),
+        full_name: full,
         department: profileDepartment.trim(),
         employment_type: profileEmploymentType,
         employee_no: profileEmployeeNo.trim() || undefined
@@ -1053,8 +1096,9 @@ export default function App() {
           <h1>Complete Your Profile</h1>
           <p className="subtitle">Fill in your profile details before using the system.</p>
 
-          <div className="form-group">
-            <input className="login-input" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="Full name" />
+          <div className="form-group" style={{ display: 'flex', gap: 8 }}>
+            <input className="login-input" value={profileFirstName} onChange={(e) => setProfileFirstName(e.target.value)} placeholder="First name" />
+            <input className="login-input" value={profileLastName} onChange={(e) => setProfileLastName(e.target.value)} placeholder="Last name" />
           </div>
           <div className="form-group">
             <select
@@ -1187,6 +1231,48 @@ export default function App() {
                         </div>
                       ))
                     )}
+                  </div>
+                  <div className="card" style={{ padding: 20, marginBottom: 20 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <h3 style={{ margin: 0 }}>Hotels</h3>
+                      <button className="button small-button" onClick={() => void loadHotels()} disabled={hotelsLoading}>{hotelsLoading ? 'Loading...' : 'Refresh'}</button>
+                    </div>
+                    { (role === 'HR_MANAGER' || role === 'ADMIN') && (
+                      <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+                        <input placeholder="Hotel name" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
+                        <input placeholder="Address (optional)" value={newHotelAddress} onChange={(e) => setNewHotelAddress(e.target.value)} />
+                        <input placeholder="Contact (optional)" value={newHotelContact} onChange={(e) => setNewHotelContact(e.target.value)} />
+                        <select value={newHotelDepartment} onChange={(e) => setNewHotelDepartment(e.target.value)}>
+                          <option value="">Assign department (optional)</option>
+                          {departmentOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <div>
+                          <button className="button small-button" onClick={() => void createHotel()}>Add Hotel</button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="table">
+                        <thead>
+                          <tr><th>Name</th><th>Department</th><th>Contact</th><th>Address</th></tr>
+                        </thead>
+                        <tbody>
+                          {hotels.length === 0 ? (
+                            <tr><td colSpan={4} style={{ textAlign: 'center' }}>No hotels</td></tr>
+                          ) : (
+                            hotels.map(h => (
+                              <tr key={h.id}>
+                                <td>{h.name}</td>
+                                <td>{h.department || '—'}</td>
+                                <td>{h.contact || '—'}</td>
+                                <td>{h.address || '—'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
 

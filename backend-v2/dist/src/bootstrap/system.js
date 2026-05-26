@@ -214,6 +214,18 @@ async function ensureFeatureSchema() {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+    await query(`
+    CREATE TABLE IF NOT EXISTS accommodation_hotels (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      address text,
+      contact text,
+      department text,
+      created_by_id uuid REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
     // lightweight key/value for system state (used to expire sessions)
     await query(`
     CREATE TABLE IF NOT EXISTS system_state (
@@ -224,4 +236,12 @@ async function ensureFeatureSchema() {
     // Force-clear sessions so users must login from scratch
     await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+    // Reset user profiles so users must complete profile on next login (preserve ADMIN accounts)
+    await query(`UPDATE users
+        SET profile_completed = false,
+            full_name = NULL,
+            employee_no = NULL,
+            department = NULL,
+            updated_at = now()
+      WHERE role IS NULL OR role != 'ADMIN'`);
 }

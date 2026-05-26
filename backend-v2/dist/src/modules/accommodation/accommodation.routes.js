@@ -34,6 +34,51 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 export const accommodationRouter = Router();
 accommodationRouter.use(requireAuth);
+// Hotels CRUD - HR Managers can onboard hotels
+accommodationRouter.get("/hotels", async (_req, res, next) => {
+    try {
+        const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY name`);
+        return res.json(rows);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "ADMIN"]), async (req, res, next) => {
+    try {
+        const body = z.object({ name: z.string().trim().min(1), address: z.string().optional(), contact: z.string().optional(), department: z.string().optional() }).safeParse(req.body);
+        if (!body.success)
+            throw badRequest("Invalid hotel payload", body.error.flatten());
+        const rows = await query(`INSERT INTO accommodation_hotels (name, address, contact, department, created_by_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [body.data.name, body.data.address ?? null, body.data.contact ?? null, body.data.department ?? null, req.user.userId]);
+        return res.status(201).json({ id: rows[0].id });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "ADMIN"]), async (req, res, next) => {
+    try {
+        const body = z.object({ name: z.string().trim().min(1).optional(), address: z.string().optional(), contact: z.string().optional(), department: z.string().optional() }).safeParse(req.body);
+        if (!body.success)
+            throw badRequest("Invalid hotel payload", body.error.flatten());
+        const updates = [];
+        const params = [];
+        for (const [k, v] of Object.entries(body.data)) {
+            if (v === undefined)
+                continue;
+            params.push(v);
+            updates.push(`${k}=$${params.length}`);
+        }
+        if (updates.length === 0)
+            return res.json({ ok: true });
+        params.push(req.params.id);
+        await query(`UPDATE accommodation_hotels SET ${updates.join(",")}, updated_at=now() WHERE id=$${params.length}`, params);
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
 async function writeAccommodationAudit(args) {
     await query(`INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
      VALUES ($1,$2,'accommodation_requests',$3,$4,$5)`, [

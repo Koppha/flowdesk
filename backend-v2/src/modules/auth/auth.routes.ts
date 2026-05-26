@@ -311,6 +311,27 @@ authRouter.post("/admin/clear-sessions", requireRole(["ADMIN"]), async (_req: Au
   }
 });
 
+// Admin: reset profiles for non-admin users and clear sessions
+authRouter.post("/admin/reset-profiles", requireRole(["ADMIN"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    await query(
+      `UPDATE users
+          SET profile_completed = false,
+              full_name = NULL,
+              employee_no = NULL,
+              department = NULL,
+              updated_at = now()
+        WHERE role IS NULL OR role != 'ADMIN'`
+    );
+
+    await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 authRouter.post("/complete-profile", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ProfileSchema.safeParse(req.body);

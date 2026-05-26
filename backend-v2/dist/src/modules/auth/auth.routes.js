@@ -244,6 +244,16 @@ authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req,
         return next(err);
     }
 });
+// Admin: clear all sessions (force logout)
+authRouter.post("/admin/clear-sessions", requireRole(["ADMIN"]), async (_req, res, next) => {
+    try {
+        await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
 authRouter.post("/complete-profile", async (req, res, next) => {
     try {
         const parsed = ProfileSchema.safeParse(req.body);

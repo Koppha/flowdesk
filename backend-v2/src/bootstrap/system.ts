@@ -264,4 +264,15 @@ async function ensureFeatureSchema() {
     `INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`
   );
+
+  // Reset user profiles so users must complete profile on next login (preserve ADMIN accounts)
+  await query(
+    `UPDATE users
+        SET profile_completed = false,
+            full_name = NULL,
+            employee_no = NULL,
+            department = NULL,
+            updated_at = now()
+      WHERE role IS NULL OR role != 'ADMIN'`
+  );
 }
