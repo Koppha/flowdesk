@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
+import { LESOTHO_DISTRICTS } from "./constants";
 
 type InboxItem =
   | {
@@ -56,6 +57,15 @@ function fmtDate(value: any) {
   const d = new Date(String(value || ""));
   if (Number.isNaN(d.getTime())) return String(value || "—");
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function lineAmount(line: any) {
+  return Number(line.line_total || 0) || Number(line.meals || 0) || Number(line.lunch || 0) + Number(line.dinner || 0);
+}
+
+function lineMealCount(line: any) {
+  const count = Number(line.meals_count);
+  return Number.isFinite(count) && count > 0 ? count : "—";
 }
 
 function displayRoleLabel(value: string | null | undefined) {
@@ -253,6 +263,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const [accommodationAmount, setAccommodationAmount] = useState("");
   const [accommodationNotes, setAccommodationNotes] = useState("");
   const [accommodationQuotation, setAccommodationQuotation] = useState<File | null>(null);
+  const [accommodationHotels, setAccommodationHotels] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
 
@@ -309,6 +320,24 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canFinanceVerify = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "HR_OFFICER";
   const canSettle = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "FINANCE_VERIFIED";
 
+  const districtHotels = useMemo(
+    () => accommodationHotels.filter((hotel) => hotel.district === accommodationLocation),
+    [accommodationHotels, accommodationLocation]
+  );
+
+  useEffect(() => {
+    if (!canCreateAccommodation) return;
+    api.hotels()
+      .then((rows: any[]) => setAccommodationHotels(rows || []))
+      .catch((e: any) => setError(String(e.message)));
+  }, [canCreateAccommodation]);
+
+  useEffect(() => {
+    if (!accommodationProvider) return;
+    if (districtHotels.some((hotel) => hotel.name === accommodationProvider)) return;
+    setAccommodationProvider("");
+  }, [districtHotels, accommodationProvider]);
+
   async function act(fn: () => Promise<any>) {
     setBusy(true);
     setError(null);
@@ -348,6 +377,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     const amount = Number(accommodationAmount || 0);
     if (!accommodationLocation.trim()) {
       setError("Accommodation location is required.");
+      return;
+    }
+    if (!accommodationProvider.trim()) {
+      setError("Select an onboarded hotel for the district.");
       return;
     }
     if (amount <= 0) {
@@ -461,6 +494,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       <thead>
                         <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
                           <th style={{ padding: 6 }}>Date</th>
+                          <th style={{ padding: 6 }}>Route</th>
                           <th style={{ padding: 6 }}>Meals</th>
                           <th style={{ padding: 6 }}>Total</th>
                         </tr>
@@ -469,8 +503,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                         {(detail.lines || []).map((l: any) => (
                           <tr key={l.id} style={{ borderBottom: "1px solid var(--border)" }}>
                             <td style={{ padding: 6 }}>{fmtDate(l.line_date)}</td>
-                            <td style={{ padding: 6 }}>{fmt(Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0))}</td>
-                            <td style={{ padding: 6 }}>{fmt(Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0))}</td>
+                            <td style={{ padding: 6 }}>{l.location || "—"}</td>
+                            <td style={{ padding: 6 }}>{lineMealCount(l)}</td>
+                            <td style={{ padding: 6 }}>{fmt(lineAmount(l))}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -548,11 +583,21 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
                   <div>
                     <div style={{ fontSize: 13, opacity: 0.8 }}>Location</div>
-                    <input value={accommodationLocation} onChange={(e) => setAccommodationLocation(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }} />
+                    <select value={accommodationLocation} onChange={(e) => setAccommodationLocation(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}>
+                      <option value="">Select district</option>
+                      {LESOTHO_DISTRICTS.map((district) => (
+                        <option key={district} value={district}>{district}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <div style={{ fontSize: 13, opacity: 0.8 }}>Provider</div>
-                    <input value={accommodationProvider} onChange={(e) => setAccommodationProvider(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }} />
+                    <select value={accommodationProvider} onChange={(e) => setAccommodationProvider(e.target.value)} disabled={!accommodationLocation} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}>
+                      <option value="">Select hotel</option>
+                      {districtHotels.map((hotel) => (
+                        <option key={hotel.id} value={hotel.name}>{hotel.name}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <div style={{ fontSize: 13, opacity: 0.8 }}>Amount</div>

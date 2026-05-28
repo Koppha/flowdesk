@@ -8,7 +8,7 @@ import { query } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
-import { createDepartmentGroup, listDepartmentGroups, resolveDepartmentGroup } from "../../lib/departments.js";
+import { createDepartmentGroup, createSectionGroup, deleteDepartmentGroup, deleteSectionGroup, listDepartmentGroups, listDepartmentsWithSections, listSectionGroups, resolveDepartmentGroup, updateDepartmentGroup, updateSectionGroup } from "../../lib/departments.js";
 
 const LoginSchema = z
   .object({
@@ -70,7 +70,21 @@ const CreateDelegationSchema = z.object({
 });
 
 const CreateDepartmentSchema = z.object({
-  name: z.string().trim().min(2, "Department name is required")
+  name: z.string().trim().min(2, "Department name is required"),
+  section_id: z.string().uuid().optional()
+});
+
+const UpdateDepartmentSchema = z.object({
+  name: z.string().trim().min(2, "Department name is required"),
+  section_id: z.string().uuid().optional()
+});
+
+const CreateSectionSchema = z.object({
+  name: z.string().trim().min(2, "Section name is required")
+});
+
+const UpdateSectionSchema = z.object({
+  name: z.string().trim().min(2, "Section name is required")
 });
 
 function maskEmail(email: string) {
@@ -295,7 +309,70 @@ authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req:
   try {
     const parsed = CreateDepartmentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
-    return res.status(201).json(await createDepartmentGroup(parsed.data.name));
+    return res.status(201).json(await createDepartmentGroup(parsed.data.name, parsed.data.section_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.put(["/departments/:department", "/groups/:department"], requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = UpdateDepartmentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
+    const updated = await updateDepartmentGroup(req.params.department, parsed.data.name, parsed.data.section_id);
+    return res.json(updated);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.delete(["/departments/:department", "/groups/:department"], requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await deleteDepartmentGroup(req.params.department));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.get("/sections", async (_req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await listSectionGroups());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.post("/sections", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = CreateSectionSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
+    return res.status(201).json(await createSectionGroup(parsed.data.name));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.put("/sections/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = UpdateSectionSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
+    return res.json(await updateSectionGroup(req.params.id, parsed.data.name));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.delete("/sections/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await deleteSectionGroup(req.params.id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.get("/departments-with-sections", async (_req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await listDepartmentsWithSections());
   } catch (err) {
     return next(err);
   }

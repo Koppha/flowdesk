@@ -7,6 +7,7 @@ import { createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } fr
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
 import { notifyAdvanceTask } from "../../lib/notifications.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
+import { getNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 function normalizeEcoCashNumber(value) {
     return String(value || "").trim().replace(/[\s-]/g, "");
@@ -81,6 +82,8 @@ const LinesSchema = z.object({
         .array(z.object({
         line_date: z.string(),
         location: z.string().optional(),
+        meals_count: z.coerce.number().int().nonnegative().optional(),
+        meal_value: z.coerce.number().nonnegative().optional(),
         lunch: z.coerce.number().nonnegative().default(0),
         dinner: z.coerce.number().nonnegative().default(0)
     }))
@@ -100,6 +103,9 @@ function toPaymentAccount(args) {
         return `BANK:${bank};ACCOUNT:${account};BRANCH:${branch}`;
     }
     return normalizeEcoCashNumber(args.ecocash_number || args.payment_account);
+}
+function toMoney(value) {
+    return Number(value.toFixed(2));
 }
 async function writeAdvanceAudit(args) {
     await query(`INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
@@ -304,20 +310,31 @@ advancesRouter.put("/:id/lines", async (req, res, next) => {
         if (!parsed.success)
             throw badRequest("Invalid payload", parsed.error.flatten());
         await query(`DELETE FROM advance_lines WHERE advance_request_id=$1`, [req.params.id]);
+        const configuredMealValue = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, 0);
         for (const line of parsed.data.lines) {
-            const total = (line.lunch || 0) + (line.dinner || 0);
-            await query(`INSERT INTO advance_lines (advance_request_id, line_date, location, lunch, dinner, line_total)
-         VALUES ($1,$2,$3,$4,$5,$6)`, [req.params.id, line.line_date, line.location ?? null, line.lunch, line.dinner, total]);
+            const hasMealCount = line.meals_count !== undefined;
+            const mealsCount = hasMealCount ? Number(line.meals_count) : 0;
+            const mealValue = hasMealCount ? configuredMealValue : Number(line.meal_value || 0);
+            const lunchAmount = hasMealCount ? toMoney(mealsCount * configuredMealValue) : Number(line.lunch || 0);
+            const dinnerAmount = hasMealCount ? 0 : Number(line.dinner || 0);
+            const total = toMoney(lunchAmount + dinnerAmount);
+            await query(`INSERT INTO advance_lines (advance_request_id, line_date, location, meals_count, meal_value, lunch, dinner, line_total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [req.params.id, line.line_date, line.location ?? null, mealsCount, mealValue, lunchAmount, dinnerAmount, total]);
         }
-        const requestedTotal = parsed.data.lines.reduce((acc, line) => acc + (line.lunch || 0) + (line.dinner || 0), 0);
+        const requestedTotal = parsed.data.lines.reduce((acc, line) => {
+            if (line.meals_count !== undefined) {
+                return acc + Number(line.meals_count) * configuredMealValue;
+            }
+            return acc + (line.lunch || 0) + (line.dinner || 0);
+        }, 0);
         await query(`UPDATE advance_requests SET requested_total=$2, updated_at=now() WHERE id=$1`, [req.params.id, requestedTotal]);
         await writeAdvanceAudit({
             actorId: req.user.userId,
             advanceId: req.params.id,
             action: "ADVANCE_LINES_UPDATE",
-            after: { requested_total: Number(requestedTotal.toFixed(2)) }
+            after: { requested_total: toMoney(requestedTotal), meal_value: configuredMealValue }
         });
-        return res.json({ ok: true, requested_total: Number(requestedTotal.toFixed(2)) });
+        return res.json({ ok: true, requested_total: toMoney(requestedTotal), meal_value: configuredMealValue });
     }
     catch (err) {
         return next(err);
@@ -338,8 +355,11 @@ advancesRouter.post("/:id/submit", async (req, res, next) => {
             const row = (await query(`SELECT count(*)::text AS count FROM advance_lines WHERE advance_request_id=$1`, [adv.id]))[0];
             if (!row || Number(row.count) < 1)
                 throw badRequest("At least one travel table entry is required");
-            const lines = await query(`SELECT lunch, dinner FROM advance_lines WHERE advance_request_id=$1`, [adv.id]);
-            const total = lines.reduce((sum, line) => sum + Number(line.lunch || 0) + Number(line.dinner || 0), 0);
+            const lines = await query(`SELECT lunch, dinner, line_total FROM advance_lines WHERE advance_request_id=$1`, [adv.id]);
+            const total = lines.reduce((sum, line) => {
+                const storedTotal = Number(line.line_total || 0);
+                return sum + (storedTotal > 0 ? storedTotal : Number(line.lunch || 0) + Number(line.dinner || 0));
+            }, 0);
             await query(`UPDATE advance_requests SET requested_total=$2 WHERE id=$1`, [adv.id, total]);
             if (total <= 0)
                 throw badRequest("Total must be > 0");

@@ -81,7 +81,9 @@ export const api = {
   departments: () => req("/auth/departments"),
   groups: () => req("/auth/groups"),
   requestDirectory: () => req("/auth/request-directory"),
-  createDepartment: (name: string) => req("/auth/departments", { method: "POST", body: JSON.stringify({ name }) }),
+  createDepartment: (name: string, sectionId?: string) => req("/auth/departments", { method: "POST", body: JSON.stringify({ name, section_id: sectionId }) }),
+  updateDepartment: (department: string, name: string, sectionId?: string) => req(`/auth/departments/${encodeURIComponent(department)}`, { method: "PUT", body: JSON.stringify({ name, section_id: sectionId }) }),
+  deleteDepartment: (department: string) => req(`/auth/departments/${encodeURIComponent(department)}`, { method: "DELETE" }),
   completeProfile: (data: any) => req("/auth/complete-profile", { method: "POST", body: JSON.stringify(data) }),
   adminUsers: () => req("/auth/users"),
   updateUserRole: (id: string, data: any) => req(`/auth/users/${id}/role`, { method: "POST", body: JSON.stringify(data) }),
@@ -89,6 +91,11 @@ export const api = {
   updateUserGroup: (id: string, data: any) => req(`/auth/users/${id}/group`, { method: "POST", body: JSON.stringify(data) }),
   updateDepartmentRole: (department: string, data: any) =>
     req(`/auth/departments/${encodeURIComponent(department)}/role`, { method: "POST", body: JSON.stringify(data) }),
+  departmentsWithSections: () => req("/auth/departments-with-sections"),
+  sections: () => req("/auth/sections"),
+  createSection: (name: string) => req("/auth/sections", { method: "POST", body: JSON.stringify({ name }) }),
+  updateSection: (id: string, name: string) => req(`/auth/sections/${id}`, { method: "PUT", body: JSON.stringify({ name }) }),
+  deleteSection: (id: string) => req(`/auth/sections/${id}`, { method: "DELETE" }),
   delegations: () => req("/auth/delegations"),
   createDelegation: (data: any) => req("/auth/delegations", { method: "POST", body: JSON.stringify(data) }),
   endDelegation: (id: string) => req(`/auth/delegations/${id}/end`, { method: "POST", body: JSON.stringify({}) }),
@@ -154,5 +161,7 @@ export const api = {
   // Hotels (accommodation)
   hotels: () => req("/accommodation/hotels"),
   createHotel: (data: any) => req("/accommodation/hotels", { method: "POST", body: JSON.stringify(data) }),
-  updateHotel: (id: string, data: any) => req(`/accommodation/hotels/${id}`, { method: "PUT", body: JSON.stringify(data) })
+  updateHotel: (id: string, data: any) => req(`/accommodation/hotels/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  mealValue: () => req("/accommodation/meal-value"),
+  updateMealValue: (meal_value: number) => req("/accommodation/meal-value", { method: "PUT", body: JSON.stringify({ meal_value }) })
 };

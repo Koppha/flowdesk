@@ -3,6 +3,7 @@ import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, g
 import AttendanceModule from "./AttendanceModule";
 import Inbox from "./Inbox";
 import OvertimeModule from "./OvertimeModule";
+import { LESOTHO_DISTRICTS } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 
 type ClearanceTripRow = {
@@ -59,6 +60,33 @@ function withStartupTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
 }
 
+function SettingsAccordion(props: { title: string; subtitle?: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
+  return (
+    <div className="card" style={{ padding: 20, marginBottom: 20 }}>
+      <button
+        type="button"
+        onClick={props.onToggle}
+        style={{
+          all: "unset",
+          width: "100%",
+          cursor: "pointer",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: 0
+        }}
+      >
+        <div style={{ textAlign: "left" }}>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{props.title}</div>
+          {props.subtitle ? <div style={{ color: "#6b7280", marginTop: 4 }}>{props.subtitle}</div> : null}
+        </div>
+        <div style={{ fontSize: 22, width: 28, textAlign: "center" }}>{props.open ? "−" : "+"}</div>
+      </button>
+      {props.open ? <div style={{ marginTop: 16 }}>{props.children}</div> : null}
+    </div>
+  );
+}
+
 async function optionalStartupData<T>(promise: Promise<T>, fallback: T, label: string): Promise<T> {
   try {
     return await withStartupTimeout(promise, label);
@@ -100,15 +128,29 @@ export default function App() {
   const [hotels, setHotels] = useState<any[]>([]);
   const [hotelsLoading, setHotelsLoading] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
+  const [newHotelDistrict, setNewHotelDistrict] = useState("");
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelContact, setNewHotelContact] = useState("");
   const [newHotelDepartment, setNewHotelDepartment] = useState("");
+  const [mealValue, setMealValue] = useState(0);
+  const [mealValueDraft, setMealValueDraft] = useState("0");
+  const [mealValueLoading, setMealValueLoading] = useState(false);
   const [departmentRoleDepartment, setDepartmentRoleDepartment] = useState("");
   const [departmentRoleUserId, setDepartmentRoleUserId] = useState("");
   const [departmentRoleValue, setDepartmentRoleValue] = useState("EMPLOYEE");
   const [groupAssignUserId, setGroupAssignUserId] = useState("");
   const [groupAssignDepartment, setGroupAssignDepartment] = useState("");
   const [newDepartmentName, setNewDepartmentName] = useState("");
+  const [newDepartmentSectionId, setNewDepartmentSectionId] = useState("");
+  const [departmentRows, setDepartmentRows] = useState<any[]>([]);
+  const [sectionOptions, setSectionOptions] = useState<{ id: string; name: string }[]>([]);
+  const [newSectionName, setNewSectionName] = useState("");
+  const [profileAccordionOpen, setProfileAccordionOpen] = useState(true);
+  const [travelSettingsOpen, setTravelSettingsOpen] = useState(true);
+  const [sectionManagementOpen, setSectionManagementOpen] = useState(true);
+  const [groupAssignmentOpen, setGroupAssignmentOpen] = useState(false);
+  const [delegationsOpen, setDelegationsOpen] = useState(false);
+  const [adminUsersOpen, setAdminUsersOpen] = useState(false);
   const [delegations, setDelegations] = useState<any[]>([]);
   const [delegationsLoading, setDelegationsLoading] = useState(false);
   const [delegationManagerId, setDelegationManagerId] = useState("");
@@ -217,18 +259,7 @@ export default function App() {
   const [bankBranch, setBankBranch] = useState("");
   const [purpose, setPurpose] = useState("");
   const [requestDate, setRequestDate] = useState(new Date().toISOString().slice(0, 10));
-  const districts = [
-    "Butha-Buthe",
-    "Leribe",
-    "Berea",
-    "Maseru",
-    "Mafeteng",
-    "Mohale's Hoek",
-    "Quthing",
-    "Qacha's Nek",
-    "Mokhotlong",
-    "Thaba-Tseka"
-  ];
+  const districts = LESOTHO_DISTRICTS;
   const [rows, setRows] = useState<Array<{ date: string; startDistrict: string; destinationDistrict: string; meals: number }>>([]);
   const [amountInWords, setAmountInWords] = useState("");
   const [clearanceMonth, setClearanceMonth] = useState("");
@@ -243,31 +274,45 @@ export default function App() {
   const [clearanceReceipts, setClearanceReceipts] = useState<any[]>([]);
   const [clearanceSourceLines, setClearanceSourceLines] = useState<any[]>([]);
 
+  function syncTravelRowStartDistricts(nextRows: Array<{ date: string; startDistrict: string; destinationDistrict: string; meals: number }>) {
+    return nextRows.map((row, index, allRows) => (
+      index === 0 ? row : { ...row, startDistrict: allRows[index - 1].destinationDistrict || "" }
+    ));
+  }
+
   const addRow = () => {
     let newDate = new Date().toISOString().split('T')[0];
+    let startDistrict = "";
     if (rows.length > 0) {
-      const lastDate = new Date(rows[rows.length - 1].date);
+      const lastRow = rows[rows.length - 1];
+      const lastDate = new Date(lastRow.date);
       lastDate.setDate(lastDate.getDate() + 1);
       newDate = lastDate.toISOString().split('T')[0];
+      startDistrict = lastRow.destinationDistrict || "";
     }
-    setRows([...rows, { date: newDate, startDistrict: "", destinationDistrict: "", meals: 0 }]);
+    setRows(syncTravelRowStartDistricts([...rows, { date: newDate, startDistrict, destinationDistrict: "", meals: 0 }]));
   };
   const deleteRow = (index: number) => {
-    setRows(rows.filter((_, i) => i !== index));
+    setRows(syncTravelRowStartDistricts(rows.filter((_, i) => i !== index)));
   };
   const updateRow = (index: number, field: string, value: any) => {
     const copy = [...rows];
     (copy[index] as any)[field] = field === "meals" ? (Number(value) || 0) : value;
-    setRows(copy);
+    setRows(syncTravelRowStartDistricts(copy));
   };
+  const mealValueNumber = Number.isFinite(Number(mealValue)) ? Number(mealValue) : 0;
   const rowTotals = rows.reduce(
-    (acc, r) => ({
-      meals: acc.meals + (Number.isFinite(Number(r.meals)) ? Number(r.meals) : 0),
-    }),
-    { meals: 0 }
+    (acc, r) => {
+      const meals = Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0;
+      return {
+        meals: acc.meals + meals,
+        amount: acc.amount + meals * mealValueNumber
+      };
+    },
+    { meals: 0, amount: 0 }
   );
   const totalRequested = () => {
-    if (advanceType === "TRAVEL_SUBSISTENCE") return rowTotals.meals;
+    if (advanceType === "TRAVEL_SUBSISTENCE") return rowTotals.amount;
     if (advanceType === "SALARY") return Number(salaryAmount) || 0;
     if (advanceType === "LOAN") return Number(loanAmount) || 0;
     return 0;
@@ -279,20 +324,34 @@ export default function App() {
   const clearanceAdvanceAmount = Number(selectedClearanceAdvance?.approved_total || 0);
   const clearanceTotals = clearanceSourceLines.reduce(
     (acc, trip) => {
-      const meals = Number(trip.meals) || Number(trip.lunch || 0) + Number(trip.dinner || 0);
+      const meals = Number(trip.line_total || 0) || Number(trip.meals || 0) || Number(trip.lunch || 0) + Number(trip.dinner || 0);
+      const mealCount = Number(trip.meals_count || 0) || (mealValueNumber > 0 ? meals / mealValueNumber : 0);
       const lineTotal =
         meals +
         (Number(trip.other_expenses) || 0) +
         (Number(trip.petrol_allowance) || 0);
       acc.petrol += Number(trip.petrol_allowance) || 0;
+      acc.mealCount += mealCount;
       acc.meals += meals;
       acc.other += Number(trip.other_expenses) || 0;
       acc.total += lineTotal;
       return acc;
     },
-    { petrol: 0, meals: 0, other: 0, total: 0 }
+    { petrol: 0, mealCount: 0, meals: 0, other: 0, total: 0 }
   );
   const clearanceBalance = Number((clearanceAdvanceAmount - clearanceTotals.total).toFixed(2));
+
+  function advanceLineAmount(line: any) {
+    return Number(line.line_total || 0) || Number(line.meals || 0) || Number(line.lunch || 0) + Number(line.dinner || 0);
+  }
+
+  function advanceLineMealCount(line: any) {
+    const storedCount = Number(line.meals_count);
+    if (Number.isFinite(storedCount) && storedCount > 0) return storedCount;
+    const amount = advanceLineAmount(line);
+    if (amount <= 0) return 0;
+    return mealValueNumber > 0 ? Number((amount / mealValueNumber).toFixed(2)) : amount;
+  }
 
   function numberToWords(num: number): string {
     if (num === 0) return "Zero Only";
@@ -339,7 +398,7 @@ export default function App() {
 
   useEffect(() => {
     setAmountInWords(numberToWords(totalRequested()));
-  }, [advanceType, salaryAmount, loanAmount, travelAmount, rows]);
+  }, [advanceType, salaryAmount, loanAmount, travelAmount, rows, mealValue]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -348,10 +407,10 @@ export default function App() {
 
   useEffect(() => {
     if (advanceType === "TRAVEL_SUBSISTENCE") {
-      const total = rowTotals.meals;
-      setTravelAmount(total.toString());
+      const total = rowTotals.amount;
+      setTravelAmount(total.toFixed(2));
     }
-  }, [rows, advanceType]);
+  }, [rows, advanceType, mealValue]);
 
   const me = getUserFromToken();
 
@@ -365,6 +424,7 @@ export default function App() {
   const role = profile?.role || me?.role || "UNKNOWN";
   const userName = displayUserLabel(profile?.full_name || me?.fullName || me?.username || "User", role);
   const userDepartment = profile?.department || me?.department || "No Department";
+  const canManageTravelSettings = ["HR_MANAGER", "AUTH_OFFICER", "ADMIN"].includes(role);
   const profileCompleted = Boolean(profile?.profile_completed ?? me?.profileCompleted);
   const employmentType = profile?.employment_type || me?.employmentType || "PERMANENT";
   const canRequestForSelf = profileCompleted && employmentType === "PERMANENT";
@@ -406,18 +466,22 @@ export default function App() {
     const meResp = await withStartupTimeout(api.me(), "Profile");
     setProfile(meResp);
 
-    const [departmentsResp, directoryResp, a, c, i] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
       optionalStartupData<any[]>(api.claims(), [], "Claims"),
-      optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox")
+      optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox"),
+      optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value")
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
     setAdvances(Array.isArray(a) ? a : []);
     setClaims(Array.isArray(c) ? c : []);
     setInboxCount(i.items?.length || 0);
+    const configuredMealValue = Number(mealResp.meal_value || 0);
+    setMealValue(configuredMealValue);
+    setMealValueDraft(String(configuredMealValue));
     if (token) {
       try {
         const anomalyRows = await api.aiAnomalies();
@@ -485,14 +549,49 @@ export default function App() {
   }, [page, clearanceLinkedAdvanceId]);
 
   useEffect(() => {
-    if (token && page === "SETTINGS") {
+    if (token && (page === "SETTINGS" || page === "REPORTS")) {
       if (role === "ADMIN" || role === "MANAGER") {
         void loadAdminUsers();
         void loadDelegations();
       }
       void loadHotels();
+      void loadMealValue();
     }
   }, [token, page, role]);
+
+  async function loadMealValue() {
+    setMealValueLoading(true);
+    try {
+      const resp: { meal_value?: number } = await api.mealValue();
+      const value = Number(resp.meal_value || 0);
+      setMealValue(value);
+      setMealValueDraft(String(value));
+    } catch (e: any) {
+      alert("Error loading meal value: " + e.message);
+    } finally {
+      setMealValueLoading(false);
+    }
+  }
+
+  async function saveMealValue() {
+    const value = Number(mealValueDraft);
+    if (!Number.isFinite(value) || value < 0) {
+      alert("Meal value must be zero or greater.");
+      return;
+    }
+    setMealValueLoading(true);
+    try {
+      const resp: { meal_value?: number } = await api.updateMealValue(value);
+      const saved = Number(resp.meal_value ?? value);
+      setMealValue(saved);
+      setMealValueDraft(String(saved));
+      alert("Meal value saved.");
+    } catch (e: any) {
+      alert("Error saving meal value: " + e.message);
+    } finally {
+      setMealValueLoading(false);
+    }
+  }
 
   async function loadHotels() {
     setHotelsLoading(true);
@@ -508,9 +607,11 @@ export default function App() {
 
   async function createHotel() {
     if (!newHotelName.trim()) return alert("Enter hotel name");
+    if (!newHotelDistrict) return alert("Select the district for this hotel");
     try {
-      await api.createHotel({ name: newHotelName.trim(), address: newHotelAddress.trim() || undefined, contact: newHotelContact.trim() || undefined, department: newHotelDepartment || undefined });
+      await api.createHotel({ name: newHotelName.trim(), district: newHotelDistrict, address: newHotelAddress.trim() || undefined, contact: newHotelContact.trim() || undefined, department: newHotelDepartment || undefined });
       setNewHotelName("");
+      setNewHotelDistrict("");
       setNewHotelAddress("");
       setNewHotelContact("");
       setNewHotelDepartment("");
@@ -591,10 +692,16 @@ export default function App() {
   async function loadAdminUsers() {
     setAdminUsersLoading(true);
     try {
-      const rows: any[] = await api.adminUsers();
-      setAdminUsers(rows);
+      const [users, sections, departments] = await Promise.all([
+        api.adminUsers(),
+        api.sections(),
+        api.departmentsWithSections()
+      ]);
+      setAdminUsers(Array.isArray(users) ? users : []);
+      setSectionOptions(Array.isArray(sections) ? sections : []);
+      setDepartmentRows(Array.isArray(departments) ? departments : []);
     } catch (e: any) {
-      alert("Error loading users: " + e.message);
+      alert("Error loading admin settings: " + e.message);
     } finally {
       setAdminUsersLoading(false);
     }
@@ -740,13 +847,100 @@ export default function App() {
       alert("Enter a department group name.");
       return;
     }
+    if (sectionOptions.length > 0 && !newDepartmentSectionId) {
+      alert("Choose a section for this department.");
+      return;
+    }
     try {
-      const created: any = await api.createDepartment(name);
+      const created: any = await api.createDepartment(name, newDepartmentSectionId || undefined);
       setDepartmentOptions((current) => Array.from(new Set([...(current || []), created.name])).sort((a, b) => a.localeCompare(b)));
       setNewDepartmentName("");
+      setNewDepartmentSectionId("");
+      await loadAdminUsers();
       alert(`Department group ${created.name} created.`);
     } catch (e: any) {
       alert("Error creating department: " + e.message);
+    }
+  }
+
+  async function editDepartment(name: string) {
+    const newName = prompt("Enter new department name:", name)?.trim();
+    if (!newName || newName === name) return;
+    try {
+      const updated: any = await api.updateDepartment(name, newName);
+      setDepartmentOptions((current) =>
+        Array.from(new Set([...(current || []).map((d) => (d === name ? updated.name : d)), updated.name])).sort((a, b) => a.localeCompare(b))
+      );
+      if (groupAssignDepartment === name) setGroupAssignDepartment(updated.name);
+      if (departmentRoleDepartment === name) setDepartmentRoleDepartment(updated.name);
+      await loadAdminUsers();
+      alert(`Department ${name} renamed to ${updated.name}.`);
+    } catch (e: any) {
+      alert("Error updating department: " + e.message);
+    }
+  }
+
+  async function deleteDepartment(name: string) {
+    if (!confirm(`Delete department group '${name}'? This cannot be undone.`)) return;
+    try {
+      await api.deleteDepartment(name);
+      setDepartmentOptions((current) => (current || []).filter((d) => d !== name));
+      if (groupAssignDepartment === name) setGroupAssignDepartment("");
+      if (departmentRoleDepartment === name) setDepartmentRoleDepartment("");
+      await loadAdminUsers();
+      alert(`Department group ${name} deleted.`);
+    } catch (e: any) {
+      alert("Error deleting department: " + e.message);
+    }
+  }
+
+  async function createSection() {
+    const name = newSectionName.trim();
+    if (!name) {
+      alert("Enter a section name.");
+      return;
+    }
+
+    try {
+      const created: any = await api.createSection(name);
+      setNewSectionName("");
+      await loadAdminUsers();
+      alert(`Section ${created.name} created.`);
+    } catch (e: any) {
+      alert("Error creating section: " + e.message);
+    }
+  }
+
+  async function editSection(id: string, currentName: string) {
+    const newName = prompt("Enter new section name:", currentName)?.trim();
+    if (!newName || newName === currentName) return;
+
+    try {
+      const updated: any = await api.updateSection(id, newName);
+      await loadAdminUsers();
+      alert(`Section renamed to ${updated.name}.`);
+    } catch (e: any) {
+      alert("Error updating section: " + e.message);
+    }
+  }
+
+  async function deleteSection(id: string, name: string) {
+    if (!confirm(`Delete section '${name}'? This cannot be undone.`)) return;
+    try {
+      await api.deleteSection(id);
+      await loadAdminUsers();
+      alert(`Section ${name} deleted.`);
+    } catch (e: any) {
+      alert("Error deleting section: " + e.message);
+    }
+  }
+
+  async function updateDepartmentSection(department: string, sectionId: string) {
+    try {
+      await api.updateDepartment(department, department, sectionId || undefined);
+      await loadAdminUsers();
+    } catch (e: any) {
+      alert("Error updating department section: " + e.message);
     }
   }
 
@@ -1237,9 +1431,15 @@ export default function App() {
                       <h3 style={{ margin: 0 }}>Hotels</h3>
                       <button className="button small-button" onClick={() => void loadHotels()} disabled={hotelsLoading}>{hotelsLoading ? 'Loading...' : 'Refresh'}</button>
                     </div>
-                    { (role === 'HR_MANAGER' || role === 'ADMIN') && (
+                    { canManageTravelSettings && (
                       <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
                         <input placeholder="Hotel name" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
+                        <select value={newHotelDistrict} onChange={(e) => setNewHotelDistrict(e.target.value)}>
+                          <option value="">Select district</option>
+                          {districts.map((district) => (
+                            <option key={district} value={district}>{district}</option>
+                          ))}
+                        </select>
                         <input placeholder="Address (optional)" value={newHotelAddress} onChange={(e) => setNewHotelAddress(e.target.value)} />
                         <input placeholder="Contact (optional)" value={newHotelContact} onChange={(e) => setNewHotelContact(e.target.value)} />
                         <select value={newHotelDepartment} onChange={(e) => setNewHotelDepartment(e.target.value)}>
@@ -1255,15 +1455,16 @@ export default function App() {
                     <div style={{ overflowX: 'auto' }}>
                       <table className="table">
                         <thead>
-                          <tr><th>Name</th><th>Department</th><th>Contact</th><th>Address</th></tr>
+                          <tr><th>Name</th><th>District</th><th>Department</th><th>Contact</th><th>Address</th></tr>
                         </thead>
                         <tbody>
                           {hotels.length === 0 ? (
-                            <tr><td colSpan={4} style={{ textAlign: 'center' }}>No hotels</td></tr>
+                            <tr><td colSpan={5} style={{ textAlign: 'center' }}>No hotels</td></tr>
                           ) : (
                             hotels.map(h => (
                               <tr key={h.id}>
                                 <td>{h.name}</td>
+                                <td>{h.district || '—'}</td>
                                 <td>{h.department || '—'}</td>
                                 <td>{h.contact || '—'}</td>
                                 <td>{h.address || '—'}</td>
@@ -1625,6 +1826,12 @@ export default function App() {
               {/* breakdown table for travel */}
               {advanceType === "TRAVEL_SUBSISTENCE" && (
                 <>
+                  <div className="card" style={{ marginBottom: 12, padding: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                      <span>Meal value</span>
+                      <b>{fmtMoney(mealValueNumber)} per meal</b>
+                    </div>
+                  </div>
                   <table className="breakdown-table">
                     <thead>
                       <tr>
@@ -1632,6 +1839,7 @@ export default function App() {
                         <th>Starting District</th>
                         <th>Destination District</th>
                         <th>Meals</th>
+                        <th>Line Total</th>
                         <th>Actions</th>
                       </tr>
                     </thead>
@@ -1649,6 +1857,7 @@ export default function App() {
                             <select
                               value={r.startDistrict || ""}
                               onChange={e => updateRow(idx, "startDistrict", e.target.value)}
+                              disabled={idx > 0}
                             >
                               <option value="">Start district</option>
                               {districts.map((district) => (
@@ -1671,11 +1880,13 @@ export default function App() {
                             <input
                               type="number"
                               min="0"
+                              step="1"
                               value={String(Number.isFinite(Number(r.meals)) ? r.meals : 0)}
                               onChange={e => updateRow(idx, "meals", e.target.value === "" ? 0 : Number(e.target.value))}
                               style={{ width: 80 }}
                             />
                           </td>
+                          <td>{fmtMoney((Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * mealValueNumber)}</td>
                           <td>
                             <button
                               className="button small-button"
@@ -1689,7 +1900,7 @@ export default function App() {
                         </tr>
                       ))}
                       <tr>
-                        <td colSpan={4}>
+                        <td colSpan={6}>
                           <button className="button small-button" onClick={addRow} type="button">
                             Add row
                           </button>
@@ -1701,13 +1912,15 @@ export default function App() {
                             <td>Sub-total</td>
                             <td></td>
                             <td></td>
-                            <td>{fmtMoney(rowTotals.meals)}</td>
+                            <td>{rowTotals.meals}</td>
+                            <td>{fmtMoney(rowTotals.amount)}</td>
                             <td></td>
                           </tr>
                           <tr>
                             <td>Total</td>
                             <td></td>
                             <td></td>
+                            <td>{rowTotals.meals}</td>
                             <td colSpan={2}>{fmtMoney(totalRequested())}</td>
                           </tr>
                         </>
@@ -1842,14 +2055,18 @@ export default function App() {
                         return;
                       }
                       if (advanceType === "TRAVEL_SUBSISTENCE") {
+                        if (mealValueNumber <= 0) {
+                          alert("HR must set the meal value before travel and subsistence requests can be submitted.");
+                          return;
+                        }
                         const hasInvalidRow = rows.some((r) =>
                           !r.date ||
                           !String(r.startDistrict || "").trim() ||
                           !String(r.destinationDistrict || "").trim() ||
-                          !(Number.isFinite(Number(r.meals)) && Number(r.meals) >= 0)
+                          !(Number.isInteger(Number(r.meals)) && Number(r.meals) >= 0)
                         );
                         if (hasInvalidRow) {
-                          alert("Each travel row must have date, starting district, destination district, and a non-negative meal amount.");
+                          alert("Each travel row must have date, starting district, destination district, and a non-negative whole number of meals.");
                           return;
                         }
                         if ((Number(totalRequested()) || 0) <= 0) {
@@ -1897,7 +2114,7 @@ export default function App() {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
                             location: `${r.startDistrict} → ${r.destinationDistrict}`,
-                            lunch: r.meals,
+                            meals_count: r.meals,
                             dinner: 0
                           }));
                           await api.updateAdvanceLines(editingAdvanceId, { lines: mappedRows });
@@ -1913,7 +2130,7 @@ export default function App() {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
                             location: `${r.startDistrict} → ${r.destinationDistrict}`,
-                            lunch: r.meals,
+                            meals_count: r.meals,
                             dinner: 0
                           }));
                           await api.updateAdvanceLines(newId, { lines: mappedRows });
@@ -2035,15 +2252,15 @@ export default function App() {
                         <tr key={line.id || index}>
                           <td>{normalizeDateInputValue(line.line_date)}</td>
                           <td>{line.location || "—"}</td>
-                          <td>{fmtMoney(Number(line.meals) || Number(line.lunch || 0) + Number(line.dinner || 0))}</td>
-                          <td>{fmtMoney(Number(line.meals) || Number(line.lunch || 0) + Number(line.dinner || 0))}</td>
+                          <td>{advanceLineMealCount(line)}</td>
+                          <td>{fmtMoney(advanceLineAmount(line))}</td>
                         </tr>
                       ))
                     )}
                     <tr>
                       <td><b>Totals</b></td>
                       <td>—</td>
-                      <td>{fmtMoney(clearanceTotals.meals)}</td>
+                      <td>{Number(clearanceTotals.mealCount.toFixed(2))}</td>
                       <td>{fmtMoney(clearanceTotals.total)}</td>
                     </tr>
                   </tbody>
@@ -2125,7 +2342,7 @@ export default function App() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
                 <h2>My Requests</h2>
-                <button className="button small-button" onClick={() => setPage("HOME")}>Back</button>
+                <button className="button small-button" onClick={startNewAdvanceRequest}>New Request</button>
               </div>
               
               <h3>Advance Requests ({advances.length})</h3>
@@ -2178,7 +2395,7 @@ export default function App() {
                                               date: normalizeDateInputValue(l.line_date),
                                               startDistrict: parts[0] || "",
                                               destinationDistrict: parts[1] || parts[0] || "",
-                                              meals: Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0)
+                                              meals: advanceLineMealCount(l)
                                             };
                                           })
                                         : []
@@ -2307,320 +2524,574 @@ export default function App() {
                 <button className="button small-button" onClick={() => setPage("HOME")}>Back</button>
               </div>
 
-              <div className="card" style={{ padding: 20, marginBottom: 20 }}>
-                <h3 style={{ marginTop: 0 }}>My Profile</h3>
-                <div>Name and Surname: {profile?.full_name || "—"}</div>
-                <div>Department: {profile?.department || "—"}</div>
-                <div>Employment Type: {fmtEmploymentType(employmentType)}</div>
-                <div>Employment Number: {profile?.employee_no || "—"}</div>
-                <div>Role: {displayRoleLabel(role)}</div>
-              </div>
+<SettingsAccordion
+                  title="My Profile"
+                  subtitle="View and confirm your user profile details."
+                  open={profileAccordionOpen}
+                  onToggle={() => setProfileAccordionOpen((current) => !current)}
+                >
+                  <div>Name and Surname: {profile?.full_name || "—"}</div>
+                  <div>Department: {profile?.department || "—"}</div>
+                  <div>Employment Type: {fmtEmploymentType(employmentType)}</div>
+                  <div>Employment Number: {profile?.employee_no || "—"}</div>
+                  <div>Role: {displayRoleLabel(role)}</div>
+                </SettingsAccordion>
+
+              {canManageTravelSettings && (
+                <SettingsAccordion
+                  title="Travel Rates & Hotels"
+                  subtitle="Maintain the meal value and district hotel register."
+                  open={travelSettingsOpen}
+                  onToggle={() => setTravelSettingsOpen((current) => !current)}
+                >
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div className="card" style={{ padding: 20 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                        <div>
+                          <h3 style={{ margin: 0 }}>Meal Value</h3>
+                          <div style={{ marginTop: 4, opacity: 0.75 }}>Current value: {fmtMoney(mealValueNumber)} per meal</div>
+                        </div>
+                        <button className="button small-button" onClick={() => void loadMealValue()} disabled={mealValueLoading}>
+                          {mealValueLoading ? "Loading..." : "Refresh"}
+                        </button>
+                      </div>
+                      <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={mealValueDraft}
+                          onChange={(e) => setMealValueDraft(e.target.value)}
+                          style={{ maxWidth: 180 }}
+                        />
+                        <button className="button small-button" onClick={() => void saveMealValue()} disabled={mealValueLoading}>
+                          Save Meal Value
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="card" style={{ padding: 20 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                        <h3 style={{ margin: 0 }}>Hotels</h3>
+                        <button className="button small-button" onClick={() => void loadHotels()} disabled={hotelsLoading}>
+                          {hotelsLoading ? "Loading..." : "Refresh"}
+                        </button>
+                      </div>
+
+                      <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+                        <input placeholder="Hotel name" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
+                        <select value={newHotelDistrict} onChange={(e) => setNewHotelDistrict(e.target.value)}>
+                          <option value="">Select district</option>
+                          {districts.map((district) => (
+                            <option key={district} value={district}>{district}</option>
+                          ))}
+                        </select>
+                        <input placeholder="Address (optional)" value={newHotelAddress} onChange={(e) => setNewHotelAddress(e.target.value)} />
+                        <input placeholder="Contact (optional)" value={newHotelContact} onChange={(e) => setNewHotelContact(e.target.value)} />
+                        <select value={newHotelDepartment} onChange={(e) => setNewHotelDepartment(e.target.value)}>
+                          <option value="">Assign department (optional)</option>
+                          {departmentOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <div>
+                          <button className="button small-button" onClick={() => void createHotel()}>Add Hotel</button>
+                        </div>
+                      </div>
+
+                      <div style={{ overflowX: "auto" }}>
+                        <table className="table">
+                          <thead>
+                            <tr><th>Name</th><th>District</th><th>Department</th><th>Contact</th><th>Address</th></tr>
+                          </thead>
+                          <tbody>
+                            {hotels.length === 0 ? (
+                              <tr><td colSpan={5} style={{ textAlign: "center" }}>No hotels</td></tr>
+                            ) : (
+                              hotels.map(h => (
+                                <tr key={h.id}>
+                                  <td>{h.name}</td>
+                                  <td>{h.district || "—"}</td>
+                                  <td>{h.department || "—"}</td>
+                                  <td>{h.contact || "—"}</td>
+                                  <td>{h.address || "—"}</td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </SettingsAccordion>
+              )}
 
               {role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER" ? (
-                <div className="card" style={{ padding: 20 }}>
+                <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                     <h3 style={{ margin: 0 }}>User Department Groups and Roles</h3>
                     <button className="button small-button" onClick={() => void loadAdminUsers()} disabled={adminUsersLoading}>
                       {adminUsersLoading ? "Loading..." : "Refresh"}
                     </button>
                   </div>
+
                   {role === "ADMIN" && (
-                    <>
-                      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-                        <input
-                          value={newDepartmentName}
-                          onChange={(e) => setNewDepartmentName(e.target.value)}
-                          placeholder="Create new department group"
-                        />
-                        <button className="button small-button" onClick={() => void createDepartment()}>
-                          Add Department Group
-                        </button>
-                      </div>
-                      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-                        <select
-                          value={groupAssignUserId}
-                          onChange={(e) => setGroupAssignUserId(e.target.value)}
-                        >
-                          <option value="">Select user to assign department group</option>
-                          {adminUsers.map((user) => (
-                            <option key={user.id} value={user.id}>
-                              {(user.full_name || user.email) + (user.employee_no ? ` (${user.employee_no})` : "")}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={groupAssignDepartment}
-                          onChange={(e) => setGroupAssignDepartment(e.target.value)}
-                          disabled={!groupAssignUserId}
-                        >
-                          <option value="">Select department group</option>
-                          {departmentOptions.map((department) => (
-                            <option key={department} value={department}>
-                              {department}
-                            </option>
-                          ))}
-                        </select>
-                        <button className="button small-button" onClick={() => void assignUserToGroup()}>
-                          Assign Department Group
-                        </button>
-                      </div>
-                    </>
-                  )}
-                  <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-                    <select value={departmentRoleDepartment} onChange={(e) => setDepartmentRoleDepartment(e.target.value)}>
-                      <option value="">Select department group</option>
-                      {departmentOptions.map((department) => (
-                        <option key={department} value={department}>{department}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={departmentRoleUserId}
-                      onChange={(e) => setDepartmentRoleUserId(e.target.value)}
-                      disabled={!departmentRoleDepartment}
+                    <SettingsAccordion
+                      title="Section & Department Management"
+                      subtitle="Create and manage sections first, then add departments under those sections."
+                      open={sectionManagementOpen}
+                      onToggle={() => setSectionManagementOpen((current) => !current)}
                     >
-                      <option value="">Select user</option>
-                      {adminUsers
-                        .filter((user) => user.department === departmentRoleDepartment)
-                        .map((user) => (
+                      <div style={{ display: "grid", gap: 20, marginBottom: 24 }}>
+                        <div className="card" style={{ padding: 24 }}>
+                          <h3 style={{ marginTop: 0 }}>Create Section</h3>
+                          <p style={{ color: "#4b5563", marginTop: 4, marginBottom: 20 }}>
+                            Create a section first. Departments are then created under that section.
+                          </p>
+                          <div style={{ display: "grid", gap: 16, maxWidth: 560 }}>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 600 }}>Section Name <span style={{ color: "#dc2626" }}>*</span></span>
+                              <input
+                                value={newSectionName}
+                                onChange={(e) => setNewSectionName(e.target.value)}
+                                placeholder="Enter section name"
+                              />
+                            </label>
+                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                              <button className="button small-button" onClick={() => void createSection()}>
+                                Create Section
+                              </button>
+                            </div>
+                            <div style={{ borderLeft: "4px solid #2563eb", background: "#eff6ff", padding: 12, borderRadius: 8 }}>
+                              <strong>Note:</strong> Sections are the top-level division for departments.
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="card" style={{ padding: 24 }}>
+                          <h3 style={{ marginTop: 0 }}>Create Department</h3>
+                          <p style={{ color: "#4b5563", marginTop: 4, marginBottom: 20 }}>
+                            Create a department group and assign it to an existing section.
+                          </p>
+                          <div style={{ display: "grid", gap: 16, maxWidth: 560 }}>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 600 }}>Department Name <span style={{ color: "#dc2626" }}>*</span></span>
+                              <input
+                                value={newDepartmentName}
+                                onChange={(e) => setNewDepartmentName(e.target.value)}
+                                placeholder="Enter department name"
+                              />
+                            </label>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 600 }}>Section <span style={{ color: "#dc2626" }}>*</span></span>
+                              <select value={newDepartmentSectionId} onChange={(e) => setNewDepartmentSectionId(e.target.value)}>
+                                <option value="">Select section</option>
+                                {sectionOptions.map((section) => (
+                                  <option key={section.id} value={section.id}>
+                                    {section.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                              <button className="button small-button" onClick={() => void createDepartment()}>
+                                Create Department
+                              </button>
+                            </div>
+                            <div style={{ borderLeft: "4px solid #2563eb", background: "#eff6ff", padding: 12, borderRadius: 8 }}>
+                              <strong>Note:</strong> Each department must belong to a section so it can be displayed in the correct division.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ marginBottom: 16 }}>
+                        <h4 style={{ margin: "12px 0 8px" }}>Existing Sections</h4>
+                        <div style={{ overflowX: "auto" }}>
+                          <table className="table" style={{ width: "100%" }}>
+                            <thead>
+                              <tr>
+                                <th>Name</th>
+                                <th style={{ width: 150 }}>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sectionOptions.length === 0 ? (
+                                <tr><td colSpan={2} style={{ textAlign: "center" }}>No sections</td></tr>
+                              ) : (
+                                sectionOptions.map((section) => (
+                                  <tr key={section.id}>
+                                    <td>{section.name}</td>
+                                    <td>
+                                      <button className="button small-button" onClick={() => void editSection(section.id, section.name)} style={{ marginRight: 8 }}>
+                                        Rename
+                                      </button>
+                                      <button className="button small-button" onClick={() => void deleteSection(section.id, section.name)}>
+                                        Delete
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div style={{ marginBottom: 16 }}>
+                        <h4 style={{ margin: "12px 0 8px" }}>Existing Department Groups</h4>
+                        <div style={{ overflowX: "auto" }}>
+                          <table className="table" style={{ width: "100%" }}>
+                            <thead>
+                              <tr>
+                                <th>Name</th>
+                                <th>Section</th>
+                                <th style={{ width: 150 }}>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {departmentRows.length === 0 ? (
+                                <tr><td colSpan={3} style={{ textAlign: "center" }}>No department groups</td></tr>
+                              ) : (
+                                departmentRows.map((department) => (
+                                  <tr key={department.name}>
+                                    <td>{department.name}</td>
+                                    <td>
+                                      <select
+                                        value={department.section_id || ""}
+                                        onChange={(e) => void updateDepartmentSection(department.name, e.target.value)}
+                                      >
+                                        <option value="">None</option>
+                                        {sectionOptions.map((section) => (
+                                          <option key={section.id} value={section.id}>
+                                            {section.name}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </td>
+                                    <td>
+                                      <button className="button small-button" onClick={() => void editDepartment(department.name)} style={{ marginRight: 8 }}>
+                                        Rename
+                                      </button>
+                                      <button className="button small-button" onClick={() => void deleteDepartment(department.name)}>
+                                        Delete
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </SettingsAccordion>
+                  )}
+
+                  <SettingsAccordion
+                    title="User Group & Role Assignment"
+                    subtitle="Assign users to departments and roles within your organization."
+                    open={groupAssignmentOpen}
+                    onToggle={() => setGroupAssignmentOpen((current) => !current)}
+                  >
+                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+                      <select
+                        value={groupAssignUserId}
+                        onChange={(e) => setGroupAssignUserId(e.target.value)}
+                      >
+                        <option value="">Select user to assign department group</option>
+                        {adminUsers.map((user) => (
                           <option key={user.id} value={user.id}>
                             {(user.full_name || user.email) + (user.employee_no ? ` (${user.employee_no})` : "")}
                           </option>
                         ))}
-                    </select>
-                    <select value={departmentRoleValue} onChange={(e) => setDepartmentRoleValue(e.target.value)}>
-                      <option value="EMPLOYEE">Employee</option>
-                      <option value="MANAGER">Manager</option>
-                      <option value="HR_MANAGER">HR Manager</option>
-                      <option value="AUTH_OFFICER">HR</option>
-                      <option value="CHIEF_OFFICER">Chief Officer</option>
-                      <option value="FINANCE">Finance</option>
-                      {role === "ADMIN" && <option value="ADMIN">Admin</option>}
-                    </select>
-                    <button className="button small-button" onClick={() => void updateDepartmentRole()}>
-                      Assign Role To User
-                    </button>
-                  </div>
-                  <div style={{ marginBottom: 16, display: "grid", gap: 10 }}>
-                    {departmentOptions.map((department) => {
-                      const members = adminUsers.filter((user) => user.department === department);
-                      const managers = members.filter((user) => user.role === "MANAGER").map((user) => user.full_name || user.email);
-                      const hrManagers = members.filter((user) => user.role === "HR_MANAGER").map((user) => user.full_name || user.email);
-                      const hrUsers = members.filter((user) => user.role === "AUTH_OFFICER").map((user) => user.full_name || user.email);
-                      const chiefs = members.filter((user) => user.role === "CHIEF_OFFICER").map((user) => user.full_name || user.email);
-                      const financeUsers = members.filter((user) => user.role === "FINANCE").map((user) => user.full_name || user.email);
-                      return (
-                        <div key={department} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
-                          <div><b>{department}</b></div>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>Managers: {managers.length ? managers.join(", ") : "None assigned"}</div>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>HR Managers: {hrManagers.length ? hrManagers.join(", ") : "None assigned"}</div>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>HR: {hrUsers.length ? hrUsers.join(", ") : "None assigned"}</div>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>Chief Officers: {chiefs.length ? chiefs.join(", ") : "None assigned"}</div>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>Finance: {financeUsers.length ? financeUsers.join(", ") : "None assigned"}</div>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>Requests go directly to Manager before HR Manager, HR, and Finance.</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div style={{ marginBottom: 20, display: "grid", gap: 12, border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <h4 style={{ margin: 0 }}>Manager Delegations</h4>
-                        <div style={{ fontSize: 13, opacity: 0.8 }}>Create and manage active delegation assignments.</div>
-                      </div>
-                      <button className="button small-button" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
-                        {delegationsLoading ? "Refreshing..." : "Refresh"}
+                      </select>
+                      <select
+                        value={groupAssignDepartment}
+                        onChange={(e) => setGroupAssignDepartment(e.target.value)}
+                        disabled={!groupAssignUserId}
+                      >
+                        <option value="">Select department group</option>
+                        {departmentOptions.map((department) => (
+                          <option key={department} value={department}>
+                            {department}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="button small-button" onClick={() => void assignUserToGroup()}>
+                        Assign Department Group
                       </button>
                     </div>
 
-                    <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
-                      {role === "ADMIN" ? (
-                        <>
-                          <div>
-                            <label style={{ display: "block", marginBottom: 6 }}>Manager</label>
-                            <select
-                              value={delegationManagerId}
-                              onChange={(e) => setDelegationManagerId(e.target.value)}
-                            >
-                              <option value="">Select manager</option>
-                              {adminUsers
-                                .filter((user) => user.role === "MANAGER")
-                                .map((user) => (
-                                  <option key={user.id} value={user.id}>
-                                    {user.full_name || user.email}
-                                  </option>
-                                ))}
-                            </select>
+                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+                      <select value={departmentRoleDepartment} onChange={(e) => setDepartmentRoleDepartment(e.target.value)}>
+                        <option value="">Select department group</option>
+                        {departmentOptions.map((department) => (
+                          <option key={department} value={department}>{department}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={departmentRoleUserId}
+                        onChange={(e) => setDepartmentRoleUserId(e.target.value)}
+                        disabled={!departmentRoleDepartment}
+                      >
+                        <option value="">Select user</option>
+                        {adminUsers
+                          .filter((user) => user.department === departmentRoleDepartment)
+                          .map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {(user.full_name || user.email) + (user.employee_no ? ` (${user.employee_no})` : "")}
+                            </option>
+                          ))}
+                      </select>
+                      <select value={departmentRoleValue} onChange={(e) => setDepartmentRoleValue(e.target.value)}>
+                        <option value="EMPLOYEE">Employee</option>
+                        <option value="MANAGER">Manager</option>
+                        <option value="HR_MANAGER">HR Manager</option>
+                        <option value="AUTH_OFFICER">HR</option>
+                        <option value="CHIEF_OFFICER">Chief Officer</option>
+                        <option value="FINANCE">Finance</option>
+                        {role === "ADMIN" && <option value="ADMIN">Admin</option>}
+                      </select>
+                      <button className="button small-button" onClick={() => void updateDepartmentRole()}>
+                        Assign Role To User
+                      </button>
+                    </div>
+
+                    <div style={{ marginBottom: 16, display: "grid", gap: 10 }}>
+                      {departmentOptions.map((department) => {
+                        const members = adminUsers.filter((user) => user.department === department);
+                        const managers = members.filter((user) => user.role === "MANAGER").map((user) => user.full_name || user.email);
+                        const hrManagers = members.filter((user) => user.role === "HR_MANAGER").map((user) => user.full_name || user.email);
+                        const hrUsers = members.filter((user) => user.role === "AUTH_OFFICER").map((user) => user.full_name || user.email);
+                        const chiefs = members.filter((user) => user.role === "CHIEF_OFFICER").map((user) => user.full_name || user.email);
+                        const financeUsers = members.filter((user) => user.role === "FINANCE").map((user) => user.full_name || user.email);
+                        return (
+                          <div key={department} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
+                            <div><b>{department}</b></div>
+                            <div style={{ fontSize: 13, opacity: 0.8 }}>Managers: {managers.length ? managers.join(", ") : "None assigned"}</div>
+                            <div style={{ fontSize: 13, opacity: 0.8 }}>HR Managers: {hrManagers.length ? hrManagers.join(", ") : "None assigned"}</div>
+                            <div style={{ fontSize: 13, opacity: 0.8 }}>HR: {hrUsers.length ? hrUsers.join(", ") : "None assigned"}</div>
+                            <div style={{ fontSize: 13, opacity: 0.8 }}>Chief Officers: {chiefs.length ? chiefs.join(", ") : "None assigned"}</div>
+                            <div style={{ fontSize: 13, opacity: 0.8 }}>Finance: {financeUsers.length ? financeUsers.join(", ") : "None assigned"}</div>
+                            <div style={{ fontSize: 13, opacity: 0.8 }}>Requests go directly to Manager before HR Manager, HR, and Finance.</div>
                           </div>
-                          <div>
-                            <label style={{ display: "block", marginBottom: 6 }}>Delegate</label>
-                            <select
-                              value={delegationDelegateId}
-                              onChange={(e) => setDelegationDelegateId(e.target.value)}
-                              disabled={!delegationManagerId}
-                            >
-                              <option value="">Select delegate</option>
-                              {adminUsers
-                                .filter((user) => user.department === adminUsers.find((u) => u.id === delegationManagerId)?.department)
-                                .filter((user) => user.id !== delegationManagerId)
-                                .map((user) => (
-                                  <option key={user.id} value={user.id}>
-                                    {user.full_name || user.email}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div>
-                            <label style={{ display: "block", marginBottom: 6 }}>Manager</label>
-                            <input value={profile?.full_name || ""} readOnly />
-                          </div>
-                          <div>
-                            <label style={{ display: "block", marginBottom: 6 }}>Delegate</label>
-                            <select
-                              value={delegationDelegateId}
-                              onChange={(e) => setDelegationDelegateId(e.target.value)}
-                            >
-                              <option value="">Select delegate</option>
-                              {adminUsers
-                                .filter((user) => user.department === profile?.department)
-                                .filter((user) => user.id !== profile?.id)
-                                .map((user) => (
-                                  <option key={user.id} value={user.id}>
-                                    {user.full_name || user.email}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                        </>
-                      )}
-                      <div style={{ display: "grid", gap: 10 }}>
+                        );
+                      })}
+                    </div>
+                  </SettingsAccordion>
+
+                  <SettingsAccordion
+                    title="Manager Delegations"
+                    subtitle="Create a delegation assignment and track active delegations."
+                    open={delegationsOpen}
+                    onToggle={() => setDelegationsOpen((current) => !current)}
+                  >
+                    <div style={{ marginBottom: 20, display: "grid", gap: 12, border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
-                          <label style={{ display: "block", marginBottom: 6 }}>From</label>
-                          <input
-                            type="date"
-                            value={delegationFromDate}
-                            onChange={(e) => setDelegationFromDate(e.target.value)}
-                          />
+                          <h4 style={{ margin: 0 }}>Manager Delegations</h4>
+                          <div style={{ fontSize: 13, opacity: 0.8 }}>Create and manage active delegation assignments.</div>
                         </div>
-                        <div>
-                          <label style={{ display: "block", marginBottom: 6 }}>To</label>
-                          <input
-                            type="date"
-                            value={delegationToDate}
-                            onChange={(e) => setDelegationToDate(e.target.value)}
-                          />
-                        </div>
+                        <button className="button small-button" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
+                          {delegationsLoading ? "Refreshing..." : "Refresh"}
+                        </button>
                       </div>
-                    </div>
 
-                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-                      <button className="button small-button" onClick={() => void createDelegation()}>
-                        Create Delegation
-                      </button>
-                      <button className="button small-button" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
-                        {delegationsLoading ? "Refreshing..." : "Reload Delegations"}
-                      </button>
-                    </div>
-
-                    <div style={{ marginTop: 16 }}>
-                      <h4 style={{ margin: "0 0 10px" }}>Active Delegations</h4>
-                      {delegations.length === 0 ? (
-                        <div style={{ color: "#6b7280" }}>No active delegations.</div>
-                      ) : (
-                        <div style={{ overflowX: "auto" }}>
-                          <table className="table">
-                            <thead>
-                              <tr>
-                                <th>Manager</th>
-                                <th>Delegate</th>
-                                <th>Department</th>
-                                <th>From</th>
-                                <th>To</th>
-                                <th>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {delegations.map((delegation) => {
-                                const manager = adminUsers.find((u) => u.id === delegation.manager_id);
-                                const delegate = adminUsers.find((u) => u.id === delegation.delegate_id);
-                                return (
-                                  <tr key={delegation.id}>
-                                    <td>{manager?.full_name || manager?.email || "—"}</td>
-                                    <td>{delegate?.full_name || delegate?.email || "—"}</td>
-                                    <td>{manager?.department || delegate?.department || "—"}</td>
-                                    <td>{delegation.from_date || "—"}</td>
-                                    <td>{delegation.to_date || "—"}</td>
-                                    <td>
-                                      <button className="button small-button" onClick={() => void endDelegation(delegation.id)}>
-                                        End
-                                      </button>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>Name</th>
-                          <th>Email</th>
-                          <th>Department</th>
-                          <th>Employment Type</th>
-                          <th>Employment No.</th>
-                          <th>Role</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {adminUsers.map((user) => (
-                          <tr key={user.id}>
-                            <td>{user.full_name || "—"}</td>
-                            <td>{user.email}</td>
-                            <td>
-                              {role === "ADMIN" ? (
-                                <select value={user.department || ""} onChange={(e) => void updateUserDepartment(user.id, e.target.value)}>
-                                  <option value="" disabled>Unassigned</option>
-                                  {departmentOptions.map((department) => (
-                                    <option key={department} value={department}>
-                                      {department}
+                      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
+                        {role === "ADMIN" ? (
+                          <>
+                            <div>
+                              <label style={{ display: "block", marginBottom: 6 }}>Manager</label>
+                              <select
+                                value={delegationManagerId}
+                                onChange={(e) => setDelegationManagerId(e.target.value)}
+                              >
+                                <option value="">Select manager</option>
+                                {adminUsers
+                                  .filter((user) => user.role === "MANAGER")
+                                  .map((user) => (
+                                    <option key={user.id} value={user.id}>
+                                      {user.full_name || user.email}
                                     </option>
                                   ))}
-                                </select>
-                              ) : (
-                                user.department || "—"
-                              )}
-                            </td>
-                            <td>{fmtEmploymentType(user.employment_type)}</td>
-                            <td>{user.employee_no || "—"}</td>
-                            <td>
-                              <select value={user.role} onChange={(e) => void updateAdminUserRole(user.id, e.target.value)}>
-                                <option value="EMPLOYEE">Employee</option>
-                                <option value="MANAGER">Manager</option>
-                                <option value="HR_MANAGER">HR Manager</option>
-                                <option value="AUTH_OFFICER">HR</option>
-                                <option value="CHIEF_OFFICER">Chief Officer</option>
-                                <option value="FINANCE">Finance</option>
-                                <option value="ADMIN">Admin</option>
                               </select>
-                            </td>
-                          </tr>
-                        ))}
-                        {adminUsers.length === 0 && (
-                          <tr>
-                            <td colSpan={6} style={{ textAlign: "center" }}>No users found.</td>
-                          </tr>
+                            </div>
+                            <div>
+                              <label style={{ display: "block", marginBottom: 6 }}>Delegate</label>
+                              <select
+                                value={delegationDelegateId}
+                                onChange={(e) => setDelegationDelegateId(e.target.value)}
+                                disabled={!delegationManagerId}
+                              >
+                                <option value="">Select delegate</option>
+                                {adminUsers
+                                  .filter((user) => user.department === adminUsers.find((u) => u.id === delegationManagerId)?.department)
+                                  .filter((user) => user.id !== delegationManagerId)
+                                  .map((user) => (
+                                    <option key={user.id} value={user.id}>
+                                      {user.full_name || user.email}
+                                    </option>
+                                  ))}
+                              </select>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div>
+                              <label style={{ display: "block", marginBottom: 6 }}>Manager</label>
+                              <input value={profile?.full_name || ""} readOnly />
+                            </div>
+                            <div>
+                              <label style={{ display: "block", marginBottom: 6 }}>Delegate</label>
+                              <select
+                                value={delegationDelegateId}
+                                onChange={(e) => setDelegationDelegateId(e.target.value)}
+                              >
+                                <option value="">Select delegate</option>
+                                {adminUsers
+                                  .filter((user) => user.department === profile?.department)
+                                  .filter((user) => user.id !== profile?.id)
+                                  .map((user) => (
+                                    <option key={user.id} value={user.id}>
+                                      {user.full_name || user.email}
+                                    </option>
+                                  ))}
+                              </select>
+                            </div>
+                          </>
                         )}
-                      </tbody>
-                    </table>
-                  </div>
+                        <div style={{ display: "grid", gap: 10 }}>
+                          <div>
+                            <label style={{ display: "block", marginBottom: 6 }}>From</label>
+                            <input
+                              type="date"
+                              value={delegationFromDate}
+                              onChange={(e) => setDelegationFromDate(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ display: "block", marginBottom: 6 }}>To</label>
+                            <input
+                              type="date"
+                              value={delegationToDate}
+                              onChange={(e) => setDelegationToDate(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+                        <button className="button small-button" onClick={() => void createDelegation()}>
+                          Create Delegation
+                        </button>
+                        <button className="button small-button" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
+                          {delegationsLoading ? "Refreshing..." : "Reload Delegations"}
+                        </button>
+                      </div>
+
+                      <div style={{ marginTop: 16 }}>
+                        <h4 style={{ margin: "0 0 10px" }}>Active Delegations</h4>
+                        {delegations.length === 0 ? (
+                          <div style={{ color: "#6b7280" }}>No active delegations.</div>
+                        ) : (
+                          <div style={{ overflowX: "auto" }}>
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>Manager</th>
+                                  <th>Delegate</th>
+                                  <th>Department</th>
+                                  <th>From</th>
+                                  <th>To</th>
+                                  <th>Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {delegations.map((delegation) => {
+                                  const manager = adminUsers.find((u) => u.id === delegation.manager_id);
+                                  const delegate = adminUsers.find((u) => u.id === delegation.delegate_id);
+                                  return (
+                                    <tr key={delegation.id}>
+                                      <td>{manager?.full_name || manager?.email || "—"}</td>
+                                      <td>{delegate?.full_name || delegate?.email || "—"}</td>
+                                      <td>{manager?.department || delegate?.department || "—"}</td>
+                                      <td>{delegation.from_date || "—"}</td>
+                                      <td>{delegation.to_date || "—"}</td>
+                                      <td>
+                                        <button className="button small-button" onClick={() => void endDelegation(delegation.id)}>
+                                          End
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </SettingsAccordion>
+
+                  <SettingsAccordion
+                    title="Admin Users"
+                    subtitle="View and manage users, departments, and roles."
+                    open={adminUsersOpen}
+                    onToggle={() => setAdminUsersOpen((current) => !current)}
+                  >
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Department</th>
+                            <th>Employment Type</th>
+                            <th>Employment No.</th>
+                            <th>Role</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {adminUsers.map((user) => (
+                            <tr key={user.id}>
+                              <td>{user.full_name || "—"}</td>
+                              <td>{user.email}</td>
+                              <td>
+                                {role === "ADMIN" ? (
+                                  <select value={user.department || ""} onChange={(e) => void updateUserDepartment(user.id, e.target.value)}>
+                                    <option value="" disabled>Unassigned</option>
+                                    {departmentOptions.map((department) => (
+                                      <option key={department} value={department}>
+                                        {department}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  user.department || "—"
+                                )}
+                              </td>
+                              <td>{fmtEmploymentType(user.employment_type)}</td>
+                              <td>{user.employee_no || "—"}</td>
+                              <td>
+                                <select value={user.role} onChange={(e) => void updateAdminUserRole(user.id, e.target.value)}>
+                                  <option value="EMPLOYEE">Employee</option>
+                                  <option value="MANAGER">Manager</option>
+                                  <option value="HR_MANAGER">HR Manager</option>
+                                  <option value="AUTH_OFFICER">HR</option>
+                                  <option value="CHIEF_OFFICER">Chief Officer</option>
+                                  <option value="FINANCE">Finance</option>
+                                  <option value="ADMIN">Admin</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                          {adminUsers.length === 0 && (
+                            <tr>
+                              <td colSpan={6} style={{ textAlign: "center" }}>No users found.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </SettingsAccordion>
                 </div>
               ) : (
                 <div className="card" style={{ padding: 20 }}>
@@ -2762,7 +3233,7 @@ export default function App() {
                                             date: normalizeDateInputValue(l.line_date),
                                             startDistrict: parts[0] || "",
                                             destinationDistrict: parts[1] || parts[0] || "",
-                                            meals: Number(l.meals) || Number(l.lunch || 0) + Number(l.dinner || 0)
+                                            meals: advanceLineMealCount(l)
                                           };
                                         })
                                       : []

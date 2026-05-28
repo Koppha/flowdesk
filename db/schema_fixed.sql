@@ -98,6 +98,8 @@ CREATE TABLE IF NOT EXISTS advance_lines (
   advance_request_id uuid NOT NULL REFERENCES advance_requests(id) ON DELETE CASCADE,
   line_date date NOT NULL,
   location text,
+  meals_count integer NOT NULL DEFAULT 0,
+  meal_value numeric(12,2) NOT NULL DEFAULT 0,
   lunch numeric(12,2) NOT NULL DEFAULT 0,
   dinner numeric(12,2) NOT NULL DEFAULT 0,
   line_total numeric(12,2) NOT NULL DEFAULT 0
@@ -136,6 +138,25 @@ CREATE TABLE IF NOT EXISTS accommodation_quotations (
   quotation_path text NOT NULL,
   quotation_uploaded_at timestamptz NOT NULL DEFAULT now(),
   quotation_uploaded_by_id uuid NOT NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS accommodation_hotels (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  district text,
+  address text,
+  contact text,
+  department text,
+  created_by_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_accommodation_hotels_district ON accommodation_hotels(district);
+
+CREATE TABLE IF NOT EXISTS system_state (
+  key text PRIMARY KEY,
+  value text
 );
 
 CREATE TABLE IF NOT EXISTS clearance_claims (

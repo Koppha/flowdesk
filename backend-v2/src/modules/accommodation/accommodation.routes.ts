@@ -6,6 +6,38 @@ import { z } from "zod";
 import { AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
+import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+
+const LESOTHO_DISTRICTS = [
+  "Butha-Buthe",
+  "Leribe",
+  "Berea",
+  "Maseru",
+  "Mafeteng",
+  "Mohale's Hoek",
+  "Quthing",
+  "Qacha's Nek",
+  "Mokhotlong",
+  "Thaba-Tseka"
+] as const;
+
+const districtSchema = z.string().trim().refine((value) => LESOTHO_DISTRICTS.includes(value as any), {
+  message: "district must be one of the 10 Lesotho districts"
+});
+
+const HotelCreateSchema = z.object({
+  name: z.string().trim().min(1),
+  district: districtSchema,
+  address: z.string().trim().optional(),
+  contact: z.string().trim().optional(),
+  department: z.string().trim().optional()
+});
+
+const HotelUpdateSchema = HotelCreateSchema.partial();
+
+const MealValueSchema = z.object({
+  meal_value: z.coerce.number().nonnegative("meal value must be zero or greater")
+});
 
 const CreateAccommodationSchema = z.object({
   advance_request_id: z.string().uuid(),
@@ -44,20 +76,20 @@ accommodationRouter.use(requireAuth);
 // Hotels CRUD - HR Managers can onboard hotels
 accommodationRouter.get("/hotels", async (_req: AuthedRequest, res, next) => {
   try {
-    const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY name`);
+    const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY district NULLS LAST, name`);
     return res.json(rows);
   } catch (err) {
     return next(err);
   }
 });
 
-accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
-    const body = z.object({ name: z.string().trim().min(1), address: z.string().optional(), contact: z.string().optional(), department: z.string().optional() }).safeParse(req.body);
+    const body = HotelCreateSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
     const rows = await query<{ id: string }>(
-      `INSERT INTO accommodation_hotels (name, address, contact, department, created_by_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [body.data.name, body.data.address ?? null, body.data.contact ?? null, body.data.department ?? null, req.user!.userId]
+      `INSERT INTO accommodation_hotels (name, district, address, contact, department, created_by_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [body.data.name, body.data.district, body.data.address ?? null, body.data.contact ?? null, body.data.department ?? null, req.user!.userId]
     );
     return res.status(201).json({ id: rows[0].id });
   } catch (err) {
@@ -65,9 +97,9 @@ accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "ADMIN"]), async 
   }
 });
 
-accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
-    const body = z.object({ name: z.string().trim().min(1).optional(), address: z.string().optional(), contact: z.string().optional(), department: z.string().optional() }).safeParse(req.body);
+    const body = HotelUpdateSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
     const updates: string[] = [];
     const params: unknown[] = [];
@@ -80,6 +112,26 @@ accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "ADMIN"]), asy
     params.push(req.params.id);
     await query(`UPDATE accommodation_hotels SET ${updates.join(",")}, updated_at=now() WHERE id=$${params.length}`, params);
     return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+accommodationRouter.get("/meal-value", async (_req: AuthedRequest, res, next) => {
+  try {
+    const mealValue = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, 0);
+    return res.json({ meal_value: mealValue });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+accommodationRouter.put("/meal-value", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const body = MealValueSchema.safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid meal value payload", body.error.flatten());
+    await setNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, Number(body.data.meal_value.toFixed(2)));
+    return res.json({ meal_value: Number(body.data.meal_value.toFixed(2)) });
   } catch (err) {
     return next(err);
   }

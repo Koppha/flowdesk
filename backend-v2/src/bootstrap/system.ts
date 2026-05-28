@@ -27,6 +27,8 @@ async function ensureUserSchema() {
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed boolean NOT NULL DEFAULT false`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS created_by_id uuid REFERENCES users(id)`);
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS location text`);
+  await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS meals_count integer NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS meal_value numeric(12,2) NOT NULL DEFAULT 0`);
   await query(`
     CREATE TABLE IF NOT EXISTS accommodation_requests (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -55,7 +57,19 @@ async function ensureUserSchema() {
   await query(`ALTER TABLE accommodation_requests ADD COLUMN IF NOT EXISTS quotation_uploaded_at timestamptz`);
   await query(`ALTER TABLE accommodation_requests ADD COLUMN IF NOT EXISTS quotation_uploaded_by_id uuid REFERENCES users(id)`);
   await query(`ALTER TABLE accommodation_requests DROP CONSTRAINT IF EXISTS accommodation_requests_status_check`);
-  await query(`ALTER TABLE accommodation_requests ADD CONSTRAINT accommodation_requests_status_check CHECK (status IN ('DRAFT','SUBMITTED','PAID','REJECTED'))`);
+  await query(`DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_constraint c
+      JOIN pg_class t ON c.conrelid = t.oid
+      WHERE c.conname = 'accommodation_requests_status_check'
+        AND t.relname = 'accommodation_requests'
+    ) THEN
+      ALTER TABLE accommodation_requests
+      ADD CONSTRAINT accommodation_requests_status_check CHECK (status IN ('DRAFT','SUBMITTED','PAID','REJECTED'));
+    END IF;
+  END$$`);
   await query(`CREATE INDEX IF NOT EXISTS idx_accommodation_requests_status ON accommodation_requests(status)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_accommodation_requests_advance ON accommodation_requests(advance_request_id)`);
   await query(`
@@ -243,6 +257,7 @@ async function ensureFeatureSchema() {
     CREATE TABLE IF NOT EXISTS accommodation_hotels (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       name text NOT NULL,
+      district text,
       address text,
       contact text,
       department text,
@@ -251,6 +266,8 @@ async function ensureFeatureSchema() {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS district text`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_accommodation_hotels_district ON accommodation_hotels(district)`);
   // lightweight key/value for system state (used to expire sessions)
   await query(`
     CREATE TABLE IF NOT EXISTS system_state (
@@ -258,6 +275,10 @@ async function ensureFeatureSchema() {
       value text
     )
   `);
+  await query(
+    `INSERT INTO system_state (key, value) VALUES ('meal_value', '0')
+     ON CONFLICT (key) DO NOTHING`
+  );
 
   // Force-clear sessions so users must login from scratch
   await query(
@@ -266,10 +287,11 @@ async function ensureFeatureSchema() {
   );
 
   // Reset user profiles so users must complete profile on next login (preserve ADMIN accounts)
+  // Keep full_name as empty string to avoid violating NOT NULL constraints
   await query(
     `UPDATE users
         SET profile_completed = false,
-            full_name = NULL,
+            full_name = '',
             employee_no = NULL,
             department = NULL,
             updated_at = now()

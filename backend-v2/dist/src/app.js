@@ -24,6 +24,7 @@ export function createApp() {
     app.use("/auth", authRouter);
     app.use("/advances", advancesRouter);
     app.use("/accommodation-requests", accommodationRouter);
+    app.use("/accommodation", accommodationRouter);
     app.use("/claims", claimsRouter);
     app.use("/inbox", inboxRouter);
     app.use("/attendance", attendanceRouter);
