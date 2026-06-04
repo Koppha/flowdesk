@@ -10,12 +10,13 @@ DO $$ BEGIN
     'AUTH_OFFICER',
     'CHIEF_OFFICER',
     'FINANCE',
-    'ADMIN'
+    'ADMIN',
+    'EXCO'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE advance_type AS ENUM ('TRAVEL_SUBSISTENCE','SALARY','LOAN');
+  CREATE TYPE advance_type AS ENUM ('TRAVEL_SUBSISTENCE','CMA','SALARY','LOAN');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -39,7 +40,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   CREATE TYPE claim_status AS ENUM (
     'DRAFT','SUBMITTED',
-    'MANAGER_APPROVED','CHIEF_OFFICER_APPROVED','HR_OFFICER',
+    'MANAGER_APPROVED','CHIEF_OFFICER_APPROVED','HR_OFFICER','HR_MANAGER_REVIEW',
     'FINANCE_VERIFIED','SETTLED','CLOSED','REJECTED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -65,9 +66,20 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS sections (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text UNIQUE NOT NULL,
+  exco_user_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS departments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text UNIQUE NOT NULL,
+  section_id uuid REFERENCES sections(id),
+  manager_user_id uuid REFERENCES users(id),
+  exco_user_id uuid REFERENCES users(id),
+  active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -75,7 +87,7 @@ CREATE TABLE IF NOT EXISTS advance_requests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   requester_id uuid NOT NULL REFERENCES users(id),
   created_by_id uuid NOT NULL REFERENCES users(id),
-  type advance_type NOT NULL DEFAULT 'TRAVEL_SUBSISTENCE',
+  type text NOT NULL DEFAULT 'TRAVEL_SUBSISTENCE',
   purpose text,
   project_number text,
   payment_method payment_method NOT NULL DEFAULT 'ECOCASH',
@@ -98,6 +110,7 @@ CREATE TABLE IF NOT EXISTS advance_lines (
   advance_request_id uuid NOT NULL REFERENCES advance_requests(id) ON DELETE CASCADE,
   line_date date NOT NULL,
   location text,
+  travel_meta jsonb NOT NULL DEFAULT '{}'::jsonb,
   meals_count integer NOT NULL DEFAULT 0,
   meal_value numeric(12,2) NOT NULL DEFAULT 0,
   lunch numeric(12,2) NOT NULL DEFAULT 0,
@@ -144,6 +157,9 @@ CREATE TABLE IF NOT EXISTS accommodation_hotels (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
   district text,
+  country text,
+  province text,
+  city text,
   address text,
   contact text,
   department text,
@@ -158,6 +174,36 @@ CREATE TABLE IF NOT EXISTS system_state (
   key text PRIMARY KEY,
   value text
 );
+
+CREATE TABLE IF NOT EXISTS travel_types (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code text UNIQUE NOT NULL,
+  name text NOT NULL,
+  location_mode text NOT NULL DEFAULT 'DISTRICT' CHECK (location_mode IN ('DISTRICT','COUNTRY_CITY')),
+  rate_kind text NOT NULL DEFAULT 'MEAL' CHECK (rate_kind IN ('MEAL','DAILY')),
+  rate_general_staff numeric(12,2) NOT NULL DEFAULT 0,
+  rate_exco numeric(12,2) NOT NULL DEFAULT 0,
+  rate_ceo numeric(12,2) NOT NULL DEFAULT 0,
+  active boolean NOT NULL DEFAULT true,
+  created_by_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS travel_locations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  travel_type_id uuid NOT NULL REFERENCES travel_types(id) ON DELETE CASCADE,
+  district text,
+  country text,
+  province text,
+  city text,
+  active boolean NOT NULL DEFAULT true,
+  created_by_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_travel_locations_type ON travel_locations(travel_type_id);
 
 CREATE TABLE IF NOT EXISTS clearance_claims (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

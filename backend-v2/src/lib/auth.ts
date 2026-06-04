@@ -12,7 +12,8 @@ export type Role =
   | "AUTH_OFFICER"
   | "CHIEF_OFFICER"
   | "FINANCE"
-  | "ADMIN";
+  | "ADMIN"
+  | "EXCO";
 
 export type AuthPayload = {
   userId: string;

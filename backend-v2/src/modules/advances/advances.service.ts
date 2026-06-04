@@ -19,14 +19,22 @@ export async function getAdvanceById(id: string) {
     type: string;
     purpose: string | null;
     payment_account: string | null;
-  }>(`SELECT id, requester_id, created_by_id, status, requested_total, approved_total, type, purpose, payment_account FROM advance_requests WHERE id=$1`, [id]);
+    requester_department: string | null;
+  }>(
+    `SELECT ar.id, ar.requester_id, ar.created_by_id, ar.status, ar.requested_total, ar.approved_total, ar.type, ar.purpose, ar.payment_account,
+            u.department AS requester_department
+       FROM advance_requests ar
+       JOIN users u ON u.id = ar.requester_id
+      WHERE ar.id=$1`,
+    [id]
+  );
   return rows[0] ?? null;
 }
 
 export async function createAdvance(args: {
   requesterId: string;
   createdById: string;
-  type: "TRAVEL_SUBSISTENCE" | "SALARY" | "LOAN";
+  type: string;
   purpose?: string | null;
   project_number?: string | null;
   payment_method: "ECOCASH" | "BANK";

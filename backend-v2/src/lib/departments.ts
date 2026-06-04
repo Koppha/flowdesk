@@ -53,13 +53,44 @@ export function normalizeDepartmentName(value: string) {
 
 let departmentGroupsEnsured = false;
 
+type DepartmentOwnerInput = {
+  sectionId?: string | null;
+  managerUserId?: string | null;
+  excoUserId?: string | null;
+  active?: boolean;
+};
+
+function hasOwn(value: object, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+async function assertEligibleOwner(userId: string | null | undefined, roles: string[], label: string) {
+  if (!userId) return null;
+  const rows = await query<{ id: string }>(
+    `SELECT id
+       FROM users
+      WHERE id = $1
+        AND is_active = true
+        AND role::text = ANY($2::text[])
+      LIMIT 1`,
+    [userId, roles]
+  );
+  if (!rows[0]) throw badRequest(`${label} must be an active ${roles.join(" or ").toLowerCase().replace(/_/g, " ")} user`);
+  return rows[0].id;
+}
+
 export async function ensureSectionSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS sections (
       id uuid PRIMARY KEY,
       name text UNIQUE NOT NULL,
+      exco_user_id uuid REFERENCES users(id),
       created_at timestamptz NOT NULL DEFAULT now()
     )
+  `);
+  await query(`
+    ALTER TABLE sections
+    ADD COLUMN IF NOT EXISTS exco_user_id uuid REFERENCES users(id)
   `);
 }
 
@@ -70,12 +101,27 @@ export async function ensureDepartmentsTable() {
       id uuid PRIMARY KEY,
       name text UNIQUE NOT NULL,
       section_id uuid REFERENCES sections(id),
+      manager_user_id uuid REFERENCES users(id),
+      exco_user_id uuid REFERENCES users(id),
+      active boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now()
     )
   `);
   await query(`
     ALTER TABLE departments
     ADD COLUMN IF NOT EXISTS section_id uuid REFERENCES sections(id)
+  `);
+  await query(`
+    ALTER TABLE departments
+    ADD COLUMN IF NOT EXISTS manager_user_id uuid REFERENCES users(id)
+  `);
+  await query(`
+    ALTER TABLE departments
+    ADD COLUMN IF NOT EXISTS exco_user_id uuid REFERENCES users(id)
+  `);
+  await query(`
+    ALTER TABLE departments
+    ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true
   `);
 }
 
@@ -113,6 +159,7 @@ export async function listDepartmentGroups() {
          SELECT trim(name) AS department
            FROM departments
           WHERE trim(name) <> ''
+            AND active = true
        ) departments
       ORDER BY department`
   );
@@ -136,7 +183,8 @@ export async function resolveDepartmentGroup(input: string) {
        FROM (
          SELECT trim(name) AS department
            FROM departments
-          WHERE trim(name) <> ''
+         WHERE trim(name) <> ''
+           AND active = true
          UNION
          SELECT DISTINCT trim(department) AS department
            FROM users
@@ -154,11 +202,33 @@ export async function resolveDepartmentGroup(input: string) {
   return rows[0].department;
 }
 
-export async function createDepartmentGroup(input: string, sectionId?: string) {
+export async function resolveSectionGroup(input: string) {
+  const section = normalizeDepartmentName(input);
+  if (!section) throw badRequest("Section is required");
+
+  await ensureSectionSchema();
+  const rows = await query<{ section: string }>(
+    `SELECT trim(name) AS section
+       FROM sections
+      WHERE trim(name) <> ''
+        AND lower(trim(name)) = lower($1)
+      ORDER BY name
+      LIMIT 1`,
+    [section]
+  );
+
+  if (!rows[0]) throw badRequest("Choose a valid section from the sections list");
+  return rows[0].section;
+}
+
+export async function createDepartmentGroup(input: string, sectionId?: string | DepartmentOwnerInput) {
+  const options = typeof sectionId === "object" ? sectionId as DepartmentOwnerInput : { sectionId };
   const department = normalizeDepartmentName(input);
   if (department.length < 2) throw badRequest("Department name is required");
 
   await ensureDepartmentsTable();
+  const managerUserId = await assertEligibleOwner(options.managerUserId, ["MANAGER"], "Manager");
+  const excoUserId = await assertEligibleOwner(options.excoUserId, ["CHIEF_OFFICER"], "EXCO owner");
   const existing = await query<{ id: string; name: string }>(
     `SELECT id, name
        FROM departments
@@ -168,36 +238,72 @@ export async function createDepartmentGroup(input: string, sectionId?: string) {
   );
   if (existing[0]) return existing[0];
 
-  const rows = await query<{ id: string; name: string }>(
-    `INSERT INTO departments (id, name, section_id)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name, section_id = EXCLUDED.section_id
-     RETURNING id, name`,
-    [randomUUID(), department, sectionId || null]
+  const rows = await query<{ id: string; name: string; section_id: string | null; manager_user_id: string | null; exco_user_id: string | null; active: boolean }>(
+    `INSERT INTO departments (id, name, section_id, manager_user_id, exco_user_id, active)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (name) DO UPDATE
+       SET name = EXCLUDED.name,
+           section_id = EXCLUDED.section_id,
+           manager_user_id = EXCLUDED.manager_user_id,
+           exco_user_id = EXCLUDED.exco_user_id,
+           active = EXCLUDED.active
+     RETURNING id, name, section_id, manager_user_id, exco_user_id, active`,
+    [randomUUID(), department, options.sectionId || null, managerUserId, excoUserId, options.active ?? true]
   );
   return rows[0];
 }
 
 export async function listDepartmentsWithSections() {
   await ensureDepartmentGroups();
-  const rows = await query<{ id: string; name: string; section_id: string | null; section_name: string | null }>(
-    `SELECT d.id, d.name, d.section_id, s.name AS section_name
+  const rows = await query<{
+    id: string;
+    name: string;
+    section_id: string | null;
+    section_name: string | null;
+    manager_user_id: string | null;
+    manager_name: string | null;
+    manager_email: string | null;
+    exco_user_id: string | null;
+    exco_name: string | null;
+    exco_email: string | null;
+    section_exco_user_id: string | null;
+    section_exco_name: string | null;
+    section_exco_email: string | null;
+    active: boolean;
+  }>(
+    `SELECT d.id,
+            d.name,
+            d.section_id,
+            s.name AS section_name,
+            d.manager_user_id,
+            manager.full_name AS manager_name,
+            manager.email AS manager_email,
+            d.exco_user_id,
+            exco.full_name AS exco_name,
+            exco.email AS exco_email,
+            s.exco_user_id AS section_exco_user_id,
+            section_exco.full_name AS section_exco_name,
+            section_exco.email AS section_exco_email,
+            d.active
        FROM departments d
        LEFT JOIN sections s ON s.id = d.section_id
+       LEFT JOIN users manager ON manager.id = d.manager_user_id
+       LEFT JOIN users exco ON exco.id = d.exco_user_id
+       LEFT JOIN users section_exco ON section_exco.id = s.exco_user_id
       ORDER BY COALESCE(s.name, 'zzz'), d.name`
   );
   return rows;
 }
 
-export async function updateDepartmentGroup(oldName: string, newName: string, sectionId?: string | null) {
+export async function updateDepartmentGroup(oldName: string, newName: string, options: DepartmentOwnerInput = {}) {
   const currentDepartment = normalizeDepartmentName(oldName);
   const updatedDepartment = normalizeDepartmentName(newName);
   if (!currentDepartment) throw badRequest("Current department is required");
   if (!updatedDepartment) throw badRequest("New department name is required");
 
   await ensureDepartmentsTable();
-  const existing = await query<{ id: string; name: string }>(
-    `SELECT id, name
+  const existing = await query<{ id: string; name: string; section_id: string | null; manager_user_id: string | null; exco_user_id: string | null; active: boolean }>(
+    `SELECT id, name, section_id, manager_user_id, exco_user_id, active
        FROM departments
       WHERE lower(trim(name)) = lower($1)
       LIMIT 1`,
@@ -215,13 +321,25 @@ export async function updateDepartmentGroup(oldName: string, newName: string, se
   );
   if (conflict[0]) throw badRequest("Department name already exists");
 
-  const rows = await query<{ id: string; name: string }>(
+  const sectionId = hasOwn(options, "sectionId") ? options.sectionId ?? null : existing[0].section_id;
+  const managerUserId = hasOwn(options, "managerUserId")
+    ? await assertEligibleOwner(options.managerUserId, ["MANAGER"], "Manager")
+    : existing[0].manager_user_id;
+  const excoUserId = hasOwn(options, "excoUserId")
+    ? await assertEligibleOwner(options.excoUserId, ["CHIEF_OFFICER"], "EXCO owner")
+    : existing[0].exco_user_id;
+  const active = hasOwn(options, "active") ? options.active ?? true : existing[0].active;
+
+  const rows = await query<{ id: string; name: string; section_id: string | null; manager_user_id: string | null; exco_user_id: string | null; active: boolean }>(
     `UPDATE departments
         SET name = $2,
-            section_id = $3
+            section_id = $3,
+            manager_user_id = $4,
+            exco_user_id = $5,
+            active = $6
       WHERE id = $1
-      RETURNING id, name`,
-    [existing[0].id, updatedDepartment, sectionId || null]
+      RETURNING id, name, section_id, manager_user_id, exco_user_id, active`,
+    [existing[0].id, updatedDepartment, sectionId, managerUserId, excoUserId, active]
   );
 
   await query(
@@ -234,11 +352,12 @@ export async function updateDepartmentGroup(oldName: string, newName: string, se
   return rows[0];
 }
 
-export async function createSectionGroup(input: string) {
+export async function createSectionGroup(input: string, excoUserId?: string | null) {
   const section = normalizeDepartmentName(input);
   if (section.length < 2) throw badRequest("Section name is required");
 
   await ensureSectionSchema();
+  const ownerId = await assertEligibleOwner(excoUserId, ["CHIEF_OFFICER"], "Section EXCO owner");
   const existing = await query<{ id: string; name: string }>(
     `SELECT id, name
        FROM sections
@@ -248,26 +367,37 @@ export async function createSectionGroup(input: string) {
   );
   if (existing[0]) return existing[0];
 
-  const rows = await query<{ id: string; name: string }>(
-    `INSERT INTO sections (id, name)
-     VALUES ($1, $2)
-     RETURNING id, name`,
-    [randomUUID(), section]
+  const rows = await query<{ id: string; name: string; exco_user_id: string | null }>(
+    `INSERT INTO sections (id, name, exco_user_id)
+     VALUES ($1, $2, $3)
+     RETURNING id, name, exco_user_id`,
+    [randomUUID(), section, ownerId]
   );
   return rows[0];
 }
 
 export async function listSectionGroups() {
   await ensureSectionSchema();
-  const rows = await query<{ id: string; name: string }>(
-    `SELECT id, name
-       FROM sections
+  const rows = await query<{
+    id: string;
+    name: string;
+    exco_user_id: string | null;
+    exco_name: string | null;
+    exco_email: string | null;
+  }>(
+    `SELECT s.id,
+            s.name,
+            s.exco_user_id,
+            exco.full_name AS exco_name,
+            exco.email AS exco_email
+       FROM sections s
+       LEFT JOIN users exco ON exco.id = s.exco_user_id
       ORDER BY name`
   );
   return rows;
 }
 
-export async function updateSectionGroup(id: string, name: string) {
+export async function updateSectionGroup(id: string, name: string, excoUserId?: string | null) {
   const section = normalizeDepartmentName(name);
   if (!section) throw badRequest("Section name is required");
 
@@ -291,12 +421,14 @@ export async function updateSectionGroup(id: string, name: string) {
   );
   if (conflict[0]) throw badRequest("Section name already exists");
 
-  const rows = await query<{ id: string; name: string }>(
+  const ownerId = excoUserId === undefined ? undefined : await assertEligibleOwner(excoUserId, ["CHIEF_OFFICER"], "Section EXCO owner");
+  const rows = await query<{ id: string; name: string; exco_user_id: string | null }>(
     `UPDATE sections
-        SET name = $2
+        SET name = $2,
+            exco_user_id = CASE WHEN $4::boolean = true THEN exco_user_id ELSE $3::uuid END
       WHERE id = $1
-      RETURNING id, name`,
-    [id, section]
+      RETURNING id, name, exco_user_id`,
+    [id, section, ownerId ?? null, excoUserId === undefined]
   );
   return rows[0];
 }
@@ -350,4 +482,57 @@ export async function deleteDepartmentGroup(name: string) {
 
   await query(`DELETE FROM departments WHERE id = $1`, [existing[0].id]);
   return { ok: true };
+}
+
+export async function listEligibleLeadershipUsers() {
+  const rows = await query<{
+    id: string;
+    full_name: string | null;
+    email: string;
+    employee_no: string | null;
+    department: string | null;
+    role: string;
+  }>(
+    `SELECT id, full_name, email, employee_no, department, role::text AS role
+       FROM users
+      WHERE is_active = true
+        AND role::text IN ('MANAGER', 'CHIEF_OFFICER')
+      ORDER BY role, full_name NULLS LAST, email`
+  );
+  return {
+    managers: rows.filter((row) => row.role === "MANAGER"),
+    exco: rows.filter((row) => row.role === "CHIEF_OFFICER")
+  };
+}
+
+export async function getDepartmentLeadership(departmentInput: string) {
+  const department = normalizeDepartmentName(departmentInput);
+  if (!department) {
+    return {
+      department: "",
+      manager_user_id: null,
+      exco_user_id: null
+    };
+  }
+
+  await ensureDepartmentsTable();
+  const rows = await query<{
+    department: string;
+    manager_user_id: string | null;
+    exco_user_id: string | null;
+  }>(
+    `SELECT d.name AS department,
+            d.manager_user_id,
+            d.exco_user_id
+       FROM departments d
+      WHERE lower(trim(d.name)) = lower($1)
+      LIMIT 1`,
+    [department]
+  );
+
+  return rows[0] ?? {
+    department,
+    manager_user_id: null,
+    exco_user_id: null
+  };
 }

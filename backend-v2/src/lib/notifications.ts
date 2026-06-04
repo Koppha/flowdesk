@@ -33,6 +33,20 @@ async function getRecipients(role: Role, department?: string | null) {
   return rows.filter((row) => row.email);
 }
 
+async function getAssignedDepartmentOwnerRecipients(department: string | null, ownerColumn: "manager_user_id" | "exco_user_id") {
+  if (!department?.trim()) return [];
+  const rows = await query<{ email: string; full_name: string | null }>(
+    `SELECT owner.email, owner.full_name
+       FROM departments d
+       JOIN users owner ON owner.id = d.${ownerColumn}
+      WHERE lower(trim(d.name)) = lower(trim($1))
+        AND owner.is_active = true
+      LIMIT 1`,
+    [department]
+  );
+  return rows.filter((row) => row.email);
+}
+
 async function sendMail(args: { to: string[]; subject: string; text: string }) {
   const mailer = getTransporter();
   if (!mailer || args.to.length === 0) return;
@@ -66,7 +80,11 @@ export async function notifyAdvanceTask(args: {
 
   try {
     const recipientDepartment = ["HR_MANAGER", "AUTH_OFFICER", "FINANCE"].includes(role) ? null : department;
-    const recipients = await getRecipients(role, recipientDepartment);
+    const recipients = args.status === "SUBMITTED"
+      ? await getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
+      : args.status === "CHIEF_OFFICER_REVIEW"
+        ? await getAssignedDepartmentOwnerRecipients(department, "exco_user_id")
+        : await getRecipients(role, recipientDepartment);
     await sendMail({
       to: recipients.map((recipient) => recipient.email),
       subject: `New advance task awaiting ${role}`,
@@ -117,7 +135,8 @@ export async function notifyClaimTask(args: {
   if (args.status === "SUBMITTED") roles = ["MANAGER"];
   if (args.status === "MANAGER_APPROVED") roles = ["CHIEF_OFFICER"];
   if (args.status === "CHIEF_OFFICER_APPROVED") roles = ["AUTH_OFFICER"];
-  if (args.status === "HR_OFFICER") roles = ["FINANCE"];
+  if (args.status === "HR_OFFICER") roles = ["HR_MANAGER"];
+  if (args.status === "HR_MANAGER_REVIEW") roles = ["FINANCE"];
   if (args.status === "FINANCE_VERIFIED") roles = ["FINANCE"];
   if (roles.length === 0) return;
 
@@ -140,5 +159,36 @@ export async function notifyClaimTask(args: {
     });
   } catch (error) {
     logger.warn("claim_task_notification_failed", { claim_id: args.claimId, status: args.status, error: serializeError(error) });
+  }
+}
+
+export async function notifyUserOnboarded(args: {
+  userId: string;
+  email: string;
+  fullName: string | null;
+  role: string;
+  sectionOrDepartment: string | null;
+  temporaryPassword: string;
+}) {
+  try {
+    const recipientName = args.fullName || args.email;
+    const role = args.role.replace(/_/g, " ");
+    const credentialLine = env.AD_AUTH_ENABLED
+      ? `Use your network credentials to sign in. If local login is required, use this temporary password: ${args.temporaryPassword}\n`
+      : `Temporary password: ${args.temporaryPassword}\n`;
+
+    await sendMail({
+      to: [args.email],
+      subject: "Advance Clearance onboarding",
+      text:
+        `Hello ${recipientName},\n\n` +
+        `You have been onboarded on the Advance Clearance System.\n\n` +
+        `Role: ${role}\n` +
+        `Section/Department: ${args.sectionOrDepartment || "-"}\n` +
+        credentialLine +
+        `\nPlease sign in and confirm your profile details.`
+    });
+  } catch (error) {
+    logger.warn("user_onboarding_notification_failed", { user_id: args.userId, email: args.email, error: serializeError(error) });
   }
 }

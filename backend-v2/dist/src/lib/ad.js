@@ -2,24 +2,29 @@ import { env } from "../config/env.js";
 function normalizeBool(value) {
     if (typeof value === "boolean")
         return value;
-    if (typeof value === "number")
-        return value === 1;
+    if (typeof value === "number") {
+        if (value === 1)
+            return true;
+        if (value === 0)
+            return false;
+        return null;
+    }
     if (typeof value === "string") {
         const v = value.trim().toLowerCase();
-        if (["true", "1", "ok", "success", "authenticated"].includes(v))
+        if (["true", "1", "ok", "success", "authenticated", "valid", "yes"].includes(v))
             return true;
-        if (["false", "0", "fail", "failed", "unauthorized", "invalid"].includes(v))
+        if (["false", "0", "fail", "failed", "unauthorized", "invalid", "denied", "no"].includes(v))
             return false;
     }
     return null;
 }
-function parseAdResult(payload) {
+export function parseAdResult(payload) {
     const direct = normalizeBool(payload);
     if (direct !== null)
         return { authenticated: direct, raw: payload };
     if (payload && typeof payload === "object") {
         const obj = payload;
-        const keys = ["authenticated", "isAuthenticated", "success", "ok", "status"];
+        const keys = ["authenticated", "isAuthenticated", "success", "ok", "valid", "isValid", "status"];
         for (const key of keys) {
             const v = normalizeBool(obj[key]);
             if (v !== null) {
@@ -43,11 +48,25 @@ function parseAdResult(payload) {
                 return { authenticated: v, profile, raw: payload };
             }
         }
+        for (const key of ["data", "result", "response"]) {
+            if (key in obj) {
+                const nested = parseAdResult(obj[key]);
+                if (nested.authenticated || normalizeBool(obj[key]) !== null) {
+                    return { ...nested, raw: payload };
+                }
+            }
+        }
     }
     return { authenticated: false, raw: payload };
 }
+function getAdAuthUrl() {
+    const explicitUrl = env.AD_AUTH_URL?.trim();
+    if (explicitUrl)
+        return explicitUrl;
+    return `${env.AD_API_BASE_URL.replace(/\/+$/, "")}/${env.AD_AUTH_PATH.replace(/^\/+/, "")}`;
+}
 export async function authenticateAgainstAd(args) {
-    const url = `${env.AD_API_BASE_URL.replace(/\/+$/, "")}/${env.AD_AUTH_PATH.replace(/^\/+/, "")}`;
+    const url = getAdAuthUrl();
     const body = JSON.stringify({
         userName: args.email,
         password: args.password

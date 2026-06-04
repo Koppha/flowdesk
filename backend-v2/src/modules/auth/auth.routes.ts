@@ -8,7 +8,8 @@ import { query } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
-import { createDepartmentGroup, createSectionGroup, deleteDepartmentGroup, deleteSectionGroup, listDepartmentGroups, listDepartmentsWithSections, listSectionGroups, resolveDepartmentGroup, updateDepartmentGroup, updateSectionGroup } from "../../lib/departments.js";
+import { createDepartmentGroup, createSectionGroup, deleteDepartmentGroup, deleteSectionGroup, listDepartmentGroups, listDepartmentsWithSections, listEligibleLeadershipUsers, listSectionGroups, resolveDepartmentGroup, resolveSectionGroup, updateDepartmentGroup, updateSectionGroup } from "../../lib/departments.js";
+import { notifyUserOnboarded } from "../../lib/notifications.js";
 
 const LoginSchema = z
   .object({
@@ -54,7 +55,29 @@ const ProfileSchema = z
   });
 
 const UpdateUserRoleSchema = z.object({
-  role: z.enum(["EMPLOYEE", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"]),
+  role: z.enum(["EMPLOYEE", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO"]),
+  is_active: z.boolean().optional()
+});
+
+const CreateUserSchema = z.object({
+  email: z.string().trim().min(3, "Email is required"),
+  full_name: z.string().trim().min(1).optional(),
+  employee_no: z.string().trim().optional(),
+  title: z.string().trim().optional(),
+  department: z.string().trim().optional(),
+  section: z.string().trim().optional(),
+  employment_type: z.enum(["PERMANENT", "INTERN", "TEMPORARY"]).optional(),
+  role: z.enum(["EMPLOYEE", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO"]).optional(),
+  is_active: z.boolean().optional()
+});
+
+const UpdateUserSchema = z.object({
+  full_name: z.string().trim().min(1).optional(),
+  email: z.string().trim().min(3).optional(),
+  employee_no: z.string().trim().optional(),
+  title: z.string().trim().optional(),
+  department: z.string().trim().optional(),
+  employment_type: z.enum(["PERMANENT", "INTERN", "TEMPORARY"]).optional(),
   is_active: z.boolean().optional()
 });
 
@@ -71,20 +94,34 @@ const CreateDelegationSchema = z.object({
 
 const CreateDepartmentSchema = z.object({
   name: z.string().trim().min(2, "Department name is required"),
-  section_id: z.string().uuid().optional()
+  section_id: z.string().uuid().nullable().optional(),
+  manager_user_id: z.string().uuid().nullable().optional(),
+  managerUserId: z.string().uuid().nullable().optional(),
+  exco_user_id: z.string().uuid().nullable().optional(),
+  excoUserId: z.string().uuid().nullable().optional(),
+  active: z.boolean().optional()
 });
 
 const UpdateDepartmentSchema = z.object({
   name: z.string().trim().min(2, "Department name is required"),
-  section_id: z.string().uuid().optional()
+  section_id: z.string().uuid().nullable().optional(),
+  manager_user_id: z.string().uuid().nullable().optional(),
+  managerUserId: z.string().uuid().nullable().optional(),
+  exco_user_id: z.string().uuid().nullable().optional(),
+  excoUserId: z.string().uuid().nullable().optional(),
+  active: z.boolean().optional()
 });
 
 const CreateSectionSchema = z.object({
-  name: z.string().trim().min(2, "Section name is required")
+  name: z.string().trim().min(2, "Section name is required"),
+  exco_user_id: z.string().uuid().nullable().optional(),
+  excoUserId: z.string().uuid().nullable().optional()
 });
 
 const UpdateSectionSchema = z.object({
-  name: z.string().trim().min(2, "Section name is required")
+  name: z.string().trim().min(2, "Section name is required"),
+  exco_user_id: z.string().uuid().nullable().optional(),
+  excoUserId: z.string().uuid().nullable().optional()
 });
 
 function maskEmail(email: string) {
@@ -113,6 +150,14 @@ function toSyntheticEmail(loginId: string) {
 
 function isEmailLike(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function normalizeEmailForStorage(value: string) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) throw badRequest("Email is required");
+  if (isEmailLike(raw)) return raw;
+  if (raw.includes("@")) throw badRequest("Enter a valid email address or username");
+  return toSyntheticEmail(raw);
 }
 
 function toAuthResponse(user: {
@@ -164,7 +209,7 @@ authRouter.post("/login", async (req, res, next) => {
     const loginRaw = (parsed.data.email || parsed.data.userName || "").trim();
     const loginDisplay = loginRaw;
     const loginUser = loginRaw.split("@")[0].trim().toLowerCase();
-    const loginEmail = isEmailLike(loginRaw) ? loginRaw.toLowerCase() : null;
+    const loginEmail = normalizeEmailForStorage(loginRaw);
     const password = parsed.data.password;
     logger.info("auth_login_attempt", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
 
@@ -197,17 +242,18 @@ authRouter.post("/login", async (req, res, next) => {
       try {
         const ad = await authenticateAgainstAd({ email: loginUser, password });
         if (ad.authenticated) {
+          const adProfile = ad.profile;
+          const emailFromAdOrLogin = normalizeEmailForStorage(adProfile?.email || loginRaw);
           if (!user) {
             const syntheticHash = await hashPassword(randomUUID());
-            const emailToStore = ad.profile?.email?.trim().toLowerCase() || loginEmail || toSyntheticEmail(loginUser);
             const created = await query<{ id: string; role: any; email: string }>(
               `INSERT INTO users (employee_no, full_name, email, role, password_hash, is_active, employment_type, profile_completed)
                VALUES ($1,$2,$3,'EMPLOYEE',$4,true,'PERMANENT',false)
-               RETURNING id, role, email`,
+              RETURNING id, role, email`,
               [
-                ad.profile?.employee_no ?? null,
-                ad.profile?.full_name ?? fallbackNameFromEmail(ad.profile?.email || loginUser),
-                emailToStore,
+                adProfile?.employee_no ?? null,
+                adProfile?.full_name ?? fallbackNameFromEmail(adProfile?.email || loginUser),
+                emailFromAdOrLogin,
                 syntheticHash
               ]
             );
@@ -216,27 +262,33 @@ authRouter.post("/login", async (req, res, next) => {
               role: created[0].role,
               email: created[0].email,
               password_hash: syntheticHash,
-              full_name: ad.profile?.full_name ?? null,
-              employee_no: ad.profile?.employee_no ?? null,
+              full_name: adProfile?.full_name ?? null,
+              employee_no: adProfile?.employee_no ?? null,
               department: null,
               employment_type: "PERMANENT",
               profile_completed: false
             };
             logger.info("ad_login_user_created", { login: loginUser, email: maskEmail(user.email), user_id: user.id });
           } else {
-            if (ad.profile?.full_name || ad.profile?.employee_no) {
+            const shouldUpdateEmail = emailFromAdOrLogin !== user.email.toLowerCase() && user.email.split("@")[0].toLowerCase() === loginUser;
+            const emailConflict = shouldUpdateEmail
+              ? await query<{ id: string }>(`SELECT id FROM users WHERE lower(email)=lower($1) AND id <> $2 LIMIT 1`, [emailFromAdOrLogin, user.id])
+              : [];
+            if (adProfile?.full_name || adProfile?.employee_no || (shouldUpdateEmail && !emailConflict[0])) {
               await query(
                 `UPDATE users
                  SET full_name = COALESCE($2, full_name),
                      employee_no = COALESCE($3, employee_no),
+                     email = COALESCE($4, email),
                      updated_at = now()
                  WHERE id = $1`,
-                [user.id, ad.profile.full_name ?? null, ad.profile.employee_no ?? null]
+                [user.id, adProfile?.full_name ?? null, adProfile?.employee_no ?? null, shouldUpdateEmail && !emailConflict[0] ? emailFromAdOrLogin : null]
               );
               user = {
                 ...user,
-                full_name: ad.profile.full_name ?? user.full_name,
-                employee_no: ad.profile.employee_no ?? user.employee_no
+                full_name: adProfile?.full_name ?? user.full_name,
+                employee_no: adProfile?.employee_no ?? user.employee_no,
+                email: shouldUpdateEmail && !emailConflict[0] ? emailFromAdOrLogin : user.email
               };
             }
           }
@@ -309,7 +361,12 @@ authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req:
   try {
     const parsed = CreateDepartmentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
-    return res.status(201).json(await createDepartmentGroup(parsed.data.name, parsed.data.section_id));
+    return res.status(201).json(await createDepartmentGroup(parsed.data.name, {
+      sectionId: parsed.data.section_id,
+      managerUserId: parsed.data.manager_user_id ?? parsed.data.managerUserId,
+      excoUserId: parsed.data.exco_user_id ?? parsed.data.excoUserId,
+      active: parsed.data.active
+    }));
   } catch (err) {
     return next(err);
   }
@@ -319,7 +376,16 @@ authRouter.put(["/departments/:department", "/groups/:department"], requireRole(
   try {
     const parsed = UpdateDepartmentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
-    const updated = await updateDepartmentGroup(req.params.department, parsed.data.name, parsed.data.section_id);
+    const updated = await updateDepartmentGroup(req.params.department, parsed.data.name, {
+      ...(Object.prototype.hasOwnProperty.call(parsed.data, "section_id") ? { sectionId: parsed.data.section_id } : {}),
+      ...(Object.prototype.hasOwnProperty.call(parsed.data, "manager_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "managerUserId")
+        ? { managerUserId: parsed.data.manager_user_id ?? parsed.data.managerUserId ?? null }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(parsed.data, "exco_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "excoUserId")
+        ? { excoUserId: parsed.data.exco_user_id ?? parsed.data.excoUserId ?? null }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(parsed.data, "active") ? { active: parsed.data.active } : {})
+    });
     return res.json(updated);
   } catch (err) {
     return next(err);
@@ -346,7 +412,7 @@ authRouter.post("/sections", requireRole(["ADMIN"]), async (req: AuthedRequest, 
   try {
     const parsed = CreateSectionSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
-    return res.status(201).json(await createSectionGroup(parsed.data.name));
+    return res.status(201).json(await createSectionGroup(parsed.data.name, parsed.data.exco_user_id ?? parsed.data.excoUserId));
   } catch (err) {
     return next(err);
   }
@@ -356,7 +422,10 @@ authRouter.put("/sections/:id", requireRole(["ADMIN"]), async (req: AuthedReques
   try {
     const parsed = UpdateSectionSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
-    return res.json(await updateSectionGroup(req.params.id, parsed.data.name));
+    const excoUserId = Object.prototype.hasOwnProperty.call(parsed.data, "exco_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "excoUserId")
+      ? parsed.data.exco_user_id ?? parsed.data.excoUserId ?? null
+      : undefined;
+    return res.json(await updateSectionGroup(req.params.id, parsed.data.name, excoUserId));
   } catch (err) {
     return next(err);
   }
@@ -373,6 +442,14 @@ authRouter.delete("/sections/:id", requireRole(["ADMIN"]), async (req: AuthedReq
 authRouter.get("/departments-with-sections", async (_req: AuthedRequest, res, next) => {
   try {
     return res.json(await listDepartmentsWithSections());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.get("/leadership-users", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await listEligibleLeadershipUsers());
   } catch (err) {
     return next(err);
   }
@@ -448,7 +525,7 @@ authRouter.get("/users", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), asy
   try {
     const isAdmin = req.user!.role === "ADMIN";
     const rows = await query(
-      `SELECT id, full_name, email, employee_no, department, employment_type, role, profile_completed, is_active, created_at, updated_at
+      `SELECT id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at
        FROM users
        WHERE ($1::boolean = true OR trim(department) = $2)
        ORDER BY full_name NULLS LAST, email`,
@@ -465,7 +542,7 @@ authRouter.get("/request-directory", async (req: AuthedRequest, res, next) => {
     const department = String(req.user!.department || "").trim();
     if (!department) return res.json([]);
     const rows = await query(
-      `SELECT id, full_name, email, employee_no, department, employment_type, role, profile_completed
+      `SELECT id, full_name, email, employee_no, title, department, employment_type, role, profile_completed
        FROM users
        WHERE is_active = true
          AND trim(department) = $1
@@ -497,7 +574,7 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
                 END,
               updated_at=now()
         WHERE id=$1
-        RETURNING id, full_name, email, employee_no, department, employment_type, role, profile_completed, is_active, created_at, updated_at`,
+        RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at`,
       [req.params.id, department]
     );
     if (!rows[0]) throw notFound();
@@ -615,9 +692,113 @@ authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFIC
               is_active=COALESCE($3, is_active),
               updated_at=now()
         WHERE id=$1
-        RETURNING id, full_name, email, employee_no, department, employment_type, role, profile_completed, is_active, created_at, updated_at`,
+        RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at`,
       [req.params.id, parsed.data.role, parsed.data.is_active ?? null]
     );
+    if (!rows[0]) throw notFound();
+    return res.json(rows[0]);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Admin: create a user (for onboarding EXCO members or other admin-created accounts)
+authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = CreateUserSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid user payload", parsed.error.flatten());
+
+    const email = normalizeEmailForStorage(parsed.data.email);
+    const existing = await query(`SELECT id FROM users WHERE lower(email)=lower($1)`, [email]);
+    if (existing[0]) throw badRequest("A user with that email already exists");
+
+    const pwd = randomUUID();
+    const hash = await hashPassword(pwd);
+    const role = parsed.data.role ?? "EXCO";
+    const employeeNo = parsed.data.employee_no?.trim() || null;
+    const sectionOrDepartment = parsed.data.section ?? parsed.data.department ?? "";
+    const department = sectionOrDepartment
+      ? role === "EXCO"
+        ? await resolveSectionGroup(sectionOrDepartment)
+        : await resolveDepartmentGroup(sectionOrDepartment)
+      : null;
+    const title = parsed.data.title || null;
+    const employmentType = parsed.data.employment_type ?? "PERMANENT";
+    const isActive = parsed.data.is_active ?? true;
+    const profileCompleted = Boolean(
+      parsed.data.full_name &&
+      department &&
+      (role === "EXCO" || employmentType !== "PERMANENT" || employeeNo)
+    );
+
+    const rows = await query<{
+      id: string;
+      full_name: string | null;
+      email: string;
+      employee_no: string | null;
+      title: string | null;
+      department: string | null;
+      employment_type: string | null;
+      role: string;
+      profile_completed: boolean;
+      is_active: boolean;
+      created_at: string;
+      updated_at: string;
+    }>(
+      `INSERT INTO users (id, employee_no, full_name, title, department, email, role, password_hash, is_active, employment_type, profile_completed, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
+       RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at`,
+      [randomUUID(), employeeNo, parsed.data.full_name ?? null, title, department, email, role, hash, isActive, employmentType, profileCompleted]
+    );
+
+    const created = rows[0];
+    await notifyUserOnboarded({
+      userId: created.id,
+      email: created.email,
+      fullName: created.full_name,
+      role: created.role,
+      sectionOrDepartment: created.department,
+      temporaryPassword: pwd
+    });
+    return res.status(201).json(created);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Admin: update user attributes
+authRouter.put("/users/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = UpdateUserSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid user payload", parsed.error.flatten());
+
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+    if (parsed.data.full_name !== undefined) { fields.push(`full_name=$${idx++}`); values.push(parsed.data.full_name); }
+    if (parsed.data.email !== undefined) { fields.push(`email=$${idx++}`); values.push(normalizeEmailForStorage(parsed.data.email)); }
+    if (parsed.data.employee_no !== undefined) { fields.push(`employee_no=$${idx++}`); values.push(parsed.data.employee_no); }
+    if (parsed.data.title !== undefined) { fields.push(`title=$${idx++}`); values.push(parsed.data.title); }
+    if (parsed.data.department !== undefined) {
+      const organization = parsed.data.department.trim();
+      const existing = await query<{ role: string }>(`SELECT role::text AS role FROM users WHERE id=$1`, [req.params.id]);
+      if (!existing[0]) throw notFound();
+      const department = organization
+        ? existing[0].role === "EXCO"
+          ? await resolveSectionGroup(organization)
+          : await resolveDepartmentGroup(organization)
+        : null;
+      fields.push(`department=$${idx++}`);
+      values.push(department);
+    }
+    if (parsed.data.employment_type !== undefined) { fields.push(`employment_type=$${idx++}`); values.push(parsed.data.employment_type); }
+    if (parsed.data.is_active !== undefined) { fields.push(`is_active=$${idx++}`); values.push(parsed.data.is_active); }
+
+    if (fields.length === 0) return res.json({ ok: true });
+
+    const sql = `UPDATE users SET ${fields.join(', ')}, updated_at=now() WHERE id=$${idx} RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at`;
+    values.push(req.params.id);
+    const rows = await query(sql, values);
     if (!rows[0]) throw notFound();
     return res.json(rows[0]);
   } catch (err) {

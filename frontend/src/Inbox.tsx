@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
-import { LESOTHO_DISTRICTS } from "./constants";
+import { LESOTHO_DISTRICTS, TravelType, isTravelTypeCode, travelTypeLabel } from "./constants";
 
 type InboxItem =
   | {
@@ -81,6 +81,72 @@ function displayRoleLabel(value: string | null | undefined) {
   }
 }
 
+function statusLabel(value: string | null | undefined) {
+  if (!value) return "Unknown";
+  return value
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function statusTone(value: string | null | undefined) {
+  const status = String(value || "").toUpperCase();
+  if (status.includes("REJECT") || status.includes("CANCEL") || status.includes("FAILED")) return "status-pill-danger";
+  if (status.includes("PAID") || status.includes("APPROVED") || status.includes("SETTLED") || status.includes("COMPLETED")) return "status-pill-success";
+  if (status.includes("SUBMITTED") || status.includes("REVIEW") || status.includes("PENDING") || status.includes("OFFICER")) return "status-pill-warning";
+  if (status.includes("DRAFT")) return "status-pill-neutral";
+  return "status-pill-info";
+}
+
+function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) {
+  switch (value) {
+    case "ADVANCE":
+      return "Advance";
+    case "ACCOMMODATION":
+      return "Travel Accommodation";
+    case "CLAIM":
+      return "Clearance";
+    default:
+      return statusLabel(String(value || "Document"));
+  }
+}
+
+function itemOwner(item: InboxItem) {
+  if (item.doc_type === "CLAIM") return item.claimant_name || "Unknown";
+  return item.requester_name || "Unknown";
+}
+
+function itemAmountValue(item: InboxItem) {
+  if (item.doc_type === "ADVANCE") return Number(item.requested_total || 0);
+  if (item.doc_type === "ACCOMMODATION") return Number(item.amount || 0);
+  return Number(item.claim_total || 0);
+}
+
+function itemAmount(item: InboxItem) {
+  return fmt(itemAmountValue(item));
+}
+
+function itemContext(item: InboxItem) {
+  if (item.doc_type === "ADVANCE") return item.purpose || "Advance request";
+  if (item.doc_type === "ACCOMMODATION") {
+    return `${item.location || "Location pending"}${item.provider ? ` - ${item.provider}` : ""}`;
+  }
+  return `Advance ${fmt(item.advance_amount)} / Balance ${fmt(item.balance_amount)}`;
+}
+
+function initials(value: string | null | undefined) {
+  const parts = String(value || "User")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return (parts[0]?.[0] || "U") + (parts[1]?.[0] || "");
+}
+
+function actionLabel(value: string | null | undefined) {
+  if (!value) return "Action";
+  return statusLabel(value);
+}
+
 export default function Inbox(props: { onBack?: () => void }) {
   const me = getUserFromToken();
   const role = me?.role || "UNKNOWN";
@@ -111,127 +177,176 @@ export default function Inbox(props: { onBack?: () => void }) {
     return g;
   }, [items]);
 
+  const metrics = useMemo(
+    () => ({
+      awaiting: items.length,
+      advances: items.filter((item) => item.doc_type === "ADVANCE").length,
+      clearances: items.filter((item) => item.doc_type === "CLAIM").length,
+      advanceValue: items
+        .filter((item) => item.doc_type === "ADVANCE")
+        .reduce((sum, item) => sum + itemAmountValue(item), 0),
+      recentActions: myActions.length
+    }),
+    [items, myActions]
+  );
+
+  const latestAction = myActions[0] || null;
+
   return (
-    <div style={{ marginTop: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="inbox-page">
+      <section className="inbox-hero">
         <div>
-          <h3 style={{ margin: 0 }}>Approval Inbox</h3>
-          <div style={{ opacity: 0.7 }}>Role: {displayRoleLabel(role)}</div>
+          <div className="inbox-eyebrow">Approval Workflow</div>
+          <h2>Approval Inbox</h2>
+          <p>
+            Review finance requests waiting for {displayRoleLabel(role)} and keep a clear record of your recent decisions.
+          </p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="inbox-hero-actions">
           {props.onBack && (
-            <button className="button small-button" onClick={props.onBack} style={{ padding: "8px 12px" }}>
+            <button className="button small-button button-subtle" onClick={props.onBack}>
               Back
             </button>
           )}
-          <button className="button small-button" onClick={() => refresh().catch((e) => setError(String(e.message)))} style={{ padding: "8px 12px" }}>
+          <button className="button small-button button-primary" onClick={() => refresh().catch((e) => setError(String(e.message)))}>
             Refresh
           </button>
         </div>
-      </div>
+      </section>
 
-      {error && <pre style={{ color: "crimson" }}>{error}</pre>}
+      {error && <pre className="inbox-error">{error}</pre>}
 
-      <div style={{ marginTop: 16 }} className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <b>My Recent Actions</b>
-          <span style={{ opacity: 0.7 }}>{myActions.length} record(s)</span>
+      <section className="inbox-metrics">
+        <div className="inbox-metric-card metric-blue">
+          <span>Awaiting My Approval</span>
+          <strong>{metrics.awaiting}</strong>
+          <small>{metrics.awaiting === 1 ? "active item" : "active items"}</small>
         </div>
-        {myActions.length === 0 ? (
-          <div style={{ marginTop: 8, opacity: 0.75 }}>No action history yet.</div>
-        ) : (
-          <div style={{ marginTop: 8, overflowX: "auto" }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Action</th>
-                  <th>Document</th>
-                  <th>Owner</th>
-                  <th>Current Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {myActions.map((a) => (
-                  <tr key={a.id}>
-                    <td>{fmtWhen(a.created_at)}</td>
-                    <td>{a.action}</td>
-                    <td>{a.doc_type}</td>
-                    <td>{a.requester_name || "—"}</td>
-                    <td>{a.current_status || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+        <div className="inbox-metric-card metric-green">
+          <span>Advance Requests</span>
+          <strong>{metrics.advances}</strong>
+          <small>{fmt(metrics.advanceValue)} advance value</small>
+        </div>
+        <div className="inbox-metric-card metric-gold">
+          <span>Clearances</span>
+          <strong>{metrics.clearances}</strong>
+          <small>claims needing attention</small>
+        </div>
+        <div className="inbox-metric-card metric-rose">
+          <span>Recent Actions</span>
+          <strong>{metrics.recentActions}</strong>
+          <small>{latestAction ? actionLabel(latestAction.action) : "No history yet"}</small>
+        </div>
+      </section>
 
-      {items.length === 0 ? (
-        <div style={{ marginTop: 16, opacity: 0.75 }}>No items awaiting your action.</div>
-      ) : (
-        <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
-          {Object.entries(grouped).map(([groupKey, groupItems]) => (
-            <div key={groupKey} style={{ padding: 12 }} className="card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                <b>{groupKey}</b>
-                <span style={{ opacity: 0.7 }}>{groupItems.length} item(s)</span>
-              </div>
-
-              <div style={{ marginTop: 8, overflowX: "auto" }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Owner</th>
-                      <th>Amount</th>
-                      <th>Balance</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {groupItems.map((it) => (
-                      <tr key={it.id}>
-                        <td>
-                          {it.doc_type === "ADVANCE"
-                            ? it.requester_name
-                            : it.doc_type === "ACCOMMODATION"
-                              ? it.requester_name
-                              : it.claimant_name}
-                        </td>
-                        <td>
-                          {it.doc_type === "ADVANCE"
-                            ? fmt(it.requested_total)
-                            : it.doc_type === "ACCOMMODATION"
-                              ? fmt(it.amount)
-                              : fmt(it.claim_total)}
-                        </td>
-                        <td>
-                          {it.doc_type === "CLAIM" ? (
-                            <>
-                              Advance {fmt(it.advance_amount)} • Balance {fmt(it.balance_amount)}
-                            </>
-                          ) : it.doc_type === "ACCOMMODATION" ? (
-                            <>
-                              {it.location}{it.provider ? ` • ${it.provider}` : ""}
-                            </>
-                          ) : (
-                            <span style={{ opacity: 0.6 }}>—</span>
-                          )}
-                        </td>
-                        <td>
-                          <button className="button small-button" onClick={() => setSelected(it)}>
-                            Review
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+      <div className="inbox-layout">
+        <section className="inbox-panel inbox-queue-panel">
+          <div className="inbox-panel-header">
+            <div>
+              <h3>Approval Queue</h3>
+              <p>{items.length === 0 ? "No work is waiting right now." : "Grouped by document type and current stage."}</p>
             </div>
-          ))}
-        </div>
-      )}
+            <span className="inbox-count-chip">{items.length} total</span>
+          </div>
+
+          {items.length === 0 ? (
+            <div className="inbox-empty-state">
+              <div className="inbox-empty-icon">0</div>
+              <h4>No items awaiting your action</h4>
+              <p>When requests reach your approval stage, they will appear here with their value, owner, and next action.</p>
+              <button className="button small-button button-primary" onClick={() => refresh().catch((e) => setError(String(e.message)))}>
+                Refresh Queue
+              </button>
+            </div>
+          ) : (
+            <div className="inbox-group-stack">
+              {Object.entries(grouped).map(([groupKey, groupItems]) => {
+                const [docTypeRaw, statusRaw] = groupKey.split(":");
+                return (
+                  <article key={groupKey} className="inbox-group-card">
+                    <div className="inbox-group-header">
+                      <div>
+                        <span className="inbox-doc-chip">{docTypeLabel(docTypeRaw)}</span>
+                        <h4>{statusLabel(statusRaw)}</h4>
+                      </div>
+                      <span className="inbox-count-chip">{groupItems.length} item(s)</span>
+                    </div>
+
+                    <div className="inbox-table-wrap">
+                      <table className="inbox-table">
+                        <thead>
+                          <tr>
+                            <th>Owner</th>
+                            <th>Status</th>
+                            <th>Amount</th>
+                            <th>Context</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupItems.map((it) => (
+                            <tr key={it.id}>
+                              <td>
+                                <div className="inbox-person-cell">
+                                  <span className="inbox-avatar-mini">{initials(itemOwner(it))}</span>
+                                  <span>
+                                    <strong>{itemOwner(it)}</strong>
+                                    <small>{docTypeLabel(it.doc_type)}</small>
+                                  </span>
+                                </div>
+                              </td>
+                              <td>
+                                <span className={`status-pill ${statusTone(it.status)}`}>{statusLabel(it.status)}</span>
+                              </td>
+                              <td className="inbox-money">{itemAmount(it)}</td>
+                              <td className="inbox-context">{itemContext(it)}</td>
+                              <td>
+                                <button className="button small-button button-primary inbox-review-button" onClick={() => setSelected(it)}>
+                                  Review
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <aside className="inbox-panel inbox-history-panel">
+          <div className="inbox-panel-header">
+            <div>
+              <h3>My Recent Actions</h3>
+              <p>Latest decisions and handoffs.</p>
+            </div>
+            <span className="inbox-count-chip">{myActions.length}</span>
+          </div>
+
+          {myActions.length === 0 ? (
+            <div className="inbox-history-empty">No action history yet.</div>
+          ) : (
+            <div className="inbox-action-list">
+              {myActions.slice(0, 10).map((a) => (
+                <div className="inbox-action-item" key={a.id}>
+                  <div className="inbox-action-topline">
+                    <strong>{actionLabel(a.action)}</strong>
+                    <span className={`status-pill ${statusTone(a.current_status)}`}>{statusLabel(a.current_status)}</span>
+                  </div>
+                  <div className="inbox-action-meta">
+                    {docTypeLabel(a.doc_type)} for {a.requester_name || "Unknown"}
+                  </div>
+                  <time>{fmtWhen(a.created_at)}</time>
+                </div>
+              ))}
+              {myActions.length > 10 && <div className="inbox-history-note">Showing latest 10 of {myActions.length} records.</div>}
+            </div>
+          )}
+        </aside>
+      </div>
 
       {selected && (
         <ReviewModal
@@ -264,6 +379,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const [accommodationNotes, setAccommodationNotes] = useState("");
   const [accommodationQuotation, setAccommodationQuotation] = useState<File | null>(null);
   const [accommodationHotels, setAccommodationHotels] = useState<any[]>([]);
+  const [travelTypes, setTravelTypes] = useState<TravelType[]>([]);
   const [busy, setBusy] = useState(false);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
 
@@ -271,20 +387,40 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     (async () => {
       setError(null);
       try {
-        const d =
+        const [d, types] = await Promise.all([
           item.doc_type === "ADVANCE"
-            ? await api.advanceDetail(item.id)
+            ? api.advanceDetail(item.id)
             : item.doc_type === "ACCOMMODATION"
-              ? await api.accommodationDetail(item.id)
-              : await api.claimDetail(item.id);
+              ? api.accommodationDetail(item.id)
+              : api.claimDetail(item.id),
+          api.travelTypes().catch(() => [])
+        ]);
         setDetail(d);
+        setTravelTypes(Array.isArray(types) ? types : []);
       } catch (e: any) {
         setError(String(e.message));
       }
     })();
   }, [item.id]);
 
-  const isTravelAdvance = item.doc_type === "ADVANCE" && detail?.type === "TRAVEL_SUBSISTENCE";
+  const isTravelAdvance =
+    item.doc_type === "ADVANCE" &&
+    (Boolean(detail?.is_travel_type) || isTravelTypeCode(detail?.type, travelTypes) || detail?.type === "TRAVEL_SUBSISTENCE" || detail?.type === "CMA");
+  const usesDistrictAccommodation = !detail?.travel_location_mode || detail.travel_location_mode === "DISTRICT";
+
+  // Extract destination districts from advance lines for local travel
+  const destinationDistricts = useMemo(() => {
+    if (!isTravelAdvance || !detail?.lines) return [];
+    const districts = new Set<string>();
+    (detail.lines || []).forEach((line: any) => {
+      const location = String(line.location || "").trim();
+      if (location.includes("→")) {
+        const destination = location.split("→")[1]?.trim();
+        if (destination) districts.add(destination);
+      }
+    });
+    return Array.from(districts);
+  }, [isTravelAdvance, detail?.lines]);
 
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
@@ -309,16 +445,28 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canCreateAccommodation =
     item.doc_type === "ADVANCE" &&
     role === "AUTH_OFFICER" &&
-    item.status === "HR_REVIEW" &&
-    isTravelAdvance;
+    ["HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status) &&
+    isTravelAdvance &&
+    usesDistrictAccommodation;
   const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
   const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
 
   const canManagerApprove = item.doc_type === "CLAIM" && role === "MANAGER" && item.status === "SUBMITTED";
   const canChiefApprove = item.doc_type === "CLAIM" && role === "CHIEF_OFFICER" && item.status === "MANAGER_APPROVED";
   const canAuthApproveClaim = item.doc_type === "CLAIM" && role === "AUTH_OFFICER" && item.status === "CHIEF_OFFICER_APPROVED";
-  const canFinanceVerify = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "HR_OFFICER";
+  const canHrManagerApproveClaim = item.doc_type === "CLAIM" && role === "HR_MANAGER" && item.status === "HR_OFFICER";
+  const canFinanceVerify = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "HR_MANAGER_REVIEW";
   const canSettle = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "FINANCE_VERIFIED";
+
+  const noActionMessage = (() => {
+    if (item.doc_type === "ADVANCE" && role === "MANAGER" && item.status !== "SUBMITTED") {
+      return "This advance is visible for reference only because manager approval is only required on submitted advances.";
+    }
+    if (item.doc_type === "CLAIM" && role === "MANAGER" && item.status !== "SUBMITTED") {
+      return "This claim is visible for reference only because manager approval is only required on submitted claims.";
+    }
+    return "No action available for your role on this item.";
+  })();
 
   const districtHotels = useMemo(
     () => accommodationHotels.filter((hotel) => hotel.district === accommodationLocation),
@@ -330,7 +478,12 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     api.hotels()
       .then((rows: any[]) => setAccommodationHotels(rows || []))
       .catch((e: any) => setError(String(e.message)));
-  }, [canCreateAccommodation]);
+    
+    // Auto-populate location from destination districts if only one exists
+    if (destinationDistricts.length === 1) {
+      setAccommodationLocation(destinationDistricts[0]);
+    }
+  }, [canCreateAccommodation, destinationDistricts]);
 
   useEffect(() => {
     if (!accommodationProvider) return;
@@ -410,58 +563,39 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", justifyContent: "center", alignItems: "center", padding: 16 }}>
-      <div
-        style={{
-          background: "var(--surface)",
-          color: "var(--text)",
-          border: "1px solid var(--border)",
-          width: 960,
-          maxWidth: "100%",
-          borderRadius: 14,
-          padding: 16,
-          boxSizing: "border-box"
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+    <div className="review-modal-backdrop">
+      <div className="review-modal-shell">
+        <div className="review-modal-header">
           <div>
-            <h3 style={{ margin: 0 }}>
-              Review {item.doc_type === "ACCOMMODATION" ? "Travel Advance Request" : item.doc_type}
-            </h3>
-            <div style={{ opacity: 0.7 }}>
-              Status: <b>{item.status}</b>
-            </div>
+            <div className="review-modal-eyebrow">Request Review</div>
+            <h3>Review {item.doc_type === "ACCOMMODATION" ? "Travel Advance Request" : docTypeLabel(item.doc_type)}</h3>
+            <span className={`status-pill ${statusTone(item.status)}`}>{statusLabel(item.status)}</span>
           </div>
-          <button className="button small-button" onClick={props.onClose} style={{ height: 36, padding: "0 12px" }}>
+          <button className="button small-button button-subtle" onClick={props.onClose}>
             Close
           </button>
         </div>
 
-        {error && <pre style={{ color: "crimson", marginTop: 12 }}>{error}</pre>}
+        {error && <pre className="inbox-error">{error}</pre>}
 
         {!detail ? (
-          <div style={{ marginTop: 12, opacity: 0.7 }}>Loading…</div>
+          <div className="review-loading">Loading request details...</div>
         ) : (
           <div
-            style={{
-              marginTop: 12,
-              display: "grid",
-              gridTemplateColumns:
-                item.doc_type === "CLAIM" || detail.type === "TRAVEL_SUBSISTENCE" ? "1fr 1fr" : "1fr",
-              gap: 12
-            }}
+            className={`review-modal-grid ${item.doc_type === "CLAIM" || isTravelAdvance ? "review-modal-grid-two" : ""}`}
           >
-            <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 12, background: "var(--surface-soft)" }}>
-              <b>Summary</b>
+            <div className="review-card">
+              <div className="review-card-title">Summary</div>
               {item.doc_type === "ADVANCE" ? (
-                <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                <div className="review-detail-list">
+                  <div>Type: {travelTypeLabel(detail.type, travelTypes)}</div>
                   <div>Purpose: {detail.purpose || "—"}</div>
                   <div>Requested Total: {fmt(detail.requested_total)}</div>
                   <div>Approved Total: {fmt(detail.approved_total)}</div>
                   <div>Payment: {detail.payment_method} {detail.payment_account || ""}</div>
                 </div>
               ) : item.doc_type === "ACCOMMODATION" ? (
-                <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                <div className="review-detail-list">
                   <div>Employee: {detail.requester_name || "—"}</div>
                   <div>Created By: {detail.created_by_name || "—"}</div>
                   <div>Location: {detail.location || "—"}</div>
@@ -474,7 +608,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   <div>Advance: {detail.advance_purpose || "—"} ({detail.advance_status || "—"})</div>
                 </div>
               ) : (
-                <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                <div className="review-detail-list">
                   <div>Project: {detail.project_number || "—"}</div>
                   <div>Month: {detail.month || "—"}</div>
                   <div>Clearance Total: {fmt(detail.claim_total)}</div>
@@ -484,55 +618,55 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               )}
             </div>
 
-            {(item.doc_type === "CLAIM" || detail.type === "TRAVEL_SUBSISTENCE") && (
-              <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 12, background: "var(--surface-soft)" }}>
-                <b>Lines</b>
+            {(item.doc_type === "CLAIM" || isTravelAdvance) && (
+              <div className="review-card">
+                <div className="review-card-title">Lines</div>
 
                 {item.doc_type === "ADVANCE" ? (
-                  <div style={{ marginTop: 8, maxHeight: 260, overflow: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", color: "var(--text)" }}>
+                  <div className="review-table-wrap">
+                    <table className="review-table">
                       <thead>
-                        <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
-                          <th style={{ padding: 6 }}>Date</th>
-                          <th style={{ padding: 6 }}>Route</th>
-                          <th style={{ padding: 6 }}>Meals</th>
-                          <th style={{ padding: 6 }}>Total</th>
+                        <tr>
+                          <th>Date</th>
+                          <th>Location</th>
+                          <th>Meals</th>
+                          <th>Total</th>
                         </tr>
                       </thead>
                       <tbody>
                         {(detail.lines || []).map((l: any) => (
-                          <tr key={l.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                            <td style={{ padding: 6 }}>{fmtDate(l.line_date)}</td>
-                            <td style={{ padding: 6 }}>{l.location || "—"}</td>
-                            <td style={{ padding: 6 }}>{lineMealCount(l)}</td>
-                            <td style={{ padding: 6 }}>{fmt(lineAmount(l))}</td>
+                          <tr key={l.id}>
+                            <td>{fmtDate(l.line_date)}</td>
+                            <td>{l.location || "—"}</td>
+                            <td>{lineMealCount(l)}</td>
+                            <td>{fmt(lineAmount(l))}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 ) : (
-                  <div style={{ marginTop: 8, maxHeight: 260, overflow: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", color: "var(--text)" }}>
+                  <div className="review-table-wrap">
+                    <table className="review-table">
                       <thead>
-                        <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
-                          <th style={{ padding: 6 }}>Date</th>
-                          <th style={{ padding: 6 }}>Route</th>
-                          <th style={{ padding: 6 }}>Petrol</th>
-                          <th style={{ padding: 6 }}>Meals</th>
-                          <th style={{ padding: 6 }}>Other</th>
-                          <th style={{ padding: 6 }}>Total</th>
+                        <tr>
+                          <th>Date</th>
+                          <th>Location</th>
+                          <th>Petrol</th>
+                          <th>Meals</th>
+                          <th>Other</th>
+                          <th>Total</th>
                         </tr>
                       </thead>
                       <tbody>
                         {(detail.trips || []).map((t: any) => (
-                          <tr key={t.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                            <td style={{ padding: 6 }}>{fmtDate(t.trip_date)}</td>
-                            <td style={{ padding: 6 }}>{(t.from_place || "—") + " → " + (t.to_place || "—")}</td>
-                            <td style={{ padding: 6 }}>{fmt(t.petrol_allowance)}</td>
-                            <td style={{ padding: 6 }}>{fmt((t.breakfast || 0) + (t.lunch || 0) + (t.dinner || 0))}</td>
-                            <td style={{ padding: 6 }}>{fmt(t.other_expenses)}</td>
-                            <td style={{ padding: 6 }}>{fmt(t.line_total)}</td>
+                          <tr key={t.id}>
+                            <td>{fmtDate(t.trip_date)}</td>
+                            <td>{(t.from_place || "—") + " → " + (t.to_place || "—")}</td>
+                            <td>{fmt(t.petrol_allowance)}</td>
+                            <td>{fmt((t.breakfast || 0) + (t.lunch || 0) + (t.dinner || 0))}</td>
+                            <td>{fmt(t.other_expenses)}</td>
+                            <td>{fmt(t.line_total)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -542,31 +676,31 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               </div>
             )}
 
-            {item.doc_type === "ADVANCE" && detail.type === "TRAVEL_SUBSISTENCE" && (
-              <div style={{ gridColumn: "1 / -1", border: "1px solid var(--border)", borderRadius: 12, padding: 12, background: "var(--surface-soft)" }}>
-                <b>Accommodation Requests</b>
+            {item.doc_type === "ADVANCE" && isTravelAdvance && (
+              <div className="review-card review-card-wide">
+                <div className="review-card-title">Accommodation Requests</div>
                 {(detail.accommodation_requests || []).length === 0 ? (
-                  <div style={{ marginTop: 8, opacity: 0.75 }}>No HR accommodation request has been sent to Finance.</div>
+                  <div className="review-empty-note">No HR accommodation request has been sent to Finance.</div>
                 ) : (
-                  <div style={{ marginTop: 8, overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", color: "var(--text)" }}>
+                  <div className="review-table-wrap">
+                    <table className="review-table">
                       <thead>
-                        <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
-                          <th style={{ padding: 6 }}>Status</th>
-                          <th style={{ padding: 6 }}>Location</th>
-                          <th style={{ padding: 6 }}>Provider</th>
-                          <th style={{ padding: 6 }}>Amount</th>
-                          <th style={{ padding: 6 }}>Created By</th>
+                        <tr>
+                          <th>Status</th>
+                          <th>Location</th>
+                          <th>Provider</th>
+                          <th>Amount</th>
+                          <th>Created By</th>
                         </tr>
                       </thead>
                       <tbody>
                         {(detail.accommodation_requests || []).map((a: any) => (
-                          <tr key={a.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                            <td style={{ padding: 6 }}>{a.status}</td>
-                            <td style={{ padding: 6 }}>{a.location || "—"}</td>
-                            <td style={{ padding: 6 }}>{a.provider || "—"}</td>
-                            <td style={{ padding: 6 }}>{fmt(a.amount)}</td>
-                            <td style={{ padding: 6 }}>{a.created_by_name || "—"}</td>
+                          <tr key={a.id}>
+                            <td>{statusLabel(a.status)}</td>
+                            <td>{a.location || "—"}</td>
+                            <td>{a.provider || "—"}</td>
+                            <td>{fmt(a.amount)}</td>
+                            <td>{a.created_by_name || "—"}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -576,144 +710,149 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               </div>
             )}
 
-            <div style={{ gridColumn: "1 / -1", border: "1px solid var(--border)", borderRadius: 12, padding: 12, background: "var(--surface-soft)" }}>
-              <b>Action</b>
+            <div className="review-card review-card-wide">
+              <div className="review-card-title">Action</div>
 
               {canCreateAccommodation && (
-                <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Location</div>
-                    <select value={accommodationLocation} onChange={(e) => setAccommodationLocation(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}>
-                      <option value="">Select district</option>
-                      {LESOTHO_DISTRICTS.map((district) => (
+                <div className="review-form-grid review-form-grid-3">
+                  <label>
+                    <span>Destination District {destinationDistricts.length > 1 ? "(Select)" : ""}</span>
+                    <select className="review-control" value={accommodationLocation} onChange={(e) => setAccommodationLocation(e.target.value)}>
+                      <option value="">
+                        {destinationDistricts.length === 0 
+                          ? "No destinations found in advance lines"
+                          : destinationDistricts.length === 1
+                            ? destinationDistricts[0]
+                            : "Select district"}
+                      </option>
+                      {destinationDistricts.length > 1 && destinationDistricts.map((district) => (
                         <option key={district} value={district}>{district}</option>
                       ))}
                     </select>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Provider</div>
-                    <select value={accommodationProvider} onChange={(e) => setAccommodationProvider(e.target.value)} disabled={!accommodationLocation} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}>
+                  </label>
+                  <label>
+                    <span>Provider</span>
+                    <select className="review-control" value={accommodationProvider} onChange={(e) => setAccommodationProvider(e.target.value)} disabled={!accommodationLocation}>
                       <option value="">Select hotel</option>
                       {districtHotels.map((hotel) => (
                         <option key={hotel.id} value={hotel.name}>{hotel.name}</option>
                       ))}
                     </select>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Amount</div>
-                    <input type="number" value={accommodationAmount} onChange={(e) => setAccommodationAmount(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Check In</div>
-                    <input type="date" value={accommodationCheckIn} onChange={(e) => setAccommodationCheckIn(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Check Out</div>
-                    <input type="date" value={accommodationCheckOut} onChange={(e) => setAccommodationCheckOut(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Notes</div>
-                    <input value={accommodationNotes} onChange={(e) => setAccommodationNotes(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }} />
-                  </div>
-                  <div style={{ gridColumn: "1 / -1" }}>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Quotation File</div>
+                  </label>
+                  <label>
+                    <span>Amount</span>
+                    <input className="review-control" type="number" value={accommodationAmount} onChange={(e) => setAccommodationAmount(e.target.value)} />
+                  </label>
+                  <label>
+                    <span>Check In</span>
+                    <input className="review-control" type="date" value={accommodationCheckIn} onChange={(e) => setAccommodationCheckIn(e.target.value)} />
+                  </label>
+                  <label>
+                    <span>Check Out</span>
+                    <input className="review-control" type="date" value={accommodationCheckOut} onChange={(e) => setAccommodationCheckOut(e.target.value)} />
+                  </label>
+                  <label>
+                    <span>Notes</span>
+                    <input className="review-control" value={accommodationNotes} onChange={(e) => setAccommodationNotes(e.target.value)} />
+                  </label>
+                  <label className="review-wide-field">
+                    <span>Quotation File</span>
                     <input
+                      className="review-control"
                       type="file"
                       accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
                       onChange={(e) => {
                         setAccommodationQuotation(e.target.files?.[0] || null);
                       }}
-                      style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}
                     />
-                  </div>
+                  </label>
                 </div>
               )}
 
-              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, opacity: 0.8 }}>
+              <div className="review-form-grid review-form-grid-2">
+                <label>
+                  <span>
                     {canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
-                  </div>
+                  </span>
                   <textarea
+                    className="review-control review-textarea"
                     value={comments}
                     onChange={(e) => {
                       setComments(e.target.value);
                       if (rollbackError) setRollbackError(null);
                       if (error === "Enter comments before rejecting this advance.") setError(null);
                     }}
-                    style={{ width: "100%", minHeight: 70, padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}
                     placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Enter reason for rollback/reject" : ""}
                   />
                   {rollbackError && (
-                    <div style={{ marginTop: 4, fontSize: 12, color: "#b45309" }}>
+                    <div className="review-warning">
                       {rollbackError}
                     </div>
                   )}
-                </div>
+                </label>
 
-                <div style={{ minWidth: 0 }}>
+                <div className="review-secondary-actions">
                   {item.doc_type === "ADVANCE" && canMarkPaid && (
-                    <>
-                      <div style={{ fontSize: 13, opacity: 0.8 }}>Payment Reference</div>
+                    <label>
+                      <span>Payment Reference</span>
                       <input
+                        className="review-control"
                         value={paidRef}
                         onChange={(e) => setPaidRef(e.target.value)}
-                        style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}
                         placeholder="EcoCash txn / voucher"
                       />
-                    </>
+                    </label>
                   )}
 
                   {item.doc_type === "ACCOMMODATION" && canMarkAccommodationPaid && (
-                    <>
-                      <div style={{ fontSize: 13, opacity: 0.8 }}>Payment Reference</div>
+                    <label>
+                      <span>Payment Reference</span>
                       <input
+                        className="review-control"
                         value={paidRef}
                         onChange={(e) => setPaidRef(e.target.value)}
-                        style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}
                         placeholder="Budget code"
                       />
-                    </>
+                    </label>
                   )}
 
                   {item.doc_type === "CLAIM" && canSettle && (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <div>
-                        <div style={{ fontSize: 13, opacity: 0.8 }}>Settlement Method</div>
-                        <select value={settleMethod} onChange={(e) => setSettleMethod(e.target.value as any)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}>
+                    <div className="review-settlement-fields">
+                      <label>
+                        <span>Settlement Method</span>
+                        <select className="review-control" value={settleMethod} onChange={(e) => setSettleMethod(e.target.value as any)}>
                           <option value="ECOCASH">ECOCASH</option>
                           <option value="BANK">BANK</option>
                         </select>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 13, opacity: 0.8 }}>Settlement Reference</div>
-                        <input value={settleRef} onChange={(e) => setSettleRef(e.target.value)} style={{ width: "100%", padding: 8, boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }} />
-                      </div>
+                      </label>
+                      <label>
+                        <span>Settlement Reference</span>
+                        <input className="review-control" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} />
+                      </label>
                     </div>
                   )}
                 </div>
               </div>
 
-              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div className="review-action-row">
                 {(canApproveAdvance || canRejectAdvance || canRollbackAdvance) && (
                   <>
                     {canApproveAdvance && (
-                      <button className="button small-button" disabled={busy} onClick={handleApproveAdvance} style={{ padding: "8px 12px" }}>
+                      <button className="button small-button button-primary" disabled={busy} onClick={handleApproveAdvance}>
                         {role === "HR_MANAGER" ? "Send to HR" : role === "CHIEF_OFFICER" ? "Chief Officer Approve" : "Approve Advance"}
                       </button>
                     )}
                     {canRejectAdvance && (
                       <button
-                        className="button small-button"
+                        className="button small-button button-danger"
                         disabled={busy}
                         onClick={handleRejectAdvance}
-                        style={{ padding: "8px 12px", backgroundColor: "#dc2626", color: "white" }}
                       >
                         Reject Advance
                       </button>
                     )}
                     {canRollbackAdvance && (
-                      <button className="button small-button" disabled={busy} onClick={handleRollbackAdvance} style={{ padding: "8px 12px" }}>
+                      <button className="button small-button button-subtle" disabled={busy} onClick={handleRollbackAdvance}>
                         Roll Back to Draft
                       </button>
                     )}
@@ -721,71 +860,75 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 )}
 
                 {canMarkPaid && (
-                  <button className="button small-button" disabled={busy || !paidRef.trim()} onClick={() => act(() => api.markAdvancePaid(item.id, paidRef.trim()))} style={{ padding: "8px 12px" }}>
+                  <button className="button small-button button-primary" disabled={busy || !paidRef.trim()} onClick={() => act(() => api.markAdvancePaid(item.id, paidRef.trim()))}>
                     Mark Advance Paid
                   </button>
                 )}
 
                 {canCreateAccommodation && (
                   <button
-                    className="button small-button"
+                    className="button small-button button-primary"
                     disabled={busy}
                     onClick={handleCreateAccommodation}
-                    style={{ padding: "8px 12px" }}
                   >
                     Send to Finance
                   </button>
                 )}
 
                 {canMarkAccommodationPaid && (
-                  <button className="button small-button" disabled={busy || !paidRef.trim()} onClick={() => act(() => api.markAccommodationPaid(item.id, paidRef.trim()))} style={{ padding: "8px 12px" }}>
+                  <button className="button small-button button-primary" disabled={busy || !paidRef.trim()} onClick={() => act(() => api.markAccommodationPaid(item.id, paidRef.trim()))}>
                     Mark Request Paid
                   </button>
                 )}
 
                 {canRejectAccommodation && (
                   <button
-                    className="button small-button"
+                    className="button small-button button-danger"
                     disabled={busy || !comments.trim()}
                     onClick={() => act(() => api.rejectAccommodation(item.id, comments.trim()))}
-                    style={{ padding: "8px 12px", backgroundColor: "#dc2626", color: "white" }}
                   >
                     Reject Request
                   </button>
                 )}
 
                 {canManagerApprove && (
-                  <button className="button small-button" disabled={busy} onClick={() => act(() => api.managerApproveClaim(item.id, comments))} style={{ padding: "8px 12px" }}>
+                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.managerApproveClaim(item.id, comments))}>
                     Certify Clearance
                   </button>
                 )}
 
                 {canChiefApprove && (
-                  <button className="button small-button" disabled={busy} onClick={() => act(() => api.chiefApproveClaim(item.id, comments))} style={{ padding: "8px 12px" }}>
+                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.chiefApproveClaim(item.id, comments))}>
                     Chief Officer Approve
                   </button>
                 )}
 
                 {canAuthApproveClaim && (
-                  <button className="button small-button" disabled={busy} onClick={() => act(() => api.authApproveClaim(item.id, comments))} style={{ padding: "8px 12px" }}>
+                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.authApproveClaim(item.id, comments))}>
                     HR Approve
                   </button>
                 )}
 
+                {canHrManagerApproveClaim && (
+                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.hrManagerApproveClaim(item.id, comments))}>
+                    HR Manager Approve
+                  </button>
+                )}
+
                 {canFinanceVerify && (
-                  <button className="button small-button" disabled={busy} onClick={() => act(() => api.financeVerifyClaim(item.id, comments))} style={{ padding: "8px 12px" }}>
+                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.financeVerifyClaim(item.id, comments))}>
                     Finance Verify
                   </button>
                 )}
 
                 {canSettle && (
-                  <button className="button small-button" disabled={busy || !settleRef.trim()} onClick={() => act(() => api.settleClaim(item.id, settleMethod, settleRef.trim()))} style={{ padding: "8px 12px" }}>
+                  <button className="button small-button button-primary" disabled={busy || !settleRef.trim()} onClick={() => act(() => api.settleClaim(item.id, settleMethod, settleRef.trim()))}>
                     Settle Clearance
                   </button>
                 )}
 
                 {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canManagerApprove || canAuthApproveClaim || canChiefApprove || canFinanceVerify || canSettle)) && (
-                  <div style={{ opacity: 0.75 }}>No action available for your role on this item.</div>
+                  <div className="review-empty-note">{noActionMessage}</div>
                 )}
               </div>
             </div>

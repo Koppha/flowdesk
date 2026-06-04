@@ -13,6 +13,7 @@ app.listen(env.PORT, "0.0.0.0", () => {
     node_env: env.NODE_ENV,
     cors_origin: env.CORS_ORIGIN || "*",
     ad_auth_enabled: env.AD_AUTH_ENABLED,
+    ad_auth_url: env.AD_AUTH_URL || null,
     ad_api_base_url: env.AD_API_BASE_URL,
     ad_auth_path: env.AD_AUTH_PATH,
     ad_fallback_local: env.AD_FALLBACK_LOCAL

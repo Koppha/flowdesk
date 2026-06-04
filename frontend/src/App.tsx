@@ -3,8 +3,39 @@ import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, g
 import AttendanceModule from "./AttendanceModule";
 import Inbox from "./Inbox";
 import OvertimeModule from "./OvertimeModule";
-import { LESOTHO_DISTRICTS } from "./constants";
+import ExcoOnboarding from "./ExcoOnboarding";
+import LeadershipAssignments from "./LeadershipAssignments";
+import ManagersOnboarding from "./ManagersOnboarding";
+import WorkflowBuilder from "./WorkflowBuilder";
+import { DEFAULT_TRAVEL_TYPES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
+import {
+  BarChart3,
+  Bell,
+  BriefcaseBusiness,
+  Building2,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronUp,
+  ClipboardList,
+  Clock3,
+  Edit3,
+  FileText,
+  GitBranch,
+  Home,
+  LogOut,
+  Mail,
+  Moon,
+  Network,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  Sun,
+  Trash2,
+  UserRoundCheck,
+  Users,
+  X
+} from "lucide-react";
 
 type ClearanceTripRow = {
   trip_date: string;
@@ -19,6 +50,16 @@ type ClearanceTripRow = {
   dinner: number;
   other_expenses: number;
   purpose: string;
+};
+
+type TravelRow = {
+  date: string;
+  startDistrict: string;
+  destinationDistrict: string;
+  country: string;
+  province: string;
+  city: string;
+  meals: number;
 };
 
 type RequestDirectoryUser = {
@@ -129,9 +170,26 @@ export default function App() {
   const [hotelsLoading, setHotelsLoading] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
   const [newHotelDistrict, setNewHotelDistrict] = useState("");
+  const [newHotelCountry, setNewHotelCountry] = useState("");
+  const [newHotelProvince, setNewHotelProvince] = useState("");
+  const [newHotelCity, setNewHotelCity] = useState("");
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelContact, setNewHotelContact] = useState("");
   const [newHotelDepartment, setNewHotelDepartment] = useState("");
+  const [travelTypes, setTravelTypes] = useState<TravelType[]>(DEFAULT_TRAVEL_TYPES);
+  const [travelTypesLoading, setTravelTypesLoading] = useState(false);
+  const [newTravelTypeName, setNewTravelTypeName] = useState("");
+  const [newTravelTypeLocationMode, setNewTravelTypeLocationMode] = useState<"DISTRICT" | "COUNTRY_CITY">("COUNTRY_CITY");
+  const [newTravelTypeRateKind, setNewTravelTypeRateKind] = useState<"MEAL" | "DAILY">("DAILY");
+  const [newTravelTypeGeneralRate, setNewTravelTypeGeneralRate] = useState("0");
+  const [newTravelTypeExcoRate, setNewTravelTypeExcoRate] = useState("0");
+  const [newTravelTypeCeoRate, setNewTravelTypeCeoRate] = useState("0");
+  const [editingTravelType, setEditingTravelType] = useState<TravelType | null>(null);
+  const [newTravelLocationTypeId, setNewTravelLocationTypeId] = useState("");
+  const [newTravelLocationDistrict, setNewTravelLocationDistrict] = useState("");
+  const [newTravelLocationCountry, setNewTravelLocationCountry] = useState("");
+  const [newTravelLocationProvince, setNewTravelLocationProvince] = useState("");
+  const [newTravelLocationCity, setNewTravelLocationCity] = useState("");
   const [mealValue, setMealValue] = useState(0);
   const [mealValueDraft, setMealValueDraft] = useState("0");
   const [mealValueLoading, setMealValueLoading] = useState(false);
@@ -142,9 +200,14 @@ export default function App() {
   const [groupAssignDepartment, setGroupAssignDepartment] = useState("");
   const [newDepartmentName, setNewDepartmentName] = useState("");
   const [newDepartmentSectionId, setNewDepartmentSectionId] = useState("");
+  const [newDepartmentManagerId, setNewDepartmentManagerId] = useState("");
+  const [newDepartmentExcoId, setNewDepartmentExcoId] = useState("");
+  const [newDepartmentActive, setNewDepartmentActive] = useState(true);
   const [departmentRows, setDepartmentRows] = useState<any[]>([]);
-  const [sectionOptions, setSectionOptions] = useState<{ id: string; name: string }[]>([]);
+  const [sectionOptions, setSectionOptions] = useState<any[]>([]);
   const [newSectionName, setNewSectionName] = useState("");
+  const [newSectionExcoId, setNewSectionExcoId] = useState("");
+  const [leadershipUsers, setLeadershipUsers] = useState<{ managers: any[]; exco: any[] }>({ managers: [], exco: [] });
   const [profileAccordionOpen, setProfileAccordionOpen] = useState(true);
   const [travelSettingsOpen, setTravelSettingsOpen] = useState(true);
   const [sectionManagementOpen, setSectionManagementOpen] = useState(true);
@@ -160,12 +223,22 @@ export default function App() {
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
   const [inboxCount, setInboxCount] = useState(0);
-  const [page, setPage] = useState<"HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_REQUESTS" | "REPORTS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME">("HOME");
+  const [page, setPage] = useState<"HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_REQUESTS" | "REPORTS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "EXCO" | "MANAGERS" | "LEADERSHIP" | "WORKFLOW_BUILDER">("HOME");
   const [theme, setTheme] = useState<"light" | "dark">((getTheme() as "light" | "dark") || "light");
   const [editingAdvanceId, setEditingAdvanceId] = useState<string | null>(null);
   const [editingAdvanceStatus, setEditingAdvanceStatus] = useState<string | null>(null);
   const [editingClaimId, setEditingClaimId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [editingDepartmentObj, setEditingDepartmentObj] = useState<null | {
+    originalName: string;
+    name: string;
+    section_id?: string | null;
+    manager_user_id?: string | null;
+    exco_user_id?: string | null;
+    active?: boolean;
+  }>(null);
+  const [editingSectionObj, setEditingSectionObj] = useState<null | { id: string; name: string; exco_user_id?: string | null }>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyAdvanceId, setHistoryAdvanceId] = useState<string | null>(null);
   const [historyEvents, setHistoryEvents] = useState<any[]>([]);
@@ -200,6 +273,8 @@ export default function App() {
         return "HR Manager";
       case "CHIEF_OFFICER":
         return "Chief Officer";
+      case "EXCO":
+        return "EXCO";
       default:
         return value || "Unknown";
     }
@@ -235,6 +310,82 @@ export default function App() {
     return user.employee_no ? `${base} (${user.employee_no})` : base;
   }
 
+  function leadershipStatus(department: any) {
+    if (!department.manager_user_id) return "No manager assigned to this department.";
+    if (!department.exco_user_id) return "No EXCO owner assigned to this department.";
+    return "Ready";
+  }
+
+  function leadershipSelect(options: any[], value: string | null | undefined, emptyLabel: string, onChange: (value: string) => void) {
+    return (
+      <select value={value || ""} onChange={(e) => onChange(e.target.value)} style={{ minWidth: 190 }}>
+        <option value="">{emptyLabel}</option>
+        {options.map((user) => (
+          <option key={user.id} value={user.id}>
+            {formatPersonLabel(user)}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  function statusPill(active: boolean) {
+    return (
+      <span className={`status-pill ${active ? "status-pill-success" : "status-pill-warning"}`}>
+        {active ? "Active" : "Inactive"}
+      </span>
+    );
+  }
+
+  function renderDepartmentOrgRow(department: any, nested = false) {
+    return (
+      <tr key={department.id || department.name}>
+        <td>
+          <div style={{ paddingLeft: nested ? 22 : 0, display: "grid", gap: 4 }}>
+            <strong>{department.name}</strong>
+            <small style={{ color: leadershipStatus(department) === "Ready" ? "#16a34a" : "#b45309" }}>
+              {leadershipStatus(department)}
+            </small>
+          </div>
+        </td>
+        <td><span className="status-pill status-pill-success">Department</span></td>
+        <td>
+          {leadershipSelect(leadershipUsers.managers, department.manager_user_id, "No manager", (value) =>
+            void updateDepartmentLeadership(department, { manager_user_id: value || null })
+          )}
+        </td>
+        <td>
+          {leadershipSelect(leadershipUsers.exco, department.exco_user_id, "No EXCO owner", (value) =>
+            void updateDepartmentLeadership(department, { exco_user_id: value || null })
+          )}
+        </td>
+        <td>
+          <button className="icon-button" onClick={() => void editDepartment(department.name)} title="Edit department" aria-label="Edit department" style={{ marginRight: 8 }}>
+            <Edit3 size={16} aria-hidden />
+          </button>
+          <button className="icon-button danger" onClick={() => void deleteDepartment(department.name)} title="Delete department" aria-label="Delete department">
+            <Trash2 size={16} aria-hidden />
+          </button>
+        </td>
+      </tr>
+    );
+  }
+
+  function updateDepartmentRow(name: string, changes: Record<string, unknown>) {
+    setDepartmentRows((current) => current.map((department) => (
+      department.name === name ? { ...department, ...changes } : department
+    )));
+  }
+
+  function initials(value: string | null | undefined) {
+    return String(value || "User")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || "")
+      .join("") || "U";
+  }
+
   function isKnownDepartment(value: string) {
     const department = value.trim().toLowerCase();
     return Boolean(department) && departmentOptions.some((option) => option.trim().toLowerCase() === department);
@@ -245,7 +396,7 @@ export default function App() {
   const [empNumber, setEmpNumber] = useState("");
   const [requestForUserId, setRequestForUserId] = useState("");
   const [supportCreatorUserId, setSupportCreatorUserId] = useState("");
-  const [advanceType, setAdvanceType] = useState<"TRAVEL_SUBSISTENCE" | "SALARY" | "LOAN" | null>(null);
+  const [advanceType, setAdvanceType] = useState<string | null>(null);
   const [monthField, setMonthField] = useState("");
   const [salaryPaybackDuration, setSalaryPaybackDuration] = useState("");
   const [salaryAmount, setSalaryAmount] = useState("0");
@@ -260,7 +411,7 @@ export default function App() {
   const [purpose, setPurpose] = useState("");
   const [requestDate, setRequestDate] = useState(new Date().toISOString().slice(0, 10));
   const districts = LESOTHO_DISTRICTS;
-  const [rows, setRows] = useState<Array<{ date: string; startDistrict: string; destinationDistrict: string; meals: number }>>([]);
+  const [rows, setRows] = useState<TravelRow[]>([]);
   const [amountInWords, setAmountInWords] = useState("");
   const [clearanceMonth, setClearanceMonth] = useState("");
   const [clearanceDutyStation, setClearanceDutyStation] = useState("");
@@ -274,7 +425,19 @@ export default function App() {
   const [clearanceReceipts, setClearanceReceipts] = useState<any[]>([]);
   const [clearanceSourceLines, setClearanceSourceLines] = useState<any[]>([]);
 
-  function syncTravelRowStartDistricts(nextRows: Array<{ date: string; startDistrict: string; destinationDistrict: string; meals: number }>) {
+  function emptyTravelRow(date?: string, startDistrict = ""): TravelRow {
+    return {
+      date: date || new Date().toISOString().slice(0, 10),
+      startDistrict,
+      destinationDistrict: "",
+      country: "",
+      province: "",
+      city: "",
+      meals: 0
+    };
+  }
+
+  function syncTravelRowStartDistricts(nextRows: TravelRow[]) {
     return nextRows.map((row, index, allRows) => (
       index === 0 ? row : { ...row, startDistrict: allRows[index - 1].destinationDistrict || "" }
     ));
@@ -290,7 +453,7 @@ export default function App() {
       newDate = lastDate.toISOString().split('T')[0];
       startDistrict = lastRow.destinationDistrict || "";
     }
-    setRows(syncTravelRowStartDistricts([...rows, { date: newDate, startDistrict, destinationDistrict: "", meals: 0 }]));
+    setRows(syncTravelRowStartDistricts([...rows, emptyTravelRow(newDate, startDistrict)]));
   };
   const deleteRow = (index: number) => {
     setRows(syncTravelRowStartDistricts(rows.filter((_, i) => i !== index)));
@@ -298,27 +461,44 @@ export default function App() {
   const updateRow = (index: number, field: string, value: any) => {
     const copy = [...rows];
     (copy[index] as any)[field] = field === "meals" ? (Number(value) || 0) : value;
+    if (field === "country" && String(value).toLowerCase() !== "south africa") {
+      copy[index].province = "";
+    }
     setRows(syncTravelRowStartDistricts(copy));
   };
   const mealValueNumber = Number.isFinite(Number(mealValue)) ? Number(mealValue) : 0;
+  const selectedTravelType = travelTypes.find((type) => type.code === advanceType && type.active !== false) || null;
+  const selectedTravelRate = selectedTravelType ? Number(selectedTravelType.rate_general_staff || 0) : 0;
+  const selectedTravelUnitLabel = selectedTravelType?.rate_kind === "DAILY" ? "day" : "meal";
+  const selectedTravelLocations = selectedTravelType?.locations || [];
+  const selectedTravelDistricts = selectedTravelLocations
+    .map((location) => String(location.district || "").trim())
+    .filter(Boolean);
+  const districtOptions = selectedTravelDistricts.length ? Array.from(new Set(selectedTravelDistricts)) : [...districts];
+  const selectedTravelCountries = Array.from(
+    new Set(selectedTravelLocations.map((location) => String(location.country || "").trim()).filter(Boolean))
+  );
+  const isSelectedCountrySouthAfrica = rows.some((row) => row.country.trim().toLowerCase() === "south africa");
+  const travelTypeOptions = travelTypes.filter((type) => type.active !== false);
+  const isTravelAdvanceSelected = Boolean(selectedTravelType);
   const rowTotals = rows.reduce(
     (acc, r) => {
       const meals = Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0;
       return {
         meals: acc.meals + meals,
-        amount: acc.amount + meals * mealValueNumber
+        amount: acc.amount + meals * selectedTravelRate
       };
     },
     { meals: 0, amount: 0 }
   );
   const totalRequested = () => {
-    if (advanceType === "TRAVEL_SUBSISTENCE") return rowTotals.amount;
+    if (isTravelAdvanceSelected) return rowTotals.amount;
     if (advanceType === "SALARY") return Number(salaryAmount) || 0;
     if (advanceType === "LOAN") return Number(loanAmount) || 0;
     return 0;
   };
   const clearableTravelAdvances = advances.filter(
-    (a) => a.type === "TRAVEL_SUBSISTENCE" && a.status === "PAID"
+    (a) => isTravelTypeCode(a.type, travelTypes) && a.status === "PAID"
   );
   const selectedClearanceAdvance = clearableTravelAdvances.find((a) => a.id === clearanceLinkedAdvanceId) || null;
   const clearanceAdvanceAmount = Number(selectedClearanceAdvance?.approved_total || 0);
@@ -350,7 +530,8 @@ export default function App() {
     if (Number.isFinite(storedCount) && storedCount > 0) return storedCount;
     const amount = advanceLineAmount(line);
     if (amount <= 0) return 0;
-    return mealValueNumber > 0 ? Number((amount / mealValueNumber).toFixed(2)) : amount;
+    const lineRate = Number(line.meal_value || 0) || selectedTravelRate || mealValueNumber;
+    return lineRate > 0 ? Number((amount / lineRate).toFixed(2)) : amount;
   }
 
   function numberToWords(num: number): string {
@@ -398,7 +579,7 @@ export default function App() {
 
   useEffect(() => {
     setAmountInWords(numberToWords(totalRequested()));
-  }, [advanceType, salaryAmount, loanAmount, travelAmount, rows, mealValue]);
+  }, [advanceType, salaryAmount, loanAmount, travelAmount, rows, mealValue, travelTypes]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -406,11 +587,11 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (advanceType === "TRAVEL_SUBSISTENCE") {
+    if (isTravelAdvanceSelected) {
       const total = rowTotals.amount;
       setTravelAmount(total.toFixed(2));
     }
-  }, [rows, advanceType, mealValue]);
+  }, [rows, advanceType, selectedTravelRate, isTravelAdvanceSelected]);
 
   const me = getUserFromToken();
 
@@ -424,6 +605,8 @@ export default function App() {
   const role = profile?.role || me?.role || "UNKNOWN";
   const userName = displayUserLabel(profile?.full_name || me?.fullName || me?.username || "User", role);
   const userDepartment = profile?.department || me?.department || "No Department";
+  const userInitials = initials(userName);
+  const roleName = displayRoleLabel(role);
   const canManageTravelSettings = ["HR_MANAGER", "AUTH_OFFICER", "ADMIN"].includes(role);
   const profileCompleted = Boolean(profile?.profile_completed ?? me?.profileCompleted);
   const employmentType = profile?.employment_type || me?.employmentType || "PERMANENT";
@@ -466,13 +649,14 @@ export default function App() {
     const meResp = await withStartupTimeout(api.me(), "Profile");
     setProfile(meResp);
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
       optionalStartupData<any[]>(api.claims(), [], "Claims"),
       optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox"),
-      optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value")
+      optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value"),
+      optionalStartupData<TravelType[]>(api.travelTypes(), DEFAULT_TRAVEL_TYPES, "Travel types")
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -482,6 +666,12 @@ export default function App() {
     const configuredMealValue = Number(mealResp.meal_value || 0);
     setMealValue(configuredMealValue);
     setMealValueDraft(String(configuredMealValue));
+    const loadedTravelTypes = Array.isArray(travelResp) && travelResp.length
+      ? travelResp
+      : DEFAULT_TRAVEL_TYPES.map((type) => (
+          type.code === "TRAVEL_SUBSISTENCE" ? { ...type, rate_general_staff: configuredMealValue } : type
+        ));
+    setTravelTypes(loadedTravelTypes);
     if (token) {
       try {
         const anomalyRows = await api.aiAnomalies();
@@ -556,6 +746,7 @@ export default function App() {
       }
       void loadHotels();
       void loadMealValue();
+      void loadTravelTypes();
     }
   }, [token, page, role]);
 
@@ -585,6 +776,9 @@ export default function App() {
       const saved = Number(resp.meal_value ?? value);
       setMealValue(saved);
       setMealValueDraft(String(saved));
+      setTravelTypes((current) =>
+        current.map((type) => type.code === "TRAVEL_SUBSISTENCE" ? { ...type, rate_general_staff: saved } : type)
+      );
       alert("Meal value saved.");
     } catch (e: any) {
       alert("Error saving meal value: " + e.message);
@@ -605,13 +799,128 @@ export default function App() {
     }
   }
 
+  async function loadTravelTypes() {
+    setTravelTypesLoading(true);
+    try {
+      const rows: TravelType[] = await api.travelTypes();
+      setTravelTypes(Array.isArray(rows) && rows.length ? rows : DEFAULT_TRAVEL_TYPES);
+    } catch (e: any) {
+      alert("Error loading travel types: " + e.message);
+    } finally {
+      setTravelTypesLoading(false);
+    }
+  }
+
+  async function createTravelType() {
+    if (!newTravelTypeName.trim()) return alert("Enter a travel type name");
+    try {
+      await api.createTravelType({
+        name: newTravelTypeName.trim(),
+        location_mode: newTravelTypeLocationMode,
+        rate_kind: newTravelTypeRateKind,
+        rate_general_staff: Number(newTravelTypeGeneralRate) || 0,
+        rate_exco: Number(newTravelTypeExcoRate) || 0,
+        rate_ceo: Number(newTravelTypeCeoRate) || 0,
+        active: true
+      });
+      setNewTravelTypeName("");
+      setNewTravelTypeGeneralRate("0");
+      setNewTravelTypeExcoRate("0");
+      setNewTravelTypeCeoRate("0");
+      await loadTravelTypes();
+      alert("Travel type saved.");
+    } catch (e: any) {
+      alert("Error saving travel type: " + e.message);
+    }
+  }
+
+  async function saveEditedTravelType() {
+    if (!editingTravelType) return;
+    await updateTravelTypeRate(editingTravelType);
+    setEditingTravelType(null);
+  }
+
+  async function updateTravelTypeRate(type: TravelType) {
+    try {
+      await api.updateTravelType(type.id, {
+        name: type.name,
+        location_mode: type.location_mode,
+        rate_kind: type.rate_kind,
+        rate_general_staff: Number(type.rate_general_staff) || 0,
+        rate_exco: Number(type.rate_exco) || 0,
+        rate_ceo: Number(type.rate_ceo) || 0,
+        active: type.active !== false
+      });
+      await loadTravelTypes();
+      alert("Travel type updated.");
+    } catch (e: any) {
+      alert("Error updating travel type: " + e.message);
+    }
+  }
+
+  async function deleteTravelType(typeId: string) {
+    if (!confirm("Are you sure you want to delete this travel type?")) return;
+    try {
+      await api.deleteTravelType(typeId);
+      await loadTravelTypes();
+      alert("Travel type deleted.");
+    } catch (e: any) {
+      alert("Error deleting travel type: " + e.message);
+    }
+  }
+
+  async function createTravelLocation() {
+    const selectedType = travelTypes.find((type) => type.id === newTravelLocationTypeId);
+    if (!selectedType) return alert("Select the travel type for this location.");
+    const country = newTravelLocationCountry.trim();
+    const city = newTravelLocationCity.trim();
+    const province = newTravelLocationProvince.trim();
+    const district = newTravelLocationDistrict.trim();
+    if (selectedType.location_mode === "DISTRICT" && !district) return alert("Enter the district.");
+    if (selectedType.location_mode === "COUNTRY_CITY") {
+      if (!country) return alert("Enter the country.");
+      if (country.toLowerCase() === "south africa" && !province) return alert("Choose the South African province.");
+      if (!city) return alert("Enter the city.");
+    }
+    try {
+      await api.createTravelLocation({
+        travel_type_id: selectedType.id,
+        district: selectedType.location_mode === "DISTRICT" ? district : undefined,
+        country: selectedType.location_mode === "COUNTRY_CITY" ? country : undefined,
+        province: selectedType.location_mode === "COUNTRY_CITY" ? province : undefined,
+        city: selectedType.location_mode === "COUNTRY_CITY" ? city : undefined
+      });
+      setNewTravelLocationDistrict("");
+      setNewTravelLocationCountry("");
+      setNewTravelLocationProvince("");
+      setNewTravelLocationCity("");
+      await loadTravelTypes();
+      alert("Travel location added.");
+    } catch (e: any) {
+      alert("Error adding travel location: " + e.message);
+    }
+  }
+
   async function createHotel() {
     if (!newHotelName.trim()) return alert("Enter hotel name");
-    if (!newHotelDistrict) return alert("Select the district for this hotel");
+    if (!newHotelDistrict && (!newHotelCountry.trim() || !newHotelCity.trim())) return alert("Select a district or enter country and city for this hotel");
+    if (newHotelCountry.trim().toLowerCase() === "south africa" && !newHotelProvince.trim()) return alert("Choose the South African province for this hotel");
     try {
-      await api.createHotel({ name: newHotelName.trim(), district: newHotelDistrict, address: newHotelAddress.trim() || undefined, contact: newHotelContact.trim() || undefined, department: newHotelDepartment || undefined });
+      await api.createHotel({
+        name: newHotelName.trim(),
+        district: newHotelDistrict || undefined,
+        country: newHotelCountry.trim() || undefined,
+        province: newHotelProvince.trim() || undefined,
+        city: newHotelCity.trim() || undefined,
+        address: newHotelAddress.trim() || undefined,
+        contact: newHotelContact.trim() || undefined,
+        department: newHotelDepartment || undefined
+      });
       setNewHotelName("");
       setNewHotelDistrict("");
+      setNewHotelCountry("");
+      setNewHotelProvince("");
+      setNewHotelCity("");
       setNewHotelAddress("");
       setNewHotelContact("");
       setNewHotelDepartment("");
@@ -625,13 +934,17 @@ export default function App() {
   async function doLogin() {
     setError(null);
     try {
+      console.log("Attempting login with:", email);
       const r = await api.login(email, password);
+      console.log("Login successful, received token:", r.token ? "✓" : "✗");
       setToken(r.token);
       setTok(r.token);
       setProfile(r.user || null);
       setPage("HOME");
     } catch (e: any) {
-      alert("Login failed: " + e.message);
+      console.error("Login error:", e);
+      const errorMsg = e?.message || "Login failed. Please try again.";
+      setError(errorMsg);
     }
   }
 
@@ -692,14 +1005,19 @@ export default function App() {
   async function loadAdminUsers() {
     setAdminUsersLoading(true);
     try {
-      const [users, sections, departments] = await Promise.all([
+      const [users, sections, departments, leaders] = await Promise.all([
         api.adminUsers(),
         api.sections(),
-        api.departmentsWithSections()
+        api.departmentsWithSections(),
+        api.leadershipUsers()
       ]);
       setAdminUsers(Array.isArray(users) ? users : []);
       setSectionOptions(Array.isArray(sections) ? sections : []);
       setDepartmentRows(Array.isArray(departments) ? departments : []);
+      setLeadershipUsers({
+        managers: Array.isArray(leaders?.managers) ? leaders.managers : [],
+        exco: Array.isArray(leaders?.exco) ? leaders.exco : []
+      });
     } catch (e: any) {
       alert("Error loading admin settings: " + e.message);
     } finally {
@@ -852,10 +1170,19 @@ export default function App() {
       return;
     }
     try {
-      const created: any = await api.createDepartment(name, newDepartmentSectionId || undefined);
+      const created: any = await api.createDepartment(
+        name,
+        newDepartmentSectionId || null,
+        newDepartmentManagerId || null,
+        newDepartmentExcoId || null,
+        newDepartmentActive
+      );
       setDepartmentOptions((current) => Array.from(new Set([...(current || []), created.name])).sort((a, b) => a.localeCompare(b)));
       setNewDepartmentName("");
       setNewDepartmentSectionId("");
+      setNewDepartmentManagerId("");
+      setNewDepartmentExcoId("");
+      setNewDepartmentActive(true);
       await loadAdminUsers();
       alert(`Department group ${created.name} created.`);
     } catch (e: any) {
@@ -864,20 +1191,16 @@ export default function App() {
   }
 
   async function editDepartment(name: string) {
-    const newName = prompt("Enter new department name:", name)?.trim();
-    if (!newName || newName === name) return;
-    try {
-      const updated: any = await api.updateDepartment(name, newName);
-      setDepartmentOptions((current) =>
-        Array.from(new Set([...(current || []).map((d) => (d === name ? updated.name : d)), updated.name])).sort((a, b) => a.localeCompare(b))
-      );
-      if (groupAssignDepartment === name) setGroupAssignDepartment(updated.name);
-      if (departmentRoleDepartment === name) setDepartmentRoleDepartment(updated.name);
-      await loadAdminUsers();
-      alert(`Department ${name} renamed to ${updated.name}.`);
-    } catch (e: any) {
-      alert("Error updating department: " + e.message);
-    }
+    // open edit modal populated with department attributes
+    const dept = departmentRows.find((d) => d.name === name);
+    setEditingDepartmentObj({
+      originalName: name,
+      name: dept?.name || name,
+      section_id: dept?.section_id || null,
+      manager_user_id: dept?.manager_user_id || null,
+      exco_user_id: dept?.exco_user_id || null,
+      active: typeof dept?.active === 'boolean' ? dept.active : true
+    });
   }
 
   async function deleteDepartment(name: string) {
@@ -902,8 +1225,9 @@ export default function App() {
     }
 
     try {
-      const created: any = await api.createSection(name);
+      const created: any = await api.createSection(name, newSectionExcoId || null);
       setNewSectionName("");
+      setNewSectionExcoId("");
       await loadAdminUsers();
       alert(`Section ${created.name} created.`);
     } catch (e: any) {
@@ -912,16 +1236,9 @@ export default function App() {
   }
 
   async function editSection(id: string, currentName: string) {
-    const newName = prompt("Enter new section name:", currentName)?.trim();
-    if (!newName || newName === currentName) return;
-
-    try {
-      const updated: any = await api.updateSection(id, newName);
-      await loadAdminUsers();
-      alert(`Section renamed to ${updated.name}.`);
-    } catch (e: any) {
-      alert("Error updating section: " + e.message);
-    }
+    // open edit modal for section
+    const section = sectionOptions.find((s) => s.id === id);
+    setEditingSectionObj({ id, name: section?.name || currentName, exco_user_id: section?.exco_user_id || null });
   }
 
   async function deleteSection(id: string, name: string) {
@@ -937,11 +1254,77 @@ export default function App() {
 
   async function updateDepartmentSection(department: string, sectionId: string) {
     try {
-      await api.updateDepartment(department, department, sectionId || undefined);
+      await api.updateDepartment(department, { name: department, section_id: sectionId || null });
       await loadAdminUsers();
     } catch (e: any) {
       alert("Error updating department section: " + e.message);
     }
+  }
+
+  async function updateDepartmentLeadership(department: any, changes: { manager_user_id?: string | null; exco_user_id?: string | null; active?: boolean }) {
+    try {
+      updateDepartmentRow(department.name, changes);
+      await api.updateDepartment(department.name, { name: department.name, ...changes });
+      await loadAdminUsers();
+    } catch (e: any) {
+      await loadAdminUsers();
+      alert("Error updating department leadership: " + e.message);
+    }
+  }
+
+  async function updateSectionLeadership(section: any, excoUserId: string | null) {
+    try {
+      setSectionOptions((current) => current.map((item) => (
+        item.id === section.id ? { ...item, exco_user_id: excoUserId } : item
+      )));
+      await api.updateSection(section.id, { name: section.name, exco_user_id: excoUserId });
+      await loadAdminUsers();
+    } catch (e: any) {
+      await loadAdminUsers();
+      alert("Error updating section owner: " + e.message);
+    }
+  }
+
+  async function submitEditDepartment() {
+    if (!editingDepartmentObj) return;
+    const payload: any = {
+      name: editingDepartmentObj.name.trim(),
+      section_id: editingDepartmentObj.section_id || null,
+      manager_user_id: editingDepartmentObj.manager_user_id || null,
+      exco_user_id: editingDepartmentObj.exco_user_id || null,
+      active: !!editingDepartmentObj.active
+    };
+    if (!payload.name) return alert('Enter a department name.');
+    try {
+      const updated: any = await api.updateDepartment(editingDepartmentObj.originalName, payload);
+      setEditingDepartmentObj(null);
+      await loadAdminUsers();
+      alert(`Department updated: ${updated.name || payload.name}`);
+    } catch (e: any) {
+      alert('Error updating department: ' + e.message);
+    }
+  }
+
+  function cancelEditDepartment() {
+    setEditingDepartmentObj(null);
+  }
+
+  async function submitEditSection() {
+    if (!editingSectionObj) return;
+    const payload: any = { name: editingSectionObj.name.trim(), exco_user_id: editingSectionObj.exco_user_id || null };
+    if (!payload.name) return alert('Enter a section name.');
+    try {
+      const updated: any = await api.updateSection(editingSectionObj.id, payload);
+      setEditingSectionObj(null);
+      await loadAdminUsers();
+      alert(`Section updated: ${updated.name || payload.name}`);
+    } catch (e: any) {
+      alert('Error updating section: ' + e.message);
+    }
+  }
+
+  function cancelEditSection() {
+    setEditingSectionObj(null);
   }
 
   async function showAdvanceHistory(advanceId: string) {
@@ -1014,6 +1397,8 @@ export default function App() {
         return "Draft (not submitted)";
       case "SUBMITTED":
         return "Waiting Manager Approval";
+      case "CHIEF_OFFICER_REVIEW":
+        return "Waiting EXCO Approval";
       case "HR_MANAGER_REVIEW":
         return "Waiting HR Manager Approval";
       case "HR_REVIEW":
@@ -1044,6 +1429,8 @@ export default function App() {
       case "CHIEF_OFFICER_APPROVED":
         return "Waiting HR Approval";
       case "HR_OFFICER":
+        return "Waiting HR Manager Approval";
+      case "HR_MANAGER_REVIEW":
         return "Waiting Finance Verification";
       case "FINANCE_VERIFIED":
         return "Waiting Finance Settlement";
@@ -1065,6 +1452,69 @@ export default function App() {
       return { bank_name: "", bank_account_number: raw || "", bank_branch: "", ecocash_number: "" };
     }
     return { bank_name: "", bank_account_number: "", bank_branch: "", ecocash_number: raw || "" };
+  }
+
+  function travelMetaFromLine(line: any) {
+    if (!line?.travel_meta) return {};
+    if (typeof line.travel_meta === "string") {
+      try {
+        return JSON.parse(line.travel_meta);
+      } catch {
+        return {};
+      }
+    }
+    return line.travel_meta || {};
+  }
+
+  function travelRowFromLine(line: any): TravelRow {
+    const meta = travelMetaFromLine(line);
+    const rawLocation = String(line.location || "").trim();
+    const parts = rawLocation.includes("→")
+      ? rawLocation.split("→").map((part) => part.trim())
+      : rawLocation.includes("->")
+        ? rawLocation.split("->").map((part) => part.trim())
+        : [rawLocation, rawLocation];
+    return {
+      date: normalizeDateInputValue(line.line_date),
+      startDistrict: meta.startDistrict || meta.start_district || parts[0] || "",
+      destinationDistrict: meta.destinationDistrict || meta.destination_district || parts[1] || parts[0] || "",
+      country: meta.country || "",
+      province: meta.province || "",
+      city: meta.city || "",
+      meals: advanceLineMealCount(line)
+    };
+  }
+
+  function populateAdvanceForm(detail: any, fallback: any = {}) {
+    setEditingAdvanceId(detail.id || fallback.id || null);
+    setEditingAdvanceStatus(detail.status || fallback.status || null);
+    setAdvanceType(detail.type || null);
+    setSalaryAmount(detail.type === "SALARY" ? String(detail.requested_total || 0) : "0");
+    setLoanAmount(detail.type === "LOAN" ? String(detail.requested_total || 0) : "");
+    setTravelAmount(isTravelTypeCode(detail.type, travelTypes) ? String(detail.requested_total || 0) : "");
+    setRows(detail.lines ? detail.lines.map((line: any) => travelRowFromLine(line)) : []);
+    setMonthField(detail.salary_month || "");
+    setSalaryPaybackDuration(
+      detail.type === "SALARY"
+        ? (detail.salary_payback_duration || detail.payback_duration || "")
+        : ""
+    );
+    setLoanPaybackDuration(
+      detail.type === "LOAN"
+        ? (detail.loan_payback_duration || detail.payback_duration || "")
+        : ""
+    );
+    setPaymentMethod((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"));
+    const parsedPayment = parsePaymentAccount((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"), detail.payment_account || "");
+    setEcocashNumber(parsedPayment.ecocash_number);
+    setBankName(parsedPayment.bank_name);
+    setBankAccountNumber(parsedPayment.bank_account_number);
+    setBankBranch(parsedPayment.bank_branch);
+    setPurpose(detail.purpose || "");
+    setRequesterName(detail.requester_name || "");
+    setEmpNumber(detail.requester_employee_no || detail.emp_number || "");
+    setRequestForUserId(detail.requester_id || profile?.id || me?.userId || "");
+    setRequestDate(normalizeDateInputValue(detail.created_at) || new Date().toISOString().slice(0, 10));
   }
 
   function isAtLeastManagerReviewed(status: string | null) {
@@ -1211,62 +1661,100 @@ export default function App() {
     acc[claim.status] = (acc[claim.status] || 0) + 1;
     return acc;
   }, {});
+  const navItemClass = (active: boolean) => `sidebar-link${active ? " active" : ""}`;
+  const nowLabel = new Date().toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const requestSummaryType = advanceType ? (isTravelAdvanceSelected ? selectedTravelType?.name || travelTypeLabel(advanceType, travelTypes) : travelTypeLabel(advanceType, travelTypes)) : "—";
+  const requestSummaryPayment = paymentMethod || "—";
+  const requestSummaryAmount = fmtMoney(totalRequested());
+  const requestSummaryDate = requestDate ? new Date(requestDate).toLocaleDateString("en-GB") : "—";
 
   if (!token) {
     return (
       <div className="login-page">
+        <section className="login-showcase">
+          <img src={econetLogo} alt="Econet Telecom Lesotho" className="login-showcase-logo" />
+          <div className="login-copy">
+            <span>Welcome to</span>
+            <h1>Advance Clearance Portal</h1>
+            <p>Finance workflow and approval management made simple and efficient.</p>
+          </div>
+          <div className="login-feature-list">
+            <div>
+              <span className="feature-icon">S</span>
+              <strong>Secure & Reliable</strong>
+              <small>Enterprise-grade access for protected finance requests.</small>
+            </div>
+            <div>
+              <span className="feature-icon">A</span>
+              <strong>Streamlined Approvals</strong>
+              <small>Track handoffs, approvals, and payments in real time.</small>
+            </div>
+            <div>
+              <span className="feature-icon">V</span>
+              <strong>Better Visibility</strong>
+              <small>Requests, clearances, and decisions stay in one place.</small>
+            </div>
+          </div>
+        </section>
+
         <div className="login-card">
           <img src={econetLogo} alt="Econet Telecom Lesotho" className="login-logo" />
-          <h1>Advance Clearance</h1>
-          <p className="subtitle">Finance workflow and approval portal</p>
+          <h2>Welcome Back</h2>
+          <p className="subtitle">Sign in to continue to your account</p>
 
           <form onSubmit={(e) => {
             e.preventDefault();
             void doLogin();
           }}>
-            <div className="form-group">
+            <div className="login-form-group">
+              <label>Username or Email</label>
               <input
                 className="login-input"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="Email"
+                placeholder="Enter your username or email"
+                type="text"
+                autoComplete="username"
+                required
               />
             </div>
 
-            <div className="form-group">
+            <div className="login-form-group">
+              <label>Password</label>
               <input
                 className="login-input"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
+                placeholder="Enter your password"
                 type="password"
+                autoComplete="current-password"
+                required
               />
             </div>
+            <div className="login-options">
+              <label>
+                <input type="checkbox" />
+                <span>Remember me</span>
+              </label>
+              <a href="#forgot">Forgot password?</a>
+            </div>
 
-            <button className="button login-button" type="submit">
+            <button className="button button-primary login-button" type="submit">
               Sign In
             </button>
           </form>
 
           {error && <pre className="error-text">{error}</pre>}
 
-          <p className="demo-text">
-            Demo accounts:
-            <br />
-            employee@example.com
-            <br />
-            manager@example.com
-            <br />
-            hr@example.com
-            <br />
-            chief@example.com
-            <br />
-            finance@example.com
-            <br />
-            admin@example.com
-            <br />
-            Password: <b>pass123</b>
-          </p>
+          <div className="login-security-note">
+            ✓ Your data is protected with enterprise-grade security
+          </div>
         </div>
       </div>
     );
@@ -1338,38 +1826,139 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell page-${page.toLowerCase().replace(/_/g, "-")}`}>
       <header className="header app-header">
-        <img src={econetLogo} alt="Econet Telecom Lesotho" className="header-logo" />
-        <div className="user">
-          <div className="avatar" />
+        <div className="user header-user">
+          <div className="avatar">{userInitials}</div>
           <div>
-            <div>{userName}</div>
-            <div style={{ fontSize: "0.85rem", opacity: 0.7 }}>{userDepartment}</div>
+            <div className="header-user-name">{userName}</div>
+            <div className="header-user-meta">{userDepartment}</div>
           </div>
         </div>
+        <div className="header-search" aria-hidden="true">
+          <span>Search employees, requests, modules...</span>
+          <kbd>Ctrl + K</kbd>
+        </div>
         <div className="header-actions">
-          <button className="button small-button" onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}>
+          <button
+            className="icon-button has-icon"
+            type="button"
+            aria-label="Toggle theme"
+            onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}
+          >
+            {theme === "light" ? <Sun size={19} aria-hidden /> : <Moon size={19} aria-hidden />}
+          </button>
+          <button className="notification-button has-icon" type="button" aria-label="Notifications">
+            <Bell size={18} aria-hidden />
+            <span>{Math.max(inboxCount, 0)}</span>
+          </button>
+          <button className="button small-button theme-button" onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}>
+            {theme === "light" ? <Moon size={16} aria-hidden /> : <Sun size={16} aria-hidden />}
             {theme === "light" ? "Dark Mode" : "Light Mode"}
           </button>
-          <button className="button small-button" onClick={doLogout}>Logout</button>
+          <button className="button small-button button-subtle" onClick={doLogout}>
+            <LogOut size={16} aria-hidden />
+            Logout
+          </button>
         </div>
       </header>
 
+      {editingDepartmentObj && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
+          <div className="card" style={{ width: 720, maxWidth: '95%', padding: 20 }}>
+            <h3>Edit Department</h3>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <label>Name</label>
+              <input value={editingDepartmentObj.name} onChange={(e) => setEditingDepartmentObj({ ...editingDepartmentObj, name: e.target.value })} />
+
+              <label>Section</label>
+              <select value={editingDepartmentObj.section_id || ''} onChange={(e) => setEditingDepartmentObj({ ...editingDepartmentObj, section_id: e.target.value || null })}>
+                <option value="">(No section)</option>
+                {sectionOptions.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+
+              <label>Manager</label>
+              {leadershipSelect(leadershipUsers.managers, editingDepartmentObj.manager_user_id || '', 'No manager', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, manager_user_id: v || null }))}
+
+              <label>EXCO Owner</label>
+              {leadershipSelect(leadershipUsers.exco, editingDepartmentObj.exco_user_id || '', 'No EXCO owner', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, exco_user_id: v || null }))}
+
+              <label>
+                <input type="checkbox" checked={!!editingDepartmentObj.active} onChange={(e) => setEditingDepartmentObj({ ...editingDepartmentObj, active: e.target.checked })} /> Active
+              </label>
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+                <button className="button small-button" onClick={cancelEditDepartment}>Cancel</button>
+                <button className="button button-primary" onClick={() => void submitEditDepartment()}>Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingSectionObj && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
+          <div className="card" style={{ width: 560, maxWidth: '95%', padding: 20 }}>
+            <h3>Edit Section</h3>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <label>Name</label>
+              <input value={editingSectionObj.name} onChange={(e) => setEditingSectionObj({ ...editingSectionObj, name: e.target.value })} />
+
+              <label>EXCO Owner</label>
+              {leadershipSelect(leadershipUsers.exco, editingSectionObj.exco_user_id || '', 'No EXCO owner', (v: string) => setEditingSectionObj({ ...editingSectionObj, exco_user_id: v || null }))}
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+                <button className="button small-button" onClick={cancelEditSection}>Cancel</button>
+                <button className="button button-primary" onClick={() => void submitEditSection()}>Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="app-body">
         <nav className="sidebar">
+          <img src={econetLogo} alt="Econet Telecom Lesotho" className="sidebar-logo" />
           <div className="sidebar-brand">
             <h2>Advance Clearance</h2>
           </div>
-          <a href="#" onClick={() => setPage("HOME")}>Dashboard</a>
-          <a href="#" onClick={() => setPage("MY_REQUESTS")}>Advance Requests</a>
-          <a href="#" onClick={() => setPage("MY_REQUESTS")}>Clearances</a>
-          {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" onClick={() => setPage("ATTENDANCE")}>Attendance</a>}
-          <a href="#" onClick={() => setPage("OVERTIME")}>Overtime</a>
-          <a href="#" onClick={() => setPage("INBOX")}>Approval Inbox ({inboxCount})</a>
-          <a href="#" onClick={() => setPage("REPORTS")}>Reports</a>
-          {(role === "ADMIN" || role === "MANAGER") && <a href="#" onClick={() => setPage("SETTINGS")}>Administrator</a>}
-          <a href="#" onClick={() => setPage("SETTINGS")}>Settings</a>
+          <div className="sidebar-section-label">Advance Clearance</div>
+          <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
+          <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_REQUESTS")} onClick={(e) => { e.preventDefault(); setPage("MY_REQUESTS"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
+          <a href="#" className={navItemClass(page === "CLEARANCE")} onClick={(e) => { e.preventDefault(); setPage("MY_REQUESTS"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
+          {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
+          <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime</a>
+          <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
+          <a href="#" className={navItemClass(page === "REPORTS")} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports</a>
+          <div className="sidebar-section-label">Administration</div>
+          {(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER") && <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>Users</a>}
+          {(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER") && <a href="#" className="sidebar-link" onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><ShieldCheck size={18} aria-hidden /></span>Roles & Permissions</a>}
+          {(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER") && (
+            <div className={`sidebar-group ${["SETTINGS", "EXCO", "MANAGERS", "LEADERSHIP", "WORKFLOW_BUILDER"].includes(page) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["SETTINGS", "EXCO", "MANAGERS", "LEADERSHIP", "WORKFLOW_BUILDER"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("LEADERSHIP"); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong><ChevronDown size={14} aria-hidden /></strong></a>
+              <div className="sidebar-subnav">
+                <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><Building2 size={14} aria-hidden />Sections & Departments</a>
+                {(role === "ADMIN" || role === "MANAGER") && <a href="#" className={navItemClass(page === "EXCO")} onClick={(e) => { e.preventDefault(); setPage("EXCO"); }}><ShieldCheck size={14} aria-hidden />EXCO Members</a>}
+                <a href="#" className={navItemClass(page === "MANAGERS")} onClick={(e) => { e.preventDefault(); setPage("MANAGERS"); }}><UserRoundCheck size={14} aria-hidden />Managers</a>
+                <a href="#" className={navItemClass(page === "LEADERSHIP")} onClick={(e) => { e.preventDefault(); setPage("LEADERSHIP"); }}><Users size={14} aria-hidden />Leadership Assignments</a>
+                <a href="#" className={navItemClass(page === "WORKFLOW_BUILDER")} onClick={(e) => { e.preventDefault(); setPage("WORKFLOW_BUILDER"); }}><ShieldCheck size={14} aria-hidden />Approval Workflow Builder</a>
+                <a href="#" className="sidebar-link" onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><BriefcaseBusiness size={14} aria-hidden />Cost Centers</a>
+                <a href="#" className="sidebar-link" onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><GitBranch size={14} aria-hidden />Reporting Lines</a>
+              </div>
+            </div>
+          )}
+          <a href="#" className={navItemClass(page === "SETTINGS" && !(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER"))} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings</a>
+          <div className="sidebar-spacer" />
+          <div className="sidebar-user-card">
+            <span className="avatar">{userInitials}</span>
+            <div>
+              <strong>{userName}</strong>
+              <small>{roleName}</small>
+              <em>Online</em>
+            </div>
+          </div>
         </nav>
 
         <div className="main">
@@ -1382,6 +1971,14 @@ export default function App() {
             <AttendanceModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME" ? (
             <OvertimeModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
+          ) : page === "EXCO" ? (
+            <ExcoOnboarding />
+          ) : page === "MANAGERS" ? (
+            <ManagersOnboarding />
+          ) : page === "LEADERSHIP" ? (
+            <LeadershipAssignments />
+          ) : page === "WORKFLOW_BUILDER" ? (
+            <WorkflowBuilder />
           ) : page === "REPORTS" ? (
             <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
@@ -1420,60 +2017,11 @@ export default function App() {
                     ) : (
                       Object.entries(advancesByType).map(([type, count]) => (
                         <div key={type} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                          <span>{type}</span>
+                          <span>{travelTypeLabel(type, travelTypes)}</span>
                           <b>{count}</b>
                         </div>
                       ))
                     )}
-                  </div>
-                  <div className="card" style={{ padding: 20, marginBottom: 20 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                      <h3 style={{ margin: 0 }}>Hotels</h3>
-                      <button className="button small-button" onClick={() => void loadHotels()} disabled={hotelsLoading}>{hotelsLoading ? 'Loading...' : 'Refresh'}</button>
-                    </div>
-                    { canManageTravelSettings && (
-                      <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
-                        <input placeholder="Hotel name" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
-                        <select value={newHotelDistrict} onChange={(e) => setNewHotelDistrict(e.target.value)}>
-                          <option value="">Select district</option>
-                          {districts.map((district) => (
-                            <option key={district} value={district}>{district}</option>
-                          ))}
-                        </select>
-                        <input placeholder="Address (optional)" value={newHotelAddress} onChange={(e) => setNewHotelAddress(e.target.value)} />
-                        <input placeholder="Contact (optional)" value={newHotelContact} onChange={(e) => setNewHotelContact(e.target.value)} />
-                        <select value={newHotelDepartment} onChange={(e) => setNewHotelDepartment(e.target.value)}>
-                          <option value="">Assign department (optional)</option>
-                          {departmentOptions.map(d => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                        <div>
-                          <button className="button small-button" onClick={() => void createHotel()}>Add Hotel</button>
-                        </div>
-                      </div>
-                    )}
-
-                    <div style={{ overflowX: 'auto' }}>
-                      <table className="table">
-                        <thead>
-                          <tr><th>Name</th><th>District</th><th>Department</th><th>Contact</th><th>Address</th></tr>
-                        </thead>
-                        <tbody>
-                          {hotels.length === 0 ? (
-                            <tr><td colSpan={5} style={{ textAlign: 'center' }}>No hotels</td></tr>
-                          ) : (
-                            hotels.map(h => (
-                              <tr key={h.id}>
-                                <td>{h.name}</td>
-                                <td>{h.district || '—'}</td>
-                                <td>{h.department || '—'}</td>
-                                <td>{h.contact || '—'}</td>
-                                <td>{h.address || '—'}</td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
                   </div>
                 </div>
 
@@ -1528,7 +2076,7 @@ export default function App() {
                       ) : (
                         advances.slice(0, 10).map((advance) => (
                           <tr key={advance.id}>
-                            <td>{advance.type}</td>
+                            <td>{travelTypeLabel(advance.type, travelTypes)}</td>
                             <td>{advanceStageLabel(advance.status, advance.type)}</td>
                             <td>{fmtMoney(advance.requested_total)}</td>
                             <td>{fmtMoney(advance.approved_total)}</td>
@@ -1655,8 +2203,24 @@ export default function App() {
                 )}
               </div>
             ) : (
-            <div className="advance-form modern-form">
-              <h2 className="form-title">{editingAdvanceId ? "Edit Advance Request" : "Advance Request Form"}</h2>
+            <div className="request-page">
+              <div className="request-header">
+                <div>
+                  <h2>{editingAdvanceId ? "Edit Advance Request" : "Create Advance Request"}</h2>
+                  <p>Submit a finance advance request for approval.</p>
+                </div>
+                <div className="request-illustration" aria-hidden="true">
+                  <span />
+                </div>
+              </div>
+              <div className="request-stepper">
+                <span className="active">Request Information</span>
+                <span>Review Request</span>
+                <span>Submit</span>
+              </div>
+              <div className="request-shell">
+                <div className="advance-form modern-form request-main-card">
+              <h2 className="form-title">Request Details</h2>
 
               {canCreateForOthers && !editingAdvanceId && (
                 <div className="form-field">
@@ -1746,58 +2310,54 @@ export default function App() {
                   <label>Date:</label><span>__________</span>
                 </div>
               )}
-              <div className="checkbox-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={advanceType === "SALARY"}
-                    onChange={() => setAdvanceType(advanceType === "SALARY" ? null : "SALARY")}
-                  /> Salary amount M
-                  <input
-                    type="number"
-                    value={salaryAmount}
-                    onChange={e => setSalaryAmount(e.target.value)}
-                    disabled={advanceType !== "SALARY"}
-                    style={{ width: 100, marginLeft: 4 }}
-                    placeholder="0"
-                  /> for month
-                  <input
-                    type="month"
-                    value={monthField}
-                    onChange={e => setMonthField(e.target.value)}
-                    disabled={advanceType !== "SALARY"}
-                    style={{ width: 120, marginLeft: 4 }}
-                  />
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={advanceType === "TRAVEL_SUBSISTENCE"}
-                    onChange={() => setAdvanceType(advanceType === "TRAVEL_SUBSISTENCE" ? null : "TRAVEL_SUBSISTENCE")}
-                  /> Travel and subsistence allowance amount of
-                  <input
-                    type="number"
-                    value={travelAmount}
-                    readOnly
-                    style={{ width: 100, marginLeft: 4 }}
-                  />
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={advanceType === "LOAN"}
-                    onChange={() => setAdvanceType(advanceType === "LOAN" ? null : "LOAN")}
-                  /> Loan amount of M
-                  <input
-                    type="number"
-                    value={loanAmount}
-                    onChange={e => setLoanAmount(e.target.value)}
-                    disabled={advanceType !== "LOAN"}
-                    style={{ width: 100, marginLeft: 4 }}
-                    placeholder="0"
-                  />
-                </label>
+              <div className="form-field">
+                <label>Advance Type</label>
+                <select
+                  value={advanceType || ""}
+                  onChange={(e) => {
+                    setAdvanceType(e.target.value || null);
+                    setRows([]);
+                  }}
+                >
+                  <option value="">Select advance type</option>
+                  <optgroup label="Travel">
+                    {travelTypeOptions.map((type) => (
+                      <option key={type.code} value={type.code}>{type.name}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Other advances">
+                    <option value="SALARY">Salary</option>
+                    <option value="LOAN">Loan</option>
+                  </optgroup>
+                </select>
               </div>
+
+              {advanceType === "SALARY" && (
+                <div className="form-grid-2">
+                  <div className="form-field">
+                    <label>Salary Amount</label>
+                    <input type="number" value={salaryAmount} onChange={e => setSalaryAmount(e.target.value)} placeholder="0" />
+                  </div>
+                  <div className="form-field">
+                    <label>Salary Month</label>
+                    <input type="month" value={monthField} onChange={e => setMonthField(e.target.value)} />
+                  </div>
+                </div>
+              )}
+
+              {advanceType === "LOAN" && (
+                <div className="form-field">
+                  <label>Loan Amount</label>
+                  <input type="number" value={loanAmount} onChange={e => setLoanAmount(e.target.value)} placeholder="0" />
+                </div>
+              )}
+
+              {isTravelAdvanceSelected && (
+                <div className="form-field">
+                  <label>{selectedTravelType?.name || "Travel"} Amount</label>
+                  <input type="number" value={travelAmount} readOnly />
+                </div>
+              )}
               {advanceType === "SALARY" && (
                 <div className="form-field">
                   <label>Payback Duration</label>
@@ -1824,21 +2384,40 @@ export default function App() {
               )}
 
               {/* breakdown table for travel */}
-              {advanceType === "TRAVEL_SUBSISTENCE" && (
+              {isTravelAdvanceSelected && selectedTravelType && (
                 <>
                   <div className="card" style={{ marginBottom: 12, padding: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                      <span>Meal value</span>
-                      <b>{fmtMoney(mealValueNumber)} per meal</b>
+                      <span>{selectedTravelType.name}</span>
+                      <b>{fmtMoney(selectedTravelRate)} per {selectedTravelUnitLabel}</b>
+                    </div>
+                    {(selectedTravelType.rate_exco > 0 || selectedTravelType.rate_ceo > 0) && (
+                      <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap", fontSize: 13, opacity: 0.78 }}>
+                        <span>General Staff: {fmtMoney(selectedTravelType.rate_general_staff)}</span>
+                        <span>EXCO: {fmtMoney(selectedTravelType.rate_exco)}</span>
+                        <span>CEO: {fmtMoney(selectedTravelType.rate_ceo)}</span>
+                      </div>
+                    )}
+                    <div style={{ marginTop: 8, fontSize: 13, opacity: 0.78 }}>
+                      {selectedTravelType.location_mode === "DISTRICT" ? "Use Lesotho districts for local travel." : "Use country, city, and South African province where applicable."}
                     </div>
                   </div>
                   <table className="breakdown-table">
                     <thead>
                       <tr>
                         <th>Date</th>
-                        <th>Starting District</th>
-                        <th>Destination District</th>
-                        <th>Meals</th>
+                        {selectedTravelType.location_mode === "DISTRICT" ? (
+                          <>
+                            <th>Starting District</th>
+                            <th>Destination District</th>
+                          </>
+                        ) : (
+                          <>
+                            <th>Country</th>
+                            <th>Province / City</th>
+                          </>
+                        )}
+                        <th>{selectedTravelType.rate_kind === "DAILY" ? "Days" : "Meals"}</th>
                         <th>Line Total</th>
                         <th>Actions</th>
                       </tr>
@@ -1853,29 +2432,77 @@ export default function App() {
                               onChange={e => updateRow(idx, "date", e.target.value)}
                             />
                           </td>
-                          <td>
-                            <select
-                              value={r.startDistrict || ""}
-                              onChange={e => updateRow(idx, "startDistrict", e.target.value)}
-                              disabled={idx > 0}
-                            >
-                              <option value="">Start district</option>
-                              {districts.map((district) => (
-                                <option key={district} value={district}>{district}</option>
-                              ))}
-                            </select>
-                          </td>
-                          <td>
-                            <select
-                              value={r.destinationDistrict || ""}
-                              onChange={e => updateRow(idx, "destinationDistrict", e.target.value)}
-                            >
-                              <option value="">Destination district</option>
-                              {districts.map((district) => (
-                                <option key={district} value={district}>{district}</option>
-                              ))}
-                            </select>
-                          </td>
+                          {selectedTravelType.location_mode === "DISTRICT" ? (
+                            <>
+                              <td>
+                                <select
+                                  value={r.startDistrict || ""}
+                                  onChange={e => updateRow(idx, "startDistrict", e.target.value)}
+                                  disabled={idx > 0}
+                                >
+                                  <option value="">Start district</option>
+                                  {districtOptions.map((district) => (
+                                    <option key={district} value={district}>{district}</option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td>
+                                <select
+                                  value={r.destinationDistrict || ""}
+                                  onChange={e => updateRow(idx, "destinationDistrict", e.target.value)}
+                                >
+                                  <option value="">Destination district</option>
+                                  {districtOptions.map((district) => (
+                                    <option key={district} value={district}>{district}</option>
+                                  ))}
+                                </select>
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              <td>
+                                <input
+                                  list={`travel-country-options-${idx}`}
+                                  value={r.country || ""}
+                                  onChange={e => updateRow(idx, "country", e.target.value)}
+                                  placeholder="Country"
+                                />
+                                <datalist id={`travel-country-options-${idx}`}>
+                                  {selectedTravelCountries.map((country) => (
+                                    <option key={country} value={country} />
+                                  ))}
+                                </datalist>
+                              </td>
+                              <td>
+                                <div style={{ display: "grid", gap: 6 }}>
+                                  {r.country.trim().toLowerCase() === "south africa" && (
+                                    <select value={r.province || ""} onChange={e => updateRow(idx, "province", e.target.value)}>
+                                      <option value="">Province</option>
+                                      {SOUTH_AFRICA_PROVINCES.map((province) => (
+                                        <option key={province} value={province}>{province}</option>
+                                      ))}
+                                    </select>
+                                  )}
+                                  <input
+                                    list={`travel-city-options-${idx}`}
+                                    value={r.city || ""}
+                                    onChange={e => updateRow(idx, "city", e.target.value)}
+                                    placeholder="City"
+                                  />
+                                  <datalist id={`travel-city-options-${idx}`}>
+                                    {selectedTravelLocations
+                                      .filter((location) => !r.country || String(location.country || "") === r.country)
+                                      .filter((location) => !r.province || String(location.province || "") === r.province)
+                                      .map((location) => String(location.city || "").trim())
+                                      .filter(Boolean)
+                                      .map((city) => (
+                                        <option key={city} value={city} />
+                                      ))}
+                                  </datalist>
+                                </div>
+                              </td>
+                            </>
+                          )}
                           <td>
                             <input
                               type="number"
@@ -1886,15 +2513,16 @@ export default function App() {
                               style={{ width: 80 }}
                             />
                           </td>
-                          <td>{fmtMoney((Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * mealValueNumber)}</td>
+                          <td>{fmtMoney((Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * selectedTravelRate)}</td>
                           <td>
                             <button
-                              className="button small-button"
+                              className="icon-button danger"
                               onClick={() => deleteRow(idx)}
                               type="button"
-                              style={{ backgroundColor: '#dc3545', color: 'white' }}
+                              title="Delete row"
+                              aria-label="Delete row"
                             >
-                              Delete
+                              <Trash2 size={16} aria-hidden />
                             </button>
                           </td>
                         </tr>
@@ -1985,7 +2613,7 @@ export default function App() {
                         return;
                       }
                       if (!advanceType) {
-                        alert("Please select advance type (Salary, Travel/Subsistence, or Loan).");
+                        alert("Please select an advance type.");
                         return;
                       }
                       if (advanceType === "SALARY" && (Number(salaryAmount) || 0) <= 0) {
@@ -2050,23 +2678,29 @@ export default function App() {
                           return;
                         }
                       }
-                      if (advanceType === "TRAVEL_SUBSISTENCE" && rows.length < 1) {
+                      if (isTravelAdvanceSelected && rows.length < 1) {
                         alert("At least one entry is required in the travel table.");
                         return;
                       }
-                      if (advanceType === "TRAVEL_SUBSISTENCE") {
-                        if (mealValueNumber <= 0) {
-                          alert("HR must set the meal value before travel and subsistence requests can be submitted.");
+                      if (isTravelAdvanceSelected && selectedTravelType) {
+                        if (selectedTravelRate <= 0) {
+                          alert("HR must set the rate before this travel type can be submitted.");
                           return;
                         }
                         const hasInvalidRow = rows.some((r) =>
-                          !r.date ||
-                          !String(r.startDistrict || "").trim() ||
-                          !String(r.destinationDistrict || "").trim() ||
-                          !(Number.isInteger(Number(r.meals)) && Number(r.meals) >= 0)
+                          !r.date || !(Number.isInteger(Number(r.meals)) && Number(r.meals) >= 0) ||
+                          (
+                            selectedTravelType.location_mode === "DISTRICT"
+                              ? (!String(r.startDistrict || "").trim() || !String(r.destinationDistrict || "").trim())
+                              : (
+                                  !String(r.country || "").trim() ||
+                                  !String(r.city || "").trim() ||
+                                  (String(r.country || "").trim().toLowerCase() === "south africa" && !String(r.province || "").trim())
+                                )
+                          )
                         );
                         if (hasInvalidRow) {
-                          alert("Each travel row must have date, starting district, destination district, and a non-negative whole number of meals.");
+                          alert("Each travel row must have date, location, and a non-negative whole number of units.");
                           return;
                         }
                         if ((Number(totalRequested()) || 0) <= 0) {
@@ -2099,7 +2733,7 @@ export default function App() {
                         base.salary_payback_duration = salaryPaybackDuration;
                         base.payback_duration = salaryPaybackDuration;
                       }
-                      if (advanceType === "TRAVEL_SUBSISTENCE") {
+                      if (isTravelAdvanceSelected) {
                         base.requested_total = Number(totalRequested()) || 0;
                       }
                       if (advanceType === "LOAN") {
@@ -2110,33 +2744,43 @@ export default function App() {
                       if (editingAdvanceId) {
                         // update existing request
                         await api.updateAdvance(editingAdvanceId, base);
-                        if (advanceType === "TRAVEL_SUBSISTENCE") {
+                        if (isTravelAdvanceSelected && selectedTravelType) {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
-                            location: `${r.startDistrict} → ${r.destinationDistrict}`,
+                            location: selectedTravelType.location_mode === "DISTRICT"
+                              ? `${r.startDistrict} → ${r.destinationDistrict}`
+                              : [r.country, r.province, r.city].filter(Boolean).join(" / "),
+                            travel_meta: selectedTravelType.location_mode === "DISTRICT"
+                              ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict }
+                              : { location_mode: selectedTravelType.location_mode, country: r.country, province: r.province, city: r.city },
                             meals_count: r.meals,
                             dinner: 0
                           }));
                           await api.updateAdvanceLines(editingAdvanceId, { lines: mappedRows });
                         }
-                        await api.submitAdvance(editingAdvanceId);
-                        alert("Advance request submitted successfully and moved to next level.");
+                        const submitResult: any = await api.submitAdvance(editingAdvanceId);
+                        alert(submitResult?.warning || "Advance request submitted successfully and moved to next level.");
                         setEditingAdvanceId(null);
                       } else {
                         // create new request, then send any additional details
                         const resp: any = await api.createAdvance(base);
                         const newId = resp.id;
-                        if (advanceType === "TRAVEL_SUBSISTENCE") {
+                        if (isTravelAdvanceSelected && selectedTravelType) {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
-                            location: `${r.startDistrict} → ${r.destinationDistrict}`,
+                            location: selectedTravelType.location_mode === "DISTRICT"
+                              ? `${r.startDistrict} → ${r.destinationDistrict}`
+                              : [r.country, r.province, r.city].filter(Boolean).join(" / "),
+                            travel_meta: selectedTravelType.location_mode === "DISTRICT"
+                              ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict }
+                              : { location_mode: selectedTravelType.location_mode, country: r.country, province: r.province, city: r.city },
                             meals_count: r.meals,
                             dinner: 0
                           }));
                           await api.updateAdvanceLines(newId, { lines: mappedRows });
                         }
-                        await api.submitAdvance(newId);
-                        alert("Advance request submitted successfully and moved to next level.");
+                        const submitResult: any = await api.submitAdvance(newId);
+                        alert(submitResult?.warning || "Advance request submitted successfully and moved to next level.");
                       }
                       await refresh();
                       setPage("HOME");
@@ -2145,6 +2789,44 @@ export default function App() {
                       alert("Error: " + e.message);
                     }
                   }}>{editingAdvanceId ? "Update & Submit" : "Submit"}</button>
+              </div>
+                </div>
+                <aside className="request-summary-card">
+                  <div className="summary-title">Request Summary</div>
+                  <dl>
+                    <div>
+                      <dt>Advance Type</dt>
+                      <dd>{requestSummaryType}</dd>
+                    </div>
+                    <div>
+                      <dt>Amount Requested</dt>
+                      <dd className="summary-amount">{requestSummaryAmount}</dd>
+                    </div>
+                    <div>
+                      <dt>Payment Method</dt>
+                      <dd>{requestSummaryPayment}</dd>
+                    </div>
+                    <div>
+                      <dt>Request For</dt>
+                      <dd>{requestForUserId === (profile?.id || me?.userId || "") ? "Myself" : requesterName || "Myself"}</dd>
+                    </div>
+                    <div>
+                      <dt>Date</dt>
+                      <dd>{requestSummaryDate}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd><span className="status-pill status-pill-warning">Draft</span></dd>
+                    </div>
+                    <div>
+                      <dt>Approval Route</dt>
+                      <dd>Manager - Finance</dd>
+                    </div>
+                  </dl>
+                  <div className="summary-note">
+                    Permanent employees and approvers can create requests on behalf of interns and temporary employees in their department.
+                  </div>
+                </aside>
               </div>
             </div>
             )
@@ -2159,7 +2841,7 @@ export default function App() {
                     <option value="">Select paid travel advance</option>
                     {clearableTravelAdvances.map((advance) => (
                       <option key={advance.id} value={advance.id}>
-                        {fmtMoney(advance.approved_total || advance.requested_total)} - {new Date(advance.created_at).toLocaleDateString()}
+                        {travelTypeLabel(advance.type, travelTypes)} - {fmtMoney(advance.approved_total || advance.requested_total)} - {new Date(advance.created_at).toLocaleDateString()}
                       </option>
                     ))}
                   </select>
@@ -2364,7 +3046,7 @@ export default function App() {
                     ) : (
                       advances.map(a => (
                         <tr key={a.id}>
-                          <td>{a.type}</td>
+                          <td>{travelTypeLabel(a.type, travelTypes)}</td>
                           <td>{fmtMoney(a.approved_total || a.requested_total || 0)}</td>
                           <td>{a.status}</td>
                           <td>{advanceStageLabel(a.status, a.type)}</td>
@@ -2377,54 +3059,7 @@ export default function App() {
                                   // fetch full details before navigating to form so we can populate rows etc
                                   try {
                                     const detail: any = await api.advanceDetail(a.id);
-                                    setEditingAdvanceId(a.id);
-                                    setEditingAdvanceStatus(detail.status || a.status || null);
-                                    setAdvanceType(detail.type);
-                                    setSalaryAmount(detail.type === "SALARY" ? String(detail.requested_total || 0) : "0");
-                                    setLoanAmount(detail.type === "LOAN" ? String(detail.requested_total || 0) : "");
-                                    // travel amount will be derived from rows via effect
-                                    setTravelAmount(detail.type === "TRAVEL_SUBSISTENCE" ? String(detail.requested_total || 0) : "");
-                                    setRows(
-                                      detail.lines
-                                        ? detail.lines.map((l: any) => {
-                                            const rawLocation = String(l.location || "").trim();
-                                            const parts = rawLocation.includes("→")
-                                              ? rawLocation.split("→").map((part) => part.trim())
-                                              : [rawLocation, rawLocation];
-                                            return {
-                                              date: normalizeDateInputValue(l.line_date),
-                                              startDistrict: parts[0] || "",
-                                              destinationDistrict: parts[1] || parts[0] || "",
-                                              meals: advanceLineMealCount(l)
-                                            };
-                                          })
-                                        : []
-                                    );
-                                    setMonthField(detail.salary_month || "");
-                                    setSalaryPaybackDuration(
-                                      detail.type === "SALARY"
-                                        ? (detail.salary_payback_duration || detail.payback_duration || "")
-                                        : ""
-                                    );
-                                    setLoanPaybackDuration(
-                                      detail.type === "LOAN"
-                                        ? (detail.loan_payback_duration || detail.payback_duration || "")
-                                        : ""
-                                    );
-                                    setPaymentMethod((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"));
-                                    {
-                                      const parsedPayment = parsePaymentAccount((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"), detail.payment_account || "");
-                                      setEcocashNumber(parsedPayment.ecocash_number);
-                                      setBankName(parsedPayment.bank_name);
-                                      setBankAccountNumber(parsedPayment.bank_account_number);
-                                      setBankBranch(parsedPayment.bank_branch);
-                                    }
-                                    setPurpose(detail.purpose || "");
-                                    // optional: if the API returned an employee number
-                                    setRequesterName(detail.requester_name || "");
-                                    setEmpNumber(detail.requester_employee_no || detail.emp_number || "");
-                                    setRequestForUserId(detail.requester_id || profile?.id || me?.userId || "");
-                                    setRequestDate(normalizeDateInputValue(detail.created_at) || new Date().toISOString().slice(0, 10));
+                                    populateAdvanceForm(detail, a);
                                     setPage("ADVANCE");
                                   } catch (e: any) {
                                     alert("Error loading advance: " + e.message);
@@ -2460,7 +3095,7 @@ export default function App() {
                             >
                               Track
                             </button>
-                            {a.status === "PAID" && a.type === "TRAVEL_SUBSISTENCE" && (
+                            {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
                               <button
                                 className="button small-button"
                                 onClick={() => startClearanceForAdvance(a.id)}
@@ -2518,10 +3153,39 @@ export default function App() {
               </div>
             </div>
           ) : page === "SETTINGS" ? (
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-                <h2>Settings</h2>
-                <button className="button small-button" onClick={() => setPage("HOME")}>Back</button>
+            <div className="admin-page">
+              <div className="page-heading">
+                <div>
+                  <h2>Administration Settings</h2>
+                  <p>Configure and manage system settings, users, roles, and organization structure.</p>
+                </div>
+                <div className="last-updated-card">
+                  <span>Last Updated</span>
+                  <strong>{nowLabel}</strong>
+                </div>
+              </div>
+
+              <div className="admin-overview-grid">
+                <button type="button" onClick={() => setAdminUsersOpen((current) => !current)}>
+                  <span className="overview-icon blue">users</span>
+                  <strong>User Management</strong>
+                  <small>Manage users and roles</small>
+                </button>
+                <button type="button" onClick={() => setSectionManagementOpen((current) => !current)}>
+                  <span className="overview-icon green">org</span>
+                  <strong>Departments</strong>
+                  <small>Manage departments</small>
+                </button>
+                <button type="button" onClick={() => setGroupAssignmentOpen((current) => !current)}>
+                  <span className="overview-icon violet">roles</span>
+                  <strong>System Roles</strong>
+                  <small>Configure permissions</small>
+                </button>
+                <button type="button" onClick={() => setTravelSettingsOpen((current) => !current)}>
+                  <span className="overview-icon orange">travel</span>
+                  <strong>Travel Setup</strong>
+                  <small>Rates and locations</small>
+                </button>
               </div>
 
 <SettingsAccordion
@@ -2539,34 +3203,218 @@ export default function App() {
 
               {canManageTravelSettings && (
                 <SettingsAccordion
-                  title="Travel Rates & Hotels"
-                  subtitle="Maintain the meal value and district hotel register."
+                  title="Travel Types, Rates & Locations"
+                  subtitle="Maintain Local Travel Allowance, CMA, and any other travel request setup."
                   open={travelSettingsOpen}
                   onToggle={() => setTravelSettingsOpen((current) => !current)}
                 >
                   <div style={{ display: "grid", gap: 16 }}>
                     <div className="card" style={{ padding: 20 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                        <div>
-                          <h3 style={{ margin: 0 }}>Meal Value</h3>
-                          <div style={{ marginTop: 4, opacity: 0.75 }}>Current value: {fmtMoney(mealValueNumber)} per meal</div>
-                        </div>
-                        <button className="button small-button" onClick={() => void loadMealValue()} disabled={mealValueLoading}>
-                          {mealValueLoading ? "Loading..." : "Refresh"}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+                        <h3 style={{ margin: 0 }}>Travel Types</h3>
+                        <button className="button small-button" onClick={() => void loadTravelTypes()} disabled={travelTypesLoading}>
+                          {travelTypesLoading ? "Loading..." : "Refresh"}
                         </button>
                       </div>
-                      <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={mealValueDraft}
-                          onChange={(e) => setMealValueDraft(e.target.value)}
-                          style={{ maxWidth: 180 }}
-                        />
-                        <button className="button small-button" onClick={() => void saveMealValue()} disabled={mealValueLoading}>
-                          Save Meal Value
-                        </button>
+
+                      <div style={{ overflowX: "auto", marginBottom: 16 }}>
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Name</th>
+                              <th>Location</th>
+                              <th>Rate</th>
+                              <th>General Staff</th>
+                              <th>EXCO</th>
+                              <th>CEO</th>
+                              <th>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {travelTypes.map((type) => (
+                              <tr key={type.id}>
+                                <td>{type.name}</td>
+                                <td>{type.location_mode === "DISTRICT" ? "Districts" : "Countries / Cities"}</td>
+                                <td>{type.rate_kind === "DAILY" ? "Daily" : "Meal"}</td>
+                                <td>{fmtMoney(type.rate_general_staff)}</td>
+                                <td>{fmtMoney(type.rate_exco)}</td>
+                                <td>{fmtMoney(type.rate_ceo)}</td>
+                                <td>
+                                  <button className="icon-button" onClick={() => setEditingTravelType(type)} title="Edit travel type" aria-label="Edit travel type" style={{ marginRight: 8 }}>
+                                    <Edit3 size={16} aria-hidden />
+                                  </button>
+                                  <button className="icon-button danger" onClick={() => void deleteTravelType(type.id)} title="Delete travel type" aria-label="Delete travel type">
+                                    <Trash2 size={16} aria-hidden />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <input placeholder="New travel type name" value={newTravelTypeName} onChange={(e) => setNewTravelTypeName(e.target.value)} />
+                        <div className="form-grid-2" style={{ marginBottom: 0 }}>
+                          <select value={newTravelTypeLocationMode} onChange={(e) => setNewTravelTypeLocationMode(e.target.value as "DISTRICT" | "COUNTRY_CITY")}>
+                            <option value="COUNTRY_CITY">Countries / Cities</option>
+                            <option value="DISTRICT">Districts</option>
+                          </select>
+                          <select value={newTravelTypeRateKind} onChange={(e) => setNewTravelTypeRateKind(e.target.value as "MEAL" | "DAILY")}>
+                            <option value="DAILY">Daily rate</option>
+                            <option value="MEAL">Meal rate</option>
+                          </select>
+                        </div>
+                        <div className="form-grid-3" style={{ marginBottom: 0 }}>
+                          <input type="number" min="0" step="0.01" placeholder="General Staff rate" value={newTravelTypeGeneralRate} onChange={(e) => setNewTravelTypeGeneralRate(e.target.value)} />
+                          <input type="number" min="0" step="0.01" placeholder="EXCO rate" value={newTravelTypeExcoRate} onChange={(e) => setNewTravelTypeExcoRate(e.target.value)} />
+                          <input type="number" min="0" step="0.01" placeholder="CEO rate" value={newTravelTypeCeoRate} onChange={(e) => setNewTravelTypeCeoRate(e.target.value)} />
+                        </div>
+                        <div>
+                          <button className="button small-button" onClick={() => void createTravelType()}>Add Travel Type</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {editingTravelType && (
+                      <div className="review-modal-backdrop">
+                        <div className="review-modal-shell" style={{ maxWidth: 560 }}>
+                          <div className="review-modal-header" style={{ alignItems: "center" }}>
+                            <div>
+                              <div className="review-modal-eyebrow">Edit Travel Type</div>
+                              <h3 style={{ margin: 0 }}>{editingTravelType.name || "Travel type"}</h3>
+                            </div>
+                            <button className="icon-button" type="button" onClick={() => setEditingTravelType(null)} aria-label="Close edit modal">
+                              <X size={18} aria-hidden />
+                            </button>
+                          </div>
+                          <div className="review-modal-grid" style={{ gap: 10 }}>
+                            <label>
+                              Name
+                              <input
+                                type="text"
+                                value={editingTravelType.name}
+                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, name: e.target.value } : null)}
+                              />
+                            </label>
+                            <label>
+                              Location
+                              <select
+                                value={editingTravelType.location_mode}
+                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, location_mode: e.target.value as "DISTRICT" | "COUNTRY_CITY" } : null)}
+                              >
+                                <option value="COUNTRY_CITY">Countries / Cities</option>
+                                <option value="DISTRICT">Districts</option>
+                              </select>
+                            </label>
+                            <label>
+                              Rate kind
+                              <select
+                                value={editingTravelType.rate_kind}
+                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_kind: e.target.value as "MEAL" | "DAILY" } : null)}
+                              >
+                                <option value="DAILY">Daily rate</option>
+                                <option value="MEAL">Meal rate</option>
+                              </select>
+                            </label>
+                            <label>
+                              General Staff rate
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={String(editingTravelType.rate_general_staff)}
+                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_general_staff: Number(e.target.value) || 0 } : null)}
+                              />
+                            </label>
+                            <label>
+                              EXCO rate
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={String(editingTravelType.rate_exco)}
+                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_exco: Number(e.target.value) || 0 } : null)}
+                              />
+                            </label>
+                            <label>
+                              CEO rate
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={String(editingTravelType.rate_ceo)}
+                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_ceo: Number(e.target.value) || 0 } : null)}
+                              />
+                            </label>
+                          </div>
+                          <div className="review-modal-actions" style={{ justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+                            <button className="button small-button button-subtle" type="button" onClick={() => setEditingTravelType(null)}>Cancel</button>
+                            <button className="button button-primary" type="button" onClick={() => void saveEditedTravelType()}>Save</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="card" style={{ padding: 20 }}>
+                      <h3 style={{ marginTop: 0 }}>Travel Locations</h3>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <select value={newTravelLocationTypeId} onChange={(e) => setNewTravelLocationTypeId(e.target.value)}>
+                          <option value="">Select travel type</option>
+                          {travelTypes.map((type) => (
+                            <option key={type.id} value={type.id}>{type.name}</option>
+                          ))}
+                        </select>
+                        {travelTypes.find((type) => type.id === newTravelLocationTypeId)?.location_mode === "DISTRICT" ? (
+                          <input placeholder="District" value={newTravelLocationDistrict} onChange={(e) => setNewTravelLocationDistrict(e.target.value)} />
+                        ) : (
+                          <>
+                            <input placeholder="Country" value={newTravelLocationCountry} onChange={(e) => setNewTravelLocationCountry(e.target.value)} />
+                            {newTravelLocationCountry.trim().toLowerCase() === "south africa" && (
+                              <select value={newTravelLocationProvince} onChange={(e) => setNewTravelLocationProvince(e.target.value)}>
+                                <option value="">Select province</option>
+                                {SOUTH_AFRICA_PROVINCES.map((province) => (
+                                  <option key={province} value={province}>{province}</option>
+                                ))}
+                              </select>
+                            )}
+                            <input placeholder="City" value={newTravelLocationCity} onChange={(e) => setNewTravelLocationCity(e.target.value)} />
+                          </>
+                        )}
+                        <div>
+                          <button className="button small-button" onClick={() => void createTravelLocation()}>Add Location</button>
+                        </div>
+                      </div>
+
+                      <div style={{ overflowX: "auto", marginTop: 16 }}>
+                        <table className="table">
+                          <thead>
+                            <tr><th>Travel Type</th><th>District</th><th>Country</th><th>Province</th><th>City</th></tr>
+                          </thead>
+                          <tbody>
+                            {travelTypes.flatMap((type) => (type.locations || []).map((location, index) => (
+                              <tr key={`${type.id}-${location.id || index}`}>
+                                <td>{type.name}</td>
+                                <td>{location.district || "—"}</td>
+                                <td>{location.country || "—"}</td>
+                                <td>{location.province || "—"}</td>
+                                <td>{location.city || "—"}</td>
+                              </tr>
+                            ))).length === 0 ? (
+                              <tr><td colSpan={5} style={{ textAlign: "center" }}>No locations</td></tr>
+                            ) : (
+                              travelTypes.flatMap((type) => (type.locations || []).map((location, index) => (
+                                <tr key={`${type.id}-${location.id || index}`}>
+                                  <td>{type.name}</td>
+                                  <td>{location.district || "—"}</td>
+                                  <td>{location.country || "—"}</td>
+                                  <td>{location.province || "—"}</td>
+                                  <td>{location.city || "—"}</td>
+                                </tr>
+                              )))
+                            )}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
 
@@ -2581,11 +3429,21 @@ export default function App() {
                       <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
                         <input placeholder="Hotel name" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
                         <select value={newHotelDistrict} onChange={(e) => setNewHotelDistrict(e.target.value)}>
-                          <option value="">Select district</option>
+                          <option value="">Local district (optional)</option>
                           {districts.map((district) => (
                             <option key={district} value={district}>{district}</option>
                           ))}
                         </select>
+                        <input placeholder="Country (for CMA/other travel)" value={newHotelCountry} onChange={(e) => setNewHotelCountry(e.target.value)} />
+                        {newHotelCountry.trim().toLowerCase() === "south africa" && (
+                          <select value={newHotelProvince} onChange={(e) => setNewHotelProvince(e.target.value)}>
+                            <option value="">Select province</option>
+                            {SOUTH_AFRICA_PROVINCES.map((province) => (
+                              <option key={province} value={province}>{province}</option>
+                            ))}
+                          </select>
+                        )}
+                        <input placeholder="City (for CMA/other travel)" value={newHotelCity} onChange={(e) => setNewHotelCity(e.target.value)} />
                         <input placeholder="Address (optional)" value={newHotelAddress} onChange={(e) => setNewHotelAddress(e.target.value)} />
                         <input placeholder="Contact (optional)" value={newHotelContact} onChange={(e) => setNewHotelContact(e.target.value)} />
                         <select value={newHotelDepartment} onChange={(e) => setNewHotelDepartment(e.target.value)}>
@@ -2600,16 +3458,19 @@ export default function App() {
                       <div style={{ overflowX: "auto" }}>
                         <table className="table">
                           <thead>
-                            <tr><th>Name</th><th>District</th><th>Department</th><th>Contact</th><th>Address</th></tr>
+                            <tr><th>Name</th><th>District</th><th>Country</th><th>Province</th><th>City</th><th>Department</th><th>Contact</th><th>Address</th></tr>
                           </thead>
                           <tbody>
                             {hotels.length === 0 ? (
-                              <tr><td colSpan={5} style={{ textAlign: "center" }}>No hotels</td></tr>
+                              <tr><td colSpan={8} style={{ textAlign: "center" }}>No hotels</td></tr>
                             ) : (
                               hotels.map(h => (
                                 <tr key={h.id}>
                                   <td>{h.name}</td>
                                   <td>{h.district || "—"}</td>
+                                  <td>{h.country || "—"}</td>
+                                  <td>{h.province || "—"}</td>
+                                  <td>{h.city || "—"}</td>
                                   <td>{h.department || "—"}</td>
                                   <td>{h.contact || "—"}</td>
                                   <td>{h.address || "—"}</td>
@@ -2640,13 +3501,10 @@ export default function App() {
                       open={sectionManagementOpen}
                       onToggle={() => setSectionManagementOpen((current) => !current)}
                     >
-                      <div style={{ display: "grid", gap: 20, marginBottom: 24 }}>
-                        <div className="card" style={{ padding: 24 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, marginBottom: 24 }}>
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 20, background: "var(--surface-soft)" }}>
                           <h3 style={{ marginTop: 0 }}>Create Section</h3>
-                          <p style={{ color: "#4b5563", marginTop: 4, marginBottom: 20 }}>
-                            Create a section first. Departments are then created under that section.
-                          </p>
-                          <div style={{ display: "grid", gap: 16, maxWidth: 560 }}>
+                          <div style={{ display: "grid", gap: 16 }}>
                             <label style={{ display: "grid", gap: 6 }}>
                               <span style={{ fontWeight: 600 }}>Section Name <span style={{ color: "#dc2626" }}>*</span></span>
                               <input
@@ -2655,23 +3513,21 @@ export default function App() {
                                 placeholder="Enter section name"
                               />
                             </label>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 600 }}>Section EXCO Owner</span>
+                              {leadershipSelect(leadershipUsers.exco, newSectionExcoId, "Select EXCO owner", setNewSectionExcoId)}
+                            </label>
                             <div style={{ display: "flex", justifyContent: "flex-end" }}>
                               <button className="button small-button" onClick={() => void createSection()}>
                                 Create Section
                               </button>
                             </div>
-                            <div style={{ borderLeft: "4px solid #2563eb", background: "#eff6ff", padding: 12, borderRadius: 8 }}>
-                              <strong>Note:</strong> Sections are the top-level division for departments.
-                            </div>
                           </div>
                         </div>
 
-                        <div className="card" style={{ padding: 24 }}>
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 20, background: "var(--surface-soft)" }}>
                           <h3 style={{ marginTop: 0 }}>Create Department</h3>
-                          <p style={{ color: "#4b5563", marginTop: 4, marginBottom: 20 }}>
-                            Create a department group and assign it to an existing section.
-                          </p>
-                          <div style={{ display: "grid", gap: 16, maxWidth: 560 }}>
+                          <div style={{ display: "grid", gap: 16 }}>
                             <label style={{ display: "grid", gap: 6 }}>
                               <span style={{ fontWeight: 600 }}>Department Name <span style={{ color: "#dc2626" }}>*</span></span>
                               <input
@@ -2691,93 +3547,86 @@ export default function App() {
                                 ))}
                               </select>
                             </label>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 600 }}>Manager</span>
+                              {leadershipSelect(leadershipUsers.managers, newDepartmentManagerId, "Select manager", setNewDepartmentManagerId)}
+                            </label>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 600 }}>EXCO Owner</span>
+                              {leadershipSelect(leadershipUsers.exco, newDepartmentExcoId, "Select EXCO owner", setNewDepartmentExcoId)}
+                            </label>
+                            <label style={{ display: "grid", gap: 6 }}>
+                              <span style={{ fontWeight: 600 }}>Status</span>
+                              <select value={newDepartmentActive ? "ACTIVE" : "INACTIVE"} onChange={(e) => setNewDepartmentActive(e.target.value === "ACTIVE")}>
+                                <option value="ACTIVE">Active</option>
+                                <option value="INACTIVE">Inactive</option>
+                              </select>
+                            </label>
                             <div style={{ display: "flex", justifyContent: "flex-end" }}>
                               <button className="button small-button" onClick={() => void createDepartment()}>
                                 Create Department
                               </button>
-                            </div>
-                            <div style={{ borderLeft: "4px solid #2563eb", background: "#eff6ff", padding: 12, borderRadius: 8 }}>
-                              <strong>Note:</strong> Each department must belong to a section so it can be displayed in the correct division.
                             </div>
                           </div>
                         </div>
                       </div>
 
                       <div style={{ marginBottom: 16 }}>
-                        <h4 style={{ margin: "12px 0 8px" }}>Existing Sections</h4>
+                        <h4 style={{ margin: "12px 0 8px" }}>Organization Structure</h4>
                         <div style={{ overflowX: "auto" }}>
                           <table className="table" style={{ width: "100%" }}>
                             <thead>
                               <tr>
                                 <th>Name</th>
-                                <th style={{ width: 150 }}>Actions</th>
+                                <th>Type</th>
+                                <th>Manager</th>
+                                <th>EXCO Owner</th>
+                                <th style={{ width: 170 }}>Actions</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {sectionOptions.length === 0 ? (
-                                <tr><td colSpan={2} style={{ textAlign: "center" }}>No sections</td></tr>
-                              ) : (
-                                sectionOptions.map((section) => (
-                                  <tr key={section.id}>
-                                    <td>{section.name}</td>
-                                    <td>
-                                      <button className="button small-button" onClick={() => void editSection(section.id, section.name)} style={{ marginRight: 8 }}>
-                                        Rename
-                                      </button>
-                                      <button className="button small-button" onClick={() => void deleteSection(section.id, section.name)}>
-                                        Delete
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-
-                      <div style={{ marginBottom: 16 }}>
-                        <h4 style={{ margin: "12px 0 8px" }}>Existing Department Groups</h4>
-                        <div style={{ overflowX: "auto" }}>
-                          <table className="table" style={{ width: "100%" }}>
-                            <thead>
-                              <tr>
-                                <th>Name</th>
-                                <th>Section</th>
-                                <th style={{ width: 150 }}>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {departmentRows.length === 0 ? (
-                                <tr><td colSpan={3} style={{ textAlign: "center" }}>No department groups</td></tr>
-                              ) : (
-                                departmentRows.map((department) => (
-                                  <tr key={department.name}>
-                                    <td>{department.name}</td>
-                                    <td>
-                                      <select
-                                        value={department.section_id || ""}
-                                        onChange={(e) => void updateDepartmentSection(department.name, e.target.value)}
-                                      >
-                                        <option value="">None</option>
-                                        {sectionOptions.map((section) => (
-                                          <option key={section.id} value={section.id}>
-                                            {section.name}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </td>
-                                    <td>
-                                      <button className="button small-button" onClick={() => void editDepartment(department.name)} style={{ marginRight: 8 }}>
-                                        Rename
-                                      </button>
-                                      <button className="button small-button" onClick={() => void deleteDepartment(department.name)}>
-                                        Delete
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))
-                              )}
+                              {sectionOptions.length === 0 && departmentRows.length === 0 ? (
+                                <tr><td colSpan={5} style={{ textAlign: "center" }}>No organization structure</td></tr>
+                              ) : null}
+                              {sectionOptions.map((section) => {
+                                const childDepartments = departmentRows.filter((department) => department.section_id === section.id);
+                                const collapsed = Boolean(collapsedSections[section.id]);
+                                return (
+                                  <React.Fragment key={section.id}>
+                                    <tr>
+                                      <td style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        <button
+                                          className="icon-button"
+                                          onClick={() => setCollapsedSections((s) => ({ ...s, [section.id]: !s[section.id] }))}
+                                          title={collapsed ? 'Expand section' : 'Collapse section'}
+                                          aria-label={collapsed ? 'Expand section' : 'Collapse section'}
+                                          style={{ marginRight: 4 }}
+                                        >
+                                          {collapsed ? <ChevronDown size={16} aria-hidden /> : <ChevronUp size={16} aria-hidden />}
+                                        </button>
+                                        <strong>{section.name}</strong>
+                                      </td>
+                                      <td><span className="status-pill status-pill-info">Section</span></td>
+                                      <td>—</td>
+                                      <td>
+                                        {leadershipSelect(leadershipUsers.exco, section.exco_user_id, "No section owner", (value) =>
+                                          void updateSectionLeadership(section, value || null)
+                                        )}
+                                      </td>
+                                      <td>
+                                        <button className="icon-button" onClick={() => void editSection(section.id, section.name)} title="Edit section" aria-label="Edit section" style={{ marginRight: 8 }}>
+                                          <Edit3 size={16} aria-hidden />
+                                        </button>
+                                        <button className="icon-button danger" onClick={() => void deleteSection(section.id, section.name)} title="Delete section" aria-label="Delete section">
+                                          <Trash2 size={16} aria-hidden />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                    {!collapsed && childDepartments.map((department) => renderDepartmentOrgRow(department, true))}
+                                  </React.Fragment>
+                                );
+                              })}
+                              {departmentRows.filter((department) => !department.section_id).map((department) => renderDepartmentOrgRow(department))}
                             </tbody>
                           </table>
                         </div>
@@ -2871,7 +3720,7 @@ export default function App() {
                             <div style={{ fontSize: 13, opacity: 0.8 }}>HR: {hrUsers.length ? hrUsers.join(", ") : "None assigned"}</div>
                             <div style={{ fontSize: 13, opacity: 0.8 }}>Chief Officers: {chiefs.length ? chiefs.join(", ") : "None assigned"}</div>
                             <div style={{ fontSize: 13, opacity: 0.8 }}>Finance: {financeUsers.length ? financeUsers.join(", ") : "None assigned"}</div>
-                            <div style={{ fontSize: 13, opacity: 0.8 }}>Requests go directly to Manager before HR Manager, HR, and Finance.</div>
+                            <div style={{ fontSize: 13, opacity: 0.8 }}>Requests route to the assigned department manager, assigned EXCO owner, then Finance.</div>
                           </div>
                         );
                       })}
@@ -3204,7 +4053,7 @@ export default function App() {
                   <tbody>
                     {advances.map((a) => (
                       <tr key={a.id}>
-                        <td>{a.type}</td>
+                        <td>{travelTypeLabel(a.type, travelTypes)}</td>
                         <td>{a.status}</td>
                         <td>{advanceStageLabel(a.status, a.type)}</td>
                         <td>{fmtMoney(a.requested_total)}</td>
@@ -3216,52 +4065,7 @@ export default function App() {
                               onClick={async () => {
                                 try {
                                   const detail: any = await api.advanceDetail(a.id);
-                                  setEditingAdvanceId(a.id);
-                                  setEditingAdvanceStatus(detail.status || a.status || null);
-                                  setAdvanceType(detail.type);
-                                  setSalaryAmount(detail.type === "SALARY" ? String(detail.requested_total || 0) : "0");
-                                  setLoanAmount(detail.type === "LOAN" ? String(detail.requested_total || 0) : "");
-                                  setTravelAmount(detail.type === "TRAVEL_SUBSISTENCE" ? String(detail.requested_total || 0) : "");
-                                  setRows(
-                                    detail.lines
-                                      ? detail.lines.map((l: any) => {
-                                          const rawLocation = String(l.location || "").trim();
-                                          const parts = rawLocation.includes("→")
-                                            ? rawLocation.split("→").map((part) => part.trim())
-                                            : [rawLocation, rawLocation];
-                                          return {
-                                            date: normalizeDateInputValue(l.line_date),
-                                            startDistrict: parts[0] || "",
-                                            destinationDistrict: parts[1] || parts[0] || "",
-                                            meals: advanceLineMealCount(l)
-                                          };
-                                        })
-                                      : []
-                                  );
-                                  setMonthField(detail.salary_month || "");
-                                  setSalaryPaybackDuration(
-                                    detail.type === "SALARY"
-                                      ? (detail.salary_payback_duration || detail.payback_duration || "")
-                                      : ""
-                                  );
-                                  setLoanPaybackDuration(
-                                    detail.type === "LOAN"
-                                      ? (detail.loan_payback_duration || detail.payback_duration || "")
-                                      : ""
-                                  );
-                                  setPaymentMethod((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"));
-                                  {
-                                    const parsedPayment = parsePaymentAccount((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"), detail.payment_account || "");
-                                    setEcocashNumber(parsedPayment.ecocash_number);
-                                    setBankName(parsedPayment.bank_name);
-                                    setBankAccountNumber(parsedPayment.bank_account_number);
-                                    setBankBranch(parsedPayment.bank_branch);
-                                  }
-                                  setPurpose(detail.purpose || "");
-                                  setRequestDate(normalizeDateInputValue(detail.created_at) || new Date().toISOString().slice(0, 10));
-                                  setRequesterName(detail.requester_name || "");
-                                  setEmpNumber(detail.requester_employee_no || detail.emp_number || "");
-                                  setRequestForUserId(detail.requester_id || profile?.id || me?.userId || "");
+                                  populateAdvanceForm(detail, a);
                                   setPage("ADVANCE");
                                 } catch (e: any) {
                                   alert("Error loading advance: " + e.message);
@@ -3297,7 +4101,7 @@ export default function App() {
                           >
                             Track
                           </button>
-                          {a.status === "PAID" && a.type === "TRAVEL_SUBSISTENCE" && (
+                          {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
                             <button
                               className="button small-button"
                               onClick={() => startClearanceForAdvance(a.id)}

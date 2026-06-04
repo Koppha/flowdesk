@@ -7,19 +7,51 @@ function allowedInboxForRole(role) {
         case "MANAGER":
             return [
                 { doc_type: "ADVANCE", status: "SUBMITTED" },
-                { doc_type: "CLAIM", status: "SUBMITTED" }
+                { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
+                { doc_type: "ADVANCE", status: "HR_REVIEW" },
+                { doc_type: "ADVANCE", status: "CHIEF_OFFICER_REVIEW" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "APPROVED" },
+                { doc_type: "CLAIM", status: "SUBMITTED" },
+                { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
+                { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
+                { doc_type: "CLAIM", status: "HR_OFFICER" },
+                { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
+                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
             ];
         case "HR_MANAGER":
-            return { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" };
+            return [
+                { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
+                { doc_type: "ADVANCE", status: "HR_REVIEW" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "APPROVED" },
+                { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
+                { doc_type: "CLAIM", status: "HR_OFFICER" },
+                { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
+                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
+            ];
         case "AUTH_OFFICER":
             return [
                 { doc_type: "ADVANCE", status: "HR_REVIEW" },
-                { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" }
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "APPROVED" },
+                { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
+                { doc_type: "CLAIM", status: "HR_OFFICER" },
+                { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
+                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
             ];
         case "CHIEF_OFFICER":
             return [
                 { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
-                { doc_type: "ADVANCE", status: "CHIEF_OFFICER_REVIEW" }
+                { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
+                { doc_type: "CLAIM", status: "HR_OFFICER" },
+                { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
+                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "ADVANCE", status: "CHIEF_OFFICER_REVIEW" },
+                { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
+                { doc_type: "ADVANCE", status: "HR_REVIEW" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "APPROVED" }
             ];
         case "FINANCE":
             return [
@@ -27,6 +59,7 @@ function allowedInboxForRole(role) {
                 { doc_type: "ADVANCE", status: "APPROVED" },
                 { doc_type: "ACCOMMODATION", status: "SUBMITTED" },
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
+                { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
                 { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
             ];
         case "ADMIN":
@@ -90,6 +123,7 @@ inboxRouter.get("/", async (req, res, next) => {
             return res.json({ items: [] });
         const items = [];
         const loadAdvanceByStatus = async (status, advanceType) => {
+            const params = [status];
             const typeFilter = advanceType === "LOAN"
                 ? ` AND ar.type = 'LOAN'`
                 : advanceType === "TRAVEL_SUBSISTENCE"
@@ -99,11 +133,21 @@ inboxRouter.get("/", async (req, res, next) => {
                         : advanceType === "NON_LOAN"
                             ? ` AND ar.type <> 'LOAN'`
                             : "";
+            let ownershipFilter = "";
+            if (effectiveRole === "MANAGER" && status === "SUBMITTED") {
+                params.push(delegation?.manager_id || req.user.userId);
+                ownershipFilter = ` AND d.manager_user_id = $${params.length}`;
+            }
+            if (role === "CHIEF_OFFICER" && status === "CHIEF_OFFICER_REVIEW") {
+                params.push(req.user.userId);
+                ownershipFilter = ` AND d.exco_user_id = $${params.length}`;
+            }
             const rows = await query(`SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose, u.full_name AS requester_name
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
-         WHERE ar.status = $1${typeFilter}
-         ORDER BY ar.created_at DESC`, [status]);
+         LEFT JOIN departments d ON lower(trim(d.name)) = lower(trim(u.department))
+         WHERE ar.status = $1${typeFilter}${ownershipFilter}
+         ORDER BY ar.created_at DESC`, params);
             for (const a of rows) {
                 items.push({
                     doc_type: "ADVANCE",
@@ -173,6 +217,7 @@ inboxRouter.get("/", async (req, res, next) => {
             await loadClaimByStatus("MANAGER_APPROVED");
             await loadClaimByStatus("CHIEF_OFFICER_APPROVED");
             await loadClaimByStatus("HR_OFFICER");
+            await loadClaimByStatus("HR_MANAGER_REVIEW");
             await loadClaimByStatus("FINANCE_VERIFIED");
             return res.json({ items });
         }

@@ -8,7 +8,7 @@ describe("department groups", () => {
         const normalized = DEFAULT_DEPARTMENT_GROUPS.map((department) => department.toLowerCase());
         expect(DEFAULT_DEPARTMENT_GROUPS).toContain("Finance");
         expect(DEFAULT_DEPARTMENT_GROUPS).toContain("Human Resources");
-        expect(DEFAULT_DEPARTMENT_GROUPS).toContain("Information Technology");
+        expect(DEFAULT_DEPARTMENT_GROUPS).toContain("Technology");
         expect(new Set(normalized).size).toBe(DEFAULT_DEPARTMENT_GROUPS.length);
     });
 });

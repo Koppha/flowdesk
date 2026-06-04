@@ -2,16 +2,18 @@ import { describe, expect, it } from "vitest";
 import { nextClaimStatus } from "../src/modules/claims/claims.routes.js";
 
 describe("claim transitions", () => {
-  it("routes clearances through employee, manager, chief officer, HR, and finance", () => {
+  it("routes clearances through employee, manager, chief officer, HR, HR manager, and finance", () => {
     const managerApproved = nextClaimStatus("SUBMITTED", "MANAGER_APPROVE");
     const chiefApproved = nextClaimStatus(managerApproved, "CHIEF_APPROVE");
     const hrApproved = nextClaimStatus(chiefApproved, "AUTH_OFFICER_APPROVE");
-    const financeVerified = nextClaimStatus(hrApproved, "FINANCE_VERIFY");
+    const hrManagerReview = nextClaimStatus(hrApproved, "HR_MANAGER_APPROVE");
+    const financeVerified = nextClaimStatus(hrManagerReview, "FINANCE_VERIFY");
     const settled = nextClaimStatus(financeVerified, "SETTLE");
 
     expect(managerApproved).toBe("MANAGER_APPROVED");
     expect(chiefApproved).toBe("CHIEF_OFFICER_APPROVED");
     expect(hrApproved).toBe("HR_OFFICER");
+    expect(hrManagerReview).toBe("HR_MANAGER_REVIEW");
     expect(financeVerified).toBe("FINANCE_VERIFIED");
     expect(settled).toBe("SETTLED");
   });

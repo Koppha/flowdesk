@@ -7,7 +7,8 @@ import { createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } fr
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
 import { notifyAdvanceTask } from "../../lib/notifications.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
-import { getNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
+import { getDepartmentLeadership } from "../../lib/departments.js";
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 function normalizeEcoCashNumber(value) {
     return String(value || "").trim().replace(/[\s-]/g, "");
@@ -22,7 +23,7 @@ function validateEcoCashNumber(data, ctx) {
     }
 }
 const CreateAdvanceSchema = z.object({
-    type: z.enum(["TRAVEL_SUBSISTENCE", "SALARY", "LOAN"]),
+    type: z.string().trim().min(1, "type is required"),
     purpose: z.string().trim().min(1, "purpose is required"),
     project_number: z.string().optional(),
     payment_method: z.enum(["ECOCASH", "BANK"]).default("ECOCASH"),
@@ -50,7 +51,7 @@ const CreateAdvanceSchema = z.object({
     }
 });
 const UpdateAdvanceSchema = z.object({
-    type: z.enum(["TRAVEL_SUBSISTENCE", "SALARY", "LOAN"]).optional(),
+    type: z.string().trim().min(1, "type cannot be empty").optional(),
     purpose: z.string().trim().min(1, "purpose cannot be empty").optional(),
     project_number: z.string().optional(),
     payment_method: z.enum(["ECOCASH", "BANK"]).optional(),
@@ -82,6 +83,7 @@ const LinesSchema = z.object({
         .array(z.object({
         line_date: z.string(),
         location: z.string().optional(),
+        travel_meta: z.record(z.unknown()).optional(),
         meals_count: z.coerce.number().int().nonnegative().optional(),
         meal_value: z.coerce.number().nonnegative().optional(),
         lunch: z.coerce.number().nonnegative().default(0),
@@ -156,15 +158,14 @@ export function canViewAdvance(args) {
         return true;
     if (args.createdById === args.userId)
         return true;
-    if (args.role === "MANAGER" && args.status === "SUBMITTED")
-        return true;
-    if (args.role === "CHIEF_OFFICER" && args.status === "CHIEF_OFFICER_REVIEW")
-        return true;
-    if (args.role === "HR_MANAGER" && args.status === "HR_MANAGER_REVIEW")
-        return true;
-    if (args.role === "AUTH_OFFICER" && ["HR_REVIEW", "HR_OFFICER"].includes(args.status))
-        return true;
-    if (args.role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(args.status))
+    const roleAllowedStatuses = {
+        MANAGER: ["SUBMITTED", "HR_MANAGER_REVIEW", "HR_REVIEW", "CHIEF_OFFICER_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
+        HR_MANAGER: ["HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
+        AUTH_OFFICER: ["HR_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
+        CHIEF_OFFICER: ["CHIEF_OFFICER_REVIEW", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
+        FINANCE: ["HR_OFFICER", "APPROVED", "PAID"]
+    };
+    if (roleAllowedStatuses[args.role]?.includes(args.status))
         return true;
     return false;
 }
@@ -188,9 +189,20 @@ advancesRouter.get("/", async (req, res, next) => {
 });
 advancesRouter.get("/:id", async (req, res, next) => {
     try {
-        const adv = (await query(`SELECT ar.*, u.full_name AS requester_name, u.employee_no AS requester_employee_no
+        const adv = (await query(`SELECT ar.*,
+                u.full_name AS requester_name,
+                u.employee_no AS requester_employee_no,
+                tt.id AS travel_type_id,
+                tt.name AS travel_type_name,
+                tt.location_mode AS travel_location_mode,
+                tt.rate_kind AS travel_rate_kind,
+                tt.rate_general_staff AS travel_rate_general_staff,
+                tt.rate_exco AS travel_rate_exco,
+                tt.rate_ceo AS travel_rate_ceo,
+                (tt.id IS NOT NULL AND tt.active = true) AS is_travel_type
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
+         LEFT JOIN travel_types tt ON tt.code = ar.type
          WHERE ar.id=$1`, [req.params.id]))[0];
         if (!adv)
             throw notFound();
@@ -232,11 +244,13 @@ advancesRouter.post("/", async (req, res, next) => {
         const parsed = CreateAdvanceSchema.safeParse(req.body);
         if (!parsed.success)
             throw badRequest("Invalid payload", parsed.error.flatten());
+        const type = await assertAdvanceTypeAllowed(parsed.data.type);
         const { requester } = await resolveAdvanceRequester(req.user.userId, parsed.data.beneficiary_user_id);
         const id = await createAdvance({
             requesterId: requester.id,
             createdById: req.user.userId,
             ...parsed.data,
+            type,
             payment_account: toPaymentAccount(parsed.data)
         });
         await writeAdvanceAudit({
@@ -266,6 +280,9 @@ advancesRouter.put("/:id", async (req, res, next) => {
         const updates = [];
         const params = [];
         const parsedData = { ...parsed.data };
+        if (typeof parsedData.type === "string") {
+            parsedData.type = await assertAdvanceTypeAllowed(parsedData.type);
+        }
         if (parsedData.payment_method) {
             parsedData.payment_account = toPaymentAccount(parsed.data);
         }
@@ -310,16 +327,32 @@ advancesRouter.put("/:id/lines", async (req, res, next) => {
         if (!parsed.success)
             throw badRequest("Invalid payload", parsed.error.flatten());
         await query(`DELETE FROM advance_lines WHERE advance_request_id=$1`, [req.params.id]);
-        const configuredMealValue = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, 0);
+        const travelType = await getTravelTypeByCode(adv.type);
+        if (!travelType?.active)
+            throw badRequest("Travel lines can only be added for travel advances");
+        const configuredMealValue = await getTravelRateForCode(adv.type);
         for (const line of parsed.data.lines) {
             const hasMealCount = line.meals_count !== undefined;
             const mealsCount = hasMealCount ? Number(line.meals_count) : 0;
+            if (hasMealCount && mealsCount > 0 && configuredMealValue <= 0) {
+                throw badRequest("HR must set a rate for this travel type before requests can be submitted");
+            }
             const mealValue = hasMealCount ? configuredMealValue : Number(line.meal_value || 0);
             const lunchAmount = hasMealCount ? toMoney(mealsCount * configuredMealValue) : Number(line.lunch || 0);
             const dinnerAmount = hasMealCount ? 0 : Number(line.dinner || 0);
             const total = toMoney(lunchAmount + dinnerAmount);
-            await query(`INSERT INTO advance_lines (advance_request_id, line_date, location, meals_count, meal_value, lunch, dinner, line_total)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [req.params.id, line.line_date, line.location ?? null, mealsCount, mealValue, lunchAmount, dinnerAmount, total]);
+            await query(`INSERT INTO advance_lines (advance_request_id, line_date, location, travel_meta, meals_count, meal_value, lunch, dinner, line_total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [
+                req.params.id,
+                line.line_date,
+                line.location ?? null,
+                JSON.stringify(line.travel_meta || {}),
+                mealsCount,
+                mealValue,
+                lunchAmount,
+                dinnerAmount,
+                total
+            ]);
         }
         const requestedTotal = parsed.data.lines.reduce((acc, line) => {
             if (line.meals_count !== undefined) {
@@ -351,7 +384,7 @@ advancesRouter.post("/:id/submit", async (req, res, next) => {
             throw badRequest("purpose is required");
         if (!String(adv.payment_account || "").trim())
             throw badRequest("payment_account is required");
-        if (adv.type === "TRAVEL_SUBSISTENCE") {
+        if (await isTravelAdvanceType(adv.type)) {
             const row = (await query(`SELECT count(*)::text AS count FROM advance_lines WHERE advance_request_id=$1`, [adv.id]))[0];
             if (!row || Number(row.count) < 1)
                 throw badRequest("At least one travel table entry is required");
@@ -368,15 +401,21 @@ advancesRouter.post("/:id/submit", async (req, res, next) => {
             if (Number(adv.requested_total) <= 0)
                 throw badRequest("requested_total must be > 0");
         }
-        const creatorRole = (await query(`SELECT role FROM users WHERE id = $1`, [adv.created_by_id]))[0]?.role;
-        const nextStatus = adv.status === "SUBMITTED"
-            ? "SUBMITTED"
-            : adv.status === "DRAFT"
-                ? ["HR_MANAGER", "MANAGER"].includes(creatorRole)
-                    ? "CHIEF_OFFICER_REVIEW"
-                    : "HR_MANAGER_REVIEW"
-                : nextStatusOrThrow(adv.status, "SUBMIT");
-        await setAdvanceStatus(adv.id, nextStatus);
+        if (adv.status !== "DRAFT" && adv.status !== "SUBMITTED") {
+            throw badRequest("Only draft advances can be submitted");
+        }
+        const leadership = await getDepartmentLeadership(adv.requester_department || "");
+        if (!leadership.manager_user_id) {
+            throw badRequest("No manager assigned to this department.");
+        }
+        const validationWarning = leadership.exco_user_id ? null : "No EXCO owner assigned to this department.";
+        const nextStatus = "SUBMITTED";
+        if (adv.status === "SUBMITTED") {
+            await setAdvanceStatus(adv.id, nextStatus);
+        }
+        else {
+            await query(`UPDATE advance_requests SET status=$2, submitted_at=now(), updated_at=now() WHERE id=$1`, [adv.id, nextStatus]);
+        }
         await writeAdvanceAudit({
             actorId: req.user.userId,
             advanceId: adv.id,
@@ -395,7 +434,7 @@ advancesRouter.post("/:id/submit", async (req, res, next) => {
                 requestedTotal: Number(notificationContext.requested_total)
             });
         }
-        return res.json({ ok: true, status: nextStatus });
+        return res.json({ ok: true, status: nextStatus, warning: validationWarning });
     }
     catch (err) {
         return next(err);
@@ -504,7 +543,23 @@ advancesRouter.post("/:id/approve", requireAuth, async (req, res, next) => {
         if (!hasManagerPrivilege && !["HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "ADMIN"].includes(req.user.role)) {
             throw forbidden("Not authorized to approve this advance");
         }
-        const creatorRole = (await query(`SELECT role FROM users WHERE id = $1`, [adv.created_by_id]))[0]?.role;
+        const leadership = await getDepartmentLeadership(adv.requester_department || "");
+        if (hasManagerPrivilege && adv.status === "SUBMITTED") {
+            const requesterDepartment = String(adv.requester_department || "").trim();
+            const managerDepartment = delegated
+                ? String(delegated.department || "").trim()
+                : String(req.user.department || "").trim();
+            if (!managerDepartment || managerDepartment !== requesterDepartment) {
+                throw forbidden("Only the requester’s department manager or delegated manager can approve this advance");
+            }
+            if (!leadership.manager_user_id) {
+                throw badRequest("No manager assigned to this department.");
+            }
+            const effectiveManagerId = delegated ? delegated.manager_id : req.user.userId;
+            if (leadership.manager_user_id !== effectiveManagerId) {
+                throw forbidden("Only the assigned department manager or delegated manager can approve this advance");
+            }
+        }
         let status;
         if (req.user.role === "AUTH_OFFICER") {
             if (adv.status !== "HR_REVIEW") {
@@ -522,19 +577,24 @@ advancesRouter.post("/:id/approve", requireAuth, async (req, res, next) => {
             if (adv.status !== "CHIEF_OFFICER_REVIEW") {
                 throw forbidden("Chief Officer can only approve advances pending Chief Officer review");
             }
-            status = nextStatusOrThrow(adv.status, "APPROVE");
-            if (creatorRole === "HR_MANAGER") {
-                status = "HR_REVIEW";
+            if (!leadership.exco_user_id) {
+                throw badRequest("No EXCO owner assigned to this department.");
             }
+            if (leadership.exco_user_id !== req.user.userId) {
+                throw forbidden("Only the assigned EXCO owner can approve this advance");
+            }
+            status = nextStatusOrThrow(adv.status, "APPROVE");
         }
         else if (req.user.role === "ADMIN") {
-            status = nextStatusOrThrow(adv.status, "APPROVE");
+            status = adv.status === "SUBMITTED" && !leadership.exco_user_id
+                ? "HR_OFFICER"
+                : nextStatusOrThrow(adv.status, "APPROVE");
         }
         else {
             if (adv.status !== "SUBMITTED") {
                 throw forbidden("Managers can only approve submitted advances");
             }
-            status = nextStatusOrThrow(adv.status, "APPROVE");
+            status = leadership.exco_user_id ? nextStatusOrThrow(adv.status, "APPROVE") : "HR_OFFICER";
         }
         await setAdvanceStatus(adv.id, status, { approvedTotal: parsed.data.approved_total });
         await writeAdvanceAudit({

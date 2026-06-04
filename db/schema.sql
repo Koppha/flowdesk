@@ -11,12 +11,13 @@ DO $$ BEGIN
     'AUTH_OFFICER',
     'CHIEF_OFFICER',
     'FINANCE',
-    'ADMIN'
+    'ADMIN',
+    'EXCO'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE advance_type AS ENUM ('TRAVEL_SUBSISTENCE','SALARY','LOAN');
+  CREATE TYPE advance_type AS ENUM ('TRAVEL_SUBSISTENCE','CMA','SALARY','LOAN');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -40,7 +41,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   CREATE TYPE claim_status AS ENUM (
     'DRAFT','SUBMITTED',
-    'MANAGER_APPROVED','CHIEF_OFFICER_APPROVED','HR_OFFICER',
+    'MANAGER_APPROVED','CHIEF_OFFICER_APPROVED','HR_OFFICER','HR_MANAGER_REVIEW',
     'FINANCE_VERIFIED','SETTLED','CLOSED','REJECTED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -50,6 +51,95 @@ DO $$ BEGIN
     'MANAGER','HR_MANAGER','AUTH_OFFICER','CHIEF_OFFICER','FINANCE'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE workflow_status AS ENUM ('DRAFT','ACTIVE','INACTIVE');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE workflow_request_type AS ENUM ('ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS position_types (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name text NOT NULL,
+  code text UNIQUE NOT NULL,
+  description text,
+  applies_to workflow_request_type[] NOT NULL DEFAULT ARRAY['ADVANCE_REQUEST']::workflow_request_type[],
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS workflows (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name text NOT NULL,
+  request_type workflow_request_type NOT NULL DEFAULT 'ADVANCE_REQUEST',
+  department text,
+  status workflow_status NOT NULL DEFAULT 'DRAFT',
+  created_by_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS workflow_steps (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  step_order integer NOT NULL,
+  position_type_id uuid REFERENCES position_types(id),
+  position_name text NOT NULL,
+  description text,
+  is_required boolean NOT NULL DEFAULT false,
+  skip_if_unassigned boolean NOT NULL DEFAULT false,
+  allow_delegation boolean NOT NULL DEFAULT false,
+  comments_required boolean NOT NULL DEFAULT false,
+  escalation_days integer NOT NULL DEFAULT 0,
+  is_final_approval boolean NOT NULL DEFAULT false,
+  is_system_step boolean NOT NULL DEFAULT false,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS workflow_rules (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  rule_name text NOT NULL,
+  condition_field text NOT NULL,
+  condition_operator text NOT NULL,
+  condition_value text NOT NULL,
+  additional_position_type_id uuid REFERENCES position_types(id),
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_rules_workflow ON workflow_rules(workflow_id);
+
+CREATE INDEX IF NOT EXISTS idx_position_types_code ON position_types(code);
+
+CREATE INDEX IF NOT EXISTS idx_workflows_request_type ON workflows(request_type);
+CREATE INDEX IF NOT EXISTS idx_workflows_department ON workflows(department);
+
+CREATE OR REPLACE FUNCTION insert_default_workflow_position_types() RETURNS void AS $$
+BEGIN
+  INSERT INTO position_types (name, code, description, applies_to)
+    VALUES
+      ('Employee', 'EMPLOYEE', 'Request Initiator', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('HOD', 'HOD', 'Department Head', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('Manager', 'MANAGER', 'Department Manager', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('EXCO Owner', 'EXCO_OWNER', 'Executive Committee Member', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('Finance', 'FINANCE', 'Finance Approval', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('Procurement', 'PROCUREMENT', 'Procurement Manager', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('HR Review', 'HR_REVIEW', 'HR Review', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('Legal Review', 'LEGAL_REVIEW', 'Legal Department', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
+      ('CEO', 'CEO', 'Chief Executive Officer', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST'])
+  ON CONFLICT (code) DO NOTHING;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT insert_default_workflow_position_types();
 
 CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -66,9 +156,20 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS sections (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name text UNIQUE NOT NULL,
+  exco_user_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS departments (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   name text UNIQUE NOT NULL,
+  section_id uuid REFERENCES sections(id),
+  manager_user_id uuid REFERENCES users(id),
+  exco_user_id uuid REFERENCES users(id),
+  active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -76,7 +177,7 @@ CREATE TABLE IF NOT EXISTS advance_requests (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   requester_id uuid NOT NULL REFERENCES users(id),
   created_by_id uuid NOT NULL REFERENCES users(id),
-  type advance_type NOT NULL DEFAULT 'TRAVEL_SUBSISTENCE',
+  type text NOT NULL DEFAULT 'TRAVEL_SUBSISTENCE',
   purpose text,
   project_number text,
   payment_method payment_method NOT NULL DEFAULT 'ECOCASH',
@@ -99,6 +200,7 @@ CREATE TABLE IF NOT EXISTS advance_lines (
   advance_request_id uuid NOT NULL REFERENCES advance_requests(id) ON DELETE CASCADE,
   line_date date NOT NULL,
   location text,
+  travel_meta jsonb NOT NULL DEFAULT '{}'::jsonb,
   meals_count integer NOT NULL DEFAULT 0,
   meal_value numeric(12,2) NOT NULL DEFAULT 0,
   lunch numeric(12,2) NOT NULL DEFAULT 0,
@@ -145,6 +247,9 @@ CREATE TABLE IF NOT EXISTS accommodation_hotels (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
   district text,
+  country text,
+  province text,
+  city text,
   address text,
   contact text,
   department text,
@@ -159,6 +264,36 @@ CREATE TABLE IF NOT EXISTS system_state (
   key text PRIMARY KEY,
   value text
 );
+
+CREATE TABLE IF NOT EXISTS travel_types (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code text UNIQUE NOT NULL,
+  name text NOT NULL,
+  location_mode text NOT NULL DEFAULT 'DISTRICT' CHECK (location_mode IN ('DISTRICT','COUNTRY_CITY')),
+  rate_kind text NOT NULL DEFAULT 'MEAL' CHECK (rate_kind IN ('MEAL','DAILY')),
+  rate_general_staff numeric(12,2) NOT NULL DEFAULT 0,
+  rate_exco numeric(12,2) NOT NULL DEFAULT 0,
+  rate_ceo numeric(12,2) NOT NULL DEFAULT 0,
+  active boolean NOT NULL DEFAULT true,
+  created_by_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS travel_locations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  travel_type_id uuid NOT NULL REFERENCES travel_types(id) ON DELETE CASCADE,
+  district text,
+  country text,
+  province text,
+  city text,
+  active boolean NOT NULL DEFAULT true,
+  created_by_id uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_travel_locations_type ON travel_locations(travel_type_id);
 
 CREATE TABLE IF NOT EXISTS clearance_claims (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),

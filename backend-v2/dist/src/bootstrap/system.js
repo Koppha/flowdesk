@@ -2,15 +2,18 @@ import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
 import { env } from "../config/env.js";
 import { ensureDepartmentGroups } from "../lib/departments.js";
+import { ensureTravelSchema } from "../lib/travel.js";
 const DEFAULT_ADMIN_EMAIL = env.ADMIN_SEED_EMAIL || "admin@example.com";
 const DEFAULT_ADMIN_PASSWORD = env.ADMIN_SEED_PASSWORD || "pass123";
 export async function bootstrapSystem() {
     await ensureUserSchema();
     await ensureDepartmentGroups();
     await ensureFeatureSchema();
+    await ensureTravelSchema();
     await ensureAdminAccount();
 }
 async function ensureUserSchema() {
+    await ensureEnumColumnValue("users", "role", "EXCO");
     await ensureEnumColumnValue("users", "role", "HR_MANAGER");
     await ensureEnumColumnValue("advance_requests", "status", "HR_OFFICER");
     await ensureEnumColumnValue("advance_requests", "status", "HR_MANAGER_REVIEW");
@@ -18,7 +21,9 @@ async function ensureUserSchema() {
     await ensureEnumColumnValue("advance_requests", "status", "CHIEF_OFFICER_REVIEW");
     await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
     await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");
+    await ensureEnumColumnValue("clearance_claims", "status", "HR_MANAGER_REVIEW");
     await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
     await query(`ALTER TABLE users ALTER COLUMN employment_type SET DEFAULT 'PERMANENT'`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed boolean NOT NULL DEFAULT false`);
@@ -255,13 +260,4 @@ async function ensureFeatureSchema() {
     // Force-clear sessions so users must login from scratch
     await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
-    // Reset user profiles so users must complete profile on next login (preserve ADMIN accounts)
-    // Keep full_name as empty string to avoid violating NOT NULL constraints
-    await query(`UPDATE users
-        SET profile_completed = false,
-            full_name = '',
-            employee_no = NULL,
-            department = NULL,
-            updated_at = now()
-      WHERE role IS NULL OR role != 'ADMIN'`);
 }

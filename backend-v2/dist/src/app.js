@@ -12,6 +12,7 @@ import { claimsRouter } from "./modules/claims/claims.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { inboxRouter } from "./modules/inbox/inbox.routes.js";
 import { overtimeRouter } from "./modules/overtime/overtime.routes.js";
+import { travelRouter } from "./modules/travel/travel.routes.js";
 export function createApp() {
     const app = express();
     app.use(cors({
@@ -29,6 +30,7 @@ export function createApp() {
     app.use("/inbox", inboxRouter);
     app.use("/attendance", attendanceRouter);
     app.use("/overtime", overtimeRouter);
+    app.use("/travel", travelRouter);
     app.use("/ai", aiRouter);
     app.use(errorHandler);
     return app;

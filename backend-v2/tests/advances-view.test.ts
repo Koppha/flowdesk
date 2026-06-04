@@ -41,6 +41,32 @@ describe("advance view access", () => {
     ).toBe(true);
   });
 
+  it("allows managers to view advances that have moved on after submission", () => {
+    expect(
+      canViewAdvance({
+        role: "MANAGER",
+        requesterId: "requester-1",
+        createdById: "creator-2",
+        userId: "manager-1",
+        status: "HR_REVIEW",
+        type: "TRAVEL_SUBSISTENCE"
+      })
+    ).toBe(true);
+  });
+
+  it("allows HR managers to view advances already at HR review", () => {
+    expect(
+      canViewAdvance({
+        role: "HR_MANAGER",
+        requesterId: "requester-1",
+        createdById: "creator-2",
+        userId: "hr-manager-1",
+        status: "HR_REVIEW",
+        type: "TRAVEL_SUBSISTENCE"
+      })
+    ).toBe(true);
+  });
+
   it("allows chief officers to view advances awaiting Chief Officer review", () => {
     expect(
       canViewAdvance({

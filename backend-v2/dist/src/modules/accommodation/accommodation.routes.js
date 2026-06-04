@@ -7,6 +7,7 @@ import { requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { isTravelAdvanceType } from "../../lib/travel.js";
 const LESOTHO_DISTRICTS = [
     "Butha-Buthe",
     "Leribe",
@@ -19,17 +20,27 @@ const LESOTHO_DISTRICTS = [
     "Mokhotlong",
     "Thaba-Tseka"
 ];
-const districtSchema = z.string().trim().refine((value) => LESOTHO_DISTRICTS.includes(value), {
-    message: "district must be one of the 10 Lesotho districts"
-});
-const HotelCreateSchema = z.object({
+const HotelBaseSchema = z.object({
     name: z.string().trim().min(1),
-    district: districtSchema,
+    district: z.string().trim().optional(),
+    country: z.string().trim().optional(),
+    province: z.string().trim().optional(),
+    city: z.string().trim().optional(),
     address: z.string().trim().optional(),
     contact: z.string().trim().optional(),
     department: z.string().trim().optional()
 });
-const HotelUpdateSchema = HotelCreateSchema.partial();
+const HotelCreateSchema = HotelBaseSchema.superRefine((data, ctx) => {
+    const hasDistrict = Boolean(String(data.district || "").trim());
+    const hasCountryCity = Boolean(String(data.country || "").trim() && String(data.city || "").trim());
+    if (!hasDistrict && !hasCountryCity) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["district"], message: "district or country/city is required" });
+    }
+    if (String(data.country || "").trim().toLowerCase() === "south africa" && !String(data.province || "").trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["province"], message: "province is required for South Africa" });
+    }
+});
+const HotelUpdateSchema = HotelBaseSchema.partial();
 const MealValueSchema = z.object({
     meal_value: z.coerce.number().nonnegative("meal value must be zero or greater")
 });
@@ -64,7 +75,7 @@ accommodationRouter.use(requireAuth);
 // Hotels CRUD - HR Managers can onboard hotels
 accommodationRouter.get("/hotels", async (_req, res, next) => {
     try {
-        const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY district NULLS LAST, name`);
+        const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY country NULLS LAST, province NULLS LAST, city NULLS LAST, district NULLS LAST, name`);
         return res.json(rows);
     }
     catch (err) {
@@ -76,7 +87,19 @@ accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "AUTH_OFFICER", "
         const body = HotelCreateSchema.safeParse(req.body);
         if (!body.success)
             throw badRequest("Invalid hotel payload", body.error.flatten());
-        const rows = await query(`INSERT INTO accommodation_hotels (name, district, address, contact, department, created_by_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [body.data.name, body.data.district, body.data.address ?? null, body.data.contact ?? null, body.data.department ?? null, req.user.userId]);
+        const rows = await query(`INSERT INTO accommodation_hotels (name, district, country, province, city, address, contact, department, created_by_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id`, [
+            body.data.name,
+            body.data.district ?? null,
+            body.data.country ?? null,
+            body.data.province ?? null,
+            body.data.city ?? null,
+            body.data.address ?? null,
+            body.data.contact ?? null,
+            body.data.department ?? null,
+            req.user.userId
+        ]);
         return res.status(201).json({ id: rows[0].id });
     }
     catch (err) {
@@ -121,6 +144,10 @@ accommodationRouter.put("/meal-value", requireRole(["HR_MANAGER", "AUTH_OFFICER"
         if (!body.success)
             throw badRequest("Invalid meal value payload", body.error.flatten());
         await setNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, Number(body.data.meal_value.toFixed(2)));
+        await query(`UPDATE travel_types
+          SET rate_general_staff=$1,
+              updated_at=now()
+        WHERE code='TRAVEL_SUBSISTENCE'`, [Number(body.data.meal_value.toFixed(2))]);
         return res.json({ meal_value: Number(body.data.meal_value.toFixed(2)) });
     }
     catch (err) {
@@ -216,7 +243,7 @@ accommodationRouter.post("/", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req
           WHERE ar.id=$1`, [parsed.data.advance_request_id]))[0];
         if (!advance)
             throw badRequest("Linked advance not found");
-        if (advance.type !== "TRAVEL_SUBSISTENCE")
+        if (!(await isTravelAdvanceType(advance.type)))
             throw badRequest("Accommodation requests can only be linked to travel advances");
         if (advance.status !== "HR_REVIEW") {
             throw badRequest("Travel advance must be in HR review stage before accommodation can be booked");

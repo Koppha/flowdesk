@@ -2,6 +2,7 @@ import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
 import { env } from "../config/env.js";
 import { ensureDepartmentGroups } from "../lib/departments.js";
+import { ensureTravelSchema } from "../lib/travel.js";
 
 const DEFAULT_ADMIN_EMAIL = env.ADMIN_SEED_EMAIL || "admin@example.com";
 const DEFAULT_ADMIN_PASSWORD = env.ADMIN_SEED_PASSWORD || "pass123";
@@ -10,10 +11,13 @@ export async function bootstrapSystem() {
   await ensureUserSchema();
   await ensureDepartmentGroups();
   await ensureFeatureSchema();
+  await ensureWorkflowSchema();
+  await ensureTravelSchema();
   await ensureAdminAccount();
 }
 
 async function ensureUserSchema() {
+  await ensureEnumColumnValue("users", "role", "EXCO");
   await ensureEnumColumnValue("users", "role", "HR_MANAGER");
   await ensureEnumColumnValue("advance_requests", "status", "HR_OFFICER");
   await ensureEnumColumnValue("advance_requests", "status", "HR_MANAGER_REVIEW");
@@ -21,7 +25,9 @@ async function ensureUserSchema() {
   await ensureEnumColumnValue("advance_requests", "status", "CHIEF_OFFICER_REVIEW");
   await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
   await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");
+  await ensureEnumColumnValue("clearance_claims", "status", "HR_MANAGER_REVIEW");
   await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
   await query(`ALTER TABLE users ALTER COLUMN employment_type SET DEFAULT 'PERMANENT'`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed boolean NOT NULL DEFAULT false`);
@@ -285,16 +291,92 @@ async function ensureFeatureSchema() {
     `INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`
   );
+}
 
-  // Reset user profiles so users must complete profile on next login (preserve ADMIN accounts)
-  // Keep full_name as empty string to avoid violating NOT NULL constraints
-  await query(
-    `UPDATE users
-        SET profile_completed = false,
-            full_name = '',
-            employee_no = NULL,
-            department = NULL,
-            updated_at = now()
-      WHERE role IS NULL OR role != 'ADMIN'`
-  );
+async function ensureWorkflowSchema() {
+  await query(`DO $$ BEGIN CREATE TYPE workflow_status AS ENUM ('DRAFT','ACTIVE','INACTIVE'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
+  await query(`DO $$ BEGIN CREATE TYPE workflow_request_type AS ENUM ('ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS position_types (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      code text UNIQUE NOT NULL,
+      description text,
+      applies_to workflow_request_type[] NOT NULL DEFAULT ARRAY['ADVANCE_REQUEST']::workflow_request_type[],
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS workflows (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      request_type workflow_request_type NOT NULL DEFAULT 'ADVANCE_REQUEST',
+      department text,
+      status workflow_status NOT NULL DEFAULT 'DRAFT',
+      created_by_id uuid REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS workflow_steps (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+      step_order integer NOT NULL,
+      position_type_id uuid REFERENCES position_types(id),
+      position_name text NOT NULL,
+      description text,
+      is_required boolean NOT NULL DEFAULT false,
+      skip_if_unassigned boolean NOT NULL DEFAULT false,
+      allow_delegation boolean NOT NULL DEFAULT false,
+      comments_required boolean NOT NULL DEFAULT false,
+      escalation_days integer NOT NULL DEFAULT 0,
+      is_final_approval boolean NOT NULL DEFAULT false,
+      is_system_step boolean NOT NULL DEFAULT false,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS workflow_rules (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+      rule_name text NOT NULL,
+      condition_field text NOT NULL,
+      condition_operator text NOT NULL,
+      condition_value text NOT NULL,
+      additional_position_type_id uuid REFERENCES position_types(id),
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await query(`CREATE INDEX IF NOT EXISTS idx_position_types_code ON position_types(code)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_workflow_rules_workflow ON workflow_rules(workflow_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_workflows_request_type ON workflows(request_type)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_workflows_department ON workflows(department)`);
+
+  await query(`
+    INSERT INTO position_types (name, code, description, applies_to)
+    VALUES
+      ('Employee', 'EMPLOYEE', 'Request Initiator', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('HOD', 'HOD', 'Department Head', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('Manager', 'MANAGER', 'Department Manager', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('EXCO Owner', 'EXCO_OWNER', 'Executive Committee Member', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('Finance', 'FINANCE', 'Finance Approval', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('Procurement', 'PROCUREMENT', 'Procurement Manager', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('HR Review', 'HR_REVIEW', 'HR Review', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('Legal Review', 'LEGAL_REVIEW', 'Legal Department', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[]),
+      ('CEO', 'CEO', 'Chief Executive Officer', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']::workflow_request_type[])
+    ON CONFLICT (code) DO NOTHING;
+  `);
 }

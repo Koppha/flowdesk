@@ -8,6 +8,7 @@ import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
+import { isTravelAdvanceType } from "../../lib/travel.js";
 
 export const claimsRouter = Router();
 claimsRouter.use(requireAuth);
@@ -27,11 +28,18 @@ type ClaimStatus =
   | "MANAGER_APPROVED"
   | "CHIEF_OFFICER_APPROVED"
   | "HR_OFFICER"
+  | "HR_MANAGER_REVIEW"
   | "FINANCE_VERIFIED"
   | "SETTLED"
   | "REJECTED";
 
-type ClaimAction = "MANAGER_APPROVE" | "CHIEF_APPROVE" | "AUTH_OFFICER_APPROVE" | "FINANCE_VERIFY" | "SETTLE";
+type ClaimAction =
+  | "MANAGER_APPROVE"
+  | "CHIEF_APPROVE"
+  | "AUTH_OFFICER_APPROVE"
+  | "HR_MANAGER_APPROVE"
+  | "FINANCE_VERIFY"
+  | "SETTLE";
 
 export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
   const map: Record<ClaimStatus, Partial<Record<ClaimAction, ClaimStatus>>> = {
@@ -39,7 +47,8 @@ export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
     SUBMITTED: { MANAGER_APPROVE: "MANAGER_APPROVED" },
     MANAGER_APPROVED: { CHIEF_APPROVE: "CHIEF_OFFICER_APPROVED" },
     CHIEF_OFFICER_APPROVED: { AUTH_OFFICER_APPROVE: "HR_OFFICER" },
-    HR_OFFICER: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
+    HR_OFFICER: { HR_MANAGER_APPROVE: "HR_MANAGER_REVIEW" },
+    HR_MANAGER_REVIEW: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
     FINANCE_VERIFIED: { SETTLE: "SETTLED" },
     SETTLED: {},
     REJECTED: {}
@@ -76,7 +85,7 @@ async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string) {
 
   if (!adv) throw badRequest("Linked advance not found");
   if (adv.requester_id !== claimantId) throw forbidden("You can only clear your own advance");
-  if (adv.type !== "TRAVEL_SUBSISTENCE") throw badRequest("Only travel advances can be cleared here");
+  if (!(await isTravelAdvanceType(adv.type))) throw badRequest("Only travel advances can be cleared here");
   if (adv.status !== "PAID") throw badRequest("Linked advance must be finance-approved before clearance");
   return { approvedTotal: Number(adv.approved_total) };
 }
@@ -116,13 +125,19 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
   return { claimTotal };
 }
 
-function canViewClaim(args: { role: string; claimantId: string; userId: string; status: ClaimStatus }) {
+export function canViewClaim(args: { role: string; claimantId: string; userId: string; status: ClaimStatus }) {
   if (args.role === "ADMIN") return true;
   if (args.claimantId === args.userId) return true;
-  if (args.role === "MANAGER" && args.status === "SUBMITTED") return true;
-  if (args.role === "CHIEF_OFFICER" && args.status === "MANAGER_APPROVED") return true;
-  if (args.role === "AUTH_OFFICER" && ["CHIEF_OFFICER_APPROVED", "HR_OFFICER"].includes(args.status)) return true;
-  if (args.role === "FINANCE" && ["HR_OFFICER", "FINANCE_VERIFIED"].includes(args.status)) return true;
+
+  const roleAllowedStatuses: Record<string, ClaimStatus[]> = {
+    MANAGER: ["SUBMITTED", "MANAGER_APPROVED", "CHIEF_OFFICER_APPROVED", "HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"],
+    CHIEF_OFFICER: ["MANAGER_APPROVED", "CHIEF_OFFICER_APPROVED", "HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"],
+    AUTH_OFFICER: ["CHIEF_OFFICER_APPROVED", "HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"],
+    HR_MANAGER: ["HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"],
+    FINANCE: ["HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"]
+  };
+
+  if (roleAllowedStatuses[args.role]?.includes(args.status)) return true;
   return false;
 }
 
@@ -519,6 +534,29 @@ claimsRouter.post("/:id/auth-officer-approve", requireRole(["AUTH_OFFICER", "ADM
     const claim = await getClaimById(req.params.id);
     if (!claim) throw notFound();
     const status = nextClaimStatus(claim.status, "AUTH_OFFICER_APPROVE");
+    await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyClaimTask({
+        claimId: claim.id,
+        status,
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total)
+      });
+    }
+    return res.json({ ok: true, status });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+claimsRouter.post("/:id/hr-manager-approve", requireRole(["HR_MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+    const status = nextClaimStatus(claim.status, "HR_MANAGER_APPROVE");
     await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
     const notificationContext = await getClaimNotificationContext(claim.id);
     if (notificationContext) {
