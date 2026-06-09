@@ -29,8 +29,7 @@ const HotelBaseSchema = z.object({
   province: z.string().trim().optional(),
   city: z.string().trim().optional(),
   address: z.string().trim().optional(),
-  contact: z.string().trim().optional(),
-  department: z.string().trim().optional()
+  contact: z.string().trim().optional()
 });
 
 const HotelCreateSchema = HotelBaseSchema.superRefine((data, ctx) => {
@@ -99,8 +98,8 @@ accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "AUTH_OFFICER", "
     const body = HotelCreateSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
     const rows = await query<{ id: string }>(
-      `INSERT INTO accommodation_hotels (name, district, country, province, city, address, contact, department, created_by_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO accommodation_hotels (name, district, country, province, city, address, contact, created_by_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING id`,
       [
         body.data.name,
@@ -110,7 +109,6 @@ accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "AUTH_OFFICER", "
         body.data.city ?? null,
         body.data.address ?? null,
         body.data.contact ?? null,
-        body.data.department ?? null,
         req.user!.userId
       ]
     );
@@ -140,6 +138,19 @@ accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER"
   }
 });
 
+accommodationRouter.delete("/hotels/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query<{ id: string }>(
+      `DELETE FROM accommodation_hotels WHERE id=$1 RETURNING id`,
+      [req.params.id]
+    );
+    if (!rows[0]) throw notFound("Hotel not found");
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 accommodationRouter.get("/meal-value", async (_req: AuthedRequest, res, next) => {
   try {
     const mealValue = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, 0);
@@ -154,13 +165,6 @@ accommodationRouter.put("/meal-value", requireRole(["HR_MANAGER", "AUTH_OFFICER"
     const body = MealValueSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid meal value payload", body.error.flatten());
     await setNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, Number(body.data.meal_value.toFixed(2)));
-    await query(
-      `UPDATE travel_types
-          SET rate_general_staff=$1,
-              updated_at=now()
-        WHERE code='TRAVEL_SUBSISTENCE'`,
-      [Number(body.data.meal_value.toFixed(2))]
-    );
     return res.json({ meal_value: Number(body.data.meal_value.toFixed(2)) });
   } catch (err) {
     return next(err);

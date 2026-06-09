@@ -13,6 +13,9 @@ import { healthRouter } from "./modules/health/health.routes.js";
 import { inboxRouter } from "./modules/inbox/inbox.routes.js";
 import { overtimeRouter } from "./modules/overtime/overtime.routes.js";
 import { travelRouter } from "./modules/travel/travel.routes.js";
+import { workflowsRouter } from "./modules/workflows/workflows.routes.js";
+import { reportingLinesRouter } from "./modules/reporting-lines/reporting-lines.routes.js";
+import { requestTypesRouter } from "./modules/request-types/request-types.routes.js";
 export function createApp() {
     const app = express();
     app.use(cors({
@@ -31,6 +34,9 @@ export function createApp() {
     app.use("/attendance", attendanceRouter);
     app.use("/overtime", overtimeRouter);
     app.use("/travel", travelRouter);
+    app.use("/workflows", workflowsRouter);
+    app.use("/reporting-lines", reportingLinesRouter);
+    app.use("/request-types", requestTypesRouter);
     app.use("/ai", aiRouter);
     app.use(errorHandler);
     return app;

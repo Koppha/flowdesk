@@ -6,6 +6,7 @@ import {
   Edit3,
   Filter,
   MoreVertical,
+  Network,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -13,6 +14,7 @@ import {
   TriangleAlert,
   UserPlus,
   UserRound,
+  Users,
   UsersRound,
   X
 } from "lucide-react";
@@ -31,6 +33,11 @@ type DepartmentAssignment = {
   name: string;
   section_id: string | null;
   section_name: string | null;
+  division_id: string | null;
+  division_name: string | null;
+  hod_user_id: string | null;
+  hod_name: string | null;
+  hod_email: string | null;
   manager_user_id: string | null;
   manager_name: string | null;
   manager_email: string | null;
@@ -50,7 +57,7 @@ type PersonSummary = {
   title: string;
 };
 
-type AssignmentStatus = "complete" | "no-manager" | "no-exco" | "unassigned" | "inactive";
+type AssignmentStatus = "complete" | "no-hod" | "no-manager" | "no-exco" | "unassigned" | "inactive";
 
 const PAGE_SIZE = 8;
 
@@ -90,13 +97,18 @@ function getManager(department: DepartmentAssignment, users: LeadershipUser[]) {
   return findPerson(users, department.manager_user_id, department.manager_name, department.manager_email, "Manager");
 }
 
+function getHod(department: DepartmentAssignment, users: LeadershipUser[]) {
+  return findPerson(users, department.hod_user_id, department.hod_name, department.hod_email, "HOD");
+}
+
 function getExco(department: DepartmentAssignment, users: LeadershipUser[]) {
   return findPerson(users, department.exco_user_id, department.exco_name, department.exco_email, "Chief Officer");
 }
 
 function statusKey(department: DepartmentAssignment): AssignmentStatus {
   if (!department.active) return "inactive";
-  if (!department.manager_user_id && !department.exco_user_id) return "unassigned";
+  if (!department.hod_user_id && !department.manager_user_id && !department.exco_user_id) return "unassigned";
+  if (!department.hod_user_id) return "no-hod";
   if (!department.manager_user_id) return "no-manager";
   if (!department.exco_user_id) return "no-exco";
   return "complete";
@@ -106,6 +118,8 @@ function statusLabel(status: AssignmentStatus) {
   switch (status) {
     case "complete":
       return "Complete";
+    case "no-hod":
+      return "No HOD";
     case "no-manager":
       return "No Manager";
     case "no-exco":
@@ -146,18 +160,21 @@ function lastUpdatedLabel() {
 
 export default function LeadershipAssignments() {
   const [departments, setDepartments] = useState<DepartmentAssignment[]>([]);
+  const [hods, setHods] = useState<LeadershipUser[]>([]);
   const [managers, setManagers] = useState<LeadershipUser[]>([]);
   const [excoUsers, setExcoUsers] = useState<LeadershipUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [divisionFilter, setDivisionFilter] = useState("ALL");
   const [sectionFilter, setSectionFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [draftDepartmentId, setDraftDepartmentId] = useState("");
+  const [draftHodId, setDraftHodId] = useState("");
   const [draftManagerId, setDraftManagerId] = useState("");
   const [draftExcoId, setDraftExcoId] = useState("");
 
@@ -171,6 +188,7 @@ export default function LeadershipAssignments() {
       ]);
       const nextDepartments = Array.isArray(departmentRows) ? departmentRows : [];
       setDepartments(nextDepartments);
+      setHods(Array.isArray(leaders?.hods) ? leaders.hods : Array.isArray(leaders?.managers) ? leaders.managers : []);
       setManagers(Array.isArray(leaders?.managers) ? leaders.managers : []);
       setExcoUsers(Array.isArray(leaders?.exco) ? leaders.exco : []);
       setSelectedId((current) => current || nextDepartments[0]?.id || null);
@@ -185,17 +203,25 @@ export default function LeadershipAssignments() {
     void load();
   }, []);
 
-  const sections = useMemo(() => {
-    return Array.from(new Set(departments.map((department) => department.section_name || "Unassigned Section"))).sort((a, b) => a.localeCompare(b));
+  const divisions = useMemo(() => {
+    return Array.from(new Set(departments.map((d) => d.division_name || "No Division"))).sort((a, b) => a.localeCompare(b));
   }, [departments]);
+
+  const sections = useMemo(() => {
+    const source = divisionFilter === "ALL" ? departments : departments.filter(d => (d.division_name || "No Division") === divisionFilter);
+    return Array.from(new Set(source.map((department) => department.section_name || "Unassigned Section"))).sort((a, b) => a.localeCompare(b));
+  }, [departments, divisionFilter]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return departments.filter((department) => {
       const manager = getManager(department, managers);
+      const hod = getHod(department, hods);
       const exco = getExco(department, excoUsers);
       const section = department.section_name || "Unassigned Section";
+      const division = department.division_name || "No Division";
       const status = statusKey(department);
+      if (divisionFilter !== "ALL" && division !== divisionFilter) return false;
       if (sectionFilter !== "ALL" && section !== sectionFilter) return false;
       if (statusFilter === "INCOMPLETE" && status === "complete") return false;
       if (statusFilter !== "ALL" && statusFilter !== "INCOMPLETE" && status !== statusFilter) return false;
@@ -203,17 +229,19 @@ export default function LeadershipAssignments() {
       return [
         department.name,
         section,
+        hod?.name,
+        hod?.email,
         manager?.name,
         manager?.email,
         exco?.name,
         exco?.email
       ].some((value) => String(value || "").toLowerCase().includes(query));
     });
-  }, [departments, excoUsers, managers, search, sectionFilter, statusFilter]);
+  }, [departments, divisionFilter, excoUsers, hods, managers, search, sectionFilter, statusFilter]);
 
   useEffect(() => {
     setPage(1);
-  }, [search, sectionFilter, statusFilter]);
+  }, [search, divisionFilter, sectionFilter, statusFilter]);
 
   useEffect(() => {
     if (!filtered.length) {
@@ -229,12 +257,14 @@ export default function LeadershipAssignments() {
   const boundedPage = Math.min(page, totalPages);
   const pagedDepartments = filtered.slice((boundedPage - 1) * PAGE_SIZE, boundedPage * PAGE_SIZE);
   const selectedDepartment = departments.find((department) => department.id === selectedId) || filtered[0] || null;
+  const selectedHod = selectedDepartment ? getHod(selectedDepartment, hods) : null;
   const selectedManager = selectedDepartment ? getManager(selectedDepartment, managers) : null;
   const selectedExco = selectedDepartment ? getExco(selectedDepartment, excoUsers) : null;
 
   const stats = useMemo(() => {
     return {
       total: departments.length,
+      withHod: departments.filter((department) => Boolean(department.hod_user_id)).length,
       withManager: departments.filter((department) => Boolean(department.manager_user_id)).length,
       withExco: departments.filter((department) => Boolean(department.exco_user_id)).length,
       unassigned: departments.filter((department) => statusKey(department) !== "complete").length
@@ -244,6 +274,7 @@ export default function LeadershipAssignments() {
   function openAssignment(department?: DepartmentAssignment | null) {
     const target = department || selectedDepartment || departments[0] || null;
     setDraftDepartmentId(target?.id || "");
+    setDraftHodId(target?.hod_user_id || "");
     setDraftManagerId(target?.manager_user_id || "");
     setDraftExcoId(target?.exco_user_id || "");
     setModalOpen(true);
@@ -259,6 +290,7 @@ export default function LeadershipAssignments() {
     try {
       await api.updateDepartment(department.name, {
         name: department.name,
+        hod_user_id: draftHodId || null,
         manager_user_id: draftManagerId || null,
         exco_user_id: draftExcoId || null
       });
@@ -273,16 +305,17 @@ export default function LeadershipAssignments() {
   }
 
   return (
-    <div className="leadership-page">
-      <div className="leadership-heading">
-        <div>
-          <h2>Leadership Assignments</h2>
-          <p>Assign Managers and EXCO Owners to departments. These assignments drive the approval workflow.</p>
+    <div className="leadership-page ep-page">
+      <div className="ep-breadcrumb">
+        <span>Administration</span><ChevronRight size={13} /><span>Organizational Structure</span><ChevronRight size={13} /><span className="ep-breadcrumb-active">Leadership Assignments</span>
+      </div>
+      <div className="ep-header">
+        <div className="ep-header-text">
+          <h1 className="ep-title">Leadership Assignments</h1>
+          <p className="ep-subtitle">Assign HODs, Managers, and EXCO Owners to departments. These assignments drive the approval workflow.</p>
         </div>
-        <div className="leadership-breadcrumb">
-          <span>Administration</span>
-          <span>Organizational Structure</span>
-          <strong>Leadership Assignments</strong>
+        <div className="ep-actions">
+          <button className="ep-btn-outline" type="button" onClick={() => void load()}><RefreshCw size={14} />Refresh</button>
         </div>
       </div>
 
@@ -290,21 +323,24 @@ export default function LeadershipAssignments() {
 
       <div className="leadership-stat-row">
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("ALL")}>
-          <span className="leadership-stat-icon blue"><UsersRound size={22} aria-hidden /></span>
-          <span><strong>{stats.total}</strong><small>Total Departments</small></span>
+          <span className="leadership-stat-icon"><UsersRound size={26} aria-hidden /></span>
+          <div><strong>{stats.total}</strong><small>Total Departments</small></div>
         </button>
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("ALL")}>
-          <span className="leadership-stat-icon green"><UserRound size={22} aria-hidden /></span>
-          <span><strong>{stats.withManager}</strong><small>Departments with Manager</small></span>
+          <span className="leadership-stat-icon"><UserRound size={26} aria-hidden /></span>
+          <div><strong>{stats.withHod}</strong><small>With HOD</small></div>
         </button>
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("ALL")}>
-          <span className="leadership-stat-icon violet"><UserRound size={22} aria-hidden /></span>
-          <span><strong>{stats.withExco}</strong><small>Departments with EXCO Owner</small></span>
+          <span className="leadership-stat-icon"><Users size={26} aria-hidden /></span>
+          <div><strong>{stats.withManager}</strong><small>With Manager</small></div>
+        </button>
+        <button className="leadership-stat" type="button" onClick={() => setStatusFilter("ALL")}>
+          <span className="leadership-stat-icon"><Network size={26} aria-hidden /></span>
+          <div><strong>{stats.withExco}</strong><small>With EXCO Owner</small></div>
         </button>
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("INCOMPLETE")}>
-          <span className="leadership-stat-icon amber"><TriangleAlert size={22} aria-hidden /></span>
-          <span><strong>{stats.unassigned}</strong><small>Unassigned Departments</small></span>
-          <em>View</em>
+          <span className="leadership-stat-icon"><TriangleAlert size={26} aria-hidden /></span>
+          <div><strong>{stats.unassigned}</strong><small>Unassigned</small></div>
         </button>
       </div>
 
@@ -313,6 +349,12 @@ export default function LeadershipAssignments() {
           <Search size={18} aria-hidden />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search department..." />
         </div>
+        {divisions.length > 1 && (
+          <select value={divisionFilter} onChange={(event) => { setDivisionFilter(event.target.value); setSectionFilter("ALL"); }}>
+            <option value="ALL">All Divisions</option>
+            {divisions.map((div) => <option key={div} value={div}>{div}</option>)}
+          </select>
+        )}
         <select value={sectionFilter} onChange={(event) => setSectionFilter(event.target.value)}>
           <option value="ALL">All Sections</option>
           {sections.map((section) => <option key={section} value={section}>{section}</option>)}
@@ -321,6 +363,7 @@ export default function LeadershipAssignments() {
           <option value="ALL">All Statuses</option>
           <option value="complete">Complete</option>
           <option value="INCOMPLETE">Needs Assignment</option>
+          <option value="no-hod">No HOD</option>
           <option value="no-manager">No Manager</option>
           <option value="no-exco">No EXCO Owner</option>
           <option value="unassigned">Unassigned</option>
@@ -342,30 +385,45 @@ export default function LeadershipAssignments() {
             <table className="leadership-table">
               <thead>
                 <tr>
-                  <th>Department</th>
-                  <th>Section</th>
-                  <th>Manager</th>
-                  <th>EXCO Owner</th>
+	                  <th>Department</th>
+	                  <th>Division › Section</th>
+	                  <th>HOD</th>
+	                  <th>Manager</th>
+	                  <th>Division EXCO</th>
+	                  <th>Section Leader</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && !departments.length ? (
-                  <tr><td colSpan={6} className="leadership-empty">Loading assignments...</td></tr>
-                ) : pagedDepartments.length === 0 ? (
-                  <tr><td colSpan={6} className="leadership-empty">No departments match the selected filters.</td></tr>
+	                  <tr><td colSpan={8} className="leadership-empty">Loading assignments...</td></tr>
+	                ) : pagedDepartments.length === 0 ? (
+	                  <tr><td colSpan={8} className="leadership-empty">No departments match the selected filters.</td></tr>
                 ) : (
                   pagedDepartments.map((department) => {
-                    const manager = getManager(department, managers);
-                    const exco = getExco(department, excoUsers);
+	                    const manager = getManager(department, managers);
+	                    const hod = getHod(department, hods);
+	                    const exco = getExco(department, excoUsers);
                     const status = statusKey(department);
                     const selected = department.id === selectedDepartment?.id;
                     return (
                       <tr key={department.id} className={selected ? "is-selected" : ""} onClick={() => setSelectedId(department.id)}>
-                        <td><strong>{department.name}</strong></td>
-                        <td>{department.section_name || "Unassigned Section"}</td>
-                        <td>
+	                        <td><strong>{department.name}</strong></td>
+	                        <td>{[department.division_name, department.section_name].filter(Boolean).join(" › ") || "Unassigned"}</td>
+	                        <td>
+	                          {hod ? (
+	                            <div className="leadership-person">
+	                              <span className="leadership-avatar">{initials(hod.name)}</span>
+	                              <span><strong>{hod.name}</strong><small>{hod.title}</small></span>
+	                            </div>
+	                          ) : (
+	                            <button className="leadership-inline-assign" type="button" onClick={(event) => { event.stopPropagation(); openAssignment(department); }}>
+	                              <span><Plus size={16} aria-hidden /></span> Assign HOD
+	                            </button>
+	                          )}
+	                        </td>
+	                        <td>
                           {manager ? (
                             <div className="leadership-person">
                               <span className="leadership-avatar">{initials(manager.name)}</span>
@@ -385,8 +443,20 @@ export default function LeadershipAssignments() {
                             </div>
                           ) : (
                             <button className="leadership-inline-assign" type="button" onClick={(event) => { event.stopPropagation(); openAssignment(department); }}>
-                              <span><Plus size={16} aria-hidden /></span> Assign EXCO Owner
+                              <span><Plus size={16} aria-hidden /></span> Assign EXCO
                             </button>
+                          )}
+                        </td>
+                        <td>
+                          {department.section_exco_name ? (
+                            <div className="leadership-person">
+                              <span className="leadership-avatar">{initials(department.section_exco_name)}</span>
+                              <span><strong>{department.section_exco_name}</strong><small>{department.section_name ?? "Section"}</small></span>
+                            </div>
+                          ) : (
+                            <span style={{ color: "var(--muted)", fontSize: 12 }}>
+                              {department.section_name ? `${department.section_name} —` : "—"}
+                            </span>
                           )}
                         </td>
                         <td><span className={statusClass(status)}>{statusLabel(status)}</span></td>
@@ -433,7 +503,9 @@ export default function LeadershipAssignments() {
                 <span className="leadership-stat-icon green"><UsersRound size={22} aria-hidden /></span>
                 <div>
                   <h4>{selectedDepartment.name}</h4>
-                  <p>{selectedDepartment.section_name || "Unassigned Section"}</p>
+                  <p>
+                    {[selectedDepartment.division_name, selectedDepartment.section_name].filter(Boolean).join(" › ") || "Unassigned"}
+                  </p>
                 </div>
                 <span className="status-pill status-pill-success">{selectedDepartment.active ? "Active" : "Inactive"}</span>
               </div>
@@ -454,6 +526,16 @@ export default function LeadershipAssignments() {
                 </div>
                 <div className="leadership-assignment-list">
                   <div>
+                    <span>HOD</span>
+                    {selectedHod ? (
+                      <div className="leadership-person">
+                        <span className="leadership-avatar">{initials(selectedHod.name)}</span>
+                        <span><strong>{selectedHod.name}</strong><small>{selectedHod.title}</small></span>
+                        <em>Active</em>
+                      </div>
+                    ) : <p>Not Assigned</p>}
+                  </div>
+                  <div>
                     <span>Manager</span>
                     {selectedManager ? (
                       <div className="leadership-person">
@@ -464,7 +546,7 @@ export default function LeadershipAssignments() {
                     ) : <p>Not Assigned</p>}
                   </div>
                   <div>
-                    <span>EXCO Owner</span>
+                    <span>Division EXCO</span>
                     {selectedExco ? (
                       <div className="leadership-person">
                         <span className="leadership-avatar dark">{initials(selectedExco.name)}</span>
@@ -473,6 +555,18 @@ export default function LeadershipAssignments() {
                       </div>
                     ) : <p>Not Assigned</p>}
                   </div>
+                  {selectedDepartment?.section_name && (
+                    <div>
+                      <span>Section Leader <small style={{ fontWeight: 400 }}>({selectedDepartment.section_name})</small></span>
+                      {selectedDepartment.section_exco_name ? (
+                        <div className="leadership-person">
+                          <span className="leadership-avatar">{initials(selectedDepartment.section_exco_name)}</span>
+                          <span><strong>{selectedDepartment.section_exco_name}</strong><small>{selectedDepartment.section_exco_email}</small></span>
+                          <em>Active</em>
+                        </div>
+                      ) : <p>Not Assigned</p>}
+                    </div>
+                  )}
                   <small>Last Updated<br />{lastUpdatedLabel()} by System Administrator</small>
                 </div>
               </div>
@@ -492,15 +586,32 @@ export default function LeadershipAssignments() {
             </div>
             <div className="leadership-modal-grid">
               <label>
-                <span>Department</span>
+                <span>Department <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>(grouped by Division)</span></span>
                 <select value={draftDepartmentId} onChange={(event) => {
-                  const department = departments.find((item) => item.id === event.target.value);
-                  setDraftDepartmentId(event.target.value);
-                  setDraftManagerId(department?.manager_user_id || "");
+	                  const department = departments.find((item) => item.id === event.target.value);
+	                  setDraftDepartmentId(event.target.value);
+	                  setDraftHodId(department?.hod_user_id || "");
+	                  setDraftManagerId(department?.manager_user_id || "");
                   setDraftExcoId(department?.exco_user_id || "");
                 }}>
                   <option value="">Select department</option>
-                  {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+                  {Array.from(
+                    departments.reduce((map, d) => {
+                      const key = d.division_name ?? "Unassigned Division";
+                      return map.set(key, [...(map.get(key) ?? []), d]);
+                    }, new Map<string, typeof departments>())
+                  ).map(([divName, depts]) => (
+                    <optgroup key={divName} label={`── ${divName}`}>
+                      {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>HOD</span>
+                <select value={draftHodId} onChange={(event) => setDraftHodId(event.target.value)}>
+                  <option value="">No HOD</option>
+                  {(hods.length ? hods : managers).map((user) => <option key={user.id} value={user.id}>{user.full_name || user.email}</option>)}
                 </select>
               </label>
               <label>

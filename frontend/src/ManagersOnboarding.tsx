@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { CheckCircle2, Edit3, RefreshCw, Search, Trash2, UserPlus, UserRoundCheck, X } from "lucide-react";
+import { confirmAction } from "./alerts";
+import { useStaffDirectory } from "./useStaffDirectory";
+import { CheckCircle2, ChevronRight, Edit3, Layers, Plus, RefreshCw, Search, Trash2, UserCheck, UserPlus, UserRoundCheck, X } from "lucide-react";
+import UserPicker, { type PickableUser } from "./UserPicker";
+import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
+
+const EMPTY_ORG: OrgSelection = {
+  divisionId: null, divisionName: null,
+  department: null, departmentId: null,
+  sectionId: null, sectionName: null,
+  teamId: null, teamName: null,
+};
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 type UserRow = {
   id: string;
@@ -9,6 +22,12 @@ type UserRow = {
   employee_no?: string | null;
   title?: string | null;
   department?: string | null;
+  division_id?: string | null;
+  division_name?: string | null;
+  section_id?: string | null;
+  section_name?: string | null;
+  team_id?: string | null;
+  team_name?: string | null;
   role?: string | null;
   is_active?: boolean;
 };
@@ -16,8 +35,15 @@ type UserRow = {
 type DepartmentRow = {
   id?: string;
   name: string;
+  division_id?: string | null;
+  division_name?: string | null;
   manager_user_id?: string | null;
+  hod_user_id?: string | null;
 };
+
+type OrgDivision = { id: string; name: string; active: boolean };
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function splitName(value: string | null | undefined) {
   const parts = String(value || "").trim().split(/\s+/).filter(Boolean);
@@ -25,125 +51,340 @@ function splitName(value: string | null | undefined) {
 }
 
 function initials(value: string | null | undefined) {
-  return String(value || "Manager")
+  return String(value || "M")
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() || "")
+    .map((p) => p[0]?.toUpperCase() || "")
     .join("") || "M";
 }
 
-function resetForm(setters: Array<(value: string) => void>) {
-  setters.forEach((setter) => setter(""));
+function resetForm(setters: Array<(v: string) => void>) {
+  setters.forEach((s) => s(""));
 }
 
+const ROLE_LABEL: Record<string, string> = {
+  HOD:     "Head of Dept",
+  MANAGER: "Manager",
+};
+
+const ROLE_COLOR: Record<string, string> = {
+  HOD:     "#1d4ed8",
+  MANAGER: "#15803d",
+};
+
+function RoleBadge({ role }: { role: string | null | undefined }) {
+  const label = ROLE_LABEL[role ?? ""] ?? role ?? "";
+  const color = ROLE_COLOR[role ?? ""] ?? "#6b7280";
+  return (
+    <span style={{
+      display: "inline-block",
+      padding: "2px 8px",
+      borderRadius: 99,
+      fontSize: 11,
+      fontWeight: 600,
+      background: `${color}18`,
+      color,
+      border: `1px solid ${color}44`,
+    }}>
+      {label}
+    </span>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export default function ManagersOnboarding() {
+  const { staff: users, loading: staffLoading, reload: reloadStaff } = useStaffDirectory();
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [departments, setDepartments] = useState<string[]>([]);
   const [departmentRows, setDepartmentRows] = useState<DepartmentRow[]>([]);
+  const [divisions, setDivisions] = useState<OrgDivision[]>([]);
   const [search, setSearch] = useState("");
-  const [showForm, setShowForm] = useState(false);
+  const [divisionFilter, setDivisionFilter] = useState("ALL");
+  const [roleFilter, setRoleFilter] = useState("ALL");
+  const [statusView, setStatusView] = useState<"active" | "inactive">("active");
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  // Add-form state
   const [newEmail, setNewEmail] = useState("");
   const [newFirstName, setNewFirstName] = useState("");
   const [newSurname, setNewSurname] = useState("");
   const [newEmployeeNo, setNewEmployeeNo] = useState("");
   const [newDepartment, setNewDepartment] = useState("");
   const [newTitle, setNewTitle] = useState("Department Manager");
+  const [newRole, setNewRole] = useState<"HOD" | "MANAGER">("MANAGER");
   const [newIsActive, setNewIsActive] = useState(true);
   const [assignAsDepartmentManager, setAssignAsDepartmentManager] = useState(true);
+  const [newOrg, setNewOrg] = useState<OrgSelection>(EMPTY_ORG);
+
+  // Edit state
   const [editingUser, setEditingUser] = useState<UserRow | null>(null);
   const [editingFirstName, setEditingFirstName] = useState("");
   const [editingSurname, setEditingSurname] = useState("");
-  const [editingSetAsDepartmentManager, setEditingSetAsDepartmentManager] = useState(false);
+  const [editingSetAsDeptManager, setEditingSetAsDeptManager] = useState(false);
+  const [editingOrg, setEditingOrg] = useState<OrgSelection>(EMPTY_ORG);
+  const [editingTypeId, setEditingTypeId] = useState("");
+  const [editingRole, setEditingRole] = useState<"HOD" | "MANAGER">("MANAGER");
+
+  // Assign existing user state
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assignRole, setAssignRole] = useState<"HOD" | "MANAGER">("MANAGER");
+  const [assignDept, setAssignDept] = useState("");
+  const [assignOrg, setAssignOrg] = useState<OrgSelection>(EMPTY_ORG);
+  const [assigning, setAssigning] = useState(false);
+
+  // Manager types
+  type MgrType = { id: string; name: string; role: string; description: string | null; active: boolean };
+  const [activeTab, setActiveTab] = useState<"MANAGERS" | "TYPES">("MANAGERS");
+  const [managerTypes, setManagerTypes] = useState<MgrType[]>([]);
+  const [selectedNewTypeId, setSelectedNewTypeId] = useState("");
+  const [selectedAssignTypeId, setSelectedAssignTypeId] = useState("");
+  // Type add/edit
+  const [showAddTypeModal, setShowAddTypeModal] = useState(false);
+  const [editingType, setEditingType] = useState<MgrType | null>(null);
+  const [typeFormName, setTypeFormName] = useState("");
+  const [typeFormRole, setTypeFormRole] = useState<"MANAGER" | "HOD">("MANAGER");
+  const [typeFormDesc, setTypeFormDesc] = useState("");
+  const [typeFormActive, setTypeFormActive] = useState(true);
+  const [typeSaving, setTypeSaving] = useState(false);
+
+  // ─── Data loading ─────────────────────────────────────────────────────────
 
   async function load() {
     setLoading(true);
     try {
-      const [allUsers, departmentNames, departmentAssignmentRows] = await Promise.all([
-        api.adminUsers(),
-        api.departments(),
-        api.departmentsWithSections()
+      const [departmentAssignmentRows, divData, typeData] = await Promise.all([
+        api.departmentsWithSections(),
+        api.divisions().catch(() => []),
+        api.managerTypes().catch(() => [])
       ]);
-      setUsers(Array.isArray(allUsers) ? allUsers : []);
-      setDepartments(Array.isArray(departmentNames) ? departmentNames : []);
       setDepartmentRows(Array.isArray(departmentAssignmentRows) ? departmentAssignmentRows : []);
+      setDivisions(Array.isArray(divData) ? divData : []);
+      const types = Array.isArray(typeData) ? typeData : [];
+      setManagerTypes(types);
+      if (types.length > 0 && !selectedNewTypeId) setSelectedNewTypeId(types[0].id);
+      if (types.length > 0 && !selectedAssignTypeId) setSelectedAssignTypeId(types[0].id);
     } catch (error: any) {
-      alert("Error loading managers: " + error.message);
+      alert("Error loading data: " + error.message);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    void load();
-  }, []);
+  useEffect(() => { void load(); }, []);
 
   useEffect(() => {
     if (!editingUser) {
       setEditingFirstName("");
       setEditingSurname("");
-      setEditingSetAsDepartmentManager(false);
+      setEditingSetAsDeptManager(false);
+      setEditingOrg(EMPTY_ORG);
+      setEditingTypeId("");
+      setEditingRole("MANAGER");
       return;
     }
     const parts = splitName(editingUser.full_name);
     setEditingFirstName(parts.first);
     setEditingSurname(parts.surname);
-    setEditingSetAsDepartmentManager(
-      Boolean(editingUser.department && departmentRows.some((department) => department.name === editingUser.department && department.manager_user_id === editingUser.id))
+    setEditingOrg(orgSelectionFromUser(editingUser));
+    setEditingSetAsDeptManager(
+      Boolean(editingUser.department && departmentRows.some(
+        (d) => d.name === editingUser.department && d.manager_user_id === editingUser.id
+      ))
     );
-  }, [departmentRows, editingUser]);
+    const role = (editingUser.role === "HOD" ? "HOD" : "MANAGER") as "HOD" | "MANAGER";
+    setEditingRole(role);
+    const matchingType = managerTypes.find((t) => t.name === editingUser.title && t.role === role);
+    setEditingTypeId(matchingType?.id ?? "");
+    // Only re-initialize when switching to a different user — re-running on every
+    // keystroke (editingUser mutates on each field change) would wipe out the
+    // org placement the admin just picked in OrgPicker.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingUser?.id]);
 
-  const managerRows = useMemo(() => {
+  // ─── Derived data ─────────────────────────────────────────────────────────
+
+  const managers = useMemo(
+    () => users.filter((u) => u.role === "MANAGER" || u.role === "HOD"),
+    [users]
+  );
+
+  const managerStatusCounts = useMemo(() => ({
+    active:   managers.filter((u) => u.is_active !== false).length,
+    inactive: managers.filter((u) => u.is_active === false).length,
+  }), [managers]);
+
+  const managementRows = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return users
-      .filter((user) => String(user.role || "").toUpperCase() === "MANAGER")
-      .filter((user) => {
+    return managers
+      .filter((u) => (statusView === "inactive" ? u.is_active === false : u.is_active !== false))
+      .filter((u) => {
+        if (divisionFilter !== "ALL" && (u.division_name ?? "Unassigned") !== divisionFilter) return false;
+        if (roleFilter !== "ALL" && u.role !== roleFilter) return false;
         if (!needle) return true;
-        return [user.full_name, user.email, user.employee_no, user.title, user.department]
-          .some((value) => String(value || "").toLowerCase().includes(needle));
+        return [u.full_name, u.email, u.employee_no, u.title, u.department, u.division_name]
+          .some((v) => String(v ?? "").toLowerCase().includes(needle));
       });
-  }, [search, users]);
+  }, [managers, search, divisionFilter, roleFilter, statusView]);
+
+  // Department options grouped by division for the dropdown
+  const deptsByDivision = useMemo(() => {
+    const groups = new Map<string, DepartmentRow[]>();
+    for (const d of departmentRows) {
+      const key = d.division_name ?? "Unassigned Division";
+      const arr = groups.get(key) ?? [];
+      arr.push(d);
+      groups.set(key, arr);
+    }
+    return groups;
+  }, [departmentRows]);
+
+  // Unique division names from management users for filter
+  const divisionNames = useMemo(() => {
+    const names = new Set<string>();
+    managers.forEach((u) => names.add(u.division_name ?? "Unassigned"));
+    return Array.from(names).sort();
+  }, [managers]);
+
+  // ─── Actions ─────────────────────────────────────────────────────────────
 
   function assignedDepartments(userId: string) {
-    return departmentRows.filter((department) => department.manager_user_id === userId).map((department) => department.name);
+    return departmentRows
+      .filter((d) => d.manager_user_id === userId || d.hod_user_id === userId)
+      .map((d) => d.name);
   }
 
-  async function setDepartmentManager(departmentName: string, userId: string) {
-    await api.updateDepartment(departmentName, { name: departmentName, manager_user_id: userId });
+  async function setDepartmentManager(departmentName: string, userId: string, role: "HOD" | "MANAGER") {
+    const dept = departmentRows.find((d) => d.name === departmentName);
+    const patch = role === "HOD"
+      ? { name: departmentName, hod_user_id: userId }
+      : { name: departmentName, manager_user_id: userId };
+    await api.updateDepartment(departmentName, patch);
+    if (dept?.id) await api.updateUser(userId, { department: departmentName });
+  }
+
+  async function handleAssignExisting(user: PickableUser) {
+    setAssigning(true);
+    try {
+      await api.updateUserRole(user.id, { role: assignRole });
+      const dept = assignOrg.department || assignDept;
+      if (dept) await setDepartmentManager(dept, user.id, assignRole);
+      // Save org IDs
+      await api.updateUser(user.id, {
+        division_id: assignOrg.divisionId ?? null,
+        section_id: assignOrg.sectionId ?? null,
+        team_id: assignOrg.teamId ?? null,
+      });
+      setShowAssignModal(false);
+      setAssignDept("");
+      setAssignOrg(EMPTY_ORG);
+      await Promise.all([load(), reloadStaff()]);
+    } catch (e: any) {
+      alert("Error assigning: " + e.message);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  function resetAddForm() {
+    resetForm([setNewEmail, setNewFirstName, setNewSurname, setNewEmployeeNo]);
+    setNewDepartment("");
+    setNewTitle("Department Manager");
+    setNewRole("MANAGER");
+    setNewIsActive(true);
+    setAssignAsDepartmentManager(true);
+    setNewOrg(EMPTY_ORG);
+    if (managerTypes.length > 0) setSelectedNewTypeId(managerTypes[0].id);
+  }
+
+  // ─── Manager Type helpers ─────────────────────────────────────────────────
+
+  function resolvedNewRole(): "HOD" | "MANAGER" {
+    const t = managerTypes.find((x) => x.id === selectedNewTypeId);
+    return (t?.role as "HOD" | "MANAGER") || newRole;
+  }
+
+  function resolvedAssignRole(): "HOD" | "MANAGER" {
+    const t = managerTypes.find((x) => x.id === selectedAssignTypeId);
+    return (t?.role as "HOD" | "MANAGER") || assignRole;
+  }
+
+  function openAddTypeModal(type?: MgrType) {
+    if (type) {
+      setEditingType(type);
+      setTypeFormName(type.name);
+      setTypeFormRole(type.role as "HOD" | "MANAGER");
+      setTypeFormDesc(type.description || "");
+      setTypeFormActive(type.active);
+    } else {
+      setEditingType(null);
+      setTypeFormName(""); setTypeFormRole("MANAGER"); setTypeFormDesc(""); setTypeFormActive(true);
+    }
+    setShowAddTypeModal(true);
+  }
+
+  async function saveType() {
+    if (!typeFormName.trim()) { alert("Name is required."); return; }
+    setTypeSaving(true);
+    try {
+      if (editingType) {
+        await api.updateManagerType(editingType.id, { name: typeFormName.trim(), role: typeFormRole, description: typeFormDesc.trim() || null, active: typeFormActive });
+      } else {
+        await api.createManagerType({ name: typeFormName.trim(), role: typeFormRole, description: typeFormDesc.trim() || null });
+      }
+      setShowAddTypeModal(false);
+      await load();
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setTypeSaving(false);
+    }
+  }
+
+  async function deleteType(t: MgrType) {
+    const confirmed = await confirmAction({ title: "Deactivate type?", text: `Deactivate "${t.name}"? Existing managers will keep their roles.`, confirmButtonText: "Deactivate" });
+    if (!confirmed) return;
+    try {
+      await api.deleteManagerType(t.id);
+      await load();
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    }
   }
 
   async function createManager() {
-    if (!newFirstName.trim() || !newSurname.trim() || !newEmail.trim() || !newDepartment.trim()) {
-      alert("Please fill first name, surname, username/email, and department.");
+    const effectiveDept = newOrg.department || newDepartment;
+    if (!newFirstName.trim() || !newSurname.trim() || !newEmail.trim() || !effectiveDept.trim()) {
+      alert("Please fill first name, surname, email, and department.");
       return;
     }
     setCreating(true);
     try {
-      const fullName = [newFirstName.trim(), newSurname.trim()].join(" ");
+      const fullName = `${newFirstName.trim()} ${newSurname.trim()}`;
+      const effectiveRole = resolvedNewRole();
+      const selectedTypeName = managerTypes.find((x) => x.id === selectedNewTypeId)?.name;
       const created: UserRow = await api.createUser({
         email: newEmail.trim(),
         full_name: fullName,
         employee_no: newEmployeeNo.trim() || undefined,
-        department: newDepartment,
-        role: "MANAGER",
-        title: newTitle.trim() || "Department Manager",
-        is_active: newIsActive
+        department: effectiveDept,
+        division_id: newOrg.divisionId ?? null,
+        section_id: newOrg.sectionId ?? null,
+        team_id: newOrg.teamId ?? null,
+        role: effectiveRole,
+        title: newTitle.trim() || selectedTypeName || "Department Manager",
+        is_active: newIsActive,
       });
       if (assignAsDepartmentManager) {
-        await setDepartmentManager(newDepartment, created.id);
+        await setDepartmentManager(effectiveDept, created.id, newRole);
       }
-      resetForm([setNewEmail, setNewFirstName, setNewSurname, setNewEmployeeNo]);
-      setNewDepartment("");
-      setNewTitle("Department Manager");
-      setNewIsActive(true);
-      setAssignAsDepartmentManager(true);
-      setShowForm(false);
-      await load();
-      alert("Manager saved.");
-    } catch (error: any) {
-      alert("Error creating manager: " + error.message);
+      resetAddForm();
+      setShowAddModal(false);
+      await Promise.all([load(), reloadStaff()]);
+      alert("Saved.");
+    } catch (e: any) {
+      alert("Error: " + e.message);
     } finally {
       setCreating(false);
     }
@@ -152,89 +393,318 @@ export default function ManagersOnboarding() {
   async function saveManager() {
     if (!editingUser) return;
     if (!editingFirstName.trim() || !editingSurname.trim() || !editingUser.email?.trim() || !editingUser.department?.trim()) {
-      alert("Please fill first name, surname, username/email, and department.");
+      alert("Please fill all required fields.");
       return;
     }
     try {
-      const fullName = [editingFirstName.trim(), editingSurname.trim()].join(" ");
+      const fullName = `${editingFirstName.trim()} ${editingSurname.trim()}`;
+      const effectiveDept = editingOrg.department || editingUser.department;
       await api.updateUser(editingUser.id, {
         full_name: fullName,
         employee_no: editingUser.employee_no || "",
         title: editingUser.title || "Department Manager",
-        department: editingUser.department,
+        department: effectiveDept,
+        division_id: editingOrg.divisionId ?? null,
+        section_id: editingOrg.sectionId ?? null,
+        team_id: editingOrg.teamId ?? null,
         email: editingUser.email,
-        is_active: editingUser.is_active !== false
+        is_active: editingUser.is_active !== false,
       });
-      if (editingSetAsDepartmentManager && editingUser.department) {
-        await setDepartmentManager(editingUser.department, editingUser.id);
+      if (editingRole !== editingUser.role) {
+        await api.updateUserRole(editingUser.id, { role: editingRole });
+      }
+      if (editingSetAsDeptManager && editingUser.department) {
+        await setDepartmentManager(editingUser.department, editingUser.id, editingRole);
       }
       setEditingUser(null);
-      await load();
-      alert("Manager saved.");
-    } catch (error: any) {
-      alert("Error saving manager: " + error.message);
+      await Promise.all([load(), reloadStaff()]);
+      alert("Saved.");
+    } catch (e: any) {
+      alert("Error: " + e.message);
     }
   }
 
-  async function deactivateManager(user: UserRow) {
-    if (!confirm(`Deactivate ${user.full_name || user.email}?`)) return;
+  async function deactivate(user: UserRow) {
+    const confirmed = await confirmAction({
+      title: "Deactivate user?",
+      text: `Deactivate ${user.full_name || user.email}?`,
+      confirmButtonText: "Deactivate"
+    });
+    if (!confirmed) return;
     try {
-      const updated: UserRow = await api.updateUser(user.id, { is_active: false });
-      setUsers((current) => current.map((item) => item.id === user.id ? updated : item));
-    } catch (error: any) {
-      alert("Error deactivating manager: " + error.message);
+      await api.updateUser(user.id, { is_active: false });
+      await reloadStaff();
+    } catch (e: any) {
+      alert("Error: " + e.message);
     }
   }
+
+  async function reactivate(user: UserRow) {
+    const confirmed = await confirmAction({
+      title: "Reactivate user?",
+      text: `Reactivate ${user.full_name || user.email}? They will be able to log in again.`,
+      confirmButtonText: "Reactivate"
+    });
+    if (!confirmed) return;
+    try {
+      await api.updateUser(user.id, { is_active: true });
+      await reloadStaff();
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    }
+  }
+
+  // ─── Dept dropdown with option groups ────────────────────────────────────
+
+  function DeptSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+    return (
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Select department</option>
+        {[...deptsByDivision.entries()].map(([divName, depts]) => (
+          <optgroup key={divName} label={`── ${divName}`}>
+            {depts.map((d) => (
+              <option key={d.name} value={d.name}>{d.name}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    );
+  }
+
+  // ─── Render ───────────────────────────────────────────────────────────────
+
+  const fieldSt: React.CSSProperties = { width: "100%", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", fontSize: 13, boxSizing: "border-box" };
 
   return (
-    <div className="onboarding-page">
-      <div className="onboarding-heading">
-        <div>
-          <h2>Managers</h2>
-          <p>Onboard department managers and connect them to departments for approval routing.</p>
-        </div>
-        <button className="button button-primary" type="button" onClick={() => setShowForm((current) => !current)}>
-          <UserPlus size={17} aria-hidden />
-          {showForm ? "Close" : "Add Manager"}
-        </button>
+    <div className="onboarding-page ep-page">
+      <div className="ep-breadcrumb">
+        <span>Administration</span>
+        <ChevronRight size={13} />
+        <span>Organizational Structure</span>
+        <ChevronRight size={13} />
+        <span className="ep-breadcrumb-active">Management</span>
       </div>
 
-      {showForm && (
-        <section className="onboarding-panel">
-          <div className="onboarding-form-grid onboarding-form-grid-4">
-            <label><span>First Name *</span><input value={newFirstName} onChange={(event) => setNewFirstName(event.target.value)} placeholder="Enter first name" /></label>
-            <label><span>Surname *</span><input value={newSurname} onChange={(event) => setNewSurname(event.target.value)} placeholder="Enter surname" /></label>
-            <label><span>Employee Number</span><input value={newEmployeeNo} onChange={(event) => setNewEmployeeNo(event.target.value)} placeholder="Enter employee number" /></label>
-            <label><span>Position / Title</span><input value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Department Manager" /></label>
-          </div>
-          <div className="onboarding-form-grid onboarding-form-grid-actions">
-            <label><span>Username or Email *</span><input value={newEmail} onChange={(event) => setNewEmail(event.target.value)} placeholder="username or user@etl.co.ls" /></label>
-            <label>
-              <span>Department *</span>
-              <select value={newDepartment} onChange={(event) => setNewDepartment(event.target.value)}>
-                <option value="">Select department</option>
-                {departments.map((department) => <option key={department} value={department}>{department}</option>)}
-              </select>
-            </label>
-            <label className="onboarding-check"><input type="checkbox" checked={newIsActive} onChange={(event) => setNewIsActive(event.target.checked)} /> Active</label>
-            <label className="onboarding-check"><input type="checkbox" checked={assignAsDepartmentManager} onChange={(event) => setAssignAsDepartmentManager(event.target.checked)} /> Set as department manager</label>
-            <div className="onboarding-actions">
-              <button className="button small-button button-subtle" type="button" onClick={() => setShowForm(false)}>Cancel</button>
-              <button className="button button-primary" type="button" onClick={() => void createManager()} disabled={creating}>{creating ? "Saving..." : "Save Manager"}</button>
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "2px solid var(--border)", paddingBottom: 0 }}>
+        {([["MANAGERS", "Managers"], ["TYPES", "Manager Types"]] as const).map(([tab, label]) => (
+          <button key={tab} type="button" onClick={() => setActiveTab(tab)} style={{
+            padding: "8px 20px", border: "none", borderBottom: activeTab === tab ? "2px solid #1d4ed8" : "2px solid transparent",
+            background: "none", cursor: "pointer", fontWeight: activeTab === tab ? 700 : 500,
+            color: activeTab === tab ? "#1d4ed8" : "var(--muted)", fontSize: 14, marginBottom: -2,
+          }}>
+            {tab === "TYPES" && <Layers size={13} style={{ marginRight: 5, verticalAlign: "middle" }} />}
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Manager Types panel ──────────────────────────────────────────────── */}
+      {activeTab === "TYPES" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>Manager Types</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>Define the types of managers in your organisation. These appear as options when onboarding managers.</div>
             </div>
+            <button type="button" onClick={() => openAddTypeModal()} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 16px", background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+              <Plus size={14} /> Add Type
+            </button>
           </div>
-        </section>
+
+          <div className="card" style={{ overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--surface-soft)", borderBottom: "2px solid var(--border)" }}>
+                  {["Type Name", "Maps To Role", "Description", "Status", ""].map((h) => (
+                    <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {managerTypes.length === 0 ? (
+                  <tr><td colSpan={5} style={{ padding: 32, textAlign: "center", color: "var(--muted)" }}>No manager types configured yet.</td></tr>
+                ) : managerTypes.map((t) => (
+                  <tr key={t.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "10px 14px", fontWeight: 600, fontSize: 13 }}>{t.name}</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, fontWeight: 600, background: t.role === "HOD" ? "#dbeafe" : "#dcfce7", color: t.role === "HOD" ? "#1d4ed8" : "#15803d" }}>{t.role}</span>
+                    </td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)" }}>{t.description || "—"}</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, fontWeight: 600, background: t.active ? "#dcfce7" : "#fee2e2", color: t.active ? "#15803d" : "#b91c1c" }}>
+                        {t.active ? "Active" : "Inactive"}
+                      </span>
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button type="button" onClick={() => openAddTypeModal(t)} style={{ padding: "5px 8px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", cursor: "pointer", color: "var(--muted)", display: "flex" }}><Edit3 size={13} /></button>
+                        {t.active && <button type="button" onClick={() => void deleteType(t)} style={{ padding: "5px 8px", border: "1px solid #fecaca", borderRadius: 6, background: "#fff5f5", cursor: "pointer", color: "#ef4444", display: "flex" }}><Trash2 size={13} /></button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Add/Edit type modal */}
+          {showAddTypeModal && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setShowAddTypeModal(false)}>
+              <div style={{ background: "var(--surface)", borderRadius: 12, padding: 28, width: 440, maxWidth: "95vw", boxShadow: "0 16px 48px rgba(0,0,0,0.22)" }} onClick={(e) => e.stopPropagation()}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>{editingType ? "Edit Manager Type" : "Add Manager Type"}</div>
+                  <button onClick={() => setShowAddTypeModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)" }}><X size={16} /></button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginBottom: 4 }}>Type Name *</label>
+                    <input value={typeFormName} onChange={(e) => setTypeFormName(e.target.value)} placeholder="e.g. Senior Manager" style={fieldSt} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginBottom: 4 }}>Maps To System Role *</label>
+                    <select value={typeFormRole} onChange={(e) => setTypeFormRole(e.target.value as "HOD" | "MANAGER")} style={fieldSt}>
+                      <option value="MANAGER">MANAGER — Department Manager</option>
+                      <option value="HOD">HOD — Head of Department</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginBottom: 4 }}>Description</label>
+                    <input value={typeFormDesc} onChange={(e) => setTypeFormDesc(e.target.value)} placeholder="Optional description" style={fieldSt} />
+                  </div>
+                  {editingType && (
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginBottom: 4 }}>Status</label>
+                      <select value={typeFormActive ? "active" : "inactive"} onChange={(e) => setTypeFormActive(e.target.value === "active")} style={fieldSt}>
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 24 }}>
+                  <button onClick={() => setShowAddTypeModal(false)} style={{ padding: "7px 16px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>Cancel</button>
+                  <button onClick={() => void saveType()} disabled={typeSaving} style={{ padding: "7px 18px", background: typeSaving ? "#93c5fd" : "#1d4ed8", color: "#fff", border: "none", borderRadius: 6, cursor: typeSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600 }}>
+                    {typeSaving ? "Saving…" : editingType ? "Save Changes" : "Add Type"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
+      {/* ── Managers panel (existing) ────────────────────────────────────────── */}
+      {activeTab === "MANAGERS" && (
+      <div style={{ display: "contents" }}>
+
+      <div className="ep-header">
+        <div className="ep-header-text">
+          <h1 className="ep-title">Management</h1>
+          <p className="ep-subtitle">Manage Heads of Department (HOD) and Managers and connect them to departments for approval routing.</p>
+        </div>
+        <div className="ep-actions">
+          <button className="ep-btn-outline" type="button" onClick={() => { setAssignDept(""); setAssignRole("MANAGER"); setSelectedAssignTypeId(managerTypes[0]?.id || ""); setShowAssignModal(true); }}>
+            <UserCheck size={15} aria-hidden /> Assign Existing User
+          </button>
+          <button className="ep-btn" type="button" onClick={() => { resetAddForm(); setShowAddModal(true); }}>
+            <UserPlus size={15} aria-hidden /> Create New Account
+          </button>
+        </div>
+      </div>
+
+      {/* Add modal */}
+      {showAddModal && (
+        <div className="leadership-modal-backdrop" onClick={() => !creating && setShowAddModal(false)}>
+          <div className="leadership-modal onboarding-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="leadership-modal-head">
+              <h3>Add Manager / HOD</h3>
+              <button className="icon-button leadership-icon-button" type="button" onClick={() => setShowAddModal(false)} disabled={creating} aria-label="Close"><X size={17} aria-hidden /></button>
+            </div>
+            <div className="onboarding-form-grid onboarding-form-grid-2">
+              <label><span>First Name *</span><input value={newFirstName} onChange={(e) => setNewFirstName(e.target.value)} placeholder="First name" /></label>
+              <label><span>Surname *</span><input value={newSurname} onChange={(e) => setNewSurname(e.target.value)} placeholder="Surname" /></label>
+              <label><span>Employee Number</span><input value={newEmployeeNo} onChange={(e) => setNewEmployeeNo(e.target.value)} placeholder="Employee No." /></label>
+              <label>
+                <span>Manager Type *</span>
+                {managerTypes.filter((t) => t.active).length > 0 ? (
+                  <select value={selectedNewTypeId} onChange={(e) => {
+                    setSelectedNewTypeId(e.target.value);
+                    const t = managerTypes.find((x) => x.id === e.target.value);
+                    if (t) { setNewRole(t.role as "HOD" | "MANAGER"); setNewTitle(t.name); }
+                  }}>
+                    {managerTypes.filter((t) => t.active).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name} ({t.role})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <select value={newRole} onChange={(e) => setNewRole(e.target.value as "HOD" | "MANAGER")}>
+                    <option value="MANAGER">Manager</option>
+                    <option value="HOD">Head of Department (HOD)</option>
+                  </select>
+                )}
+              </label>
+              <label><span>Position / Title</span><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Department Manager" /></label>
+              <label><span>Username or Email *</span><input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="user@etl.co.ls" /></label>
+              <label className="onboarding-check"><input type="checkbox" checked={newIsActive} onChange={(e) => setNewIsActive(e.target.checked)} /> Active</label>
+              <label className="onboarding-check"><input type="checkbox" checked={assignAsDepartmentManager} onChange={(e) => setAssignAsDepartmentManager(e.target.checked)} /> Assign as department {newRole === "HOD" ? "HOD" : "manager"}</label>
+              <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement *</div>
+                <OrgPicker value={newOrg} onChange={(sel) => { setNewOrg(sel); if (sel.department) setNewDepartment(sel.department); }} />
+              </div>
+            </div>
+            <div className="leadership-modal-actions">
+              <button className="button small-button button-subtle" type="button" onClick={() => setShowAddModal(false)} disabled={creating}>Cancel</button>
+              <button className="button button-primary" type="button" onClick={() => void createManager()} disabled={creating}>{creating ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Table panel */}
       <section className="onboarding-panel">
+        {/* Active / Inactive view toggle — deactivated managers get their own
+            section instead of being mixed into the working roster */}
+        <div style={{ display: "flex", gap: 6, padding: "12px 16px 0" }}>
+          {([
+            { key: "active",   label: `Active (${managerStatusCounts.active})` },
+            { key: "inactive", label: `Inactive (${managerStatusCounts.inactive})` },
+          ] as const).map(({ key, label }) => (
+            <button key={key} type="button" onClick={() => setStatusView(key)}
+              style={{
+                padding: "6px 14px", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                border: statusView === key ? "1px solid #3b82f6" : "1px solid var(--border)",
+                background: statusView === key ? "#eff6ff" : "var(--surface-soft)",
+                color: statusView === key ? "#1d4ed8" : "var(--muted)",
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="onboarding-toolbar">
           <div className="onboarding-search">
             <Search size={18} aria-hidden />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search managers..." />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, email, department…" />
           </div>
-          <button className="button small-button button-subtle" type="button" onClick={() => void load()} disabled={loading}>
+
+          {/* Division filter */}
+          {divisionNames.length > 1 && (
+            <select value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)} style={{ fontSize: 13, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)" }}>
+              <option value="ALL">All Divisions</option>
+              {divisionNames.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
+
+          {/* Role filter */}
+          <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={{ fontSize: 13, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)" }}>
+            <option value="ALL">All Roles</option>
+            <option value="HOD">HOD Only</option>
+            <option value="MANAGER">Manager Only</option>
+          </select>
+
+          <button className="button small-button button-subtle" type="button" onClick={() => { void load(); void reloadStaff(); }} disabled={loading || staffLoading}>
             <RefreshCw size={16} aria-hidden />
-            {loading ? "Loading..." : "Refresh"}
+            {loading ? "Loading…" : "Refresh"}
           </button>
         </div>
 
@@ -243,9 +713,9 @@ export default function ManagersOnboarding() {
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Employee No</th>
+                <th>Role</th>
+                <th>Org Path</th>
                 <th>Title</th>
-                <th>Department</th>
                 <th>Email</th>
                 <th>Assignment</th>
                 <th>Status</th>
@@ -253,36 +723,60 @@ export default function ManagersOnboarding() {
               </tr>
             </thead>
             <tbody>
-              {managerRows.length === 0 ? (
-                <tr><td colSpan={8} style={{ textAlign: "center" }}>{loading ? "Loading managers..." : "No managers found."}</td></tr>
-              ) : managerRows.map((manager) => {
-                const assigned = assignedDepartments(manager.id);
+              {managementRows.length === 0 ? (
+                <tr><td colSpan={8} style={{ textAlign: "center" }}>{loading || staffLoading ? "Loading…" : statusView === "inactive" ? "No inactive managers." : "No results found."}</td></tr>
+              ) : managementRows.map((mgr: UserRow) => {
+                const assigned = assignedDepartments(mgr.id);
+                const orgPath = [mgr.division_name, mgr.department, mgr.section_name, mgr.team_name]
+                  .filter(Boolean).join(" › ");
                 return (
-                  <tr key={manager.id}>
+                  <tr key={mgr.id}>
                     <td>
                       <div className="onboarding-person">
                         <span className="onboarding-avatar"><UserRoundCheck size={16} aria-hidden /></span>
-                        <span><strong>{manager.full_name || manager.email}</strong><small>{initials(manager.full_name || manager.email)}</small></span>
+                        <span>
+                          <strong>{mgr.full_name || mgr.email}</strong>
+                          <small style={{ display: "block", color: "var(--muted)", fontSize: 11 }}>{initials(mgr.full_name)}</small>
+                        </span>
                       </div>
                     </td>
-                    <td>{manager.employee_no || "-"}</td>
-                    <td>{manager.title || "Department Manager"}</td>
-                    <td>{manager.department || "-"}</td>
-                    <td>{manager.email}</td>
+                    <td><RoleBadge role={mgr.role} /></td>
+                    <td>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                        {orgPath || mgr.department || "—"}
+                      </span>
+                    </td>
+                    <td>{mgr.title || "—"}</td>
+                    <td>{mgr.email}</td>
                     <td>
                       {assigned.length ? (
-                        <span className="status-pill status-pill-success"><CheckCircle2 size={13} aria-hidden /> {assigned.join(", ")}</span>
+                        <span className="status-pill status-pill-success">
+                          <CheckCircle2 size={13} aria-hidden /> {assigned.join(", ")}
+                        </span>
                       ) : (
-                        <button className="link-button" type="button" disabled={!manager.department} onClick={() => manager.department && void setDepartmentManager(manager.department, manager.id).then(load)}>
-                          Set department manager
+                        <button
+                          className="link-button"
+                          type="button"
+                          disabled={!mgr.department}
+                          onClick={() => mgr.department && void setDepartmentManager(mgr.department, mgr.id, (mgr.role ?? "MANAGER") as "HOD" | "MANAGER").then(() => Promise.all([load(), reloadStaff()]))}
+                        >
+                          Assign to department
                         </button>
                       )}
                     </td>
-                    <td>{manager.is_active !== false ? <span className="status-pill status-pill-success">Active</span> : <span className="status-pill status-pill-warning">Inactive</span>}</td>
+                    <td>
+                      {mgr.is_active !== false
+                        ? <span className="status-pill status-pill-success">Active</span>
+                        : <span className="status-pill status-pill-warning">Inactive</span>}
+                    </td>
                     <td>
                       <div className="onboarding-row-actions">
-                        <button className="icon-button leadership-icon-button" type="button" title="Edit manager" aria-label="Edit manager" onClick={() => setEditingUser(manager)}><Edit3 size={16} aria-hidden /></button>
-                        <button className="icon-button leadership-icon-button danger" type="button" title="Deactivate manager" aria-label="Deactivate manager" onClick={() => void deactivateManager(manager)}><Trash2 size={16} aria-hidden /></button>
+                        <button className="icon-button leadership-icon-button" type="button" title="Edit" onClick={() => setEditingUser(mgr)}><Edit3 size={16} aria-hidden /></button>
+                        {mgr.is_active !== false ? (
+                          <button className="icon-button leadership-icon-button danger" type="button" title="Deactivate" onClick={() => void deactivate(mgr)}><Trash2 size={16} aria-hidden /></button>
+                        ) : (
+                          <button className="icon-button leadership-icon-button" type="button" title="Reactivate" onClick={() => void reactivate(mgr)}><UserCheck size={16} aria-hidden /></button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -293,35 +787,105 @@ export default function ManagersOnboarding() {
         </div>
       </section>
 
+      {/* Edit modal */}
       {editingUser && (
         <div className="leadership-modal-backdrop">
           <div className="leadership-modal onboarding-modal">
             <div className="leadership-modal-head">
-              <h3>Edit Manager</h3>
-              <button className="icon-button leadership-icon-button" type="button" onClick={() => setEditingUser(null)} aria-label="Close edit modal"><X size={17} aria-hidden /></button>
+              <h3>Edit — {editingUser.full_name || editingUser.email}</h3>
+              <button className="icon-button leadership-icon-button" type="button" onClick={() => setEditingUser(null)} aria-label="Close"><X size={17} aria-hidden /></button>
             </div>
             <div className="onboarding-form-grid onboarding-form-grid-2">
-              <label><span>First Name *</span><input value={editingFirstName} onChange={(event) => setEditingFirstName(event.target.value)} /></label>
-              <label><span>Surname *</span><input value={editingSurname} onChange={(event) => setEditingSurname(event.target.value)} /></label>
-              <label><span>Employee Number</span><input value={editingUser.employee_no || ""} onChange={(event) => setEditingUser({ ...editingUser, employee_no: event.target.value })} /></label>
-              <label><span>Position / Title</span><input value={editingUser.title || ""} onChange={(event) => setEditingUser({ ...editingUser, title: event.target.value })} /></label>
+              <label><span>First Name *</span><input value={editingFirstName} onChange={(e) => setEditingFirstName(e.target.value)} /></label>
+              <label><span>Surname *</span><input value={editingSurname} onChange={(e) => setEditingSurname(e.target.value)} /></label>
+              <label><span>Employee Number</span><input value={editingUser.employee_no || ""} onChange={(e) => setEditingUser({ ...editingUser, employee_no: e.target.value })} /></label>
               <label>
-                <span>Department *</span>
-                <select value={editingUser.department || ""} onChange={(event) => setEditingUser({ ...editingUser, department: event.target.value })}>
-                  <option value="">Select department</option>
-                  {departments.map((department) => <option key={department} value={department}>{department}</option>)}
-                </select>
+                <span>Manager Type *</span>
+                {managerTypes.filter((t) => t.active).length > 0 ? (
+                  <select value={editingTypeId} onChange={(e) => {
+                    setEditingTypeId(e.target.value);
+                    const t = managerTypes.find((x) => x.id === e.target.value);
+                    if (t) { setEditingRole(t.role as "HOD" | "MANAGER"); setEditingUser({ ...editingUser, title: t.name }); }
+                  }}>
+                    <option value="">— Keep current ({editingUser.role === "HOD" ? "HOD" : "MANAGER"}) —</option>
+                    {managerTypes.filter((t) => t.active).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name} ({t.role})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <select value={editingRole} onChange={(e) => setEditingRole(e.target.value as "HOD" | "MANAGER")}>
+                    <option value="MANAGER">Manager</option>
+                    <option value="HOD">Head of Department (HOD)</option>
+                  </select>
+                )}
               </label>
-              <label><span>Username or Email *</span><input value={editingUser.email || ""} onChange={(event) => setEditingUser({ ...editingUser, email: event.target.value })} /></label>
-              <label className="onboarding-check"><input type="checkbox" checked={editingUser.is_active !== false} onChange={(event) => setEditingUser({ ...editingUser, is_active: event.target.checked })} /> Active</label>
-              <label className="onboarding-check"><input type="checkbox" checked={editingSetAsDepartmentManager} onChange={(event) => setEditingSetAsDepartmentManager(event.target.checked)} /> Set as department manager</label>
+              <label><span>Position / Title</span><input value={editingUser.title || ""} onChange={(e) => setEditingUser({ ...editingUser, title: e.target.value })} /></label>
+              <label><span>Username or Email *</span><input value={editingUser.email || ""} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} /></label>
+              <label className="onboarding-check"><input type="checkbox" checked={editingUser.is_active !== false} onChange={(e) => setEditingUser({ ...editingUser, is_active: e.target.checked })} /> Active</label>
+              <label className="onboarding-check"><input type="checkbox" checked={editingSetAsDeptManager} onChange={(e) => setEditingSetAsDeptManager(e.target.checked)} /> Update department assignment</label>
+              <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement</div>
+                <OrgPicker value={editingOrg} onChange={(sel) => { setEditingOrg(sel); if (sel.department) setEditingUser({ ...editingUser, department: sel.department }); }} />
+              </div>
             </div>
             <div className="leadership-modal-actions">
               <button className="button small-button button-subtle" type="button" onClick={() => setEditingUser(null)}>Cancel</button>
-              <button className="button button-primary" type="button" onClick={() => void saveManager()}>Save Manager</button>
+              <button className="button button-primary" type="button" onClick={() => void saveManager()}>Save</button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Assign existing user as Manager / HOD */}
+      {showAssignModal && (
+        <UserPicker
+          title="Assign Existing User as Manager / HOD"
+          subtitle="Pick an employee to promote to Manager or HOD and connect them to a department."
+          users={users}
+          excludeRoles={[]}
+          onClose={() => setShowAssignModal(false)}
+          onSelect={handleAssignExisting}
+          saving={assigning}
+          saveLabel={`Assign as ${resolvedAssignRole() === "HOD" ? "HOD" : "Manager"}`}
+          extra={
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--muted)", marginBottom: 4 }}>Manager Type *</label>
+                {managerTypes.filter((t) => t.active).length > 0 ? (
+                  <select
+                    value={selectedAssignTypeId}
+                    onChange={(e) => {
+                      setSelectedAssignTypeId(e.target.value);
+                      const t = managerTypes.find((x) => x.id === e.target.value);
+                      if (t) setAssignRole(t.role as "HOD" | "MANAGER");
+                    }}
+                    style={{ width: "100%", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", fontSize: 13 }}
+                  >
+                    {managerTypes.filter((t) => t.active).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name} ({t.role})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={assignRole}
+                    onChange={(e) => setAssignRole(e.target.value as "HOD" | "MANAGER")}
+                    style={{ width: "100%", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", fontSize: 13 }}
+                  >
+                    <option value="MANAGER">Manager</option>
+                    <option value="HOD">Head of Department (HOD)</option>
+                  </select>
+                )}
+              </div>
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement (optional)</div>
+                <OrgPicker value={assignOrg} onChange={(sel) => { setAssignOrg(sel); if (sel.department) setAssignDept(sel.department); }} />
+              </div>
+            </div>
+          }
+        />
+      )}
+
+      </div>
       )}
     </div>
   );

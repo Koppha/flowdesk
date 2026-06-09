@@ -7,6 +7,7 @@ import { query } from "./db.js";
 
 export type Role =
   | "EMPLOYEE"
+  | "HOD"
   | "MANAGER"
   | "HR_MANAGER"
   | "AUTH_OFFICER"
@@ -22,6 +23,9 @@ export type AuthPayload = {
   fullName?: string;
   employeeNo?: string | null;
   department?: string | null;
+  divisionId?: string | null;
+  sectionId?: string | null;
+  teamId?: string | null;
   employmentType?: string | null;
   profileCompleted?: boolean;
 };

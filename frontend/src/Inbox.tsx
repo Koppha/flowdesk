@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
 import { LESOTHO_DISTRICTS, TravelType, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { Bell, CheckCircle2, ClipboardList, RefreshCw } from "lucide-react";
 
 type InboxItem =
   | {
@@ -30,6 +31,25 @@ type InboxItem =
       advance_amount: number;
       balance_amount: number;
       claimant_name: string;
+    }
+  | {
+      doc_type: "OVERTIME_REQUEST";
+      id: string;
+      status: string;
+      employee_name: string | null;
+      section_name: string | null;
+      year: number;
+      month: number;
+    }
+  | {
+      doc_type: "OVERTIME_CLAIM";
+      id: string;
+      status: string;
+      employee_name: string | null;
+      division: string | null;
+      year: number;
+      month: number;
+      total_amount: number;
     };
 
 type MyInboxAction = {
@@ -98,39 +118,43 @@ function statusTone(value: string | null | undefined) {
   return "status-pill-info";
 }
 
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
 function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) {
   switch (value) {
-    case "ADVANCE":
-      return "Advance";
-    case "ACCOMMODATION":
-      return "Travel Accommodation";
-    case "CLAIM":
-      return "Clearance";
-    default:
-      return statusLabel(String(value || "Document"));
+    case "ADVANCE":          return "Advance";
+    case "ACCOMMODATION":    return "Travel Accommodation";
+    case "CLAIM":            return "Clearance";
+    case "OVERTIME_REQUEST": return "Overtime Request";
+    case "OVERTIME_CLAIM":   return "Overtime Claim";
+    default:                 return statusLabel(String(value || "Document"));
   }
 }
 
 function itemOwner(item: InboxItem) {
   if (item.doc_type === "CLAIM") return item.claimant_name || "Unknown";
+  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM") return item.employee_name || "Unknown";
   return item.requester_name || "Unknown";
 }
 
 function itemAmountValue(item: InboxItem) {
   if (item.doc_type === "ADVANCE") return Number(item.requested_total || 0);
   if (item.doc_type === "ACCOMMODATION") return Number(item.amount || 0);
+  if (item.doc_type === "OVERTIME_CLAIM") return Number(item.total_amount || 0);
+  if (item.doc_type === "OVERTIME_REQUEST") return 0;
   return Number(item.claim_total || 0);
 }
 
 function itemAmount(item: InboxItem) {
+  if (item.doc_type === "OVERTIME_REQUEST") return "—";
   return fmt(itemAmountValue(item));
 }
 
 function itemContext(item: InboxItem) {
   if (item.doc_type === "ADVANCE") return item.purpose || "Advance request";
-  if (item.doc_type === "ACCOMMODATION") {
-    return `${item.location || "Location pending"}${item.provider ? ` - ${item.provider}` : ""}`;
-  }
+  if (item.doc_type === "ACCOMMODATION") return `${item.location || "Location pending"}${item.provider ? ` - ${item.provider}` : ""}`;
+  if (item.doc_type === "OVERTIME_REQUEST") return `${MONTHS[(item.month ?? 1) - 1]} ${item.year} · ${item.section_name || ""}`;
+  if (item.doc_type === "OVERTIME_CLAIM") return `${MONTHS[(item.month ?? 1) - 1]} ${item.year} · ${item.division || ""}`;
   return `Advance ${fmt(item.advance_amount)} / Balance ${fmt(item.balance_amount)}`;
 }
 
@@ -218,24 +242,20 @@ export default function Inbox(props: { onBack?: () => void }) {
 
       <section className="inbox-metrics">
         <div className="inbox-metric-card metric-blue">
-          <span>Awaiting My Approval</span>
-          <strong>{metrics.awaiting}</strong>
-          <small>{metrics.awaiting === 1 ? "active item" : "active items"}</small>
+          <Bell size={26} className="metric-icon" />
+          <div><strong>{metrics.awaiting}</strong><span>Awaiting My Approval</span></div>
         </div>
         <div className="inbox-metric-card metric-green">
-          <span>Advance Requests</span>
-          <strong>{metrics.advances}</strong>
-          <small>{fmt(metrics.advanceValue)} advance value</small>
+          <ClipboardList size={26} className="metric-icon" />
+          <div><strong>{metrics.advances}</strong><span>Advance Requests</span><small>{fmt(metrics.advanceValue)} value</small></div>
         </div>
         <div className="inbox-metric-card metric-gold">
-          <span>Clearances</span>
-          <strong>{metrics.clearances}</strong>
-          <small>claims needing attention</small>
+          <CheckCircle2 size={26} className="metric-icon" />
+          <div><strong>{metrics.clearances}</strong><span>Clearances</span></div>
         </div>
         <div className="inbox-metric-card metric-rose">
-          <span>Recent Actions</span>
-          <strong>{metrics.recentActions}</strong>
-          <small>{latestAction ? actionLabel(latestAction.action) : "No history yet"}</small>
+          <RefreshCw size={26} className="metric-icon" />
+          <div><strong>{metrics.recentActions}</strong><span>Recent Actions</span><small>{latestAction ? actionLabel(latestAction.action) : "No history yet"}</small></div>
         </div>
       </section>
 
@@ -405,14 +425,21 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
 
   const isTravelAdvance =
     item.doc_type === "ADVANCE" &&
-    (Boolean(detail?.is_travel_type) || isTravelTypeCode(detail?.type, travelTypes) || detail?.type === "TRAVEL_SUBSISTENCE" || detail?.type === "CMA");
+    (Boolean(detail?.is_travel_type) || isTravelTypeCode(detail?.type, travelTypes));
+  // Accommodation is only valid for local travel (Lesotho districts mode)
   const usesDistrictAccommodation = !detail?.travel_location_mode || detail.travel_location_mode === "DISTRICT";
+  // Multi-day: more than 1 travel line means the traveller stays overnight
+  const travelDayCount = (detail?.lines ?? []).length;
+  const isMultiDayTravel = travelDayCount > 1;
 
-  // Extract destination districts from advance lines for local travel
+  // Extract destination districts (exclude last return-home leg)
   const destinationDistricts = useMemo(() => {
     if (!isTravelAdvance || !detail?.lines) return [];
+    const lines: any[] = detail.lines || [];
+    // Use all lines except the last (which is typically the return trip home)
+    const outboundLines = lines.length > 1 ? lines.slice(0, -1) : lines;
     const districts = new Set<string>();
-    (detail.lines || []).forEach((line: any) => {
+    outboundLines.forEach((line: any) => {
       const location = String(line.location || "").trim();
       if (location.includes("→")) {
         const destination = location.split("→")[1]?.trim();
@@ -420,6 +447,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       }
     });
     return Array.from(districts);
+  }, [isTravelAdvance, detail?.lines]);
+
+  // Auto-fill check-in / check-out from travel line dates
+  const travelDateRange = useMemo(() => {
+    if (!isTravelAdvance || !detail?.lines?.length) return { first: "", last: "" };
+    const dates = (detail.lines as any[]).map((l: any) => String(l.trip_date || l.date || "")).filter(Boolean).sort();
+    return { first: dates[0] || "", last: dates[dates.length - 1] || "" };
   }, [isTravelAdvance, detail?.lines]);
 
   const canRollbackAdvance =
@@ -447,7 +481,8 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     role === "AUTH_OFFICER" &&
     ["HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status) &&
     isTravelAdvance &&
-    usesDistrictAccommodation;
+    usesDistrictAccommodation &&   // local travel only
+    isMultiDayTravel;              // must be more than 1 day
   const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
   const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
 
@@ -478,12 +513,14 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     api.hotels()
       .then((rows: any[]) => setAccommodationHotels(rows || []))
       .catch((e: any) => setError(String(e.message)));
-    
-    // Auto-populate location from destination districts if only one exists
+    // Auto-populate destination district if only one
     if (destinationDistricts.length === 1) {
       setAccommodationLocation(destinationDistricts[0]);
     }
-  }, [canCreateAccommodation, destinationDistricts]);
+    // Auto-populate check-in / check-out from travel dates
+    if (travelDateRange.first) setAccommodationCheckIn(travelDateRange.first);
+    if (travelDateRange.last)  setAccommodationCheckOut(travelDateRange.last);
+  }, [canCreateAccommodation, destinationDistricts, travelDateRange]);
 
   useEffect(() => {
     if (!accommodationProvider) return;
@@ -714,58 +751,69 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               <div className="review-card-title">Action</div>
 
               {canCreateAccommodation && (
-                <div className="review-form-grid review-form-grid-3">
-                  <label>
-                    <span>Destination District {destinationDistricts.length > 1 ? "(Select)" : ""}</span>
-                    <select className="review-control" value={accommodationLocation} onChange={(e) => setAccommodationLocation(e.target.value)}>
-                      <option value="">
-                        {destinationDistricts.length === 0 
-                          ? "No destinations found in advance lines"
-                          : destinationDistricts.length === 1
-                            ? destinationDistricts[0]
-                            : "Select district"}
-                      </option>
-                      {destinationDistricts.length > 1 && destinationDistricts.map((district) => (
-                        <option key={district} value={district}>{district}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Provider</span>
-                    <select className="review-control" value={accommodationProvider} onChange={(e) => setAccommodationProvider(e.target.value)} disabled={!accommodationLocation}>
-                      <option value="">Select hotel</option>
-                      {districtHotels.map((hotel) => (
-                        <option key={hotel.id} value={hotel.name}>{hotel.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Amount</span>
-                    <input className="review-control" type="number" value={accommodationAmount} onChange={(e) => setAccommodationAmount(e.target.value)} />
-                  </label>
-                  <label>
-                    <span>Check In</span>
-                    <input className="review-control" type="date" value={accommodationCheckIn} onChange={(e) => setAccommodationCheckIn(e.target.value)} />
-                  </label>
-                  <label>
-                    <span>Check Out</span>
-                    <input className="review-control" type="date" value={accommodationCheckOut} onChange={(e) => setAccommodationCheckOut(e.target.value)} />
-                  </label>
-                  <label>
-                    <span>Notes</span>
-                    <input className="review-control" value={accommodationNotes} onChange={(e) => setAccommodationNotes(e.target.value)} />
-                  </label>
-                  <label className="review-wide-field">
-                    <span>Quotation File</span>
-                    <input
-                      className="review-control"
-                      type="file"
-                      accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
-                      onChange={(e) => {
-                        setAccommodationQuotation(e.target.files?.[0] || null);
-                      }}
-                    />
-                  </label>
+                <div style={{ marginBottom: 16 }}>
+                  {/* Header banner */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.18)", borderLeft: "4px solid #2563eb", borderRadius: "0 8px 8px 0", marginBottom: 14, fontSize: "0.85rem" }}>
+                    <span style={{ fontSize: 18 }}>🏨</span>
+                    <div>
+                      <strong style={{ color: "#1d4ed8" }}>Set Accommodation</strong>
+                      <span style={{ color: "var(--muted)", marginLeft: 8 }}>
+                        {travelDayCount}-day local trip · destination district{destinationDistricts.length > 1 ? "s" : ""}: <strong>{destinationDistricts.join(", ") || "—"}</strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="review-form-grid review-form-grid-3">
+                    <label>
+                      <span>Destination District <span style={{ color: "#dc2626" }}>*</span></span>
+                      <select className="review-control" value={accommodationLocation} onChange={(e) => setAccommodationLocation(e.target.value)}>
+                        <option value="">
+                          {destinationDistricts.length === 0
+                            ? "No destinations found"
+                            : destinationDistricts.length === 1
+                              ? destinationDistricts[0]
+                              : "Select district"}
+                        </option>
+                        {destinationDistricts.length > 1 && destinationDistricts.map((district) => (
+                          <option key={district} value={district}>{district}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Hotel / Provider</span>
+                      <select className="review-control" value={accommodationProvider} onChange={(e) => setAccommodationProvider(e.target.value)} disabled={!accommodationLocation}>
+                        <option value="">{!accommodationLocation ? "Select district first" : districtHotels.length === 0 ? "No hotels in this district" : "Select hotel"}</option>
+                        {districtHotels.map((hotel) => (
+                          <option key={hotel.id} value={hotel.name}>{hotel.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Amount (M)</span>
+                      <input className="review-control" type="number" min="0" step="0.01" placeholder="0.00" value={accommodationAmount} onChange={(e) => setAccommodationAmount(e.target.value)} />
+                    </label>
+                    <label>
+                      <span>Check In <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(auto-filled)</span></span>
+                      <input className="review-control" type="date" value={accommodationCheckIn} onChange={(e) => setAccommodationCheckIn(e.target.value)} />
+                    </label>
+                    <label>
+                      <span>Check Out <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(auto-filled)</span></span>
+                      <input className="review-control" type="date" value={accommodationCheckOut} onChange={(e) => setAccommodationCheckOut(e.target.value)} />
+                    </label>
+                    <label>
+                      <span>Notes</span>
+                      <input className="review-control" placeholder="Optional notes…" value={accommodationNotes} onChange={(e) => setAccommodationNotes(e.target.value)} />
+                    </label>
+                    <label className="review-wide-field">
+                      <span>Quotation File <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(Optional)</span></span>
+                      <input
+                        className="review-control"
+                        type="file"
+                        accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+                        onChange={(e) => setAccommodationQuotation(e.target.files?.[0] || null)}
+                      />
+                    </label>
+                  </div>
                 </div>
               )}
 

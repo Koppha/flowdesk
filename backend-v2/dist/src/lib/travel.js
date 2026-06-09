@@ -1,18 +1,5 @@
 import { badRequest } from "./errors.js";
 import { query } from "./db.js";
-import { getNumericSystemSetting, SYSTEM_SETTING_KEYS } from "./systemSettings.js";
-const LESOTHO_DISTRICTS = [
-    "Butha-Buthe",
-    "Leribe",
-    "Berea",
-    "Maseru",
-    "Mafeteng",
-    "Mohale's Hoek",
-    "Quthing",
-    "Qacha's Nek",
-    "Mokhotlong",
-    "Thaba-Tseka"
-];
 const RESERVED_ADVANCE_TYPES = new Set(["SALARY", "LOAN"]);
 export function normalizeTravelCode(value) {
     return String(value || "")
@@ -32,17 +19,19 @@ function mapTravelType(row) {
         rate_general_staff: toNumber(row.rate_general_staff),
         rate_exco: toNumber(row.rate_exco),
         rate_ceo: toNumber(row.rate_ceo),
+        currency: row.currency || "LSL",
+        requires_accommodation: row.requires_accommodation ?? false,
         locations: row.locations || []
     };
 }
 export async function ensureTravelSchema() {
     await query(`ALTER TABLE advance_requests ALTER COLUMN type DROP DEFAULT`);
     await query(`ALTER TABLE advance_requests ALTER COLUMN type TYPE text USING type::text`);
-    await query(`ALTER TABLE advance_requests ALTER COLUMN type SET DEFAULT 'TRAVEL_SUBSISTENCE'`);
     await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS travel_meta jsonb NOT NULL DEFAULT '{}'::jsonb`);
     await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS country text`);
     await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS province text`);
     await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS city text`);
+    await query(`ALTER TABLE accommodation_hotels DROP COLUMN IF EXISTS department`);
     await query(`
     CREATE TABLE IF NOT EXISTS travel_types (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -67,6 +56,8 @@ export async function ensureTravelSchema() {
     await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS rate_exco numeric(12,2) NOT NULL DEFAULT 0`);
     await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS rate_ceo numeric(12,2) NOT NULL DEFAULT 0`);
     await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`);
+    await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'LSL'`);
+    await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS requires_accommodation boolean NOT NULL DEFAULT false`);
     await query(`
     CREATE TABLE IF NOT EXISTS travel_locations (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -92,61 +83,9 @@ export async function ensureTravelSchema() {
         COALESCE(city, '')
       )
   `);
-    await seedDefaultTravelTypes();
-}
-async function seedDefaultTravelTypes() {
-    const localRate = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.mealValue, 0);
-    const local = (await query(`INSERT INTO travel_types
-        (code, name, location_mode, rate_kind, rate_general_staff, active)
-       VALUES ('TRAVEL_SUBSISTENCE', 'Local Travel Allowance', 'DISTRICT', 'MEAL', $1, true)
-       ON CONFLICT (code) DO UPDATE
-         SET name = EXCLUDED.name,
-             location_mode = EXCLUDED.location_mode,
-             rate_kind = EXCLUDED.rate_kind,
-             rate_general_staff = CASE
-               WHEN travel_types.rate_general_staff = 0 THEN EXCLUDED.rate_general_staff
-               ELSE travel_types.rate_general_staff
-             END,
-             active = true,
-             updated_at = now()
-       RETURNING id`, [localRate]))[0];
-    const cma = (await query(`INSERT INTO travel_types
-        (code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, active)
-       VALUES ('CMA', 'Business Travel Allowance (CMA)', 'COUNTRY_CITY', 'DAILY', 600, 800, 1000, true)
-       ON CONFLICT (code) DO UPDATE
-         SET name = EXCLUDED.name,
-             location_mode = EXCLUDED.location_mode,
-             rate_kind = EXCLUDED.rate_kind,
-             rate_general_staff = CASE
-               WHEN travel_types.rate_general_staff = 0 THEN EXCLUDED.rate_general_staff
-               ELSE travel_types.rate_general_staff
-             END,
-             rate_exco = CASE WHEN travel_types.rate_exco = 0 THEN EXCLUDED.rate_exco ELSE travel_types.rate_exco END,
-             rate_ceo = CASE WHEN travel_types.rate_ceo = 0 THEN EXCLUDED.rate_ceo ELSE travel_types.rate_ceo END,
-             active = true,
-             updated_at = now()
-       RETURNING id`))[0];
-    for (const district of LESOTHO_DISTRICTS) {
-        await query(`INSERT INTO travel_locations (travel_type_id, district)
-       VALUES ($1, $2)
-       ON CONFLICT DO NOTHING`, [local.id, district]);
-    }
-    const cmaLocations = [
-        { country: "South Africa", province: "Gauteng", city: "Johannesburg" },
-        { country: "South Africa", province: "Gauteng", city: "Pretoria" },
-        { country: "South Africa", province: "Western Cape", city: "Cape Town" },
-        { country: "South Africa", province: "KwaZulu-Natal", city: "Durban" },
-        { country: "Namibia", province: "", city: "Windhoek" },
-        { country: "Eswatini", province: "", city: "Mbabane" }
-    ];
-    for (const location of cmaLocations) {
-        await query(`INSERT INTO travel_locations (travel_type_id, country, province, city)
-       VALUES ($1, $2, NULLIF($3, ''), $4)
-       ON CONFLICT DO NOTHING`, [cma.id, location.country, location.province, location.city]);
-    }
 }
 export async function listTravelTypes(includeInactive = false) {
-    const rows = await query(`SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, active
+    const rows = await query(`SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation
        FROM travel_types
       ${includeInactive ? "" : "WHERE active = true"}
       ORDER BY name`);
@@ -163,7 +102,7 @@ export async function getTravelTypeByCode(code) {
     const normalized = normalizeTravelCode(code);
     if (!normalized)
         return null;
-    const row = (await query(`SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, active
+    const row = (await query(`SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation
          FROM travel_types
         WHERE code = $1
         LIMIT 1`, [normalized]))[0];

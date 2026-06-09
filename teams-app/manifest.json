@@ -1,0 +1,37 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "a7f3e2d1-5c8b-4e9f-b0a2-6d1c7e3f8b9a",
+  "packageName": "com.etl.advance-clearance",
+  "developer": {
+    "name": "ETL",
+    "websiteUrl": "http://10.3.10.59:5174",
+    "privacyUrl": "http://10.3.10.59:5174",
+    "termsOfUseUrl": "http://10.3.10.59:5174"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Advance Clearance",
+    "full": "Advance Clearance System"
+  },
+  "description": {
+    "short": "Submit and track advance requests",
+    "full": "Advance Clearance System for managing employee advance requests, travel clearance, attendance, and overtime — all within Microsoft Teams."
+  },
+  "accentColor": "#1d4ed8",
+  "staticTabs": [
+    {
+      "entityId": "advance-clearance-main",
+      "name": "Advance Clearance",
+      "contentUrl": "http://10.3.10.59:5174",
+      "websiteUrl": "http://10.3.10.59:5174",
+      "scopes": ["personal"]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["10.3.10.59"]
+}

@@ -8,8 +8,8 @@ import { query } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
-import { createDepartmentGroup, createSectionGroup, deleteDepartmentGroup, deleteSectionGroup, listDepartmentGroups, listDepartmentsWithSections, listEligibleLeadershipUsers, listSectionGroups, resolveDepartmentGroup, resolveSectionGroup, updateDepartmentGroup, updateSectionGroup } from "../../lib/departments.js";
-import { notifyUserOnboarded } from "../../lib/notifications.js";
+import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
+import { notifyProfileCompleted, notifyUserOnboarded } from "../../lib/notifications.js";
 const LoginSchema = z
     .object({
     email: z.string().min(1).optional(),
@@ -32,15 +32,18 @@ function assertRoleAssignmentAllowed(req, target, nextRole) {
     if (!department || !targetDepartment || department !== targetDepartment) {
         throw forbidden("Managers and chief officers can only assign roles within their department");
     }
-    if (nextRole === "ADMIN" || target.role === "ADMIN") {
-        throw forbidden("Managers and chief officers cannot assign or modify admin roles");
+    if (nextRole === "ADMIN" || target.role === "ADMIN" || nextRole === "CEO" || target.role === "CEO") {
+        throw forbidden("Only system administrators can assign or modify the ADMIN or CEO role");
     }
 }
 const ProfileSchema = z
     .object({
     full_name: z.string().trim().min(1, "Full name is required"),
     department: z.string().trim().min(1, "Department is required"),
-    employment_type: z.enum(["PERMANENT", "INTERN", "TEMPORARY"]),
+    division_id: z.string().uuid().nullable().optional(),
+    section_id: z.string().uuid().nullable().optional(),
+    team_id: z.string().uuid().nullable().optional(),
+    employment_type: z.string().trim().min(1).default("PERMANENT"),
     employee_no: z.string().trim().optional()
 })
     .superRefine((data, ctx) => {
@@ -50,7 +53,7 @@ const ProfileSchema = z
     }
 });
 const UpdateUserRoleSchema = z.object({
-    role: z.enum(["EMPLOYEE", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO"]),
+    role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO", "CEO"]),
     is_active: z.boolean().optional()
 });
 const CreateUserSchema = z.object({
@@ -60,21 +63,30 @@ const CreateUserSchema = z.object({
     title: z.string().trim().optional(),
     department: z.string().trim().optional(),
     section: z.string().trim().optional(),
-    employment_type: z.enum(["PERMANENT", "INTERN", "TEMPORARY"]).optional(),
-    role: z.enum(["EMPLOYEE", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO"]).optional(),
+    division_id: z.string().uuid().nullable().optional(),
+    section_id: z.string().uuid().nullable().optional(),
+    team_id: z.string().uuid().nullable().optional(),
+    employment_type: z.string().trim().optional(),
+    role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
     is_active: z.boolean().optional()
 });
 const UpdateUserSchema = z.object({
     full_name: z.string().trim().min(1).optional(),
     email: z.string().trim().min(3).optional(),
-    employee_no: z.string().trim().optional(),
-    title: z.string().trim().optional(),
+    employee_no: z.string().trim().nullable().optional(),
+    title: z.string().trim().nullable().optional(),
     department: z.string().trim().optional(),
-    employment_type: z.enum(["PERMANENT", "INTERN", "TEMPORARY"]).optional(),
+    division_id: z.string().uuid().nullable().optional(),
+    section_id: z.string().uuid().nullable().optional(),
+    team_id: z.string().uuid().nullable().optional(),
+    employment_type: z.string().trim().optional(),
     is_active: z.boolean().optional()
 });
 const UpdateUserDepartmentSchema = z.object({
-    department: z.string().trim().min(1, "Department is required")
+    department: z.string().trim().min(1, "Department is required"),
+    division_id: z.string().uuid().nullable().optional(),
+    section_id: z.string().uuid().nullable().optional(),
+    team_id: z.string().uuid().nullable().optional()
 });
 const CreateDelegationSchema = z.object({
     manager_id: z.string().uuid().optional(),
@@ -85,30 +97,67 @@ const CreateDelegationSchema = z.object({
 const CreateDepartmentSchema = z.object({
     name: z.string().trim().min(2, "Department name is required"),
     section_id: z.string().uuid().nullable().optional(),
+    division_id: z.string().uuid().nullable().optional(),
+    hod_user_id: z.string().uuid().nullable().optional(),
+    hodUserId: z.string().uuid().nullable().optional(),
     manager_user_id: z.string().uuid().nullable().optional(),
     managerUserId: z.string().uuid().nullable().optional(),
     exco_user_id: z.string().uuid().nullable().optional(),
     excoUserId: z.string().uuid().nullable().optional(),
-    active: z.boolean().optional()
+    active: z.boolean().optional(),
+    is_business_partner: z.boolean().optional(),
+    division_ids: z.array(z.string().uuid()).optional()
 });
 const UpdateDepartmentSchema = z.object({
     name: z.string().trim().min(2, "Department name is required"),
     section_id: z.string().uuid().nullable().optional(),
+    division_id: z.string().uuid().nullable().optional(),
+    hod_user_id: z.string().uuid().nullable().optional(),
+    hodUserId: z.string().uuid().nullable().optional(),
     manager_user_id: z.string().uuid().nullable().optional(),
     managerUserId: z.string().uuid().nullable().optional(),
     exco_user_id: z.string().uuid().nullable().optional(),
     excoUserId: z.string().uuid().nullable().optional(),
-    active: z.boolean().optional()
+    active: z.boolean().optional(),
+    is_business_partner: z.boolean().optional(),
+    division_ids: z.array(z.string().uuid()).optional()
 });
 const CreateSectionSchema = z.object({
     name: z.string().trim().min(2, "Section name is required"),
+    department_id: z.string().uuid().nullable().optional(),
     exco_user_id: z.string().uuid().nullable().optional(),
-    excoUserId: z.string().uuid().nullable().optional()
+    excoUserId: z.string().uuid().nullable().optional(),
+    is_business_partner: z.boolean().optional(),
+    division_ids: z.array(z.string().uuid()).optional()
 });
 const UpdateSectionSchema = z.object({
     name: z.string().trim().min(2, "Section name is required"),
+    department_id: z.string().uuid().nullable().optional(),
     exco_user_id: z.string().uuid().nullable().optional(),
-    excoUserId: z.string().uuid().nullable().optional()
+    excoUserId: z.string().uuid().nullable().optional(),
+    active: z.boolean().optional(),
+    is_business_partner: z.boolean().optional(),
+    division_ids: z.array(z.string().uuid()).optional()
+});
+const CreateDivisionSchema = z.object({
+    name: z.string().trim().min(2, "Division name is required"),
+    description: z.string().trim().optional().nullable()
+});
+const UpdateDivisionSchema = z.object({
+    name: z.string().trim().min(2, "Division name is required"),
+    description: z.string().trim().optional().nullable(),
+    active: z.boolean().optional()
+});
+const CreateTeamSchema = z.object({
+    name: z.string().trim().min(2, "Team name is required"),
+    section_id: z.string().uuid().nullable().optional(),
+    leader_user_id: z.string().uuid().nullable().optional()
+});
+const UpdateTeamSchema = z.object({
+    name: z.string().trim().min(2, "Team name is required"),
+    section_id: z.string().uuid().nullable().optional(),
+    leader_user_id: z.string().uuid().nullable().optional(),
+    active: z.boolean().optional()
 });
 function maskEmail(email) {
     const [local, domain] = email.split("@");
@@ -154,6 +203,9 @@ function toAuthResponse(user, username) {
         fullName: user.full_name || undefined,
         employeeNo: user.employee_no ?? null,
         department: user.department ?? null,
+        divisionId: user.division_id ?? null,
+        sectionId: user.section_id ?? null,
+        teamId: user.team_id ?? null,
         employmentType: user.employment_type ?? "PERMANENT",
         profileCompleted
     });
@@ -165,6 +217,9 @@ function toAuthResponse(user, username) {
             full_name: user.full_name,
             employee_no: user.employee_no,
             department: user.department ?? null,
+            division_id: user.division_id ?? null,
+            section_id: user.section_id ?? null,
+            team_id: user.team_id ?? null,
             employment_type: user.employment_type ?? "PERMANENT",
             profile_completed: profileCompleted
         }
@@ -187,7 +242,7 @@ authRouter.post("/login", async (req, res, next) => {
         const loginEmail = normalizeEmailForStorage(loginRaw);
         const password = parsed.data.password;
         logger.info("auth_login_attempt", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
-        const users = await query(`SELECT id, password_hash, role, full_name, employee_no, department, employment_type, profile_completed, email
+        const users = await query(`SELECT id, password_hash, role, full_name, employee_no, department, division_id, section_id, team_id, employment_type, profile_completed, email
        FROM users
        WHERE (
          lower(employee_no)=lower($1)
@@ -222,6 +277,9 @@ authRouter.post("/login", async (req, res, next) => {
                             full_name: adProfile?.full_name ?? null,
                             employee_no: adProfile?.employee_no ?? null,
                             department: null,
+                            division_id: null,
+                            section_id: null,
+                            team_id: null,
                             employment_type: "PERMANENT",
                             profile_completed: false
                         };
@@ -277,9 +335,16 @@ authRouter.post("/login", async (req, res, next) => {
 authRouter.use(requireAuth);
 authRouter.get("/me", async (req, res, next) => {
     try {
-        const user = (await query(`SELECT id, email, role, full_name, employee_no, department, employment_type, profile_completed, is_active
-         FROM users
-         WHERE id=$1`, [req.user.userId]))[0];
+        const user = (await query(`SELECT u.id, u.email, u.role, u.full_name, u.employee_no, u.department,
+                u.division_id, dv.name AS division_name,
+                u.section_id, s.name AS section_name,
+                u.team_id, t.name AS team_name,
+                u.employment_type, u.profile_completed, u.is_active
+           FROM users u
+           LEFT JOIN divisions dv ON dv.id = u.division_id
+           LEFT JOIN sections s ON s.id = u.section_id
+           LEFT JOIN teams t ON t.id = u.team_id
+          WHERE u.id=$1`, [req.user.userId]))[0];
         if (!user)
             throw notFound();
         return res.json({ ...user, profile_completed: isProfileComplete(user) });
@@ -303,9 +368,13 @@ authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req,
             throw badRequest("Invalid department payload", parsed.error.flatten());
         return res.status(201).json(await createDepartmentGroup(parsed.data.name, {
             sectionId: parsed.data.section_id,
+            divisionId: parsed.data.division_id,
+            hodUserId: parsed.data.hod_user_id ?? parsed.data.hodUserId,
             managerUserId: parsed.data.manager_user_id ?? parsed.data.managerUserId,
             excoUserId: parsed.data.exco_user_id ?? parsed.data.excoUserId,
-            active: parsed.data.active
+            active: parsed.data.active,
+            isBusinessPartner: parsed.data.is_business_partner,
+            divisionIds: parsed.data.division_ids
         }));
     }
     catch (err) {
@@ -319,13 +388,19 @@ authRouter.put(["/departments/:department", "/groups/:department"], requireRole(
             throw badRequest("Invalid department payload", parsed.error.flatten());
         const updated = await updateDepartmentGroup(req.params.department, parsed.data.name, {
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "section_id") ? { sectionId: parsed.data.section_id } : {}),
+            ...(Object.prototype.hasOwnProperty.call(parsed.data, "division_id") ? { divisionId: parsed.data.division_id } : {}),
+            ...(Object.prototype.hasOwnProperty.call(parsed.data, "hod_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "hodUserId")
+                ? { hodUserId: parsed.data.hod_user_id ?? parsed.data.hodUserId ?? null }
+                : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "manager_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "managerUserId")
                 ? { managerUserId: parsed.data.manager_user_id ?? parsed.data.managerUserId ?? null }
                 : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "exco_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "excoUserId")
                 ? { excoUserId: parsed.data.exco_user_id ?? parsed.data.excoUserId ?? null }
                 : {}),
-            ...(Object.prototype.hasOwnProperty.call(parsed.data, "active") ? { active: parsed.data.active } : {})
+            ...(Object.prototype.hasOwnProperty.call(parsed.data, "active") ? { active: parsed.data.active } : {}),
+            ...(Object.prototype.hasOwnProperty.call(parsed.data, "is_business_partner") ? { isBusinessPartner: parsed.data.is_business_partner } : {}),
+            ...(Object.prototype.hasOwnProperty.call(parsed.data, "division_ids") ? { divisionIds: parsed.data.division_ids } : {})
         });
         return res.json(updated);
     }
@@ -354,7 +429,7 @@ authRouter.post("/sections", requireRole(["ADMIN"]), async (req, res, next) => {
         const parsed = CreateSectionSchema.safeParse(req.body);
         if (!parsed.success)
             throw badRequest("Invalid section payload", parsed.error.flatten());
-        return res.status(201).json(await createSectionGroup(parsed.data.name, parsed.data.exco_user_id ?? parsed.data.excoUserId));
+        return res.status(201).json(await createSectionGroup(parsed.data.name, parsed.data.exco_user_id ?? parsed.data.excoUserId, parsed.data.department_id, parsed.data.is_business_partner, parsed.data.division_ids));
     }
     catch (err) {
         return next(err);
@@ -368,7 +443,9 @@ authRouter.put("/sections/:id", requireRole(["ADMIN"]), async (req, res, next) =
         const excoUserId = Object.prototype.hasOwnProperty.call(parsed.data, "exco_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "excoUserId")
             ? parsed.data.exco_user_id ?? parsed.data.excoUserId ?? null
             : undefined;
-        return res.json(await updateSectionGroup(req.params.id, parsed.data.name, excoUserId));
+        const deptId = Object.prototype.hasOwnProperty.call(parsed.data, "department_id") ? parsed.data.department_id ?? null : undefined;
+        const divisionIds = Object.prototype.hasOwnProperty.call(parsed.data, "division_ids") ? parsed.data.division_ids : undefined;
+        return res.json(await updateSectionGroup(req.params.id, parsed.data.name, excoUserId, deptId, parsed.data.active, parsed.data.is_business_partner, divisionIds));
     }
     catch (err) {
         return next(err);
@@ -393,6 +470,164 @@ authRouter.get("/departments-with-sections", async (_req, res, next) => {
 authRouter.get("/leadership-users", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (_req, res, next) => {
     try {
         return res.json(await listEligibleLeadershipUsers());
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ---------------------------------------------------------------------------
+// Divisions
+// ---------------------------------------------------------------------------
+authRouter.get("/divisions", async (_req, res, next) => {
+    try {
+        return res.json(await listDivisions());
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/divisions", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = CreateDivisionSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid division payload", parsed.error.flatten());
+        return res.status(201).json(await createDivision(parsed.data.name, parsed.data.description));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.put("/divisions/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = UpdateDivisionSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid division payload", parsed.error.flatten());
+        return res.json(await updateDivision(req.params.id, parsed.data.name, parsed.data.description, parsed.data.active));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.delete("/divisions/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        return res.json(await deleteDivision(req.params.id));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ---------------------------------------------------------------------------
+// Teams
+// ---------------------------------------------------------------------------
+authRouter.get("/teams", async (req, res, next) => {
+    try {
+        const sectionId = typeof req.query.section_id === "string" ? req.query.section_id : undefined;
+        return res.json(await listTeams(sectionId));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/teams", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = CreateTeamSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid team payload", parsed.error.flatten());
+        return res.status(201).json(await createTeam(parsed.data.name, parsed.data.section_id, parsed.data.leader_user_id));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.put("/teams/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = UpdateTeamSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid team payload", parsed.error.flatten());
+        return res.json(await updateTeam(req.params.id, parsed.data.name, parsed.data.section_id, parsed.data.leader_user_id, parsed.data.active));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.delete("/teams/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        return res.json(await deleteTeam(req.params.id));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ---------------------------------------------------------------------------
+// Full org structure tree
+// ---------------------------------------------------------------------------
+authRouter.get("/org-structure", async (_req, res, next) => {
+    try {
+        return res.json(await listOrgStructure());
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// DELETE /auth/org-structure/unassigned — bulk-delete all unassigned nodes
+authRouter.delete("/org-structure/unassigned", requireRole(["ADMIN"]), async (_req, res, next) => {
+    try {
+        // Teams with no section
+        const unassignedTeams = await query(`SELECT id, name FROM teams WHERE section_id IS NULL`);
+        let teamsDeleted = 0;
+        const teamSkipped = [];
+        for (const t of unassignedTeams) {
+            try {
+                await deleteTeam(t.id);
+                teamsDeleted++;
+            }
+            catch {
+                teamSkipped.push(t.name);
+            }
+        }
+        // Sections with no department_id and no departments pointing to them
+        const unassignedSections = await query(`SELECT id, name FROM sections WHERE department_id IS NULL`);
+        let sectionsDeleted = 0;
+        const sectionSkipped = [];
+        for (const s of unassignedSections) {
+            try {
+                await deleteSectionGroup(s.id);
+                sectionsDeleted++;
+            }
+            catch {
+                sectionSkipped.push(s.name);
+            }
+        }
+        // Departments with no division_id
+        const unassignedDepts = await query(`SELECT id, name FROM departments WHERE division_id IS NULL`);
+        let deptsDeleted = 0;
+        const deptSkipped = [];
+        for (const d of unassignedDepts) {
+            try {
+                await deleteDepartmentGroup(d.name);
+                deptsDeleted++;
+            }
+            catch {
+                deptSkipped.push(d.name);
+            }
+        }
+        return res.json({
+            deleted: { departments: deptsDeleted, sections: sectionsDeleted, teams: teamsDeleted },
+            skipped: { departments: deptSkipped, sections: sectionSkipped, teams: teamSkipped },
+        });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// GET /auth/ceo — fetch CEO user(s)
+authRouter.get("/ceo", async (_req, res, next) => {
+    try {
+        const rows = await query(`SELECT id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active
+         FROM users
+        WHERE role::text = 'CEO'
+        ORDER BY is_active DESC, full_name NULLS LAST`);
+        return res.json(rows);
     }
     catch (err) {
         return next(err);
@@ -432,28 +667,74 @@ authRouter.post("/complete-profile", async (req, res, next) => {
             throw badRequest("Invalid profile payload", parsed.error.flatten());
         const employeeNo = String(parsed.data.employee_no || "").trim() || null;
         const department = await resolveDepartmentGroup(parsed.data.department);
+        await ensureUserOrgColumns();
+        // If team_id is provided but section_id is missing, resolve section from team
+        let sectionId = parsed.data.section_id ?? null;
+        const teamId = parsed.data.team_id ?? null;
+        if (teamId && !sectionId) {
+            const teamRows = await query(`SELECT section_id FROM teams WHERE id=$1`, [teamId]);
+            sectionId = teamRows[0]?.section_id ?? null;
+        }
         const rows = await query(`UPDATE users
           SET full_name=$2,
               department=$3,
               employment_type=$4,
               employee_no=$5,
+              division_id=$6,
+              section_id=$7,
+              team_id=$8,
               profile_completed=true,
               updated_at=now()
         WHERE id=$1
-        RETURNING id, role, full_name, employee_no, department, employment_type, profile_completed`, [req.user.userId, parsed.data.full_name, department, parsed.data.employment_type, employeeNo]);
-        return res.json(toAuthResponse(rows[0], req.user?.username || req.user?.fullName || "user"));
+        RETURNING id, role, full_name, employee_no, department, division_id, section_id, team_id, employment_type, profile_completed`, [req.user.userId, parsed.data.full_name, department, parsed.data.employment_type, employeeNo,
+            parsed.data.division_id ?? null, sectionId, teamId]);
+        const saved = rows[0];
+        // Fire-and-forget: notify user of completion + notify HR
+        void notifyProfileCompleted({
+            userId: saved.id,
+            fullName: saved.full_name,
+            email: (await query(`SELECT email FROM users WHERE id=$1`, [saved.id]))[0]?.email ?? "",
+            department: saved.department,
+            employmentType: saved.employment_type ?? "PERMANENT",
+            employeeNo: saved.employee_no
+        });
+        return res.json(toAuthResponse(saved, req.user?.username || req.user?.fullName || "user"));
     }
     catch (err) {
         return next(err);
     }
 });
-authRouter.get("/users", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (req, res, next) => {
+// Middleware: allow ADMIN always, otherwise check the user_management feature permission
+async function requireUserManagementAccess(req, res, next) {
+    if (!req.user)
+        return res.status(401).json({ error: "Unauthorized" });
+    if (req.user.role === "ADMIN")
+        return next();
     try {
-        const isAdmin = req.user.role === "ADMIN";
-        const rows = await query(`SELECT id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at
-       FROM users
-       WHERE ($1::boolean = true OR trim(department) = $2)
-       ORDER BY full_name NULLS LAST, email`, [isAdmin, String(req.user.department || "").trim()]);
+        const rows = await query(`SELECT allowed_roles FROM admin_feature_permissions WHERE feature_key = 'user_management' LIMIT 1`, []);
+        const allowed = rows[0]?.allowed_roles ?? ["ADMIN", "MANAGER", "CHIEF_OFFICER"];
+        if (allowed.includes(req.user.role))
+            return next();
+        return res.status(403).json({ error: "Forbidden" });
+    }
+    catch {
+        return res.status(403).json({ error: "Forbidden" });
+    }
+}
+authRouter.get("/users", requireAuth, requireUserManagementAccess, async (req, res, next) => {
+    try {
+        const divisionFilter = typeof req.query.division_id === "string" ? req.query.division_id : null;
+        const rows = await query(`SELECT u.id, u.full_name, u.email, u.employee_no, u.title, u.department,
+              u.division_id, dv.name AS division_name,
+              u.section_id, s.name AS section_name,
+              u.team_id, t.name AS team_name,
+              u.employment_type, u.role, u.profile_completed, u.is_active, u.created_at, u.updated_at
+         FROM users u
+         LEFT JOIN divisions dv ON dv.id = u.division_id
+         LEFT JOIN teams t ON t.id = u.team_id
+         LEFT JOIN sections s ON s.id = COALESCE(u.section_id, t.section_id)
+        WHERE ($1::uuid IS NULL OR u.division_id = $1::uuid)
+        ORDER BY u.full_name NULLS LAST, u.email`, [divisionFilter]);
         return res.json(rows);
     }
     catch (err) {
@@ -482,8 +763,19 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
         if (!parsed.success)
             throw badRequest("Invalid department payload", parsed.error.flatten());
         const department = await resolveDepartmentGroup(parsed.data.department);
+        await ensureUserOrgColumns();
+        // If team_id is provided but section_id is missing, resolve section from team
+        let deptSectionId = parsed.data.section_id ?? null;
+        const deptTeamId = parsed.data.team_id ?? null;
+        if (deptTeamId && !deptSectionId) {
+            const teamRows = await query(`SELECT section_id FROM teams WHERE id=$1`, [deptTeamId]);
+            deptSectionId = teamRows[0]?.section_id ?? null;
+        }
         const rows = await query(`UPDATE users
           SET department=$2,
+              division_id=$3,
+              section_id=$4,
+              team_id=$5,
               profile_completed =
                 CASE
                   WHEN coalesce(nullif(trim(full_name), ''), '') = '' THEN false
@@ -494,7 +786,7 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
                 END,
               updated_at=now()
         WHERE id=$1
-        RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at`, [req.params.id, department]);
+        RETURNING id, full_name, email, employee_no, title, department, division_id, section_id, team_id, employment_type, role, profile_completed, is_active, created_at, updated_at`, [req.params.id, department, parsed.data.division_id ?? null, deptSectionId, deptTeamId]);
         if (!rows[0])
             throw notFound();
         return res.json(rows[0]);
@@ -621,9 +913,7 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req, res, next) => {
         const employeeNo = parsed.data.employee_no?.trim() || null;
         const sectionOrDepartment = parsed.data.section ?? parsed.data.department ?? "";
         const department = sectionOrDepartment
-            ? role === "EXCO"
-                ? await resolveSectionGroup(sectionOrDepartment)
-                : await resolveDepartmentGroup(sectionOrDepartment)
+            ? await resolveDepartmentGroup(sectionOrDepartment)
             : null;
         const title = parsed.data.title || null;
         const employmentType = parsed.data.employment_type ?? "PERMANENT";
@@ -680,9 +970,7 @@ authRouter.put("/users/:id", requireRole(["ADMIN"]), async (req, res, next) => {
             if (!existing[0])
                 throw notFound();
             const department = organization
-                ? existing[0].role === "EXCO"
-                    ? await resolveSectionGroup(organization)
-                    : await resolveDepartmentGroup(organization)
+                ? await resolveDepartmentGroup(organization)
                 : null;
             fields.push(`department=$${idx++}`);
             values.push(department);
@@ -695,9 +983,21 @@ authRouter.put("/users/:id", requireRole(["ADMIN"]), async (req, res, next) => {
             fields.push(`is_active=$${idx++}`);
             values.push(parsed.data.is_active);
         }
+        if (Object.prototype.hasOwnProperty.call(parsed.data, "division_id")) {
+            fields.push(`division_id=$${idx++}`);
+            values.push(parsed.data.division_id ?? null);
+        }
+        if (Object.prototype.hasOwnProperty.call(parsed.data, "section_id")) {
+            fields.push(`section_id=$${idx++}`);
+            values.push(parsed.data.section_id ?? null);
+        }
+        if (Object.prototype.hasOwnProperty.call(parsed.data, "team_id")) {
+            fields.push(`team_id=$${idx++}`);
+            values.push(parsed.data.team_id ?? null);
+        }
         if (fields.length === 0)
             return res.json({ ok: true });
-        const sql = `UPDATE users SET ${fields.join(', ')}, updated_at=now() WHERE id=$${idx} RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at`;
+        const sql = `UPDATE users SET ${fields.join(', ')}, updated_at=now() WHERE id=$${idx} RETURNING id, full_name, email, employee_no, title, department, division_id, section_id, team_id, employment_type, role, profile_completed, is_active, created_at, updated_at`;
         values.push(req.params.id);
         const rows = await query(sql, values);
         if (!rows[0])
@@ -708,6 +1008,79 @@ authRouter.put("/users/:id", requireRole(["ADMIN"]), async (req, res, next) => {
         return next(err);
     }
 });
+// ---------------------------------------------------------------------------
+// Delete user (soft-delete)
+// ---------------------------------------------------------------------------
+authRouter.delete("/users/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        if (req.params.id === req.user.userId)
+            throw badRequest("You cannot delete your own account");
+        const rows = await query(`SELECT role::text AS role FROM users WHERE id=$1`, [req.params.id]);
+        if (!rows[0])
+            throw notFound("User not found");
+        if (rows[0].role === "ADMIN")
+            throw forbidden("Cannot deactivate admin accounts");
+        await query(`UPDATE users SET is_active=false, updated_at=now() WHERE id=$1`, [req.params.id]);
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ---------------------------------------------------------------------------
+// Manager Types
+// ---------------------------------------------------------------------------
+const CreateManagerTypeSchema = z.object({
+    name: z.string().trim().min(2, "Name is required"),
+    role: z.enum(["MANAGER", "HOD"]).default("MANAGER"),
+    description: z.string().trim().optional().nullable()
+});
+const UpdateManagerTypeSchema = z.object({
+    name: z.string().trim().min(2, "Name is required"),
+    role: z.enum(["MANAGER", "HOD"]),
+    description: z.string().trim().optional().nullable(),
+    active: z.boolean().optional()
+});
+authRouter.get("/manager-types", async (_req, res, next) => {
+    try {
+        return res.json(await listManagerTypes());
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/manager-types", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = CreateManagerTypeSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid manager type payload", parsed.error.flatten());
+        return res.status(201).json(await createManagerType(parsed.data.name, parsed.data.role, parsed.data.description));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.put("/manager-types/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = UpdateManagerTypeSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid manager type payload", parsed.error.flatten());
+        return res.json(await updateManagerType(req.params.id, parsed.data.name, parsed.data.role, parsed.data.description, parsed.data.active));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.delete("/manager-types/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        await deleteManagerType(req.params.id);
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ---------------------------------------------------------------------------
 authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (req, res, next) => {
     try {
         const parsed = UpdateUserRoleSchema.safeParse(req.body);
@@ -722,6 +1095,147 @@ authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER"
           AND ($3::boolean = true OR role <> 'ADMIN')
         RETURNING id`, [department, parsed.data.role, req.user.role === "ADMIN"]);
         return res.json({ ok: true, updated_count: rows.length, department, role: parsed.data.role });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ─── Employment Types ─────────────────────────────────────────────────────────
+const EmpTypeSchema = z.object({
+    code: z.string().trim().min(1).max(40),
+    name: z.string().trim().min(1).max(80),
+    active: z.boolean().optional(),
+    sort_order: z.coerce.number().int().optional(),
+});
+authRouter.get("/employment-types", async (_req, res, next) => {
+    try {
+        const rows = await query(`SELECT id, code, name, active, sort_order FROM employment_types ORDER BY sort_order, name`);
+        return res.json(rows);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/employment-types", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = EmpTypeSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid employment type", parsed.error.flatten());
+        const code = parsed.data.code.trim().toUpperCase().replace(/[^A-Z0-9_]+/g, "_");
+        const row = (await query(`INSERT INTO employment_types (code, name, active, sort_order)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (code) DO UPDATE
+         SET name=$2, active=$3, sort_order=$4, updated_at=now()
+       RETURNING id`, [code, parsed.data.name, parsed.data.active ?? true, parsed.data.sort_order ?? 99]))[0];
+        return res.status(201).json({ id: row.id, code });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.put("/employment-types/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = EmpTypeSchema.partial().safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid employment type", parsed.error.flatten());
+        const updates = [];
+        const params = [];
+        if (parsed.data.name !== undefined) {
+            params.push(parsed.data.name);
+            updates.push(`name=$${params.length}`);
+        }
+        if (parsed.data.active !== undefined) {
+            params.push(parsed.data.active);
+            updates.push(`active=$${params.length}`);
+        }
+        if (parsed.data.sort_order !== undefined) {
+            params.push(parsed.data.sort_order);
+            updates.push(`sort_order=$${params.length}`);
+        }
+        if (updates.length === 0)
+            return res.json({ ok: true });
+        params.push(req.params.id);
+        const rows = await query(`UPDATE employment_types SET ${updates.join(",")},updated_at=now() WHERE id=$${params.length} RETURNING id`, params);
+        if (!rows[0])
+            throw badRequest("Employment type not found");
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.delete("/employment-types/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const rows = await query(`DELETE FROM employment_types WHERE id=$1 RETURNING id`, [req.params.id]);
+        if (!rows[0])
+            throw badRequest("Employment type not found");
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+const FEATURE_KEYS = [
+    "user_management", "roles_permissions", "travel_setup", "org_structure",
+    "team_roster", "ceo_management", "employees",
+    "exco_members", "managers", "leadership_assignments", "workflow_builder",
+    "request_types", "reporting_lines"
+];
+const FEATURE_DEFAULTS = {
+    user_management: ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    roles_permissions: ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    travel_setup: ["ADMIN", "HR_MANAGER", "AUTH_OFFICER"],
+    org_structure: ["ADMIN"],
+    team_roster: ["ADMIN"],
+    ceo_management: ["ADMIN"],
+    employees: ["ADMIN"],
+    exco_members: ["ADMIN", "MANAGER"],
+    managers: ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    leadership_assignments: ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    workflow_builder: ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    request_types: ["ADMIN"],
+    reporting_lines: ["ADMIN", "MANAGER", "CHIEF_OFFICER"]
+};
+authRouter.get("/admin-feature-permissions", requireAuth, async (_req, res, next) => {
+    try {
+        await query(`CREATE TABLE IF NOT EXISTS admin_feature_permissions (
+         feature_key text PRIMARY KEY,
+         allowed_roles text[] NOT NULL DEFAULT '{}'::text[],
+         updated_at timestamptz NOT NULL DEFAULT now()
+       )`, []);
+        const rows = await query(`SELECT feature_key, allowed_roles FROM admin_feature_permissions ORDER BY feature_key`, []);
+        const features = { ...FEATURE_DEFAULTS };
+        for (const row of rows) {
+            features[row.feature_key] = row.allowed_roles;
+        }
+        return res.json({ features });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.put("/admin-feature-permissions", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const body = req.body;
+        if (!body.features || typeof body.features !== "object")
+            throw badRequest("features object is required");
+        await query(`CREATE TABLE IF NOT EXISTS admin_feature_permissions (
+         feature_key text PRIMARY KEY,
+         allowed_roles text[] NOT NULL DEFAULT '{}'::text[],
+         updated_at timestamptz NOT NULL DEFAULT now()
+       )`, []);
+        for (const key of FEATURE_KEYS) {
+            const rawRoles = body.features[key];
+            if (!Array.isArray(rawRoles))
+                continue;
+            // ADMIN always has access — ensure it's always included
+            const roles = Array.from(new Set([...rawRoles, "ADMIN"])).filter((r) => typeof r === "string");
+            await query(`INSERT INTO admin_feature_permissions (feature_key, allowed_roles, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (feature_key) DO UPDATE
+           SET allowed_roles = $2, updated_at = now()`, [key, roles]);
+        }
+        return res.json({ ok: true });
     }
     catch (err) {
         return next(err);

@@ -20,6 +20,8 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(16),
   CORS_ORIGIN: z.string().optional(),
+  // Public URL of the frontend — included as the sign-in link in onboarding emails
+  APP_URL: z.string().default("http://10.3.10.59:5174"),
   AD_AUTH_ENABLED: booleanFromEnv(false),
   AD_AUTH_URL: z.string().optional(),
   AD_API_BASE_URL: z.string().default("http://dt-internalproxy-1.etl.co.ls/ldap/api"),
@@ -29,13 +31,21 @@ const EnvSchema = z.object({
   AD_SYNTHETIC_EMAIL_DOMAIN: z.string().default("etl.co.ls"),
   ADMIN_SEED_EMAIL: z.string().default("admin@example.com"),
   ADMIN_SEED_PASSWORD: z.string().default("pass123"),
+  // HTTP email API (Active Directory email service — primary transport)
+  EMAIL_API_ENABLED: booleanFromEnv(false),
+  EMAIL_API_BASE_URL: z.string().default("http://10.1.10.105/EmailActiveDirectoryAPI"),
+  EMAIL_API_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  // Legacy SMTP (fallback — used only if EMAIL_API_ENABLED is false and SMTP_ENABLED is true)
   SMTP_ENABLED: booleanFromEnv(false),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().positive().optional(),
   SMTP_SECURE: booleanFromEnv(false),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
-  SMTP_FROM: z.string().optional()
+  SMTP_FROM: z.string().optional(),
+  // Microsoft Teams Incoming Webhook (channel notifications)
+  TEAMS_ENABLED: booleanFromEnv(false),
+  TEAMS_WEBHOOK_URL: z.string().optional()
 });
 
 const parsed = EnvSchema.safeParse(process.env);

@@ -13,7 +13,9 @@ const TravelTypeSchema = z.object({
   rate_general_staff: z.coerce.number().nonnegative().default(0),
   rate_exco: z.coerce.number().nonnegative().default(0),
   rate_ceo: z.coerce.number().nonnegative().default(0),
-  active: z.boolean().optional()
+  currency: z.string().trim().min(2).max(5).default("LSL"),
+  active: z.boolean().optional(),
+  requires_accommodation: z.boolean().optional()
 });
 
 const TravelTypeUpdateSchema = TravelTypeSchema.partial();
@@ -52,8 +54,8 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"])
     const row = (
       await query<{ id: string }>(
         `INSERT INTO travel_types
-          (code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, active, created_by_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          (code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, created_by_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (code) DO UPDATE
            SET name = EXCLUDED.name,
                location_mode = EXCLUDED.location_mode,
@@ -61,7 +63,9 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"])
                rate_general_staff = EXCLUDED.rate_general_staff,
                rate_exco = EXCLUDED.rate_exco,
                rate_ceo = EXCLUDED.rate_ceo,
+               currency = EXCLUDED.currency,
                active = EXCLUDED.active,
+               requires_accommodation = EXCLUDED.requires_accommodation,
                updated_at = now()
          RETURNING id`,
         [
@@ -72,7 +76,9 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"])
           Number(parsed.data.rate_general_staff.toFixed(2)),
           Number(parsed.data.rate_exco.toFixed(2)),
           Number(parsed.data.rate_ceo.toFixed(2)),
+          parsed.data.currency,
           parsed.data.active ?? true,
+          parsed.data.requires_accommodation ?? false,
           req.user!.userId
         ]
       )

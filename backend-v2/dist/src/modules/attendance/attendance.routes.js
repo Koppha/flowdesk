@@ -5,6 +5,7 @@ import { requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canCreateAdvanceOnBehalf, getUserAccountState, isProfileComplete } from "../../lib/userProfile.js";
+import { getUserOrgPath } from "../../lib/departments.js";
 const DayCodeSchema = z.object({
     day: z.coerce.number().int().min(1).max(31),
     code: z.enum(["R", "C", "S", "A", "O", "H", "E", "T", "X", ""])
@@ -102,6 +103,18 @@ attendanceRouter.post("/", async (req, res, next) => {
         if (!parsed.success)
             throw badRequest("Invalid attendance payload", parsed.error.flatten());
         await ensureAttendancePermissions(req.user.userId, parsed.data.employee_id);
+        // Auto-fill division/section from user's org profile if not provided
+        let division = parsed.data.division ?? null;
+        let sectionName = parsed.data.section_name ?? null;
+        if (!division || !sectionName) {
+            const orgPath = await getUserOrgPath(parsed.data.employee_id);
+            if (orgPath) {
+                if (!division)
+                    division = orgPath.division_name ?? null;
+                if (!sectionName)
+                    sectionName = orgPath.section_name ?? null;
+            }
+        }
         const totals = summarizeDayCodes(parsed.data.day_codes);
         const rows = await query(`INSERT INTO attendance_records
        (id, employee_id, compiled_by_id, division, section_name, month, year, account_project_no, day_codes,
@@ -129,8 +142,8 @@ attendanceRouter.post("/", async (req, res, next) => {
             randomUUID(),
             parsed.data.employee_id,
             req.user.userId,
-            parsed.data.division ?? null,
-            parsed.data.section_name ?? null,
+            division,
+            sectionName,
             parsed.data.month,
             parsed.data.year,
             parsed.data.account_project_no ?? null,

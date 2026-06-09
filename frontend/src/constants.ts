@@ -26,6 +26,30 @@ export const SOUTH_AFRICA_PROVINCES = [
 export type TravelLocationMode = "DISTRICT" | "COUNTRY_CITY";
 export type TravelRateKind = "MEAL" | "DAILY";
 
+export const CURRENCIES = [
+  { code: "LSL", symbol: "M",   name: "Lesotho Maloti" },
+  { code: "ZAR", symbol: "R",   name: "South African Rand" },
+  { code: "USD", symbol: "$",   name: "US Dollar" },
+  { code: "EUR", symbol: "€",   name: "Euro" },
+  { code: "GBP", symbol: "£",   name: "British Pound" },
+  { code: "BWP", symbol: "P",   name: "Botswana Pula" },
+  { code: "MZN", symbol: "MT",  name: "Mozambican Metical" },
+  { code: "ZMW", symbol: "K",   name: "Zambian Kwacha" },
+  { code: "NAD", symbol: "N$",  name: "Namibian Dollar" },
+  { code: "MWK", symbol: "MK",  name: "Malawian Kwacha" },
+] as const;
+
+export type CurrencyCode = typeof CURRENCIES[number]["code"];
+
+export function getCurrencySymbol(code?: string | null): string {
+  return CURRENCIES.find(c => c.code === code)?.symbol ?? (code ?? "M");
+}
+
+export function formatMoney(value: number | string | null | undefined, currencyCode?: string | null): string {
+  const symbol = getCurrencySymbol(currencyCode);
+  return `${symbol} ${Number(value || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export type TravelLocation = {
   id?: string;
   travel_type_id?: string;
@@ -45,36 +69,11 @@ export type TravelType = {
   rate_general_staff: number;
   rate_exco: number;
   rate_ceo: number;
+  currency?: string;
   active?: boolean;
+  requires_accommodation?: boolean;
   locations?: TravelLocation[];
 };
-
-export const DEFAULT_TRAVEL_TYPES: TravelType[] = [
-  {
-    id: "local-default",
-    code: "TRAVEL_SUBSISTENCE",
-    name: "Local Travel Allowance",
-    location_mode: "DISTRICT",
-    rate_kind: "MEAL",
-    rate_general_staff: 0,
-    rate_exco: 0,
-    rate_ceo: 0,
-    active: true,
-    locations: LESOTHO_DISTRICTS.map((district) => ({ district }))
-  },
-  {
-    id: "cma-default",
-    code: "CMA",
-    name: "Business Travel Allowance (CMA)",
-    location_mode: "COUNTRY_CITY",
-    rate_kind: "DAILY",
-    rate_general_staff: 600,
-    rate_exco: 800,
-    rate_ceo: 1000,
-    active: true,
-    locations: []
-  }
-];
 
 export function travelTypeLabel(code: string | null | undefined, travelTypes: TravelType[]) {
   if (!code) return "—";

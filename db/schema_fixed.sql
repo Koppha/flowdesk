@@ -16,10 +16,6 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE advance_type AS ENUM ('TRAVEL_SUBSISTENCE','CMA','SALARY','LOAN');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
   CREATE TYPE payment_method AS ENUM ('ECOCASH','BANK','CASH','OTHER');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -87,7 +83,7 @@ CREATE TABLE IF NOT EXISTS advance_requests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   requester_id uuid NOT NULL REFERENCES users(id),
   created_by_id uuid NOT NULL REFERENCES users(id),
-  type text NOT NULL DEFAULT 'TRAVEL_SUBSISTENCE',
+  type text NOT NULL,
   purpose text,
   project_number text,
   payment_method payment_method NOT NULL DEFAULT 'ECOCASH',

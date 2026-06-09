@@ -1,16 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import Swal from "sweetalert2";
+import "sweetalert2/dist/sweetalert2.min.css";
+import { showNotice } from "./alerts";
 import "./styles.css";
 import App from "./App";
 
 window.alert = (message?: string) => {
-  Swal.fire({
-    icon: "info",
-    title: "Notice",
-    text: String(message ?? ""),
-    confirmButtonText: "OK"
-  });
+  void showNotice(String(message ?? ""));
 };
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

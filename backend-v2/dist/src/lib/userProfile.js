@@ -14,7 +14,7 @@ export function isProfileComplete(user) {
     return Boolean(employeeNo);
 }
 export async function getUserAccountState(userId) {
-    const rows = await query(`SELECT id, role, full_name, employee_no, department, employment_type, profile_completed, is_active
+    const rows = await query(`SELECT id, role, full_name, employee_no, department, division_id, section_id, team_id, employment_type, profile_completed, is_active
      FROM users
      WHERE id=$1`, [userId]);
     const user = rows[0];
@@ -39,5 +39,5 @@ export function canCreateAdvanceOnBehalf(user) {
     const role = String(user.role || "").trim().toUpperCase();
     if (isPermanentEmployee(user))
         return true;
-    return ["MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"].includes(role);
+    return ["HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "CEO", "EXCO"].includes(role);
 }

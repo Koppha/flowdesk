@@ -1,20 +1,28 @@
 import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
 import { env } from "../config/env.js";
-import { ensureDepartmentGroups } from "../lib/departments.js";
+import { ensureDepartmentGroups, ensureManagerTypesTable, ensureUserOrgColumns } from "../lib/departments.js";
 import { ensureTravelSchema } from "../lib/travel.js";
 const DEFAULT_ADMIN_EMAIL = env.ADMIN_SEED_EMAIL || "admin@example.com";
 const DEFAULT_ADMIN_PASSWORD = env.ADMIN_SEED_PASSWORD || "pass123";
 export async function bootstrapSystem() {
     await ensureUserSchema();
     await ensureDepartmentGroups();
+    await ensureUserOrgColumns();
+    await ensureManagerTypesTable();
     await ensureFeatureSchema();
+    await ensureWorkflowSchema();
     await ensureTravelSchema();
+    await ensureReportingLinesSchema();
+    await ensureRequestTypesSchema();
+    await ensureEmploymentTypesSchema();
     await ensureAdminAccount();
 }
 async function ensureUserSchema() {
     await ensureEnumColumnValue("users", "role", "EXCO");
+    await ensureEnumColumnValue("users", "role", "HOD");
     await ensureEnumColumnValue("users", "role", "HR_MANAGER");
+    await ensureEnumColumnValue("users", "role", "CEO");
     await ensureEnumColumnValue("advance_requests", "status", "HR_OFFICER");
     await ensureEnumColumnValue("advance_requests", "status", "HR_MANAGER_REVIEW");
     await ensureEnumColumnValue("advance_requests", "status", "HR_REVIEW");
@@ -124,6 +132,18 @@ async function ensureEnumColumnValue(tableName, columnName, value) {
 
       IF enum_type IS NOT NULL THEN
         EXECUTE format('ALTER TYPE %s ADD VALUE IF NOT EXISTS %L', enum_type, '${safeValue}');
+      END IF;
+    END $$;
+  `);
+}
+async function ensureEnumTypeValue(typeName, value) {
+    const safeType = typeName.replace(/'/g, "''");
+    const safeValue = value.replace(/'/g, "''");
+    await query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = '${safeType}') THEN
+        EXECUTE format('ALTER TYPE %I ADD VALUE IF NOT EXISTS %L', '${safeType}', '${safeValue}');
       END IF;
     END $$;
   `);
@@ -240,13 +260,40 @@ async function ensureFeatureSchema() {
       district text,
       address text,
       contact text,
-      department text,
       created_by_id uuid REFERENCES users(id),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS recommended_by_supervisor text`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS supervisor_date text`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS approved_by_hod text`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS approved_by_cto text`);
+    // Workflow audit columns for overtime_requests
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS supervisor_approved_by_id uuid REFERENCES users(id)`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS supervisor_approved_at timestamptz`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS hod_approved_by_id uuid REFERENCES users(id)`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS hod_approved_at timestamptz`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS cto_approved_by_id uuid REFERENCES users(id)`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS cto_approved_at timestamptz`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS rejected_by_id uuid REFERENCES users(id)`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS rejected_at timestamptz`);
+    await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS rejection_reason text`);
+    // Workflow audit columns for overtime_claims
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS compensation_type text`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS salary_class text`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS number_of_hours numeric(12,2)`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS calculated_by text`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS checked_noted_earning_by text`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS transferred_to_summary_by text`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS manager_authorised_by_id uuid REFERENCES users(id)`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS manager_authorised_at timestamptz`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS hr_noted_at timestamptz`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS finance_verified_at timestamptz`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS earnings_recorded_at timestamptz`);
+    await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS summary_transferred_at timestamptz`);
     await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS district text`);
+    await query(`ALTER TABLE accommodation_hotels DROP COLUMN IF EXISTS department`);
     await query(`CREATE INDEX IF NOT EXISTS idx_accommodation_hotels_district ON accommodation_hotels(district)`);
     // lightweight key/value for system state (used to expire sessions)
     await query(`
@@ -257,7 +304,198 @@ async function ensureFeatureSchema() {
   `);
     await query(`INSERT INTO system_state (key, value) VALUES ('meal_value', '0')
      ON CONFLICT (key) DO NOTHING`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS override_chain jsonb`);
     // Force-clear sessions so users must login from scratch
     await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+}
+async function ensureRequestTypesSchema() {
+    await query(`
+    CREATE TABLE IF NOT EXISTS custom_request_types (
+      id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      name         text        NOT NULL,
+      code         text        NOT NULL,
+      description  text,
+      icon         text,
+      color        text,
+      category     text,
+      status       text        NOT NULL DEFAULT 'DRAFT',
+      is_active    boolean     NOT NULL DEFAULT true,
+      created_by_id uuid       REFERENCES users(id),
+      created_at   timestamptz NOT NULL DEFAULT now(),
+      updated_at   timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT custom_request_types_code_uq UNIQUE (code)
+    )
+  `);
+    await query(`
+    CREATE TABLE IF NOT EXISTS request_type_fields (
+      id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_type_id  uuid        NOT NULL REFERENCES custom_request_types(id) ON DELETE CASCADE,
+      field_key        text        NOT NULL,
+      field_label      text        NOT NULL,
+      field_type       text        NOT NULL DEFAULT 'text',
+      is_required      boolean     NOT NULL DEFAULT false,
+      placeholder      text,
+      options          jsonb,
+      sort_order       integer     NOT NULL DEFAULT 0,
+      is_active        boolean     NOT NULL DEFAULT true,
+      created_at       timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`
+    CREATE TABLE IF NOT EXISTS request_type_permissions (
+      id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_type_id  uuid        NOT NULL REFERENCES custom_request_types(id) ON DELETE CASCADE,
+      permission_type  text        NOT NULL DEFAULT 'ALL',
+      department       text,
+      user_id          uuid        REFERENCES users(id) ON DELETE CASCADE,
+      can_submit       boolean     NOT NULL DEFAULT true,
+      can_design       boolean     NOT NULL DEFAULT false,
+      created_by_id    uuid        REFERENCES users(id),
+      created_at       timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_rtf_type   ON request_type_fields(request_type_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_rtp_type   ON request_type_permissions(request_type_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_rtp_user   ON request_type_permissions(user_id)`);
+}
+async function ensureReportingLinesSchema() {
+    await query(`
+    CREATE TABLE IF NOT EXISTS reporting_lines (
+      id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      manager_id     uuid        REFERENCES users(id),
+      effective_from date        NOT NULL DEFAULT CURRENT_DATE,
+      effective_to   date,
+      reason         text,
+      is_active      boolean     NOT NULL DEFAULT true,
+      created_by_id  uuid        REFERENCES users(id),
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      updated_at     timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_employee ON reporting_lines(employee_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_manager  ON reporting_lines(manager_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_active   ON reporting_lines(is_active)`);
+}
+async function ensureWorkflowSchema() {
+    await query(`DO $$ BEGIN CREATE TYPE workflow_status AS ENUM ('DRAFT','ACTIVE','INACTIVE'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
+    await query(`DO $$ BEGIN CREATE TYPE workflow_request_type AS ENUM ('ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','PROCUREMENT_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
+    for (const requestType of [
+        "ADVANCE_REQUEST",
+        "TRAVEL_REQUEST",
+        "ACCOMMODATION_REQUEST",
+        "OVERTIME_REQUEST",
+        "PROCUREMENT_REQUEST",
+        "CLEARANCE_REQUEST",
+        "PETTY_CASH_REQUEST",
+        "CUSTOM_WORKFLOW",
+        "CLAIM_REQUEST"
+    ]) {
+        await ensureEnumTypeValue("workflow_request_type", requestType);
+    }
+    await query(`
+    CREATE TABLE IF NOT EXISTS position_types (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      code text UNIQUE NOT NULL,
+      description text,
+      applies_to workflow_request_type[] NOT NULL DEFAULT ARRAY['ADVANCE_REQUEST']::workflow_request_type[],
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`
+    CREATE TABLE IF NOT EXISTS workflows (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      request_type workflow_request_type NOT NULL DEFAULT 'ADVANCE_REQUEST',
+      department text,
+      description text,
+      status workflow_status NOT NULL DEFAULT 'DRAFT',
+      created_by_id uuid REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS description text`);
+    await query(`
+    CREATE TABLE IF NOT EXISTS workflow_steps (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+      step_order integer NOT NULL,
+      position_type_id uuid REFERENCES position_types(id),
+      position_name text NOT NULL,
+      description text,
+      is_required boolean NOT NULL DEFAULT false,
+      skip_if_unassigned boolean NOT NULL DEFAULT false,
+      allow_delegation boolean NOT NULL DEFAULT false,
+      comments_required boolean NOT NULL DEFAULT false,
+      escalation_days integer NOT NULL DEFAULT 0,
+      is_final_approval boolean NOT NULL DEFAULT false,
+      is_system_step boolean NOT NULL DEFAULT false,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`
+    CREATE TABLE IF NOT EXISTS workflow_rules (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+      rule_name text NOT NULL,
+      condition_field text NOT NULL,
+      condition_operator text NOT NULL,
+      condition_value text NOT NULL,
+      additional_position_type_id uuid REFERENCES position_types(id),
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_position_types_code ON position_types(code)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_workflow_rules_workflow ON workflow_rules(workflow_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_workflows_request_type ON workflows(request_type)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_workflows_department ON workflows(department)`);
+    await query(`
+    INSERT INTO position_types (name, code, description, applies_to)
+    VALUES
+      ('Employee', 'EMPLOYEE', 'Request Initiator', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('HOD', 'HOD', 'Department Head', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('Manager', 'MANAGER', 'Department Manager', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('EXCO Owner', 'EXCO_OWNER', 'Executive Committee Member', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('Finance', 'FINANCE', 'Finance Approval', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('Procurement', 'PROCUREMENT', 'Procurement Manager', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('HR Review', 'HR_REVIEW', 'HR Review', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('Legal Review', 'LEGAL_REVIEW', 'Legal Department', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
+      ('CEO', 'CEO', 'Chief Executive Officer', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[])
+    ON CONFLICT (code) DO UPDATE
+      SET name = EXCLUDED.name,
+          description = EXCLUDED.description,
+          applies_to = EXCLUDED.applies_to,
+          is_active = true,
+          updated_at = now();
+  `);
+}
+async function ensureEmploymentTypesSchema() {
+    await query(`
+    CREATE TABLE IF NOT EXISTS employment_types (
+      id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      code       text        UNIQUE NOT NULL,
+      name       text        NOT NULL,
+      active     boolean     NOT NULL DEFAULT true,
+      sort_order integer     NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`
+    INSERT INTO employment_types (code, name, sort_order) VALUES
+      ('PERMANENT', 'Permanent', 1),
+      ('INTERN',    'Intern',    2),
+      ('TEMPORARY', 'Temporary', 3)
+    ON CONFLICT (code) DO NOTHING
+  `);
 }

@@ -17,7 +17,10 @@ function allowedInboxForRole(role) {
                 { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
-                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
+                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "OVERTIME_REQUEST", status: "SUBMITTED" },
+                { doc_type: "OVERTIME_REQUEST", status: "SUPERVISOR_APPROVED" },
+                { doc_type: "OVERTIME_CLAIM", status: "SUBMITTED" }
             ];
         case "HR_MANAGER":
             return [
@@ -28,7 +31,10 @@ function allowedInboxForRole(role) {
                 { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
-                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
+                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "OVERTIME_CLAIM", status: "MANAGER_AUTHORISED" },
+                { doc_type: "OVERTIME_CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "OVERTIME_CLAIM", status: "EARNINGS_RECORDED" }
             ];
         case "AUTH_OFFICER":
             return [
@@ -51,7 +57,8 @@ function allowedInboxForRole(role) {
                 { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
                 { doc_type: "ADVANCE", status: "HR_REVIEW" },
                 { doc_type: "ADVANCE", status: "HR_OFFICER" },
-                { doc_type: "ADVANCE", status: "APPROVED" }
+                { doc_type: "ADVANCE", status: "APPROVED" },
+                { doc_type: "OVERTIME_REQUEST", status: "HOD_APPROVED" }
             ];
         case "FINANCE":
             return [
@@ -60,7 +67,8 @@ function allowedInboxForRole(role) {
                 { doc_type: "ACCOMMODATION", status: "SUBMITTED" },
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
-                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
+                { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "OVERTIME_CLAIM", status: "HR_NOTED" }
             ];
         case "ADMIN":
             return "ALL";
@@ -124,15 +132,14 @@ inboxRouter.get("/", async (req, res, next) => {
         const items = [];
         const loadAdvanceByStatus = async (status, advanceType) => {
             const params = [status];
-            const typeFilter = advanceType === "LOAN"
-                ? ` AND ar.type = 'LOAN'`
-                : advanceType === "TRAVEL_SUBSISTENCE"
-                    ? ` AND ar.type = 'TRAVEL_SUBSISTENCE'`
-                    : advanceType === "SALARY"
-                        ? ` AND ar.type = 'SALARY'`
-                        : advanceType === "NON_LOAN"
-                            ? ` AND ar.type <> 'LOAN'`
-                            : "";
+            let typeFilter = "";
+            if (advanceType === "NON_LOAN") {
+                typeFilter = ` AND ar.type <> 'LOAN'`;
+            }
+            else if (advanceType) {
+                params.push(advanceType);
+                typeFilter = ` AND ar.type = $${params.length}`;
+            }
             let ownershipFilter = "";
             if (effectiveRole === "MANAGER" && status === "SUBMITTED") {
                 params.push(delegation?.manager_id || req.user.userId);
@@ -162,11 +169,18 @@ inboxRouter.get("/", async (req, res, next) => {
             }
         };
         const loadClaimByStatus = async (status) => {
+            const params = [status];
+            let ownershipFilter = "";
+            if (effectiveRole === "MANAGER" && status === "SUBMITTED") {
+                params.push(delegation?.manager_id || req.user.userId);
+                ownershipFilter = ` AND d.manager_user_id = $${params.length}`;
+            }
             const rows = await query(`SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, u.full_name AS claimant_name
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
-         WHERE c.status = $1
-         ORDER BY c.created_at DESC`, [status]);
+         LEFT JOIN departments d ON lower(trim(d.name)) = lower(trim(u.department))
+         WHERE c.status = $1${ownershipFilter}
+         ORDER BY c.created_at DESC`, params);
             for (const c of rows) {
                 items.push({
                     doc_type: "CLAIM",
@@ -205,6 +219,43 @@ inboxRouter.get("/", async (req, res, next) => {
                 });
             }
         };
+        const loadOvertimeRequestByStatus = async (status) => {
+            const rows = await query(`SELECT o.id, o.status, o.employee_name, o.section_name, o.year, o.month,
+                u.full_name AS created_by_name
+         FROM overtime_requests o
+         JOIN users u ON u.id = o.created_by_id
+         WHERE o.status = $1
+         ORDER BY o.created_at DESC`, [status]);
+            for (const o of rows) {
+                items.push({
+                    doc_type: "OVERTIME_REQUEST",
+                    id: o.id,
+                    status: o.status,
+                    employee_name: o.employee_name,
+                    section_name: o.section_name,
+                    year: o.year,
+                    month: o.month
+                });
+            }
+        };
+        const loadOvertimeClaimByStatus = async (status) => {
+            const rows = await query(`SELECT o.id, o.status, o.employee_name, o.division, o.year, o.month, o.total_amount
+         FROM overtime_claims o
+         WHERE o.status = $1
+         ORDER BY o.created_at DESC`, [status]);
+            for (const o of rows) {
+                items.push({
+                    doc_type: "OVERTIME_CLAIM",
+                    id: o.id,
+                    status: o.status,
+                    employee_name: o.employee_name,
+                    division: o.division,
+                    year: o.year,
+                    month: o.month,
+                    total_amount: Number(o.total_amount)
+                });
+            }
+        };
         if (rule === "ALL") {
             await loadAdvanceByStatus("SUBMITTED");
             await loadAdvanceByStatus("CHIEF_OFFICER_REVIEW");
@@ -219,6 +270,14 @@ inboxRouter.get("/", async (req, res, next) => {
             await loadClaimByStatus("HR_OFFICER");
             await loadClaimByStatus("HR_MANAGER_REVIEW");
             await loadClaimByStatus("FINANCE_VERIFIED");
+            await loadOvertimeRequestByStatus("SUBMITTED");
+            await loadOvertimeRequestByStatus("SUPERVISOR_APPROVED");
+            await loadOvertimeRequestByStatus("HOD_APPROVED");
+            await loadOvertimeClaimByStatus("SUBMITTED");
+            await loadOvertimeClaimByStatus("MANAGER_AUTHORISED");
+            await loadOvertimeClaimByStatus("HR_NOTED");
+            await loadOvertimeClaimByStatus("FINANCE_VERIFIED");
+            await loadOvertimeClaimByStatus("EARNINGS_RECORDED");
             return res.json({ items });
         }
         const rules = Array.isArray(rule) ? rule : [rule];
@@ -228,6 +287,12 @@ inboxRouter.get("/", async (req, res, next) => {
             }
             else if (r.doc_type === "ACCOMMODATION") {
                 await loadAccommodationByStatus(r.status);
+            }
+            else if (r.doc_type === "OVERTIME_REQUEST") {
+                await loadOvertimeRequestByStatus(r.status);
+            }
+            else if (r.doc_type === "OVERTIME_CLAIM") {
+                await loadOvertimeClaimByStatus(r.status);
             }
             else {
                 await loadClaimByStatus(r.status);

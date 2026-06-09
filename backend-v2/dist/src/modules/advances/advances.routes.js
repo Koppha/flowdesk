@@ -5,7 +5,7 @@ import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } from "./advances.service.js";
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
-import { notifyAdvanceTask } from "../../lib/notifications.js";
+import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceTask } from "../../lib/notifications.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
@@ -33,7 +33,12 @@ const CreateAdvanceSchema = z.object({
     bank_account_number: z.string().optional(),
     bank_branch: z.string().optional(),
     requested_total: z.coerce.number().nonnegative(),
-    beneficiary_user_id: z.string().uuid().optional()
+    beneficiary_user_id: z.string().uuid().optional(),
+    override_chain: z.array(z.object({
+        label: z.string().trim().min(1),
+        user_id: z.string().uuid(),
+        user_name: z.string()
+    })).optional()
 }).superRefine((data, ctx) => {
     if (data.payment_method === "ECOCASH") {
         validateEcoCashNumber(data, ctx);
@@ -146,7 +151,7 @@ async function resolveAdvanceRequester(actorId, beneficiaryUserId) {
     return { actor, requester };
 }
 async function getAdvanceNotificationContext(advanceId) {
-    return (await query(`SELECT u.full_name, u.department, ar.requested_total, ar.type, ar.status
+    return (await query(`SELECT u.full_name, u.email, u.department, ar.requested_total, ar.approved_total, ar.type, ar.status, ar.paid_reference
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
         WHERE ar.id = $1`, [advanceId]))[0] ?? null;
@@ -169,6 +174,124 @@ export function canViewAdvance(args) {
         return true;
     return false;
 }
+// ── SLA Report ──────────────────────────────────────────────────────────────
+const SLA_TARGETS = { submission_hours: 48, approval_hours: 72, payment_hours: 48 };
+function hoursBetween(a, b) {
+    if (!a || !b)
+        return null;
+    const diff = new Date(b).getTime() - new Date(a).getTime();
+    return Math.round(diff / 3_600_000 * 10) / 10;
+}
+advancesRouter.get("/sla-report", requireAuth, async (req, res, next) => {
+    try {
+        const isAdmin = req.user.role === "ADMIN";
+        const periodDays = Number(req.query.period_days || 90);
+        const rows = await query(`SELECT ar.id, ar.type, ar.status, ar.requested_total, ar.approved_total,
+              ar.created_at, ar.submitted_at, ar.approved_at, ar.paid_at,
+              u.full_name AS requester_name, u.department, u.division_id,
+              dv.name AS division_name
+         FROM advance_requests ar
+         JOIN users u ON u.id = ar.requester_id
+         LEFT JOIN divisions dv ON dv.id = u.division_id
+        WHERE ar.created_at >= now() - ($1 || ' days')::interval
+          ${!isAdmin ? "AND (ar.requester_id = $2 OR ar.created_by_id = $2)" : ""}
+        ORDER BY ar.created_at DESC`, isAdmin ? [periodDays] : [periodDays, req.user.userId]);
+        // Compute per-request metrics
+        const requests = rows.map((r) => {
+            const submissionHrs = hoursBetween(r.created_at, r.submitted_at);
+            const approvalHrs = hoursBetween(r.submitted_at, r.approved_at);
+            const paymentHrs = hoursBetween(r.approved_at, r.paid_at);
+            const totalHrs = hoursBetween(r.created_at, r.paid_at ?? (["DRAFT", "SUBMITTED", "APPROVED"].includes(r.status) ? null : undefined));
+            // At-risk = still pending and approaching SLA limit (> 75%)
+            const nowMs = Date.now();
+            let slaStatus = "pending";
+            if (r.status === "CANCELLED") {
+                slaStatus = "pending";
+            }
+            else if (r.status === "PAID") {
+                const sub = submissionHrs ?? 0;
+                const apr = approvalHrs ?? 0;
+                const pay = paymentHrs ?? 0;
+                slaStatus = sub <= SLA_TARGETS.submission_hours && apr <= SLA_TARGETS.approval_hours && pay <= SLA_TARGETS.payment_hours
+                    ? "on_time" : "breached";
+            }
+            else {
+                // In-flight: check if we're overdue yet
+                const pendingHrs = (nowMs - new Date(r.created_at).getTime()) / 3_600_000;
+                const totalTarget = SLA_TARGETS.submission_hours + SLA_TARGETS.approval_hours + SLA_TARGETS.payment_hours;
+                if (pendingHrs > totalTarget)
+                    slaStatus = "breached";
+                else if (pendingHrs > totalTarget * 0.75)
+                    slaStatus = "at_risk";
+            }
+            return {
+                id: r.id,
+                type: r.type,
+                status: r.status,
+                requester_name: r.requester_name,
+                department: r.department,
+                division_name: r.division_name,
+                requested_total: r.requested_total,
+                approved_total: r.approved_total,
+                created_at: r.created_at,
+                submitted_at: r.submitted_at,
+                approved_at: r.approved_at,
+                paid_at: r.paid_at,
+                submission_hours: submissionHrs,
+                approval_hours: approvalHrs,
+                payment_hours: paymentHrs,
+                total_hours: totalHrs,
+                sla_status: slaStatus,
+            };
+        });
+        // Aggregations
+        const summary = {
+            total: requests.length,
+            on_time: requests.filter((r) => r.sla_status === "on_time").length,
+            at_risk: requests.filter((r) => r.sla_status === "at_risk").length,
+            breached: requests.filter((r) => r.sla_status === "breached").length,
+            pending: requests.filter((r) => r.sla_status === "pending").length,
+        };
+        const avgHrs = (arr) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10 : null;
+        const avgMetrics = {
+            avg_submission_hours: avgHrs(requests.map((r) => r.submission_hours).filter((v) => v != null)),
+            avg_approval_hours: avgHrs(requests.map((r) => r.approval_hours).filter((v) => v != null)),
+            avg_payment_hours: avgHrs(requests.map((r) => r.payment_hours).filter((v) => v != null)),
+        };
+        const byDept = {};
+        requests.forEach((r) => {
+            const k = r.department || "Unassigned";
+            if (!byDept[k])
+                byDept[k] = { total: 0, on_time: 0, breached: 0, at_risk: 0 };
+            byDept[k].total++;
+            if (r.sla_status === "on_time")
+                byDept[k].on_time++;
+            if (r.sla_status === "breached")
+                byDept[k].breached++;
+            if (r.sla_status === "at_risk")
+                byDept[k].at_risk++;
+        });
+        const byType = {};
+        requests.forEach((r) => {
+            const k = r.type || "Unknown";
+            if (!byType[k])
+                byType[k] = { total: 0, on_time: 0, breached: 0, avg_total_hours: null };
+            byType[k].total++;
+            if (r.sla_status === "on_time")
+                byType[k].on_time++;
+            if (r.sla_status === "breached")
+                byType[k].breached++;
+        });
+        Object.keys(byType).forEach((k) => {
+            const hrs = requests.filter((r) => r.type === k && r.total_hours != null).map((r) => r.total_hours);
+            byType[k].avg_total_hours = avgHrs(hrs);
+        });
+        return res.json({ sla_targets: SLA_TARGETS, summary, avg_metrics: avgMetrics, by_department: byDept, by_type: byType, requests });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
 advancesRouter.get("/", async (req, res, next) => {
     try {
         const mine = req.query.mine === "true";
@@ -251,7 +374,8 @@ advancesRouter.post("/", async (req, res, next) => {
             createdById: req.user.userId,
             ...parsed.data,
             type,
-            payment_account: toPaymentAccount(parsed.data)
+            payment_account: toPaymentAccount(parsed.data),
+            override_chain: parsed.data.override_chain ?? null
         });
         await writeAdvanceAudit({
             actorId: req.user.userId,
@@ -405,10 +529,13 @@ advancesRouter.post("/:id/submit", async (req, res, next) => {
             throw badRequest("Only draft advances can be submitted");
         }
         const leadership = await getDepartmentLeadership(adv.requester_department || "");
-        if (!leadership.manager_user_id) {
-            throw badRequest("No manager assigned to this department.");
+        const hasOverrideChain = Array.isArray(adv.override_chain) && adv.override_chain.length > 0;
+        if (!leadership.manager_user_id && !hasOverrideChain) {
+            throw badRequest("No manager assigned to this department. Please define a custom approval chain for this request.");
         }
-        const validationWarning = leadership.exco_user_id ? null : "No EXCO owner assigned to this department.";
+        const validationWarning = leadership.exco_user_id ? null
+            : hasOverrideChain ? null
+                : "No EXCO owner assigned to this department.";
         const nextStatus = "SUBMITTED";
         if (adv.status === "SUBMITTED") {
             await setAdvanceStatus(adv.id, nextStatus);
@@ -430,6 +557,7 @@ advancesRouter.post("/:id/submit", async (req, res, next) => {
                 status: nextStatus,
                 advanceType: notificationContext.type,
                 requesterName: notificationContext.full_name,
+                requesterEmail: notificationContext.email,
                 department: notificationContext.department,
                 requestedTotal: Number(notificationContext.requested_total)
             });
@@ -473,6 +601,7 @@ advancesRouter.post("/:id/rollback", requireRole(["MANAGER", "HR_MANAGER", "AUTH
                 status,
                 advanceType: notificationContext.type,
                 requesterName: notificationContext.full_name,
+                requesterEmail: notificationContext.email,
                 department: notificationContext.department,
                 requestedTotal: Number(notificationContext.requested_total)
             });
@@ -596,13 +725,18 @@ advancesRouter.post("/:id/approve", requireAuth, async (req, res, next) => {
             }
             status = leadership.exco_user_id ? nextStatusOrThrow(adv.status, "APPROVE") : "HR_OFFICER";
         }
+        let actingFor;
+        if (delegated && hasManagerPrivilege && req.user.role !== "MANAGER") {
+            const onBehalfOf = await getUserAccountState(delegated.manager_id);
+            actingFor = { id: onBehalfOf.id, name: onBehalfOf.full_name };
+        }
         await setAdvanceStatus(adv.id, status, { approvedTotal: parsed.data.approved_total });
         await writeAdvanceAudit({
             actorId: req.user.userId,
             advanceId: adv.id,
             action: "ADVANCE_APPROVE",
             before: { status: adv.status, approved_total: Number(adv.approved_total || 0) },
-            after: { status, approved_total: parsed.data.approved_total }
+            after: { status, approved_total: parsed.data.approved_total, ...(actingFor ? { acting_for: actingFor } : {}) }
         });
         const notificationContext = await getAdvanceNotificationContext(adv.id);
         if (notificationContext) {
@@ -611,6 +745,7 @@ advancesRouter.post("/:id/approve", requireAuth, async (req, res, next) => {
                 status,
                 advanceType: notificationContext.type,
                 requesterName: notificationContext.full_name,
+                requesterEmail: notificationContext.email,
                 department: notificationContext.department,
                 requestedTotal: Number(notificationContext.requested_total)
             });
@@ -635,6 +770,18 @@ advancesRouter.post("/:id/mark-paid", requireRole(["FINANCE", "ADMIN"]), async (
             before: { status: adv.status },
             after: { status }
         });
+        const paidCtx = await getAdvanceNotificationContext(adv.id);
+        if (paidCtx) {
+            await notifyAdvancePaid({
+                advanceId: adv.id,
+                requesterName: paidCtx.full_name,
+                requesterEmail: paidCtx.email,
+                department: paidCtx.department,
+                advanceType: paidCtx.type,
+                approvedTotal: Number(paidCtx.approved_total || paidCtx.requested_total),
+                paidReference: paidCtx.paid_reference
+            });
+        }
         return res.json({ ok: true, status });
     }
     catch (err) {
@@ -657,6 +804,17 @@ advancesRouter.post("/:id/revoke", async (req, res, next) => {
             before: { status: adv.status },
             after: { status }
         });
+        const cancelCtx = await getAdvanceNotificationContext(adv.id);
+        if (cancelCtx) {
+            await notifyAdvanceCancelled({
+                advanceId: adv.id,
+                requesterName: cancelCtx.full_name,
+                requesterEmail: cancelCtx.email,
+                department: cancelCtx.department,
+                advanceType: cancelCtx.type,
+                requestedTotal: Number(cancelCtx.requested_total)
+            });
+        }
         return res.json({ ok: true, status });
     }
     catch (err) {

@@ -8,6 +8,7 @@ import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
+import { getDepartmentLeadership } from "../../lib/departments.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
 
 export const claimsRouter = Router();
@@ -483,8 +484,29 @@ claimsRouter.post("/:id/manager-approve", async (req: AuthedRequest, res, next) 
     if (!claim) throw notFound();
 
     const delegated = await getActiveManagerDelegation(req.user!.userId);
-    if (req.user!.role !== "MANAGER" && !delegated) {
+    const hasManagerPrivilege = req.user!.role === "MANAGER" || Boolean(delegated);
+    if (!hasManagerPrivilege && req.user!.role !== "ADMIN") {
       throw forbidden("Only managers or delegated users can approve claims");
+    }
+
+    if (hasManagerPrivilege) {
+      const claimantRows = await query<{ department: string | null }>(
+        `SELECT department FROM users WHERE id=$1`,
+        [claim.claimant_id]
+      );
+      const claimantDepartment = String(claimantRows[0]?.department || "").trim();
+      const managerDepartment = delegated
+        ? String(delegated.department || "").trim()
+        : String(req.user!.department || "").trim();
+      if (!managerDepartment || managerDepartment !== claimantDepartment) {
+        throw forbidden("Only the claimant's department manager or delegated manager can approve this claim");
+      }
+      const leadership = await getDepartmentLeadership(claimantDepartment);
+      if (!leadership.manager_user_id) throw badRequest("No manager assigned to this department");
+      const effectiveManagerId = delegated ? delegated.manager_id : req.user!.userId;
+      if (leadership.manager_user_id !== effectiveManagerId) {
+        throw forbidden("Only the assigned department manager or delegated manager can approve this claim");
+      }
     }
 
     const status = nextClaimStatus(claim.status, "MANAGER_APPROVE");

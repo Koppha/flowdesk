@@ -1,0 +1,442 @@
+import { useEffect, useMemo, useState } from "react";
+import { api } from "./api";
+
+type OvertimeClaimModuleProps = {
+  profile: any;
+  requestDirectory: { id: string; full_name: string | null; email: string; employee_no: string | null; department: string | null; title?: string | null; role?: string | null }[];
+  onBack: () => void;
+};
+
+type ClaimLine = {
+  date: string;
+  day: string;
+  from_time: string;
+  to_time: string;
+  ordered_by: string;
+  hours_125: number;
+  hours_150: number;
+  hours_200: number;
+  converted_hours: number;
+  account_or_project: string;
+  activity_name: string;
+};
+
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+const RATES: Record<string, 125 | 150 | 200> = {
+  Saturday: 150, Sunday: 200
+};
+
+function dayFromDate(d: string) {
+  if (!d) return "";
+  const dt = new Date(d);
+  return isNaN(dt.getTime()) ? "" : DAY_NAMES[dt.getDay()];
+}
+
+function defaultRate(day: string): 125 | 150 | 200 {
+  return RATES[day] ?? 125;
+}
+
+function buildLinesFromRequest(req: any): ClaimLine[] {
+  const lines: any[] = Array.isArray(req.lines) ? req.lines : [];
+  return lines.map((l: any) => {
+    const day = l.day || dayFromDate(l.date || "");
+    const rate = defaultRate(day);
+    // Compute hours from start/end if available
+    let hrs = 0;
+    if (l.actual_start && l.actual_end) {
+      const [sh, sm] = l.actual_start.split(":").map(Number);
+      const [eh, em] = l.actual_end.split(":").map(Number);
+      hrs = Math.max(0, (eh * 60 + em - (sh * 60 + sm)) / 60);
+    }
+    return {
+      date: l.date || "",
+      day,
+      from_time: l.actual_start || l.estimated_start || "",
+      to_time: l.actual_end || l.estimated_end || "",
+      ordered_by: "",
+      hours_125: rate === 125 ? hrs : 0,
+      hours_150: rate === 150 ? hrs : 0,
+      hours_200: rate === 200 ? hrs : 0,
+      converted_hours: hrs * (rate / 100),
+      account_or_project: "",
+      activity_name: l.reason || ""
+    };
+  });
+}
+
+const EMPTY_LINE: ClaimLine = {
+  date: "", day: "", from_time: "", to_time: "", ordered_by: "",
+  hours_125: 0, hours_150: 0, hours_200: 0, converted_hours: 0,
+  account_or_project: "", activity_name: ""
+};
+
+const th: React.CSSProperties = { background: "#f1f5f9", padding: "7px 8px", textAlign: "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", border: "1px solid #e2e8f0" };
+const td: React.CSSProperties = { padding: "3px 5px", border: "1px solid #e2e8f0", verticalAlign: "middle" };
+const inp: React.CSSProperties = { width: "100%", border: "none", background: "transparent", fontSize: 12, padding: "2px 3px", outline: "none", minWidth: 0 };
+const numInp: React.CSSProperties = { ...inp, width: 52, textAlign: "right" };
+
+export default function OvertimeClaimModule({ profile, requestDirectory, onBack }: OvertimeClaimModuleProps) {
+  const [tab, setTab] = useState<"CLAIM" | "RECORDS">("CLAIM");
+  const [approvedRequests, setApprovedRequests] = useState<any[]>([]);
+  const [records, setRecords] = useState<any[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const canPickEmployee = ["ADMIN", "MANAGER"].includes(String(profile?.role || "").toUpperCase());
+  const isHR = ["HR_MANAGER", "ADMIN"].includes(String(profile?.role || "").toUpperCase());
+  const isFinance = ["FINANCE", "ADMIN"].includes(String(profile?.role || "").toUpperCase());
+
+  // Header
+  const [selectedRequestId, setSelectedRequestId] = useState("");
+  const [employeeId, setEmployeeId] = useState(profile?.id || "");
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  const [division, setDivision] = useState(profile?.department || "");
+  const [jobTitle, setJobTitle] = useState(profile?.title || "");
+
+  // Lines
+  const [lines, setLines] = useState<ClaimLine[]>([{ ...EMPTY_LINE }]);
+
+  // Footer
+  const [compensationType, setCompensationType] = useState<"PAY" | "DAYS">("PAY");
+
+  const selectedEmployee = useMemo(
+    () => requestDirectory.find((u) => u.id === employeeId),
+    [employeeId, requestDirectory]
+  );
+
+  // Totals
+  const totalOvertime = useMemo(
+    () => lines.reduce((s, l) => s + Number(l.converted_hours || 0), 0),
+    [lines]
+  );
+
+  async function loadData() {
+    try {
+      const [reqs, claims] = await Promise.all([api.overtimeRequests(), api.overtimeClaims()]);
+      setApprovedRequests((Array.isArray(reqs) ? reqs : []).filter((r: any) => r.status === "APPROVED"));
+      setRecords(Array.isArray(claims) ? claims : []);
+    } catch { /* silent */ }
+  }
+
+  useEffect(() => { void loadData(); }, []);
+
+  function handleRequestSelect(reqId: string) {
+    setSelectedRequestId(reqId);
+    if (!reqId) { setLines([{ ...EMPTY_LINE }]); return; }
+    const req = approvedRequests.find((r) => r.id === reqId);
+    if (!req) return;
+    setEmployeeId(req.employee_id || employeeId);
+    setYear(req.year);
+    setMonth(req.month);
+    setDivision(req.section_name || req.division || profile?.department || "");
+    setJobTitle(req.job_title || profile?.title || "");
+    const built = buildLinesFromRequest(req);
+    setLines(built.length ? built : [{ ...EMPTY_LINE }]);
+  }
+
+  function updateLine(idx: number, field: keyof ClaimLine, value: string | number) {
+    setLines((prev) => prev.map((l, i) => {
+      if (i !== idx) return l;
+      const updated = { ...l, [field]: value };
+      // Auto-recalc converted_hours when rate hours change
+      const rate = defaultRate(updated.day);
+      if (["hours_125","hours_150","hours_200"].includes(field as string)) {
+        const hrs = Number(updated.hours_125) + Number(updated.hours_150) + Number(updated.hours_200);
+        updated.converted_hours = parseFloat((hrs * (rate / 100)).toFixed(2));
+      }
+      if (field === "date") {
+        updated.day = dayFromDate(String(value));
+      }
+      return updated;
+    }));
+  }
+
+  function addLine() { setLines((prev) => [...prev, { ...EMPTY_LINE }]); }
+  function removeLine(idx: number) {
+    setLines((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx));
+  }
+
+  async function save(status: "DRAFT" | "SUBMITTED") {
+    if (!employeeId) { alert("Select an employee."); return; }
+    setSubmitting(true);
+    try {
+      const empName = canPickEmployee ? (selectedEmployee?.full_name || "") : (profile?.full_name || "");
+      const empNo   = canPickEmployee ? (selectedEmployee?.employee_no || "") : (profile?.employee_no || "");
+      await api.saveOvertimeClaim({
+        overtime_request_id: selectedRequestId || undefined,
+        employee_id: employeeId,
+        employee_name: empName,
+        employee_no: empNo,
+        job_title: jobTitle,
+        division,
+        year, month,
+        lines,
+        total_overtime: totalOvertime,
+        compensated_hours: totalOvertime,
+        pay_days: compensationType === "DAYS" ? totalOvertime : 0,
+        status
+      });
+      await loadData();
+      alert(status === "SUBMITTED" ? "Claim submitted for manager authorisation." : "Draft saved.");
+      if (status === "SUBMITTED") {
+        setLines([{ ...EMPTY_LINE }]);
+        setSelectedRequestId("");
+        setTab("RECORDS");
+      }
+    } catch (e: any) {
+      alert("Error: " + (e as any).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 3 };
+  const fieldStyle: React.CSSProperties = { width: "100%", border: "1px solid #cbd5e1", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "var(--surface-soft)", color: "var(--text)", boxSizing: "border-box" };
+
+  const STATUS_STEPS = [
+    { key: "SUBMITTED",         label: "Submitted" },
+    { key: "MANAGER_AUTHORISED",label: "Manager Authorised" },
+    { key: "HR_NOTED",          label: "HR Noted" },
+    { key: "FINANCE_VERIFIED",  label: "Finance Verified" },
+    { key: "EARNINGS_RECORDED", label: "Earnings Recorded" },
+    { key: "SUMMARY_TRANSFERRED", label: "Summary Transferred" },
+  ];
+
+  function statusColor(s: string) {
+    if (s === "SUMMARY_TRANSFERRED") return { bg: "#dcfce7", color: "#15803d" };
+    if (s === "DRAFT") return { bg: "#f1f5f9", color: "#475569" };
+    if (s === "SUBMITTED") return { bg: "#fef9c3", color: "#a16207" };
+    return { bg: "#dbeafe", color: "#1d4ed8" };
+  }
+
+  return (
+    <div style={{ padding: "0 0 40px" }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Overtime Allowance Claim</h2>
+          <p style={{ margin: "4px 0 0", color: "var(--muted)", fontSize: 13 }}>Claim overtime payment or compensation days for approved overtime worked.</p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setTab(tab === "CLAIM" ? "RECORDS" : "CLAIM")}
+            style={{ padding: "7px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>
+            {tab === "CLAIM" ? "View Records" : "New Claim"}
+          </button>
+          <button onClick={onBack} style={{ padding: "7px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>Back</button>
+        </div>
+      </div>
+
+      {tab === "RECORDS" ? (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "var(--surface-soft)", borderBottom: "2px solid var(--border)" }}>
+                {["Employee","Division","Month","Year","Total Hrs","Status"].map((h) => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {records.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: 32, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>No claims yet.</td></tr>
+              ) : records.map((r) => {
+                const sc = statusColor(r.status);
+                return (
+                  <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{r.employee_name || "—"}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, color: "var(--muted)" }}>{r.division || "—"}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{MONTHS[(r.month ?? 1) - 1]}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{r.year}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{Number(r.total_overtime || 0).toFixed(1)}</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, fontWeight: 600, background: sc.bg, color: sc.color }}>
+                        {r.status}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 28 }}>
+
+          {/* Link to approved request */}
+          <div style={{ marginBottom: 16, padding: "12px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
+            <label style={{ ...labelStyle, color: "#0369a1" }}>Link to Approved Overtime Request (optional)</label>
+            <select value={selectedRequestId} onChange={(e) => handleRequestSelect(e.target.value)} style={fieldStyle}>
+              <option value="">— Select an approved request to pre-fill lines —</option>
+              {approvedRequests.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.employee_name} · {MONTHS[(r.month ?? 1) - 1]} {r.year} · {r.section_name || r.division || ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Header fields */}
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
+            <div>
+              <label style={labelStyle}>Names</label>
+              {canPickEmployee ? (
+                <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} style={fieldStyle}>
+                  <option value="">Select employee</option>
+                  {requestDirectory.map((u) => (
+                    <option key={u.id} value={u.id}>{u.full_name || u.email}{u.employee_no ? ` (${u.employee_no})` : ""}</option>
+                  ))}
+                </select>
+              ) : (
+                <input value={profile?.full_name || ""} readOnly style={{ ...fieldStyle, opacity: 0.85 }} />
+              )}
+            </div>
+            <div>
+              <label style={labelStyle}>E/N</label>
+              <input value={canPickEmployee ? (selectedEmployee?.employee_no || "") : (profile?.employee_no || "")} readOnly style={{ ...fieldStyle, opacity: 0.7 }} />
+            </div>
+            <div>
+              <label style={labelStyle}>Title</label>
+              <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} style={fieldStyle} placeholder="e.g. Backend Developer" />
+            </div>
+            <div>
+              <label style={labelStyle}>Division</label>
+              <input value={division} onChange={(e) => setDivision(e.target.value)} style={fieldStyle} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div>
+                <label style={labelStyle}>Year</label>
+                <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} style={fieldStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Month</label>
+                <select value={month} onChange={(e) => setMonth(Number(e.target.value))} style={fieldStyle}>
+                  {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Lines table */}
+          <div style={{ overflowX: "auto", marginBottom: 16 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th style={th}>Date</th>
+                  <th style={th}>Day</th>
+                  <th style={{ ...th, textAlign: "center" }} colSpan={2}>Overtime</th>
+                  <th style={th}>Ordered By</th>
+                  <th style={{ ...th, textAlign: "center" }}>125%</th>
+                  <th style={{ ...th, textAlign: "center" }}>150%</th>
+                  <th style={{ ...th, textAlign: "center" }}>200%</th>
+                  <th style={{ ...th, textAlign: "center" }}>Converted Hrs</th>
+                  <th style={th}>Account No.</th>
+                  <th style={th}>Project/Activity</th>
+                  <th style={{ ...th, width: 28 }}></th>
+                </tr>
+                <tr style={{ background: "#f8fafc" }}>
+                  <th style={th}></th><th style={th}></th>
+                  <th style={{ ...th, fontSize: 10, color: "#94a3b8" }}>From</th>
+                  <th style={{ ...th, fontSize: 10, color: "#94a3b8" }}>To</th>
+                  <th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((line, idx) => (
+                  <tr key={idx} style={{ background: idx % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                    <td style={{ ...td, minWidth: 120 }}>
+                      <input type="date" value={line.date} onChange={(e) => updateLine(idx, "date", e.target.value)} style={inp} />
+                    </td>
+                    <td style={{ ...td, minWidth: 80, color: "#64748b", fontSize: 11 }}>
+                      {line.day || <span style={{ opacity: 0.35 }}>auto</span>}
+                    </td>
+                    <td style={{ ...td, minWidth: 65 }}>
+                      <input type="time" value={line.from_time} onChange={(e) => updateLine(idx, "from_time", e.target.value)} style={{ ...inp, width: 65 }} />
+                    </td>
+                    <td style={{ ...td, minWidth: 65 }}>
+                      <input type="time" value={line.to_time} onChange={(e) => updateLine(idx, "to_time", e.target.value)} style={{ ...inp, width: 65 }} />
+                    </td>
+                    <td style={{ ...td, minWidth: 110 }}>
+                      <input value={line.ordered_by} onChange={(e) => updateLine(idx, "ordered_by", e.target.value)} style={inp} placeholder="Ordered by…" />
+                    </td>
+                    <td style={{ ...td, background: line.day === "Saturday" || line.day === "Sunday" ? "#fafaf9" : "#f0fdf4" }}>
+                      <input type="number" min={0} step={0.5} value={line.hours_125 || ""} onChange={(e) => updateLine(idx, "hours_125", Number(e.target.value))} style={numInp} />
+                    </td>
+                    <td style={{ ...td, background: line.day === "Saturday" ? "#fefce8" : "#fafaf9" }}>
+                      <input type="number" min={0} step={0.5} value={line.hours_150 || ""} onChange={(e) => updateLine(idx, "hours_150", Number(e.target.value))} style={numInp} />
+                    </td>
+                    <td style={{ ...td, background: line.day === "Sunday" ? "#fef2f2" : "#fafaf9" }}>
+                      <input type="number" min={0} step={0.5} value={line.hours_200 || ""} onChange={(e) => updateLine(idx, "hours_200", Number(e.target.value))} style={numInp} />
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 600, fontSize: 12, color: "#1d4ed8" }}>
+                      {Number(line.converted_hours || 0).toFixed(2)}
+                    </td>
+                    <td style={{ ...td, minWidth: 80 }}>
+                      <input value={line.account_or_project} onChange={(e) => updateLine(idx, "account_or_project", e.target.value)} style={inp} placeholder="ACC-001" />
+                    </td>
+                    <td style={{ ...td, minWidth: 160 }}>
+                      <input value={line.activity_name} onChange={(e) => updateLine(idx, "activity_name", e.target.value)} style={inp} placeholder="Activity / reason…" />
+                    </td>
+                    <td style={{ ...td, textAlign: "center" }}>
+                      <button onClick={() => removeLine(idx)}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 15, padding: "1px 3px" }}>×</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: "#f1f5f9" }}>
+                  <td colSpan={8} style={{ ...td, textAlign: "right", fontWeight: 700, fontSize: 12, paddingRight: 8 }}>Total Overtime:</td>
+                  <td style={{ ...td, textAlign: "right", fontWeight: 700, color: "#1d4ed8" }}>{totalOvertime.toFixed(2)}</td>
+                  <td colSpan={3} style={td}></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <button onClick={addLine}
+            style={{ marginBottom: 24, padding: "5px 12px", border: "1px dashed #94a3b8", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 12, color: "#64748b" }}>
+            + Add Row
+          </button>
+
+          {/* Compensation type + actions */}
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 18, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", marginBottom: 8 }}>Number of Hours to be Compensated by:</div>
+              <div style={{ display: "flex", gap: 16 }}>
+                {(["PAY", "DAYS"] as const).map((opt) => (
+                  <label key={opt} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", fontWeight: compensationType === opt ? 700 : 400 }}>
+                    <input type="radio" name="compType" value={opt} checked={compensationType === opt}
+                      onChange={() => setCompensationType(opt)} />
+                    {opt === "PAY" ? "Pay" : "Days off"}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => void save("DRAFT")} disabled={submitting}
+                style={{ padding: "9px 20px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13 }}>
+                Save Draft
+              </button>
+              <button onClick={() => void save("SUBMITTED")} disabled={submitting}
+                style={{ padding: "9px 22px", border: "none", borderRadius: 6, background: submitting ? "#93c5fd" : "#1d4ed8", color: "#fff", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600 }}>
+                {submitting ? "Submitting…" : "Submit Claim"}
+              </button>
+            </div>
+          </div>
+
+          {/* HR / Finance read-only panel (only visible to HR/Finance) */}
+          {(isHR || isFinance) && (
+            <div style={{ marginTop: 24, borderTop: "2px solid #e2e8f0", paddingTop: 18 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>HR & Finance Actions (back-office only)</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {isHR && <span style={{ fontSize: 12, color: "var(--muted)" }}>Use the Approval Inbox to take action on submitted claims at each workflow stage.</span>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

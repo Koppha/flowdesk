@@ -1,13 +1,26 @@
 import React, { useEffect, useState } from "react";
-import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken } from "./api";
+import { useStaffDirectory } from "./useStaffDirectory";
+import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale } from "./api";
 import AttendanceModule from "./AttendanceModule";
 import Inbox from "./Inbox";
 import OvertimeModule from "./OvertimeModule";
+import OvertimeClaimModule from "./OvertimeClaimModule";
+import EmployeesOnboarding from "./EmployeesOnboarding";
 import ExcoOnboarding from "./ExcoOnboarding";
 import LeadershipAssignments from "./LeadershipAssignments";
 import ManagersOnboarding from "./ManagersOnboarding";
 import WorkflowBuilder from "./WorkflowBuilder";
-import { DEFAULT_TRAVEL_TYPES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, isTravelTypeCode, travelTypeLabel } from "./constants";
+import ReportingLines from "./ReportingLines";
+import RequestTypes from "./RequestTypes";
+import CeoManagement from "./CeoManagement";
+import OrgStructure from "./OrgStructure";
+import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
+import TeamRoster from "./TeamRoster";
+import UserManagement from "./UserManagement";
+import SlaReports from "./SlaReports";
+import { useEmploymentTypes } from "./useEmploymentTypes";
+import { confirmAction } from "./alerts";
+import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import {
   BarChart3,
@@ -17,24 +30,35 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   ChevronUp,
   ClipboardList,
   Clock3,
   Edit3,
+  Eye,
+  EyeOff,
   FileText,
   GitBranch,
   Home,
+  Hotel,
+  Lock,
   LogOut,
   Mail,
   Moon,
   Network,
+  Plane,
+  Plus,
+  RefreshCw,
   Settings as SettingsIcon,
   ShieldCheck,
   Sun,
   Trash2,
+  User,
   UserRoundCheck,
   Users,
-  X
+  Wallet,
+  X,
+  Zap
 } from "lucide-react";
 
 type ClearanceTripRow = {
@@ -150,18 +174,22 @@ function isAuthOrTimeoutError(error: unknown) {
 }
 
 export default function App() {
+  const empTypes = useEmploymentTypes();
   const [token, setTok] = useState(getToken());
   const [email, setEmail] = useState("employee@example.com");
   const [password, setPassword] = useState("pass123");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [profile, setProfile] = useState<any>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileFirstName, setProfileFirstName] = useState("");
   const [profileLastName, setProfileLastName] = useState("");
   const [profileDepartment, setProfileDepartment] = useState("");
+  const [profileOrgSelection, setProfileOrgSelection] = useState<OrgSelection>({ divisionId: null, divisionName: null, department: null, departmentId: null, sectionId: null, sectionName: null, teamId: null, teamName: null });
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
-  const [profileEmploymentType, setProfileEmploymentType] = useState<"PERMANENT" | "INTERN" | "TEMPORARY">("PERMANENT");
+  const [profileEmploymentType, setProfileEmploymentType] = useState("PERMANENT");
   const [profileEmployeeNo, setProfileEmployeeNo] = useState("");
   const [requestDirectory, setRequestDirectory] = useState<RequestDirectoryUser[]>([]);
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
@@ -175,8 +203,7 @@ export default function App() {
   const [newHotelCity, setNewHotelCity] = useState("");
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelContact, setNewHotelContact] = useState("");
-  const [newHotelDepartment, setNewHotelDepartment] = useState("");
-  const [travelTypes, setTravelTypes] = useState<TravelType[]>(DEFAULT_TRAVEL_TYPES);
+  const [travelTypes, setTravelTypes] = useState<TravelType[]>([]);
   const [travelTypesLoading, setTravelTypesLoading] = useState(false);
   const [newTravelTypeName, setNewTravelTypeName] = useState("");
   const [newTravelTypeLocationMode, setNewTravelTypeLocationMode] = useState<"DISTRICT" | "COUNTRY_CITY">("COUNTRY_CITY");
@@ -184,7 +211,13 @@ export default function App() {
   const [newTravelTypeGeneralRate, setNewTravelTypeGeneralRate] = useState("0");
   const [newTravelTypeExcoRate, setNewTravelTypeExcoRate] = useState("0");
   const [newTravelTypeCeoRate, setNewTravelTypeCeoRate] = useState("0");
+  const [newTravelTypeCurrency, setNewTravelTypeCurrency] = useState("LSL");
+  const [newTravelTypeRequiresAccommodation, setNewTravelTypeRequiresAccommodation] = useState(false);
   const [editingTravelType, setEditingTravelType] = useState<TravelType | null>(null);
+  const [showAddTravelTypeModal, setShowAddTravelTypeModal] = useState(false);
+  const [showAddHotelModal, setShowAddHotelModal] = useState(false);
+  const [editingHotel, setEditingHotel] = useState<any | null>(null);
+  const [savingHotel, setSavingHotel] = useState(false);
   const [newTravelLocationTypeId, setNewTravelLocationTypeId] = useState("");
   const [newTravelLocationDistrict, setNewTravelLocationDistrict] = useState("");
   const [newTravelLocationCountry, setNewTravelLocationCountry] = useState("");
@@ -193,13 +226,9 @@ export default function App() {
   const [mealValue, setMealValue] = useState(0);
   const [mealValueDraft, setMealValueDraft] = useState("0");
   const [mealValueLoading, setMealValueLoading] = useState(false);
-  const [departmentRoleDepartment, setDepartmentRoleDepartment] = useState("");
-  const [departmentRoleUserId, setDepartmentRoleUserId] = useState("");
-  const [departmentRoleValue, setDepartmentRoleValue] = useState("EMPLOYEE");
-  const [groupAssignUserId, setGroupAssignUserId] = useState("");
-  const [groupAssignDepartment, setGroupAssignDepartment] = useState("");
   const [newDepartmentName, setNewDepartmentName] = useState("");
   const [newDepartmentSectionId, setNewDepartmentSectionId] = useState("");
+  const [newDepartmentHodId, setNewDepartmentHodId] = useState("");
   const [newDepartmentManagerId, setNewDepartmentManagerId] = useState("");
   const [newDepartmentExcoId, setNewDepartmentExcoId] = useState("");
   const [newDepartmentActive, setNewDepartmentActive] = useState(true);
@@ -207,15 +236,24 @@ export default function App() {
   const [sectionOptions, setSectionOptions] = useState<any[]>([]);
   const [newSectionName, setNewSectionName] = useState("");
   const [newSectionExcoId, setNewSectionExcoId] = useState("");
-  const [leadershipUsers, setLeadershipUsers] = useState<{ managers: any[]; exco: any[] }>({ managers: [], exco: [] });
+  const [leadershipUsers, setLeadershipUsers] = useState<{ hods: any[]; managers: any[]; exco: any[] }>({ hods: [], managers: [], exco: [] });
   const [profileAccordionOpen, setProfileAccordionOpen] = useState(true);
+  const [displayAccordionOpen, setDisplayAccordionOpen] = useState(true);
   const [travelSettingsOpen, setTravelSettingsOpen] = useState(true);
   const [sectionManagementOpen, setSectionManagementOpen] = useState(true);
-  const [groupAssignmentOpen, setGroupAssignmentOpen] = useState(false);
   const [delegationsOpen, setDelegationsOpen] = useState(false);
   const [adminUsersOpen, setAdminUsersOpen] = useState(false);
+  const [orgNavOpen, setOrgNavOpen] = useState(false);
+  const [featurePermissions, setFeaturePermissions] = useState<Record<string, string[]>>({});
+  const [featurePermOpen, setFeaturePermOpen] = useState(false);
+  const [featurePermDraft, setFeaturePermDraft] = useState<Record<string, string[]>>({});
+  const [featurePermSaving, setFeaturePermSaving] = useState(false);
   const [delegations, setDelegations] = useState<any[]>([]);
   const [delegationsLoading, setDelegationsLoading] = useState(false);
+  const [orgAssignModal, setOrgAssignModal] = useState<{ userId: string; userName: string } | null>(null);
+  const [orgAssignSelection, setOrgAssignSelection] = useState<OrgSelection>({ divisionId: null, divisionName: null, department: null, departmentId: null, sectionId: null, sectionName: null, teamId: null, teamName: null });
+  const [orgAssignSaving, setOrgAssignSaving] = useState(false);
+  const [userDivisionFilter, setUserDivisionFilter] = useState<string>("");
   const [delegationManagerId, setDelegationManagerId] = useState("");
   const [delegationDelegateId, setDelegationDelegateId] = useState("");
   const [delegationFromDate, setDelegationFromDate] = useState("");
@@ -223,8 +261,9 @@ export default function App() {
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
   const [inboxCount, setInboxCount] = useState(0);
-  const [page, setPage] = useState<"HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_REQUESTS" | "REPORTS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "EXCO" | "MANAGERS" | "LEADERSHIP" | "WORKFLOW_BUILDER">("HOME");
+  const [page, setPage] = useState<"HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_REQUESTS" | "REPORTS" | "SLA_REPORTS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER">("HOME");
   const [theme, setTheme] = useState<"light" | "dark">((getTheme() as "light" | "dark") || "light");
+  const [uiScale, setUiScale] = useState<number>(getUiScale);
   const [editingAdvanceId, setEditingAdvanceId] = useState<string | null>(null);
   const [editingAdvanceStatus, setEditingAdvanceStatus] = useState<string | null>(null);
   const [editingClaimId, setEditingClaimId] = useState<string | null>(null);
@@ -235,6 +274,7 @@ export default function App() {
     name: string;
     section_id?: string | null;
     manager_user_id?: string | null;
+    hod_user_id?: string | null;
     exco_user_id?: string | null;
     active?: boolean;
   }>(null);
@@ -259,24 +299,23 @@ export default function App() {
     return "";
   }
 
-  function fmtMoney(value: any) {
-    return `M${Number(value || 0).toFixed(2)}`;
+  function fmtMoney(value: any, currency?: string | null) {
+    return formatMoney(value, currency ?? "LSL");
   }
 
   function displayRoleLabel(value: string | null | undefined) {
     switch (value) {
-      case "ADMIN":
-        return "Administrator";
-      case "AUTH_OFFICER":
-        return "HR";
-      case "HR_MANAGER":
-        return "HR Manager";
-      case "CHIEF_OFFICER":
-        return "Chief Officer";
-      case "EXCO":
-        return "EXCO";
-      default:
-        return value || "Unknown";
+      case "CEO":          return "Chief Executive Officer";
+      case "ADMIN":        return "Administrator";
+      case "EXCO":         return "EXCO Member";
+      case "CHIEF_OFFICER":return "Chief Officer";
+      case "AUTH_OFFICER": return "HR";
+      case "HR_MANAGER":   return "HR Manager";
+      case "HOD":          return "Head of Department";
+      case "MANAGER":      return "Manager";
+      case "FINANCE":      return "Finance";
+      case "EMPLOYEE":     return "Employee";
+      default:             return value || "Unknown";
     }
   }
 
@@ -289,20 +328,11 @@ export default function App() {
   }
 
   function fmtEmploymentType(value: string | null | undefined) {
-    switch (value) {
-      case "PERMANENT":
-        return "Permanent";
-      case "INTERN":
-        return "Intern";
-      case "TEMPORARY":
-        return "Temporary";
-      default:
-        return value || "Unknown";
-    }
+    return empTypes.find(t => t.code === value)?.name ?? value ?? "Unknown";
   }
 
   function isApproverRole(value: string | null | undefined) {
-    return ["MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"].includes(String(value || "").trim().toUpperCase());
+    return ["HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO", "CEO"].includes(String(value || "").trim().toUpperCase());
   }
 
   function formatPersonLabel(user: { full_name: string | null; email?: string; employee_no?: string | null }) {
@@ -311,6 +341,7 @@ export default function App() {
   }
 
   function leadershipStatus(department: any) {
+    if (!department.hod_user_id) return "No HOD assigned to this department.";
     if (!department.manager_user_id) return "No manager assigned to this department.";
     if (!department.exco_user_id) return "No EXCO owner assigned to this department.";
     return "Ready";
@@ -349,6 +380,11 @@ export default function App() {
           </div>
         </td>
         <td><span className="status-pill status-pill-success">Department</span></td>
+        <td>
+          {leadershipSelect(leadershipUsers.hods.length ? leadershipUsers.hods : leadershipUsers.managers, department.hod_user_id, "No HOD", (value) =>
+            void updateDepartmentLeadership(department, { hod_user_id: value || null })
+          )}
+        </td>
         <td>
           {leadershipSelect(leadershipUsers.managers, department.manager_user_id, "No manager", (value) =>
             void updateDepartmentLeadership(department, { manager_user_id: value || null })
@@ -390,6 +426,17 @@ export default function App() {
     const department = value.trim().toLowerCase();
     return Boolean(department) && departmentOptions.some((option) => option.trim().toLowerCase() === department);
   }
+
+  // advance request approval chain (resolved from workflow)
+  const [advanceApprovalChain, setAdvanceApprovalChain] = useState<Array<{ label: string; name: string | null }>>([]);
+  const [advanceWorkflowFound, setAdvanceWorkflowFound] = useState<boolean | null>(null);
+  // custom chain built by user when no workflow exists for their dept/section
+  const [customApprovalChain, setCustomApprovalChain] = useState<Array<{ label: string; user_id: string; user_name: string }>>([]);
+  const [customChainLabel, setCustomChainLabel] = useState("");
+  const [customChainUserId, setCustomChainUserId] = useState("");
+  const [chainPositionSearches, setChainPositionSearches] = useState<Record<string, string>>({});
+  const [chainPositionTypes, setChainPositionTypes] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  const { staff: staffDirectory } = useStaffDirectory();
 
   // advance request form fields
   const [requesterName, setRequesterName] = useState("");
@@ -587,6 +634,11 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    document.documentElement.style.fontSize = `${uiScale * 16}px`;
+    saveUiScale(uiScale);
+  }, [uiScale]);
+
+  useEffect(() => {
     if (isTravelAdvanceSelected) {
       const total = rowTotals.amount;
       setTravelAmount(total.toFixed(2));
@@ -604,10 +656,32 @@ export default function App() {
 
   const role = profile?.role || me?.role || "UNKNOWN";
   const userName = displayUserLabel(profile?.full_name || me?.fullName || me?.username || "User", role);
-  const userDepartment = profile?.department || me?.department || "No Department";
+  const userDepartment = [profile?.division_name, profile?.department, profile?.section_name, profile?.team_name].filter(Boolean).join(" › ")
+    || profile?.department || me?.department || "No Department";
   const userInitials = initials(userName);
   const roleName = displayRoleLabel(role);
-  const canManageTravelSettings = ["HR_MANAGER", "AUTH_OFFICER", "ADMIN"].includes(role);
+  const FEATURE_DEFAULTS: Record<string, string[]> = {
+    user_management:        ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    roles_permissions:      ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    travel_setup:           ["ADMIN", "HR_MANAGER", "AUTH_OFFICER"],
+    org_structure:          ["ADMIN"],
+    team_roster:            ["ADMIN"],
+    ceo_management:         ["ADMIN"],
+    employees:              ["ADMIN"],
+    exco_members:           ["ADMIN", "MANAGER"],
+    managers:               ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    leadership_assignments: ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    workflow_builder:       ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    request_types:          ["ADMIN"],
+    reporting_lines:        ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+  };
+
+  function canAccessFeature(key: string): boolean {
+    const allowed = featurePermissions[key] ?? FEATURE_DEFAULTS[key] ?? [];
+    return allowed.includes(role);
+  }
+
+  const canManageTravelSettings = canAccessFeature("travel_setup");
   const profileCompleted = Boolean(profile?.profile_completed ?? me?.profileCompleted);
   const employmentType = profile?.employment_type || me?.employmentType || "PERMANENT";
   const canRequestForSelf = profileCompleted && employmentType === "PERMANENT";
@@ -644,19 +718,68 @@ export default function App() {
     }
   }, [page, requestDate]);
 
+  // resolve approval chain from the workflow that matches the user's section + advance type
+  useEffect(() => {
+    if (page !== "MY_REQUESTS" && page !== "ADVANCE") return;
+    const dept = profile?.department || "";
+    const section = profile?.section_name || "";
+
+    function loadCustomChainData() {
+      setChainPositionTypes([
+        { id: "counter_signer", name: "Counter Signed By", code: "COUNTER_SIGNER" },
+        { id: "approved_by",    name: "Approved By",       code: "APPROVED_BY"    },
+      ]);
+    }
+
+    if (!dept) {
+      setAdvanceApprovalChain([]);
+      setAdvanceWorkflowFound(false);
+      loadCustomChainData();
+      return;
+    }
+    setAdvanceWorkflowFound(null);
+    // Pass the selected advance sub-type so the backend can prefer a sub-type-specific workflow
+    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined)
+      .then((result: any) => {
+        const chain: any[] = Array.isArray(result?.chain) ? result.chain : [];
+        const filtered = chain.filter((s: any) => s.position_type_code !== "EMPLOYEE");
+        setAdvanceApprovalChain(
+          filtered.map((s: any) => ({
+            label: s.approval_mode === "ANY_ONE" ? `${s.position_name} (Group)` : s.position_name,
+            name: s.approver_name || null
+          }))
+        );
+        const found = filtered.length > 0;
+        setAdvanceWorkflowFound(found);
+        if (!found) loadCustomChainData();
+      })
+      .catch(() => {
+        setAdvanceApprovalChain([]);
+        setAdvanceWorkflowFound(false);
+        loadCustomChainData();
+      });
+  }, [page, profile?.department, profile?.section_name, advanceType]);
+
   async function refresh() {
     setError(null);
     const meResp = await withStartupTimeout(api.me(), "Profile");
     setProfile(meResp);
+    // Pre-seed the profile org selection so the profile completion form
+    // shows the user's current org placement if they revisit it
+    if (meResp) {
+      setProfileOrgSelection(orgSelectionFromUser(meResp));
+      if (meResp.department) setProfileDepartment(meResp.department);
+    }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
       optionalStartupData<any[]>(api.claims(), [], "Claims"),
       optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox"),
       optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value"),
-      optionalStartupData<TravelType[]>(api.travelTypes(), DEFAULT_TRAVEL_TYPES, "Travel types")
+      optionalStartupData<TravelType[]>(api.travelTypes(), [], "Travel types"),
+      optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions")
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -666,12 +789,10 @@ export default function App() {
     const configuredMealValue = Number(mealResp.meal_value || 0);
     setMealValue(configuredMealValue);
     setMealValueDraft(String(configuredMealValue));
-    const loadedTravelTypes = Array.isArray(travelResp) && travelResp.length
-      ? travelResp
-      : DEFAULT_TRAVEL_TYPES.map((type) => (
-          type.code === "TRAVEL_SUBSISTENCE" ? { ...type, rate_general_staff: configuredMealValue } : type
-        ));
-    setTravelTypes(loadedTravelTypes);
+    setTravelTypes(Array.isArray(travelResp) ? travelResp : []);
+    if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
+      setFeaturePermissions(featPermResp.features as Record<string, string[]>);
+    }
     if (token) {
       try {
         const anomalyRows = await api.aiAnomalies();
@@ -703,7 +824,7 @@ export default function App() {
     setProfileLastName(parts.join(" ") || "");
     setProfileName(full);
     setProfileDepartment(profile?.department || "");
-    setProfileEmploymentType((profile?.employment_type || "PERMANENT") as "PERMANENT" | "INTERN" | "TEMPORARY");
+    setProfileEmploymentType(profile?.employment_type || "PERMANENT");
     setProfileEmployeeNo(profile?.employee_no || "");
     if (profile?.full_name) setRequesterName(profile.full_name);
     if (profile?.employee_no) setEmpNumber(profile.employee_no);
@@ -739,16 +860,24 @@ export default function App() {
   }, [page, clearanceLinkedAdvanceId]);
 
   useEffect(() => {
-    if (token && (page === "SETTINGS" || page === "REPORTS")) {
+    if (token && ["SETTINGS", "REPORTS", "USER_MANAGEMENT", "ROLES_PERMISSIONS"].includes(page)) {
       if (role === "ADMIN" || role === "MANAGER") {
         void loadAdminUsers();
         void loadDelegations();
       }
+    }
+    if (token && ["SETTINGS", "REPORTS", "TRAVEL_SETUP"].includes(page)) {
       void loadHotels();
       void loadMealValue();
       void loadTravelTypes();
     }
   }, [token, page, role]);
+
+  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "TEAM_ROSTER"] as const;
+
+  useEffect(() => {
+    if (ORG_PAGES.includes(page as any)) setOrgNavOpen(true);
+  }, [page]);
 
   async function loadMealValue() {
     setMealValueLoading(true);
@@ -776,9 +905,6 @@ export default function App() {
       const saved = Number(resp.meal_value ?? value);
       setMealValue(saved);
       setMealValueDraft(String(saved));
-      setTravelTypes((current) =>
-        current.map((type) => type.code === "TRAVEL_SUBSISTENCE" ? { ...type, rate_general_staff: saved } : type)
-      );
       alert("Meal value saved.");
     } catch (e: any) {
       alert("Error saving meal value: " + e.message);
@@ -803,7 +929,7 @@ export default function App() {
     setTravelTypesLoading(true);
     try {
       const rows: TravelType[] = await api.travelTypes();
-      setTravelTypes(Array.isArray(rows) && rows.length ? rows : DEFAULT_TRAVEL_TYPES);
+      setTravelTypes(Array.isArray(rows) ? rows : []);
     } catch (e: any) {
       alert("Error loading travel types: " + e.message);
     } finally {
@@ -821,12 +947,16 @@ export default function App() {
         rate_general_staff: Number(newTravelTypeGeneralRate) || 0,
         rate_exco: Number(newTravelTypeExcoRate) || 0,
         rate_ceo: Number(newTravelTypeCeoRate) || 0,
-        active: true
+        currency: newTravelTypeCurrency,
+        active: true,
+        requires_accommodation: newTravelTypeRequiresAccommodation
       });
       setNewTravelTypeName("");
       setNewTravelTypeGeneralRate("0");
       setNewTravelTypeExcoRate("0");
       setNewTravelTypeCeoRate("0");
+      setNewTravelTypeCurrency("LSL");
+      setNewTravelTypeRequiresAccommodation(false);
       await loadTravelTypes();
       alert("Travel type saved.");
     } catch (e: any) {
@@ -849,6 +979,7 @@ export default function App() {
         rate_general_staff: Number(type.rate_general_staff) || 0,
         rate_exco: Number(type.rate_exco) || 0,
         rate_ceo: Number(type.rate_ceo) || 0,
+        currency: type.currency ?? "LSL",
         active: type.active !== false
       });
       await loadTravelTypes();
@@ -859,7 +990,12 @@ export default function App() {
   }
 
   async function deleteTravelType(typeId: string) {
-    if (!confirm("Are you sure you want to delete this travel type?")) return;
+    const confirmed = await confirmAction({
+      title: "Delete travel type?",
+      text: "This will remove the travel type and its configured locations.",
+      confirmButtonText: "Delete"
+    });
+    if (!confirmed) return;
     try {
       await api.deleteTravelType(typeId);
       await loadTravelTypes();
@@ -913,8 +1049,7 @@ export default function App() {
         province: newHotelProvince.trim() || undefined,
         city: newHotelCity.trim() || undefined,
         address: newHotelAddress.trim() || undefined,
-        contact: newHotelContact.trim() || undefined,
-        department: newHotelDepartment || undefined
+        contact: newHotelContact.trim() || undefined
       });
       setNewHotelName("");
       setNewHotelDistrict("");
@@ -923,16 +1058,53 @@ export default function App() {
       setNewHotelCity("");
       setNewHotelAddress("");
       setNewHotelContact("");
-      setNewHotelDepartment("");
       void loadHotels();
-      alert("Hotel added");
+      setShowAddHotelModal(false);
     } catch (e: any) {
       alert("Error creating hotel: " + e.message);
     }
   }
 
+  async function saveHotel() {
+    if (!editingHotel) return;
+    setSavingHotel(true);
+    try {
+      await api.updateHotel(editingHotel.id, {
+        name: editingHotel.name,
+        district: editingHotel.district || undefined,
+        country: editingHotel.country || undefined,
+        province: editingHotel.province || undefined,
+        city: editingHotel.city || undefined,
+        address: editingHotel.address || undefined,
+        contact: editingHotel.contact || undefined,
+      });
+      setEditingHotel(null);
+      void loadHotels();
+    } catch (e: any) {
+      alert("Error updating hotel: " + e.message);
+    } finally { setSavingHotel(false); }
+  }
+
+  async function deleteHotel(hotel: any) {
+    if (!hotel?.id) return;
+    const confirmed = await confirmAction({
+      title: "Delete hotel?",
+      text: `Delete ${hotel.name || "this hotel"}?`,
+      confirmButtonText: "Delete"
+    });
+    if (!confirmed) return;
+    try {
+      await api.deleteHotel(hotel.id);
+      void loadHotels();
+    } catch (e: any) {
+      alert("Error deleting hotel: " + e.message);
+    }
+  }
+
   async function doLogin() {
+    if (loginLoading) return;
     setError(null);
+    setLoginLoading(true);
     try {
       console.log("Attempting login with:", email);
       const r = await api.login(email, password);
@@ -945,6 +1117,8 @@ export default function App() {
       console.error("Login error:", e);
       const errorMsg = e?.message || "Login failed. Please try again.";
       setError(errorMsg);
+    } finally {
+      setLoginLoading(false);
     }
   }
 
@@ -965,8 +1139,10 @@ export default function App() {
       alert("Enter your first name and last name.");
       return;
     }
-    if (!isKnownDepartment(profileDepartment)) {
-      alert("Choose your department from the department groups list.");
+    // Accept either OrgPicker selection or legacy dropdown
+    const effectiveDepartment = profileOrgSelection.department || profileDepartment;
+    if (!effectiveDepartment) {
+      alert("Choose your department.");
       return;
     }
     if (profileEmploymentType === "PERMANENT" && !profileEmployeeNo.trim()) {
@@ -978,7 +1154,10 @@ export default function App() {
       const full = `${profileFirstName.trim()} ${profileLastName.trim()}`;
       const result: any = await api.completeProfile({
         full_name: full,
-        department: profileDepartment.trim(),
+        department: effectiveDepartment.trim(),
+        division_id: profileOrgSelection.divisionId ?? null,
+        section_id: profileOrgSelection.sectionId ?? null,
+        team_id: profileOrgSelection.teamId ?? null,
         employment_type: profileEmploymentType,
         employee_no: profileEmployeeNo.trim() || undefined
       });
@@ -986,8 +1165,8 @@ export default function App() {
       setTok(result.token);
       setProfile(result.user);
       setDepartmentOptions((current) =>
-        profileDepartment && !current.includes(profileDepartment)
-          ? [...current, profileDepartment].sort((a, b) => a.localeCompare(b))
+        effectiveDepartment && !current.includes(effectiveDepartment)
+          ? [...current, effectiveDepartment].sort((a, b) => a.localeCompare(b))
           : current
       );
       setRequesterName(result.user?.full_name || "");
@@ -1015,6 +1194,7 @@ export default function App() {
       setSectionOptions(Array.isArray(sections) ? sections : []);
       setDepartmentRows(Array.isArray(departments) ? departments : []);
       setLeadershipUsers({
+        hods: Array.isArray(leaders?.hods) ? leaders.hods : Array.isArray(leaders?.managers) ? leaders.managers : [],
         managers: Array.isArray(leaders?.managers) ? leaders.managers : [],
         exco: Array.isArray(leaders?.exco) ? leaders.exco : []
       });
@@ -1037,15 +1217,33 @@ export default function App() {
     }
   }
 
-  async function updateUserDepartment(userId: string, department: string) {
+  useEffect(() => {
+    if (delegationsOpen && delegations.length === 0 && !delegationsLoading) {
+      void loadDelegations();
+    }
+  }, [delegationsOpen]);
+
+  async function updateUserDepartment(userId: string, department: string, divisionId?: string | null, sectionId?: string | null, teamId?: string | null) {
     try {
-      const updated: any = await api.updateUserDepartment(userId, { department });
+      const updated: any = await api.updateUserDepartment(userId, { department, division_id: divisionId ?? null, section_id: sectionId ?? null, team_id: teamId ?? null });
       setAdminUsers((current) => current.map((user) => (user.id === userId ? updated : user)));
-      if (profile?.id === userId) {
-        setProfile(updated);
-      }
+      if (profile?.id === userId) setProfile(updated);
     } catch (e: any) {
       alert("Error updating department: " + e.message);
+    }
+  }
+
+  async function saveOrgAssignment() {
+    if (!orgAssignModal) return;
+    if (!orgAssignSelection.department) { alert("Select a department."); return; }
+    setOrgAssignSaving(true);
+    try {
+      await updateUserDepartment(orgAssignModal.userId, orgAssignSelection.department, orgAssignSelection.divisionId, orgAssignSelection.sectionId, orgAssignSelection.teamId);
+      setOrgAssignModal(null);
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setOrgAssignSaving(false);
     }
   }
 
@@ -1069,19 +1267,24 @@ export default function App() {
         payload.manager_id = delegationManagerId;
       }
 
-      const created: any = await api.createDelegation(payload);
-      setDelegations((current) => [created, ...current]);
+      await api.createDelegation(payload);
       setDelegationManagerId("");
       setDelegationDelegateId("");
       setDelegationFromDate("");
       setDelegationToDate("");
-      alert("Delegation created.");
+      await loadDelegations();
     } catch (e: any) {
       alert("Error creating delegation: " + e.message);
     }
   }
 
   async function endDelegation(id: string) {
+    const confirmed = await confirmAction({
+      title: "End delegation?",
+      text: "The delegate will immediately lose manager approval authority.",
+      confirmButtonText: "End Delegation"
+    });
+    if (!confirmed) return;
     try {
       await api.endDelegation(id);
       setDelegations((current) => current.filter((delegation) => delegation.id !== id));
@@ -1089,17 +1292,6 @@ export default function App() {
       alert("Error ending delegation: " + e.message);
     }
   }
-
-  useEffect(() => {
-    if (!departmentRoleDepartment) {
-      setDepartmentRoleUserId("");
-      return;
-    }
-    const departmentUsers = adminUsers.filter((user) => user.department === departmentRoleDepartment);
-    if (!departmentUsers.some((user) => user.id === departmentRoleUserId)) {
-      setDepartmentRoleUserId(departmentUsers[0]?.id || "");
-    }
-  }, [adminUsers, departmentRoleDepartment, departmentRoleUserId]);
 
   async function updateAdminUserRole(userId: string, roleValue: string) {
     try {
@@ -1113,49 +1305,16 @@ export default function App() {
     }
   }
 
-  async function assignUserToGroup() {
-    if (!groupAssignUserId) {
-      alert("Choose a user to assign.");
-      return;
-    }
-    if (!groupAssignDepartment) {
-      alert("Choose a department group first.");
-      return;
-    }
+  async function saveFeaturePermissions() {
+    setFeaturePermSaving(true);
     try {
-      const updated: any = await api.updateUserGroup(groupAssignUserId, {
-        department: groupAssignDepartment
-      });
-      setAdminUsers((current) => current.map((user) => (user.id === groupAssignUserId ? updated : user)));
-      if (profile?.id === groupAssignUserId) {
-        setProfile(updated);
-      }
-      setGroupAssignDepartment("");
-      setGroupAssignUserId("");
-      alert(`Assigned ${updated.full_name || updated.email} to department group ${updated.department}.`);
+      await api.updateAdminFeaturePermissions(featurePermDraft);
+      setFeaturePermissions(featurePermDraft);
+      alert("Feature permissions saved.");
     } catch (e: any) {
-      alert("Error assigning group: " + e.message);
-    }
-  }
-
-  async function updateDepartmentRole() {
-    if (!departmentRoleDepartment) {
-      alert("Choose a department first.");
-      return;
-    }
-    if (!departmentRoleUserId) {
-      alert("Choose a user first.");
-      return;
-    }
-    try {
-      const updated: any = await api.updateUserRole(departmentRoleUserId, { role: departmentRoleValue });
-      setAdminUsers((current) => current.map((user) => (user.id === departmentRoleUserId ? updated : user)));
-      if (profile?.id === departmentRoleUserId) {
-        setProfile(updated);
-      }
-      alert(`Updated role for ${updated.full_name || updated.email}.`);
-    } catch (e: any) {
-      alert("Error updating role: " + e.message);
+      alert("Error saving permissions: " + e.message);
+    } finally {
+      setFeaturePermSaving(false);
     }
   }
 
@@ -1175,11 +1334,13 @@ export default function App() {
         newDepartmentSectionId || null,
         newDepartmentManagerId || null,
         newDepartmentExcoId || null,
-        newDepartmentActive
+        newDepartmentActive,
+        newDepartmentHodId || null
       );
       setDepartmentOptions((current) => Array.from(new Set([...(current || []), created.name])).sort((a, b) => a.localeCompare(b)));
       setNewDepartmentName("");
       setNewDepartmentSectionId("");
+      setNewDepartmentHodId("");
       setNewDepartmentManagerId("");
       setNewDepartmentExcoId("");
       setNewDepartmentActive(true);
@@ -1197,6 +1358,7 @@ export default function App() {
       originalName: name,
       name: dept?.name || name,
       section_id: dept?.section_id || null,
+      hod_user_id: dept?.hod_user_id || null,
       manager_user_id: dept?.manager_user_id || null,
       exco_user_id: dept?.exco_user_id || null,
       active: typeof dept?.active === 'boolean' ? dept.active : true
@@ -1204,12 +1366,15 @@ export default function App() {
   }
 
   async function deleteDepartment(name: string) {
-    if (!confirm(`Delete department group '${name}'? This cannot be undone.`)) return;
+    const confirmed = await confirmAction({
+      title: "Delete department group?",
+      text: `Delete '${name}'? This cannot be undone.`,
+      confirmButtonText: "Delete"
+    });
+    if (!confirmed) return;
     try {
       await api.deleteDepartment(name);
       setDepartmentOptions((current) => (current || []).filter((d) => d !== name));
-      if (groupAssignDepartment === name) setGroupAssignDepartment("");
-      if (departmentRoleDepartment === name) setDepartmentRoleDepartment("");
       await loadAdminUsers();
       alert(`Department group ${name} deleted.`);
     } catch (e: any) {
@@ -1242,7 +1407,12 @@ export default function App() {
   }
 
   async function deleteSection(id: string, name: string) {
-    if (!confirm(`Delete section '${name}'? This cannot be undone.`)) return;
+    const confirmed = await confirmAction({
+      title: "Delete section?",
+      text: `Delete '${name}'? This cannot be undone.`,
+      confirmButtonText: "Delete"
+    });
+    if (!confirmed) return;
     try {
       await api.deleteSection(id);
       await loadAdminUsers();
@@ -1261,7 +1431,7 @@ export default function App() {
     }
   }
 
-  async function updateDepartmentLeadership(department: any, changes: { manager_user_id?: string | null; exco_user_id?: string | null; active?: boolean }) {
+  async function updateDepartmentLeadership(department: any, changes: { hod_user_id?: string | null; manager_user_id?: string | null; exco_user_id?: string | null; active?: boolean }) {
     try {
       updateDepartmentRow(department.name, changes);
       await api.updateDepartment(department.name, { name: department.name, ...changes });
@@ -1290,6 +1460,7 @@ export default function App() {
     const payload: any = {
       name: editingDepartmentObj.name.trim(),
       section_id: editingDepartmentObj.section_id || null,
+      hod_user_id: editingDepartmentObj.hod_user_id || null,
       manager_user_id: editingDepartmentObj.manager_user_id || null,
       exco_user_id: editingDepartmentObj.exco_user_id || null,
       active: !!editingDepartmentObj.active
@@ -1388,6 +1559,11 @@ export default function App() {
     setRequestDate(new Date().toISOString().slice(0, 10));
     setRows([]);
     setMonthField("");
+    setCustomApprovalChain([]);
+    setCustomChainLabel("");
+    setCustomChainUserId("");
+    setChainPositionSearches({});
+    setChainPositionTypes([]);
     setPage("ADVANCE");
   }
 
@@ -1678,83 +1854,179 @@ export default function App() {
     return (
       <div className="login-page">
         <section className="login-showcase">
-          <img src={econetLogo} alt="Econet Telecom Lesotho" className="login-showcase-logo" />
-          <div className="login-copy">
-            <span>Welcome to</span>
-            <h1>Advance Clearance Portal</h1>
-            <p>Finance workflow and approval management made simple and efficient.</p>
+          <span className="econet-logo-frame login-showcase-logo">
+            <img src={econetLogo} alt="Econet Telecom Lesotho" />
+          </span>
+
+          <div className="flowdesk-brand">
+            <span className="flowdesk-mark" aria-hidden>F</span>
+            <span className="flowdesk-wordmark">FLOW<span>DESK</span></span>
           </div>
-          <div className="login-feature-list">
-            <div>
-              <span className="feature-icon">S</span>
-              <strong>Secure & Reliable</strong>
-              <small>Enterprise-grade access for protected finance requests.</small>
+          <div className="flowdesk-brand-underline" aria-hidden />
+
+          <p className="login-tagline">
+            Streamlined advance requests, approvals, travel clearance and settlement — all in one secure platform.
+          </p>
+
+          <div className="login-illustration" aria-hidden>
+            <div className="login-illustration-monitor">
+              <div className="login-illustration-monitor-dots">
+                <span /><span /><span />
+              </div>
+              <div className="login-illustration-monitor-body">
+                <div className="login-illustration-donut" />
+                <div className="login-illustration-bars">
+                  <span style={{ height: "35%" }} />
+                  <span style={{ height: "55%" }} />
+                  <span style={{ height: "75%" }} />
+                  <span style={{ height: "95%" }} />
+                </div>
+                <div className="login-illustration-row"><span className="dot done" /><i /></div>
+                <div className="login-illustration-row"><span className="dot done" /><i /></div>
+              </div>
+              <div className="login-illustration-stand" />
             </div>
-            <div>
-              <span className="feature-icon">A</span>
-              <strong>Streamlined Approvals</strong>
-              <small>Track handoffs, approvals, and payments in real time.</small>
+
+            <div className="login-badge login-badge-request">
+              <FileText size={16} aria-hidden />
+              <span>Request</span>
             </div>
-            <div>
-              <span className="feature-icon">V</span>
-              <strong>Better Visibility</strong>
-              <small>Requests, clearances, and decisions stay in one place.</small>
+            <div className="login-badge login-badge-approve">
+              <CheckCircle2 size={16} aria-hidden />
+              <span>Approve</span>
+            </div>
+            <div className="login-badge login-badge-travel">
+              <Plane size={16} aria-hidden />
+              <span>Travel</span>
+            </div>
+            <div className="login-badge login-badge-settle">
+              <Wallet size={16} aria-hidden />
+              <span>Settle</span>
+            </div>
+
+            <div className="login-illustration-plant">
+              <span className="login-illustration-plant-pot" />
+              <span className="login-illustration-plant-leaf l1" />
+              <span className="login-illustration-plant-leaf l2" />
+              <span className="login-illustration-plant-leaf l3" />
+            </div>
+            <div className="login-illustration-mug">
+              <span className="login-illustration-mug-mark">F</span>
+              <span className="login-illustration-mug-handle" />
             </div>
           </div>
+
+          <div className="login-feature-row">
+            <div>
+              <ShieldCheck size={20} aria-hidden />
+              <div>
+                <strong>Secure</strong>
+                <small>Enterprise grade security</small>
+              </div>
+            </div>
+            <div>
+              <Zap size={20} aria-hidden />
+              <div>
+                <strong>Efficient</strong>
+                <small>Automated workflow and real-time tracking</small>
+              </div>
+            </div>
+            <div>
+              <BarChart3 size={20} aria-hidden />
+              <div>
+                <strong>Transparent</strong>
+                <small>Full visibility and audit trail</small>
+              </div>
+            </div>
+          </div>
+
+          <div className="login-showcase-footer">© {new Date().getFullYear()} FlowDesk. All rights reserved.</div>
         </section>
 
-        <div className="login-card">
-          <img src={econetLogo} alt="Econet Telecom Lesotho" className="login-logo" />
-          <h2>Welcome Back</h2>
-          <p className="subtitle">Sign in to continue to your account</p>
+        <div className="login-panel">
+          <div className="login-card">
+            <span className="econet-logo-frame login-logo">
+              <img src={econetLogo} alt="Econet Telecom Lesotho" />
+            </span>
+            <h2>Welcome Back</h2>
+            <p className="subtitle">Sign in to continue to FlowDesk</p>
 
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            void doLogin();
-          }}>
-            <div className="login-form-group">
-              <label>Username or Email</label>
-              <input
-                className="login-input"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter your username or email"
-                type="text"
-                autoComplete="username"
-                required
-              />
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              void doLogin();
+            }}>
+              <div className="login-form-group">
+                <label>Username</label>
+                <div className="login-icon-field">
+                  <User size={18} className="login-field-icon" aria-hidden />
+                  <input
+                    className="login-input login-input-icon"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Enter your username"
+                    type="text"
+                    autoComplete="username"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="login-form-group">
+                <label>Password</label>
+                <div className="login-icon-field">
+                  <Lock size={18} className="login-field-icon" aria-hidden />
+                  <input
+                    className="login-input login-input-icon login-input-icon-trailing"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="login-password-toggle"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff size={18} aria-hidden /> : <Eye size={18} aria-hidden />}
+                  </button>
+                </div>
+              </div>
+              <div className="login-options">
+                <label>
+                  <input type="checkbox" />
+                  <span>Remember me</span>
+                </label>
+                <a href="#forgot">Forgot password?</a>
+              </div>
+
+              <button className="button button-primary login-button" type="submit" disabled={loginLoading} aria-busy={loginLoading}>
+                {loginLoading ? (
+                  <span className="login-button-content" aria-live="polite">
+                    <RefreshCw size={18} className="login-button-spinner" />
+                    Signing in...
+                  </span>
+                ) : (
+                  <span className="login-button-content">
+                    <Lock size={16} aria-hidden />
+                    Sign In
+                  </span>
+                )}
+              </button>
+            </form>
+
+            {error && <pre className="error-text">{error}</pre>}
+
+            <div className="login-security-note login-security-banner">
+              <ShieldCheck size={18} aria-hidden />
+              <span>This is a secure system. Unauthorised access is prohibited.</span>
             </div>
-
-            <div className="login-form-group">
-              <label>Password</label>
-              <input
-                className="login-input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                type="password"
-                autoComplete="current-password"
-                required
-              />
-            </div>
-            <div className="login-options">
-              <label>
-                <input type="checkbox" />
-                <span>Remember me</span>
-              </label>
-              <a href="#forgot">Forgot password?</a>
-            </div>
-
-            <button className="button button-primary login-button" type="submit">
-              Sign In
-            </button>
-          </form>
-
-          {error && <pre className="error-text">{error}</pre>}
-
-          <div className="login-security-note">
-            ✓ Your data is protected with enterprise-grade security
           </div>
+
         </div>
       </div>
     );
@@ -1774,7 +2046,9 @@ export default function App() {
     return (
       <div className="login-page">
         <div className="login-card" style={{ maxWidth: 520 }}>
-          <img src={econetLogo} alt="Econet Telecom Lesotho" className="login-logo" />
+          <span className="econet-logo-frame login-logo">
+            <img src={econetLogo} alt="Econet Telecom Lesotho" />
+          </span>
           <h1>Complete Your Profile</h1>
           <p className="subtitle">Fill in your profile details before using the system.</p>
 
@@ -1783,25 +2057,15 @@ export default function App() {
             <input className="login-input" value={profileLastName} onChange={(e) => setProfileLastName(e.target.value)} placeholder="Last name" />
           </div>
           <div className="form-group">
-            <select
-              className="login-input"
-              value={profileDepartment}
-              onChange={(e) => setProfileDepartment(e.target.value)}
-              disabled={departmentOptions.length === 0}
-            >
-              <option value="">{departmentOptions.length === 0 ? "Loading departments..." : "Choose department"}</option>
-              {departmentOptions.map((department) => (
-                <option key={department} value={department}>
-                  {department}
-                </option>
-              ))}
-            </select>
+            <OrgPicker
+              value={profileOrgSelection}
+              onChange={(sel) => { setProfileOrgSelection(sel); if (sel.department) setProfileDepartment(sel.department); }}
+              inputClassName="login-input"
+            />
           </div>
           <div className="form-group">
-            <select className="login-input" value={profileEmploymentType} onChange={(e) => setProfileEmploymentType(e.target.value as "PERMANENT" | "INTERN" | "TEMPORARY")}>
-              <option value="PERMANENT">Permanent Employee</option>
-              <option value="INTERN">Intern</option>
-              <option value="TEMPORARY">Temporary Employee</option>
+            <select className="login-input" value={profileEmploymentType} onChange={(e) => setProfileEmploymentType(e.target.value)}>
+              {empTypes.map(t => <option key={t.code} value={t.code}>{t.name}</option>)}
             </select>
           </div>
           <div className="form-group">
@@ -1818,7 +2082,7 @@ export default function App() {
             </p>
           )}
 
-          <button className="button login-button" onClick={submitProfile} disabled={departmentOptions.length === 0}>Save Profile</button>
+          <button className="button login-button" onClick={submitProfile}>Save Profile</button>
           <button className="button small-button" onClick={doLogout} style={{ marginTop: 12 }}>Logout</button>
         </div>
       </div>
@@ -1852,10 +2116,6 @@ export default function App() {
             <Bell size={18} aria-hidden />
             <span>{Math.max(inboxCount, 0)}</span>
           </button>
-          <button className="button small-button theme-button" onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}>
-            {theme === "light" ? <Moon size={16} aria-hidden /> : <Sun size={16} aria-hidden />}
-            {theme === "light" ? "Dark Mode" : "Light Mode"}
-          </button>
           <button className="button small-button button-subtle" onClick={doLogout}>
             <LogOut size={16} aria-hidden />
             Logout
@@ -1878,6 +2138,9 @@ export default function App() {
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
+
+              <label>HOD</label>
+              {leadershipSelect(leadershipUsers.hods.length ? leadershipUsers.hods : leadershipUsers.managers, editingDepartmentObj.hod_user_id || '', 'No HOD', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, hod_user_id: v || null }))}
 
               <label>Manager</label>
               {leadershipSelect(leadershipUsers.managers, editingDepartmentObj.manager_user_id || '', 'No manager', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, manager_user_id: v || null }))}
@@ -1922,34 +2185,50 @@ export default function App() {
         <nav className="sidebar">
           <img src={econetLogo} alt="Econet Telecom Lesotho" className="sidebar-logo" />
           <div className="sidebar-brand">
-            <h2>Advance Clearance</h2>
+            <h2>FlowDesk</h2>
           </div>
           <div className="sidebar-section-label">Advance Clearance</div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
           <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_REQUESTS")} onClick={(e) => { e.preventDefault(); setPage("MY_REQUESTS"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
           <a href="#" className={navItemClass(page === "CLEARANCE")} onClick={(e) => { e.preventDefault(); setPage("MY_REQUESTS"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
           {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
-          <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime</a>
+          <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
+          <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           <a href="#" className={navItemClass(page === "REPORTS")} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports</a>
           <div className="sidebar-section-label">Administration</div>
-          {(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER") && <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>Users</a>}
-          {(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER") && <a href="#" className="sidebar-link" onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><ShieldCheck size={18} aria-hidden /></span>Roles & Permissions</a>}
-          {(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER") && (
-            <div className={`sidebar-group ${["SETTINGS", "EXCO", "MANAGERS", "LEADERSHIP", "WORKFLOW_BUILDER"].includes(page) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(["SETTINGS", "EXCO", "MANAGERS", "LEADERSHIP", "WORKFLOW_BUILDER"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("LEADERSHIP"); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          {(canAccessFeature("user_management") || canAccessFeature("roles_permissions")) && (
+            <div className={`sidebar-group ${["USER_MANAGEMENT", "ROLES_PERMISSIONS"].includes(page) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
               <div className="sidebar-subnav">
-                <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><Building2 size={14} aria-hidden />Sections & Departments</a>
-                {(role === "ADMIN" || role === "MANAGER") && <a href="#" className={navItemClass(page === "EXCO")} onClick={(e) => { e.preventDefault(); setPage("EXCO"); }}><ShieldCheck size={14} aria-hidden />EXCO Members</a>}
-                <a href="#" className={navItemClass(page === "MANAGERS")} onClick={(e) => { e.preventDefault(); setPage("MANAGERS"); }}><UserRoundCheck size={14} aria-hidden />Managers</a>
-                <a href="#" className={navItemClass(page === "LEADERSHIP")} onClick={(e) => { e.preventDefault(); setPage("LEADERSHIP"); }}><Users size={14} aria-hidden />Leadership Assignments</a>
-                <a href="#" className={navItemClass(page === "WORKFLOW_BUILDER")} onClick={(e) => { e.preventDefault(); setPage("WORKFLOW_BUILDER"); }}><ShieldCheck size={14} aria-hidden />Approval Workflow Builder</a>
-                <a href="#" className="sidebar-link" onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><BriefcaseBusiness size={14} aria-hidden />Cost Centers</a>
-                <a href="#" className="sidebar-link" onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><GitBranch size={14} aria-hidden />Reporting Lines</a>
+                {canAccessFeature("user_management") && <a href="#" className={navItemClass(page === "USER_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><Users size={14} aria-hidden />Users</a>}
+                {canAccessFeature("roles_permissions") && <a href="#" className={navItemClass(page === "ROLES_PERMISSIONS")} onClick={(e) => { e.preventDefault(); setPage("ROLES_PERMISSIONS"); }}><ShieldCheck size={14} aria-hidden />Roles & Permissions</a>}
               </div>
             </div>
           )}
-          <a href="#" className={navItemClass(page === "SETTINGS" && !(role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER"))} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings</a>
+          {canManageTravelSettings && (
+            <a href="#" className={navItemClass(page === "TRAVEL_SETUP")} onClick={(e) => { e.preventDefault(); setPage("TRAVEL_SETUP"); }}><span className="sidebar-nav-icon"><BriefcaseBusiness size={18} aria-hidden /></span>Travel Setup</a>
+          )}
+          {canAccessFeature("request_types") && (
+            <a href="#" className={navItemClass(page === "REQUEST_TYPES")} onClick={(e) => { e.preventDefault(); setPage("REQUEST_TYPES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Request Types</a>
+          )}
+          {(canAccessFeature("org_structure") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines")) && (
+            <div className={`sidebar-group ${orgNavOpen ? "open" : ""}`}>
+              <a href="#" className={navItemClass(ORG_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setOrgNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong>{orgNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
+              <div className="sidebar-subnav">
+                {canAccessFeature("org_structure") && <a href="#" className={navItemClass(page === "ORG_STRUCTURE")} onClick={(e) => { e.preventDefault(); setPage("ORG_STRUCTURE"); }}><Network size={14} aria-hidden />Org Structure</a>}
+                {canAccessFeature("team_roster") && <a href="#" className={navItemClass(page === "TEAM_ROSTER")} onClick={(e) => { e.preventDefault(); setPage("TEAM_ROSTER"); }}><Users size={14} aria-hidden />Team Roster</a>}
+                {canAccessFeature("ceo_management") && <a href="#" className={navItemClass(page === "CEO_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("CEO_MANAGEMENT"); }}><ShieldCheck size={14} aria-hidden />CEO</a>}
+                {canAccessFeature("employees") && <a href="#" className={navItemClass(page === "EMPLOYEES")} onClick={(e) => { e.preventDefault(); setPage("EMPLOYEES"); }}><Users size={14} aria-hidden />Employees</a>}
+                {canAccessFeature("exco_members") && <a href="#" className={navItemClass(page === "EXCO")} onClick={(e) => { e.preventDefault(); setPage("EXCO"); }}><ShieldCheck size={14} aria-hidden />EXCO Members</a>}
+                {canAccessFeature("managers") && <a href="#" className={navItemClass(page === "MANAGERS")} onClick={(e) => { e.preventDefault(); setPage("MANAGERS"); }}><UserRoundCheck size={14} aria-hidden />Managers</a>}
+                {canAccessFeature("leadership_assignments") && <a href="#" className={navItemClass(page === "LEADERSHIP")} onClick={(e) => { e.preventDefault(); setPage("LEADERSHIP"); }}><Users size={14} aria-hidden />Leadership Assignments</a>}
+                {canAccessFeature("workflow_builder") && <a href="#" className={navItemClass(page === "WORKFLOW_BUILDER")} onClick={(e) => { e.preventDefault(); setPage("WORKFLOW_BUILDER"); }}><ShieldCheck size={14} aria-hidden />Approval Workflow Builder</a>}
+                {canAccessFeature("reporting_lines") && <a href="#" className={navItemClass(page === "REPORTING_LINES")} onClick={(e) => { e.preventDefault(); setPage("REPORTING_LINES"); }}><GitBranch size={14} aria-hidden />Reporting Lines</a>}
+              </div>
+            </div>
+          )}
+          <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings</a>
           <div className="sidebar-spacer" />
           <div className="sidebar-user-card">
             <span className="avatar">{userInitials}</span>
@@ -1971,6 +2250,12 @@ export default function App() {
             <AttendanceModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME" ? (
             <OvertimeModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
+          ) : page === "OVERTIME_CLAIM" ? (
+            <OvertimeClaimModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
+          ) : page === "CEO_MANAGEMENT" ? (
+            <CeoManagement />
+          ) : page === "EMPLOYEES" ? (
+            <EmployeesOnboarding />
           ) : page === "EXCO" ? (
             <ExcoOnboarding />
           ) : page === "MANAGERS" ? (
@@ -1979,205 +2264,917 @@ export default function App() {
             <LeadershipAssignments />
           ) : page === "WORKFLOW_BUILDER" ? (
             <WorkflowBuilder />
-          ) : page === "REPORTS" ? (
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-                <div>
-                  <h2 style={{ margin: 0 }}>Reports</h2>
-                  <div style={{ opacity: 0.7, marginTop: 4 }}>Snapshot of advance and clearance activity from the records already loaded in the app.</div>
+          ) : page === "REPORTING_LINES" ? (
+            <ReportingLines />
+          ) : page === "ORG_STRUCTURE" ? (
+            <OrgStructure />
+          ) : page === "TEAM_ROSTER" ? (
+            <TeamRoster />
+          ) : page === "REQUEST_TYPES" ? (
+            <RequestTypes onNavigate={(p) => setPage(p as any)} />
+          ) : page === "USER_MANAGEMENT" ? (
+            <div className="ep-page">
+              <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Users</span></div>
+              <UserManagement />
+            </div>
+          ) : page === "ROLES_PERMISSIONS" ? (
+            <div className="ep-page">
+              <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Roles & Permissions</span></div>
+              <div className="ep-header">
+                <div className="ep-header-text">
+                  <h1 className="ep-title">Roles & Permissions</h1>
+                  <p className="ep-subtitle">Manage manager delegations and feature access permissions.</p>
                 </div>
-                <button className="button small-button" onClick={() => setPage("HOME")}>Back</button>
-              </div>
-
-              <div className="card-container">
-                <div className="card">
-                  <div className="title">Total Advances</div>
-                  <div className="value">{advances.length}</div>
-                </div>
-                <div className="card">
-                  <div className="title">Total Clearances</div>
-                  <div className="value">{claims.length}</div>
-                </div>
-                <div className="card">
-                  <div className="title">Approved / Paid Value</div>
-                  <div className="value">{fmtMoney(advances.reduce((sum, a) => sum + Number(a.approved_total || 0), 0))}</div>
-                </div>
-                <div className="card">
-                  <div className="title">Clearance Spend</div>
-                  <div className="value">{fmtMoney(claims.reduce((sum, c) => sum + Number(c.claim_total || 0), 0))}</div>
+                <div className="ep-actions">
+                  <button className="ep-btn-outline" onClick={() => void loadAdminUsers()} disabled={adminUsersLoading}>{adminUsersLoading ? "Loading…" : "Refresh"}</button>
                 </div>
               </div>
 
-              <div style={{ marginTop: 24, display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
-                <div className="card" style={{ padding: 20 }}>
-                  <h3 style={{ marginTop: 0 }}>Advances By Type</h3>
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {Object.entries(advancesByType).length === 0 ? (
-                      <div style={{ opacity: 0.7 }}>No advance records yet.</div>
-                    ) : (
-                      Object.entries(advancesByType).map(([type, count]) => (
-                        <div key={type} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                          <span>{travelTypeLabel(type, travelTypes)}</span>
-                          <b>{count}</b>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                <div className="card" style={{ padding: 20 }}>
-                  <h3 style={{ marginTop: 0 }}>Advances By Status</h3>
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {Object.entries(advancesByStatus).length === 0 ? (
-                      <div style={{ opacity: 0.7 }}>No advance records yet.</div>
-                    ) : (
-                      Object.entries(advancesByStatus).map(([status, count]) => (
-                        <div key={status} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                          <span>{advanceStageLabel(status)}</span>
-                          <b>{count}</b>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                <div className="card" style={{ padding: 20 }}>
-                  <h3 style={{ marginTop: 0 }}>Clearances By Status</h3>
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {Object.entries(claimsByStatus).length === 0 ? (
-                      <div style={{ opacity: 0.7 }}>No clearance records yet.</div>
-                    ) : (
-                      Object.entries(claimsByStatus).map(([status, count]) => (
-                        <div key={status} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                          <span>{clearanceStageLabel(status)}</span>
-                          <b>{count}</b>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="card" style={{ marginTop: 24, padding: 20 }}>
-                <h3 style={{ marginTop: 0 }}>Recent Advance Requests</h3>
-                <div style={{ overflowX: "auto" }}>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>Requested</th>
-                        <th>Approved</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {advances.length === 0 ? (
-                        <tr><td colSpan={4} style={{ textAlign: "center" }}>No advance records yet.</td></tr>
-                      ) : (
-                        advances.slice(0, 10).map((advance) => (
-                          <tr key={advance.id}>
-                            <td>{travelTypeLabel(advance.type, travelTypes)}</td>
-                            <td>{advanceStageLabel(advance.status, advance.type)}</td>
-                            <td>{fmtMoney(advance.requested_total)}</td>
-                            <td>{fmtMoney(advance.approved_total)}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div style={{ marginTop: 24, display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
-                <div className="card" style={{ padding: 20 }}>
-                  <h3 style={{ marginTop: 0 }}>Fraud / Anomaly Flags</h3>
-                  <div style={{ display: "grid", gap: 10 }}>
-                    <div>Duplicate claims: {aiAnomalies?.duplicateClaims?.length || 0}</div>
-                    <div>Unusual amounts: {aiAnomalies?.unusualAdvances?.length || 0}</div>
-                    <div>Repeated rollbacks: {aiAnomalies?.repeatedRollbacks?.length || 0}</div>
-                  </div>
-                  {aiAnomalies?.duplicateClaims?.[0] && (
-                    <div style={{ marginTop: 10, opacity: 0.8 }}>
-                      Top duplicate flag: {aiAnomalies.duplicateClaims[0].claimant_name} ({aiAnomalies.duplicateClaims[0].duplicate_count})
+              <SettingsAccordion
+                title="Manager Delegations"
+                subtitle="Create a delegation assignment and track active delegations."
+                open={delegationsOpen}
+                onToggle={() => setDelegationsOpen((current) => !current)}
+              >
+                {/* Create Delegation form */}
+                <div className="ep-panel" style={{ marginBottom: 16 }}>
+                  <div className="ep-panel-head">
+                    <div>
+                      <div className="ep-panel-title">Create Delegation</div>
+                      <div className="ep-panel-sub">Temporarily assign a manager's approval authority to a delegate.</div>
                     </div>
-                  )}
-                </div>
-
-                <div className="card" style={{ padding: 20 }}>
-                  <h3 style={{ marginTop: 0 }}>Natural-Language Reporting</h3>
-                  <div className="form-field">
-                    <label>Ask a report question</label>
-                    <input value={nlPrompt} onChange={(e) => setNlPrompt(e.target.value)} />
+                    <button className="ep-btn-outline" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
+                      {delegationsLoading ? "Loading…" : "Refresh"}
+                    </button>
                   </div>
-                  <button
-                    className="button small-button"
-                    onClick={async () => {
-                      try {
-                        const result = await api.aiNlReport(nlPrompt);
-                        setNlReport(result);
-                      } catch (e: any) {
-                        alert("Error generating report: " + e.message);
-                      }
-                    }}
-                  >
-                    Run Report
-                  </button>
-                  {nlReport && (
-                    <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-                      <div><strong>{nlReport.interpretation}</strong></div>
-                      <div style={{ overflowX: "auto" }}>
-                        <table className="table">
-                          <thead>
-                            <tr>
-                              {Object.keys(nlReport.rows?.[0] || { result: "" }).map((key) => (
-                                <th key={key}>{key}</th>
+                  <div className="ep-panel-body">
+                    <div className="ep-form-row" style={{ marginBottom: 0 }}>
+                      {role === "ADMIN" ? (
+                        <>
+                          <div className="ep-form-group">
+                            <label>Manager <span className="ep-required">*</span></label>
+                            <select className="ep-form-select" value={delegationManagerId} onChange={(e) => setDelegationManagerId(e.target.value)}>
+                              <option value="">Select manager</option>
+                              {adminUsers.filter((user) => user.role === "MANAGER").map((user) => (
+                                <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                               ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(nlReport.rows || []).map((row: any, index: number) => (
-                              <tr key={index}>
-                                {Object.keys(nlReport.rows?.[0] || { result: "" }).map((key) => (
-                                  <td key={key}>{String(row[key] ?? "")}</td>
+                            </select>
+                          </div>
+                          <div className="ep-form-group">
+                            <label>Delegate <span className="ep-required">*</span></label>
+                            <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)} disabled={!delegationManagerId}>
+                              <option value="">Select delegate</option>
+                              {adminUsers
+                                .filter((user) => user.department === adminUsers.find((u) => u.id === delegationManagerId)?.department)
+                                .filter((user) => user.id !== delegationManagerId)
+                                .map((user) => (
+                                  <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                                 ))}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </select>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
+                          <label>Delegate <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)}>
+                            <option value="">Select delegate</option>
+                            {adminUsers
+                              .filter((user) => user.department === adminUsers.find((u) => u.id === (profile?.id || me?.userId))?.department)
+                              .filter((user) => user.id !== (profile?.id || me?.userId))
+                              .map((user) => (
+                                <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
+                              ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="ep-form-group">
+                        <label>From Date <span className="ep-optional">(Optional)</span></label>
+                        <input type="date" className="ep-form-input" value={delegationFromDate} onChange={(e) => setDelegationFromDate(e.target.value)} />
+                      </div>
+                      <div className="ep-form-group">
+                        <label>To Date <span className="ep-optional">(Optional)</span></label>
+                        <input type="date" className="ep-form-input" value={delegationToDate} onChange={(e) => setDelegationToDate(e.target.value)} />
                       </div>
                     </div>
-                  )}
+                    <button className="ep-btn" style={{ marginTop: 8 }} onClick={() => void createDelegation()}>Create Delegation</button>
+                  </div>
                 </div>
 
-                <div className="card" style={{ padding: 20 }}>
-                  <h3 style={{ marginTop: 0 }}>OCR Receipt / Proof Extract</h3>
-                  <div className="form-field">
-                    <label>Paste OCR text from a receipt or payment proof</label>
-                    <textarea value={ocrText} onChange={(e) => setOcrText(e.target.value)} rows={5} />
+                {/* Delegations table */}
+                {delegationsLoading ? (
+                  <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>Loading…</div>
+                ) : delegations.length === 0 ? (
+                  <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>No delegations found.</div>
+                ) : (
+                  <div className="ep-table-wrap">
+                    <table className="ep-table">
+                      <thead>
+                        <tr><th>Manager</th><th>Delegate</th><th>Department</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
+                      </thead>
+                      <tbody>
+                        {delegations.map((delegation) => (
+                          <tr key={delegation.id}>
+                            <td style={{ fontWeight: 600 }}>{delegation.manager_name || "—"}</td>
+                            <td>{delegation.delegate_name || "—"}</td>
+                            <td style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{delegation.department || "—"}</td>
+                            <td style={{ fontSize: "0.85rem" }}>{delegation.from_date || "—"}</td>
+                            <td style={{ fontSize: "0.85rem" }}>{delegation.to_date || "—"}</td>
+                            <td>
+                              <span className={`status-pill ${delegation.active ? "status-pill-success" : "status-pill-danger"}`}>
+                                {delegation.active ? "Active" : "Ended"}
+                              </span>
+                            </td>
+                            <td>
+                              {delegation.active && (
+                                <button className="ep-btn-danger" style={{ padding: "5px 10px", fontSize: "0.8rem" }} onClick={() => void endDelegation(delegation.id)}>
+                                  End
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                  <button
-                    className="button small-button"
-                    onClick={async () => {
-                      try {
-                        const result = await api.aiOcrExtract(ocrText);
-                        setOcrResult(result);
-                      } catch (e: any) {
-                        alert("Error extracting OCR fields: " + e.message);
-                      }
-                    }}
-                  >
-                    Extract Fields
-                  </button>
-                  {ocrResult && (
-                    <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
-                      <div>Date: {ocrResult.extracted_date || "—"}</div>
-                      <div>Amount: {ocrResult.extracted_amount != null ? `M${Number(ocrResult.extracted_amount).toFixed(2)}` : "—"}</div>
-                      <div>Reference: {ocrResult.extracted_reference || "—"}</div>
-                    </div>
+                )}
+              </SettingsAccordion>
+
+              {role === "ADMIN" && (
+                <SettingsAccordion
+                  title="Administration Feature Access"
+                  subtitle="Control which roles can see each administration function in the sidebar."
+                  open={featurePermOpen}
+                  onToggle={() => {
+                    if (!featurePermOpen) {
+                      setFeaturePermDraft({ ...featurePermissions });
+                    }
+                    setFeaturePermOpen((v) => !v);
+                  }}
+                >
+                  {(() => {
+                    const ROLES_LIST = [
+                      { key: "EMPLOYEE",      label: "Employee" },
+                      { key: "HOD",           label: "HOD" },
+                      { key: "MANAGER",       label: "Manager" },
+                      { key: "HR_MANAGER",    label: "HR Manager" },
+                      { key: "AUTH_OFFICER",  label: "HR" },
+                      { key: "CHIEF_OFFICER", label: "Chief Officer" },
+                      { key: "FINANCE",       label: "Finance" },
+                      { key: "EXCO",          label: "EXCO" },
+                      { key: "CEO",           label: "CEO" },
+                      { key: "ADMIN",         label: "Admin" },
+                    ];
+                    const FEATURES_LIST = [
+                      { key: "user_management",        label: "Users",                    group: "User Management" },
+                      { key: "roles_permissions",      label: "Roles & Permissions",      group: "User Management" },
+                      { key: "travel_setup",           label: "Travel Setup",             group: "Travel" },
+                      { key: "org_structure",          label: "Org Structure",            group: "Org Structure" },
+                      { key: "team_roster",            label: "Team Roster",              group: "Org Structure" },
+                      { key: "ceo_management",         label: "CEO",                      group: "Org Structure" },
+                      { key: "employees",              label: "Employees",                group: "Org Structure" },
+                      { key: "exco_members",           label: "EXCO Members",             group: "Org Structure" },
+                      { key: "managers",               label: "Managers",                 group: "Org Structure" },
+                      { key: "leadership_assignments", label: "Leadership Assignments",   group: "Org Structure" },
+                      { key: "workflow_builder",       label: "Approval Workflow Builder",group: "Org Structure" },
+                      { key: "request_types",          label: "Request Types",            group: "Org Structure" },
+                      { key: "reporting_lines",        label: "Reporting Lines",          group: "Org Structure" },
+                    ];
+                    const draft = featurePermDraft;
+                    const DEFAULTS: Record<string, string[]> = {
+                      user_management:        ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                      roles_permissions:      ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                      travel_setup:           ["ADMIN","HR_MANAGER","AUTH_OFFICER"],
+                      org_structure:          ["ADMIN"],
+                      team_roster:            ["ADMIN"],
+
+                      ceo_management:         ["ADMIN"],
+                      employees:              ["ADMIN"],
+                      exco_members:           ["ADMIN","MANAGER"],
+                      managers:               ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                      leadership_assignments: ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                      workflow_builder:       ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                      request_types:          ["ADMIN"],
+                      reporting_lines:        ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                    };
+                    function toggleRole(featureKey: string, roleKey: string) {
+                      if (roleKey === "ADMIN") return;
+                      const current = draft[featureKey] ?? DEFAULTS[featureKey] ?? [];
+                      const next = current.includes(roleKey)
+                        ? current.filter((r) => r !== roleKey)
+                        : [...current, roleKey];
+                      setFeaturePermDraft({ ...draft, [featureKey]: next });
+                    }
+                    const groups = Array.from(new Set(FEATURES_LIST.map((f) => f.group)));
+                    return (
+                      <div>
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                            <thead>
+                              <tr>
+                                <th style={{ textAlign: "left", padding: "6px 10px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", minWidth: 180 }}>Feature</th>
+                                {ROLES_LIST.map((r) => (
+                                  <th key={r.key} style={{ padding: "6px 8px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", textAlign: "center", minWidth: 70, fontSize: 12, fontWeight: 600 }}>{r.label}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {groups.map((group) => {
+                                const groupFeatures = FEATURES_LIST.filter((f) => f.group === group);
+                                return (
+                                  <React.Fragment key={group}>
+                                    <tr>
+                                      <td colSpan={ROLES_LIST.length + 1} style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted,#6b7280)", background: "var(--bg-secondary,#f8fafc)", borderTop: "1px solid var(--border,#e5e7eb)" }}>{group}</td>
+                                    </tr>
+                                    {groupFeatures.map((feat, idx) => {
+                                      const allowed = draft[feat.key] ?? DEFAULTS[feat.key] ?? [];
+                                      return (
+                                        <tr key={feat.key} style={{ background: idx % 2 === 0 ? "transparent" : "var(--bg-secondary,#f8fafc)" }}>
+                                          <td style={{ padding: "7px 10px", borderBottom: "1px solid var(--border,#e5e7eb)" }}>{feat.label}</td>
+                                          {ROLES_LIST.map((r) => {
+                                            const checked = allowed.includes(r.key);
+                                            const isAdmin = r.key === "ADMIN";
+                                            return (
+                                              <td key={r.key} style={{ textAlign: "center", borderBottom: "1px solid var(--border,#e5e7eb)", padding: "7px 8px" }}>
+                                                <input
+                                                  type="checkbox"
+                                                  checked={checked}
+                                                  disabled={isAdmin}
+                                                  title={isAdmin ? "Admin always has access" : undefined}
+                                                  onChange={() => toggleRole(feat.key, r.key)}
+                                                  style={{ cursor: isAdmin ? "not-allowed" : "pointer", accentColor: "var(--primary,#2563eb)" }}
+                                                />
+                                              </td>
+                                            );
+                                          })}
+                                        </tr>
+                                      );
+                                    })}
+                                  </React.Fragment>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
+                          <button className="ep-btn-outline" onClick={() => setFeaturePermDraft({ ...featurePermissions })}>Reset</button>
+                          <button className="ep-btn" onClick={() => void saveFeaturePermissions()} disabled={featurePermSaving}>{featurePermSaving ? "Saving…" : "Save Changes"}</button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </SettingsAccordion>
+              )}
+            </div>
+          ) : page === "TRAVEL_SETUP" ? (
+            <div className="ep-page">
+              <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Travel Setup</span></div>
+              <div className="ep-header">
+                <div className="ep-header-text">
+                  <h1 className="ep-title">Travel Setup</h1>
+                  <p className="ep-subtitle">Maintain travel types, allowance rates, and approved hotel accommodations.</p>
+                </div>
+                <div className="ep-actions">
+                  <button className="ep-btn-outline" onClick={() => void Promise.all([loadTravelTypes(), loadHotels()])} disabled={travelTypesLoading || hotelsLoading}>Refresh</button>
+                </div>
+              </div>
+
+              {/* ── Travel Types panel ── */}
+              <div className="ep-panel">
+                <div className="ep-panel-head">
+                  <div>
+                    <div className="ep-panel-title">Travel Types & Rates</div>
+                    <div className="ep-panel-sub">Configure travel allowance types and rates per employee category.</div>
+                  </div>
+                  <button className="ep-btn" onClick={() => setShowAddTravelTypeModal(true)}><Plus size={15} />Add Travel Type</button>
+                </div>
+                <div className="ep-table-wrap">
+                  {travelTypesLoading ? (
+                    <div className="ep-loading"><RefreshCw size={18} className="rl-spin" /><p>Loading…</p></div>
+                  ) : travelTypes.length === 0 ? (
+                    <div className="ep-empty"><p>No travel types yet. Click <strong>Add Travel Type</strong> to create one.</p></div>
+                  ) : (
+                    <table className="ep-table">
+                      <thead>
+                        <tr><th>Name</th><th>Location Mode</th><th>Rate Type</th><th>Currency</th><th>General Staff</th><th>EXCO</th><th>CEO</th><th>Actions</th></tr>
+                      </thead>
+                      <tbody>
+                        {travelTypes.map((type) => (
+                          <tr key={type.id}>
+                            <td style={{ fontWeight: 600 }}>{type.name}</td>
+                            <td><span className="status-pill status-pill-info">{type.location_mode === "DISTRICT" ? "Districts" : "Countries / Cities"}</span></td>
+                            <td>{type.rate_kind === "DAILY" ? "Daily" : "Meal"}</td>
+                            <td>
+                              <span title={CURRENCIES.find(c => c.code === (type.currency ?? "LSL"))?.name ?? type.currency}>
+                                <strong>{getCurrencySymbol(type.currency)}</strong>
+                                {" "}{type.currency ?? "LSL"}
+                              </span>
+                            </td>
+                            <td>{fmtMoney(type.rate_general_staff, type.currency)}</td>
+                            <td>{fmtMoney(type.rate_exco, type.currency)}</td>
+                            <td>{fmtMoney(type.rate_ceo, type.currency)}</td>
+                            <td>
+                              <div style={{ display: "flex", gap: 4 }}>
+                                <button className="ep-icon-btn" onClick={() => setEditingTravelType(type)} title="Edit"><Edit3 size={13} aria-hidden /></button>
+                                <button className="ep-icon-btn" style={{ color: "#dc2626" }} onClick={() => void deleteTravelType(type.id)} title="Delete"><Trash2 size={13} aria-hidden /></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
+                </div>
+              </div>
+
+              {/* ── Hotels panel ── */}
+              <div className="ep-panel">
+                <div className="ep-panel-head">
+                  <div>
+                    <div className="ep-panel-title">Hotels & Accommodation</div>
+                    <div className="ep-panel-sub">Manage approved hotels available for accommodation requests.</div>
+                  </div>
+                  <button className="ep-btn" onClick={() => setShowAddHotelModal(true)}><Plus size={15} />Add Hotel</button>
+                </div>
+                <div className="ep-table-wrap">
+                  {hotelsLoading ? (
+                    <div className="ep-loading"><RefreshCw size={18} className="rl-spin" /><p>Loading…</p></div>
+                  ) : hotels.length === 0 ? (
+                    <div className="ep-empty"><p>No hotels yet. Click <strong>Add Hotel</strong> to add one.</p></div>
+                  ) : (
+                    <table className="ep-table">
+                      <thead>
+                        <tr><th>Hotel Name</th><th>District / City</th><th>Country</th><th>Contact</th><th>Actions</th></tr>
+                      </thead>
+                      <tbody>
+                        {hotels.map((hotel) => (
+                          <tr key={hotel.id}>
+                            <td style={{ fontWeight: 600 }}>{hotel.name}</td>
+                            <td>{hotel.district || hotel.city || "—"}</td>
+                            <td>{hotel.country || "Lesotho"}</td>
+                            <td>{hotel.contact || "—"}</td>
+                            <td>
+                              <div style={{ display: "flex", gap: 4 }}>
+                                <button className="ep-icon-btn" onClick={() => setEditingHotel({ ...hotel })} title="Edit"><Edit3 size={13} /></button>
+                                <button className="ep-icon-btn danger" onClick={() => void deleteHotel(hotel)} title="Delete"><Trash2 size={13} /></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Add Travel Type Modal ── */}
+              {showAddTravelTypeModal && (
+                <div className="ep-modal-overlay" onClick={() => setShowAddTravelTypeModal(false)}>
+                  <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="ep-modal-head">
+                      <div><h2 className="ep-modal-title">Add Travel Type</h2><p className="ep-modal-sub">Define a new travel allowance type with rates per employee category.</p></div>
+                      <button className="ep-icon-btn" onClick={() => setShowAddTravelTypeModal(false)}><X size={18} /></button>
+                    </div>
+                    <div className="ep-modal-body">
+                      <div className="ep-form-group">
+                        <label>Travel Type Name <span className="ep-required">*</span></label>
+                        <input className="ep-form-input" placeholder="e.g. Business Travel Allowance" value={newTravelTypeName} onChange={(e) => setNewTravelTypeName(e.target.value)} />
+                      </div>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>Location Mode <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={newTravelTypeLocationMode} onChange={(e) => setNewTravelTypeLocationMode(e.target.value as "DISTRICT" | "COUNTRY_CITY")}>
+                            <option value="COUNTRY_CITY">Countries / Cities</option>
+                            <option value="DISTRICT">Districts</option>
+                          </select>
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Rate Type <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={newTravelTypeRateKind} onChange={(e) => setNewTravelTypeRateKind(e.target.value as "MEAL" | "DAILY")}>
+                            <option value="DAILY">Daily Rate</option>
+                            <option value="MEAL">Meal Rate</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="ep-form-group">
+                        <label>Currency <span className="ep-required">*</span></label>
+                        <select className="ep-form-select" value={newTravelTypeCurrency} onChange={(e) => setNewTravelTypeCurrency(e.target.value)}>
+                          {CURRENCIES.map(c => (
+                            <option key={c.code} value={c.code}>{c.symbol} — {c.code} ({c.name})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="ep-form-row-3">
+                        <div className="ep-form-group">
+                          <label>General Staff Rate ({getCurrencySymbol(newTravelTypeCurrency)})</label>
+                          <input type="number" min="0" step="0.01" className="ep-form-input" placeholder="0.00" value={newTravelTypeGeneralRate} onChange={(e) => setNewTravelTypeGeneralRate(e.target.value)} />
+                        </div>
+                        <div className="ep-form-group">
+                          <label>EXCO Rate ({getCurrencySymbol(newTravelTypeCurrency)})</label>
+                          <input type="number" min="0" step="0.01" className="ep-form-input" placeholder="0.00" value={newTravelTypeExcoRate} onChange={(e) => setNewTravelTypeExcoRate(e.target.value)} />
+                        </div>
+                        <div className="ep-form-group">
+                          <label>CEO Rate ({getCurrencySymbol(newTravelTypeCurrency)})</label>
+                          <input type="number" min="0" step="0.01" className="ep-form-input" placeholder="0.00" value={newTravelTypeCeoRate} onChange={(e) => setNewTravelTypeCeoRate(e.target.value)} />
+                        </div>
+                      </div>
+                      <label className="ep-checkbox-label">
+                        <input type="checkbox" checked={newTravelTypeRequiresAccommodation} onChange={(e) => setNewTravelTypeRequiresAccommodation(e.target.checked)} />
+                        <span>Requires accommodation booking</span>
+                      </label>
+                    </div>
+                    <div className="ep-modal-footer">
+                      <button className="ep-btn-outline" onClick={() => setShowAddTravelTypeModal(false)}>Cancel</button>
+                      <button className="ep-btn" onClick={() => { void createTravelType(); setShowAddTravelTypeModal(false); }}>Add Travel Type</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Edit Travel Type Modal ── */}
+              {editingTravelType && (
+                <div className="ep-modal-overlay" onClick={() => setEditingTravelType(null)}>
+                  <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="ep-modal-head">
+                      <div><h2 className="ep-modal-title">Edit Travel Type</h2><p className="ep-modal-sub">Update the rates and settings for <strong>{editingTravelType.name}</strong>.</p></div>
+                      <button className="ep-icon-btn" onClick={() => setEditingTravelType(null)}><X size={18} /></button>
+                    </div>
+                    <div className="ep-modal-body">
+                      <div className="ep-form-group">
+                        <label>Travel Type Name <span className="ep-required">*</span></label>
+                        <input className="ep-form-input" value={editingTravelType.name} onChange={(e) => setEditingTravelType({ ...editingTravelType, name: e.target.value })} />
+                      </div>
+                      <div className="ep-form-group">
+                        <label>Currency <span className="ep-required">*</span></label>
+                        <select className="ep-form-select" value={editingTravelType.currency ?? "LSL"} onChange={(e) => setEditingTravelType({ ...editingTravelType, currency: e.target.value })}>
+                          {CURRENCIES.map(c => (
+                            <option key={c.code} value={c.code}>{c.symbol} — {c.code} ({c.name})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="ep-form-row-3">
+                        <div className="ep-form-group">
+                          <label>General Staff Rate ({getCurrencySymbol(editingTravelType.currency)})</label>
+                          <input type="number" min="0" step="0.01" className="ep-form-input" value={editingTravelType.rate_general_staff} onChange={(e) => setEditingTravelType({ ...editingTravelType, rate_general_staff: Number(e.target.value) })} />
+                        </div>
+                        <div className="ep-form-group">
+                          <label>EXCO Rate ({getCurrencySymbol(editingTravelType.currency)})</label>
+                          <input type="number" min="0" step="0.01" className="ep-form-input" value={editingTravelType.rate_exco} onChange={(e) => setEditingTravelType({ ...editingTravelType, rate_exco: Number(e.target.value) })} />
+                        </div>
+                        <div className="ep-form-group">
+                          <label>CEO Rate ({getCurrencySymbol(editingTravelType.currency)})</label>
+                          <input type="number" min="0" step="0.01" className="ep-form-input" value={editingTravelType.rate_ceo} onChange={(e) => setEditingTravelType({ ...editingTravelType, rate_ceo: Number(e.target.value) })} />
+                        </div>
+                      </div>
+                      <label className="ep-checkbox-label">
+                        <input type="checkbox" checked={editingTravelType.requires_accommodation ?? false} onChange={(e) => setEditingTravelType({ ...editingTravelType, requires_accommodation: e.target.checked })} />
+                        <span>Requires accommodation booking</span>
+                      </label>
+                    </div>
+                    <div className="ep-modal-footer">
+                      <button className="ep-btn-outline" onClick={() => setEditingTravelType(null)}>Cancel</button>
+                      <button className="ep-btn" onClick={() => void updateTravelTypeRate(editingTravelType)}>Save Changes</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Add Hotel Modal ── */}
+              {showAddHotelModal && (
+                <div className="ep-modal-overlay" onClick={() => setShowAddHotelModal(false)}>
+                  <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="ep-modal-head">
+                      <div><h2 className="ep-modal-title">Add Hotel</h2><p className="ep-modal-sub">Add an approved hotel for accommodation requests.</p></div>
+                      <button className="ep-icon-btn" onClick={() => setShowAddHotelModal(false)}><X size={18} /></button>
+                    </div>
+                    <div className="ep-modal-body">
+                      <div className="ep-form-group">
+                        <label>Hotel Name <span className="ep-required">*</span></label>
+                        <input className="ep-form-input" placeholder="e.g. Lesotho Sun Hotel" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
+                      </div>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>District <span className="ep-optional">(optional if city provided)</span></label>
+                          <select className="ep-form-select" value={newHotelDistrict} onChange={(e) => setNewHotelDistrict(e.target.value)}>
+                            <option value="">— Select district —</option>
+                            {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                          </select>
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Country <span className="ep-optional">(optional if district provided)</span></label>
+                          <input className="ep-form-input" placeholder="e.g. Lesotho" value={newHotelCountry} onChange={(e) => setNewHotelCountry(e.target.value)} />
+                        </div>
+                      </div>
+                      {newHotelCountry.trim().toLowerCase() === "south africa" && (
+                        <div className="ep-form-group">
+                          <label>Province <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={newHotelProvince} onChange={(e) => setNewHotelProvince(e.target.value)}>
+                            <option value="">— Select province —</option>
+                            {SOUTH_AFRICA_PROVINCES.map((p) => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                        </div>
+                      )}
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>City <span className="ep-optional">(Optional)</span></label>
+                          <input className="ep-form-input" placeholder="e.g. Maseru" value={newHotelCity} onChange={(e) => setNewHotelCity(e.target.value)} />
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Contact <span className="ep-optional">(Optional)</span></label>
+                          <input className="ep-form-input" placeholder="+266 2231 xxxx" value={newHotelContact} onChange={(e) => setNewHotelContact(e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>Address <span className="ep-optional">(Optional)</span></label>
+                          <input className="ep-form-input" placeholder="Street address" value={newHotelAddress} onChange={(e) => setNewHotelAddress(e.target.value)} />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="ep-modal-footer">
+                      <button className="ep-btn-outline" onClick={() => setShowAddHotelModal(false)}>Cancel</button>
+                      <button className="ep-btn" onClick={() => void createHotel()}>Add Hotel</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Edit Hotel Modal ── */}
+              {editingHotel && (
+                <div className="ep-modal-overlay" onClick={() => setEditingHotel(null)}>
+                  <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="ep-modal-head">
+                      <div><h2 className="ep-modal-title">Edit Hotel</h2><p className="ep-modal-sub">Update details for <strong>{editingHotel.name}</strong>.</p></div>
+                      <button className="ep-icon-btn" onClick={() => setEditingHotel(null)}><X size={18} /></button>
+                    </div>
+                    <div className="ep-modal-body">
+                      <div className="ep-form-group">
+                        <label>Hotel Name <span className="ep-required">*</span></label>
+                        <input className="ep-form-input" value={editingHotel.name || ""} onChange={(e) => setEditingHotel({ ...editingHotel, name: e.target.value })} />
+                      </div>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>District</label>
+                          <select className="ep-form-select" value={editingHotel.district || ""} onChange={(e) => setEditingHotel({ ...editingHotel, district: e.target.value })}>
+                            <option value="">— Select district —</option>
+                            {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                          </select>
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Country</label>
+                          <input className="ep-form-input" value={editingHotel.country || ""} onChange={(e) => setEditingHotel({ ...editingHotel, country: e.target.value })} />
+                        </div>
+                      </div>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>City</label>
+                          <input className="ep-form-input" value={editingHotel.city || ""} onChange={(e) => setEditingHotel({ ...editingHotel, city: e.target.value })} />
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Contact</label>
+                          <input className="ep-form-input" value={editingHotel.contact || ""} onChange={(e) => setEditingHotel({ ...editingHotel, contact: e.target.value })} />
+                        </div>
+                      </div>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>Address</label>
+                          <input className="ep-form-input" value={editingHotel.address || ""} onChange={(e) => setEditingHotel({ ...editingHotel, address: e.target.value })} />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="ep-modal-footer">
+                      <button className="ep-btn-outline" onClick={() => setEditingHotel(null)}>Cancel</button>
+                      <button className="ep-btn" onClick={() => void saveHotel()} disabled={savingHotel}>{savingHotel ? "Saving…" : "Save Changes"}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : page === "REPORTS" ? (
+            <div className="ep-page">
+              {/* Header */}
+              <div className="ep-header">
+                <div className="ep-header-text">
+                  <h1 className="ep-title">Reports</h1>
+                  <p className="ep-subtitle">Overview of advance and clearance activity across the organisation.</p>
+                </div>
+              </div>
+
+              {/* KPI stat cards */}
+              <div className="ep-kpi-row">
+                <div className="stat-card stat-card-blue">
+                  <span className="stat-icon"><FileText size={28} /></span>
+                  <div>
+                    <div className="stat-value">{advances.length}</div>
+                    <div className="stat-label">Total Advances</div>
+                  </div>
+                </div>
+                <div className="stat-card stat-card-green">
+                  <span className="stat-icon"><ClipboardList size={28} /></span>
+                  <div>
+                    <div className="stat-value">{claims.length}</div>
+                    <div className="stat-label">Total Clearances</div>
+                  </div>
+                </div>
+                <div className="stat-card stat-card-gold">
+                  <span className="stat-icon"><Wallet size={28} /></span>
+                  <div>
+                    <div className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(advances.reduce((s, a) => s + Number(a.approved_total || 0), 0))}</div>
+                    <div className="stat-label">Approved / Paid Value</div>
+                  </div>
+                </div>
+                <div className="stat-card stat-card-rose">
+                  <span className="stat-icon"><Wallet size={28} /></span>
+                  <div>
+                    <div className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(claims.reduce((s, c) => s + Number(c.claim_total || 0), 0))}</div>
+                    <div className="stat-label">Clearance Spend</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Report module cards */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 24 }}>
+                {([
+                  { icon: <BarChart3 size={26} />, color: "#3b82f6", bg: "#eff6ff", title: "SLA Reports", desc: "Track processing times, breach rates, and SLA compliance by department.", action: () => setPage("SLA_REPORTS"), live: true },
+                  { icon: <FileText size={26} />, color: "#8b5cf6", bg: "#ede9fe", title: "Advance Analysis", desc: "Breakdown of advance requests by type, status, and value.", action: null, live: false },
+                  { icon: <ClipboardList size={26} />, color: "#059669", bg: "#d1fae5", title: "Clearance Summary", desc: "Clearance submission and approval rates over time.", action: null, live: false },
+                  { icon: <Zap size={26} />, color: "#f59e0b", bg: "#fef3c7", title: "AI Anomaly Flags", desc: `${(aiAnomalies?.duplicateClaims?.length || 0) + (aiAnomalies?.unusualAdvances?.length || 0) + (aiAnomalies?.repeatedRollbacks?.length || 0)} total flags detected across all records.`, action: null, live: false },
+                ] as const).map(({ icon, color, bg, title, desc, action, live }) => (
+                  <div key={title}
+                    onClick={() => action?.()}
+                    style={{
+                      background: "white", borderRadius: 12, border: `1px solid #e8edf2`,
+                      boxShadow: "0 1px 4px rgba(0,0,0,0.06)", padding: 20,
+                      cursor: action ? "pointer" : "default",
+                      transition: "box-shadow 0.15s, transform 0.15s",
+                      display: "flex", flexDirection: "column", gap: 12,
+                    }}
+                    onMouseEnter={e => { if (action) { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(0,0,0,0.12)"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)"; } }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 1px 4px rgba(0,0,0,0.06)"; (e.currentTarget as HTMLDivElement).style.transform = ""; }}
+                  >
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                      <span style={{ width: 46, height: 46, borderRadius: 12, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color }}>{icon}</span>
+                      {live ? (
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 99, background: "#d1fae5", color: "#065f46" }}>Live</span>
+                      ) : (
+                        <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 99, background: "#f1f5f9", color: "#94a3b8" }}>Coming soon</span>
+                      )}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>{title}</div>
+                      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>{desc}</div>
+                    </div>
+                    {action && (
+                      <div style={{ fontSize: 13, color, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+                        View Report <ChevronRight />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Breakdown panels */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 20 }}>
+                {/* Advances by type */}
+                <div className="ep-panel">
+                  <div className="ep-panel-head"><div className="ep-panel-title">Advances by Type</div></div>
+                  <div style={{ padding: "4px 0" }}>
+                    {Object.entries(advancesByType).length === 0 ? (
+                      <div className="ep-empty" style={{ padding: "20px 0" }}><p>No advance records yet.</p></div>
+                    ) : (() => {
+                      const total = Object.values(advancesByType).reduce((s, n) => s + n, 0);
+                      return Object.entries(advancesByType).sort(([,a],[,b]) => b - a).map(([type, count]) => (
+                        <div key={type} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 20px" }}>
+                          <span style={{ flex: 1, fontSize: 13, color: "var(--text)", fontWeight: 500 }}>{travelTypeLabel(type, travelTypes)}</span>
+                          <div style={{ width: 80, height: 6, background: "var(--surface-soft)", borderRadius: 99, overflow: "hidden", flexShrink: 0 }}>
+                            <div style={{ height: "100%", width: `${(count/total)*100}%`, background: "#3b82f6", borderRadius: 99 }} />
+                          </div>
+                          <span style={{ fontWeight: 700, color: "var(--text)", minWidth: 24, textAlign: "right", fontSize: 13 }}>{count}</span>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </div>
+
+                {/* Advances by status */}
+                <div className="ep-panel">
+                  <div className="ep-panel-head"><div className="ep-panel-title">Advances by Status</div></div>
+                  <div style={{ padding: "4px 0" }}>
+                    {Object.entries(advancesByStatus).length === 0 ? (
+                      <div className="ep-empty" style={{ padding: "20px 0" }}><p>No advance records yet.</p></div>
+                    ) : (() => {
+                      const total = Object.values(advancesByStatus).reduce((s, n) => s + n, 0);
+                      const statusColors: Record<string, [string,string]> = {
+                        DRAFT: ["#f1f5f9","#64748b"], SUBMITTED: ["#dbeafe","#1d4ed8"],
+                        PENDING_APPROVAL: ["#fef3c7","#92400e"], APPROVED: ["#d1fae5","#065f46"],
+                        REJECTED: ["#fee2e2","#dc2626"], PAID: ["#ede9fe","#6d28d9"],
+                        PENDING_PAYMENT: ["#fef3c7","#92400e"],
+                      };
+                      return Object.entries(advancesByStatus).sort(([,a],[,b]) => b - a).map(([status, count]) => {
+                        const [bg, color] = statusColors[status] || ["#f1f5f9","#64748b"];
+                        return (
+                          <div key={status} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 20px" }}>
+                            <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>
+                              {advanceStageLabel(status)}
+                            </span>
+                            <div style={{ flex: 1, height: 6, background: "var(--surface-soft)", borderRadius: 99, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${(count/total)*100}%`, background: color, borderRadius: 99 }} />
+                            </div>
+                            <span style={{ fontWeight: 700, color: "var(--text)", minWidth: 24, textAlign: "right", fontSize: 13 }}>{count}</span>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+
+                {/* Clearances by status */}
+                <div className="ep-panel">
+                  <div className="ep-panel-head"><div className="ep-panel-title">Clearances by Status</div></div>
+                  <div style={{ padding: "4px 0" }}>
+                    {Object.entries(claimsByStatus).length === 0 ? (
+                      <div className="ep-empty" style={{ padding: "20px 0" }}><p>No clearance records yet.</p></div>
+                    ) : (() => {
+                      const total = Object.values(claimsByStatus).reduce((s, n) => s + n, 0);
+                      const statusColors: Record<string, [string,string]> = {
+                        SUBMITTED: ["#dbeafe","#1d4ed8"], APPROVED: ["#d1fae5","#065f46"],
+                        REJECTED: ["#fee2e2","#dc2626"], PAID: ["#ede9fe","#6d28d9"],
+                        PENDING_APPROVAL: ["#fef3c7","#92400e"],
+                      };
+                      return Object.entries(claimsByStatus).sort(([,a],[,b]) => b - a).map(([status, count]) => {
+                        const [bg, color] = statusColors[status] || ["#f1f5f9","#64748b"];
+                        return (
+                          <div key={status} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 20px" }}>
+                            <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>
+                              {clearanceStageLabel(status)}
+                            </span>
+                            <div style={{ flex: 1, height: 6, background: "var(--surface-soft)", borderRadius: 99, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${(count/total)*100}%`, background: color, borderRadius: 99 }} />
+                            </div>
+                            <span style={{ fontWeight: 700, color: "var(--text)", minWidth: 24, textAlign: "right", fontSize: 13 }}>{count}</span>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              </div>
+
+              {/* Recent requests table */}
+              <div className="ep-panel" style={{ marginBottom: 20 }}>
+                <div className="ep-panel-head">
+                  <div className="ep-panel-title">Recent Advance Requests</div>
+                </div>
+                <div className="ep-table-wrap">
+                  {advances.length === 0 ? (
+                    <div className="ep-empty"><p>No advance records yet.</p></div>
+                  ) : (
+                    <table className="ep-table">
+                      <thead>
+                        <tr>
+                          <th>Employee</th>
+                          <th>Type</th>
+                          <th>Status</th>
+                          <th>Requested</th>
+                          <th>Approved</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {advances.slice(0, 10).map((adv) => {
+                          const statusColors: Record<string, [string,string]> = {
+                            DRAFT: ["#f1f5f9","#64748b"], SUBMITTED: ["#dbeafe","#1d4ed8"],
+                            PENDING_APPROVAL: ["#fef3c7","#92400e"], APPROVED: ["#d1fae5","#065f46"],
+                            REJECTED: ["#fee2e2","#dc2626"], PAID: ["#ede9fe","#6d28d9"],
+                            PENDING_PAYMENT: ["#fef3c7","#92400e"],
+                          };
+                          const [sbg, sclr] = statusColors[adv.status] || ["#f1f5f9","#64748b"];
+                          return (
+                            <tr key={adv.id}>
+                              <td style={{ fontWeight: 600 }}>{(adv as any).requester_name || (adv as any).full_name || "—"}</td>
+                              <td>{travelTypeLabel(adv.type, travelTypes)}</td>
+                              <td>
+                                <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: sbg, color: sclr }}>
+                                  {advanceStageLabel(adv.status, adv.type)}
+                                </span>
+                              </td>
+                              <td style={{ fontWeight: 600 }}>{fmtMoney(adv.requested_total)}</td>
+                              <td style={{ color: "var(--muted)" }}>{fmtMoney(adv.approved_total)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* AI tools */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 1fr", gap: 14 }}>
+
+                {/* Fraud flags */}
+                <div className="ep-panel">
+                  <div className="ep-panel-head"><div className="ep-panel-title">Anomaly Flags</div></div>
+                  <div style={{ padding: "8px 20px 16px" }}>
+                    {[
+                      { label: "Duplicate claims", count: aiAnomalies?.duplicateClaims?.length || 0, color: "#dc2626", bg: "#fee2e2" },
+                      { label: "Unusual amounts",  count: aiAnomalies?.unusualAdvances?.length   || 0, color: "#f59e0b", bg: "#fef3c7" },
+                      { label: "Repeated rollbacks",count: aiAnomalies?.repeatedRollbacks?.length || 0, color: "#8b5cf6", bg: "#ede9fe" },
+                    ].map(({ label, count, color, bg }) => (
+                      <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--surface-soft)" }}>
+                        <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
+                        <span style={{ fontWeight: 700, fontSize: 15, padding: "2px 10px", borderRadius: 99, background: count > 0 ? bg : "var(--surface-soft)", color: count > 0 ? color : "var(--muted)" }}>{count}</span>
+                      </div>
+                    ))}
+                    {aiAnomalies?.duplicateClaims?.[0] && (
+                      <div style={{ marginTop: 12, padding: "10px 12px", background: "#fef2f2", borderRadius: 8, fontSize: 12, color: "#dc2626" }}>
+                        Top flag: {aiAnomalies.duplicateClaims[0].claimant_name} ({aiAnomalies.duplicateClaims[0].duplicate_count} duplicates)
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* NL Reporting */}
+                <div className="ep-panel">
+                  <div className="ep-panel-head"><div className="ep-panel-title">Natural-Language Query</div></div>
+                  <div style={{ padding: "8px 20px 16px" }}>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>Ask a question in plain English and get instant results from the records.</div>
+                    <div className="ep-form-group">
+                      <input
+                        className="ep-form-input"
+                        placeholder="e.g. show rejected salary advances this month by department"
+                        value={nlPrompt}
+                        onChange={(e) => setNlPrompt(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === "Enter") {
+                            try { const r = await api.aiNlReport(nlPrompt); setNlReport(r); } catch (err: any) { alert(err.message); }
+                          }
+                        }}
+                      />
+                    </div>
+                    <button className="ep-btn-primary" style={{ marginTop: 8 }}
+                      onClick={async () => {
+                        try { const r = await api.aiNlReport(nlPrompt); setNlReport(r); } catch (err: any) { alert(err.message); }
+                      }}>
+                      Run Report
+                    </button>
+                    {nlReport && (
+                      <div style={{ marginTop: 14 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>{nlReport.interpretation}</div>
+                        <div style={{ overflowX: "auto" }}>
+                          <table className="ep-table">
+                            <thead>
+                              <tr>{Object.keys(nlReport.rows?.[0] || { result: "" }).map((k) => <th key={k}>{k}</th>)}</tr>
+                            </thead>
+                            <tbody>
+                              {(nlReport.rows || []).map((row: any, i: number) => (
+                                <tr key={i}>{Object.keys(nlReport.rows?.[0] || { result: "" }).map((k) => <td key={k}>{String(row[k] ?? "")}</td>)}</tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* OCR */}
+                <div className="ep-panel">
+                  <div className="ep-panel-head"><div className="ep-panel-title">OCR Proof Extract</div></div>
+                  <div style={{ padding: "8px 20px 16px" }}>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>Paste text from a receipt or payment proof to extract key fields.</div>
+                    <textarea
+                      className="ep-form-input"
+                      placeholder="Paste OCR text here…"
+                      value={ocrText}
+                      onChange={(e) => setOcrText(e.target.value)}
+                      rows={4}
+                      style={{ resize: "vertical" }}
+                    />
+                    <button className="ep-btn-primary" style={{ marginTop: 8 }}
+                      onClick={async () => {
+                        try { const r = await api.aiOcrExtract(ocrText); setOcrResult(r); } catch (err: any) { alert(err.message); }
+                      }}>
+                      Extract Fields
+                    </button>
+                    {ocrResult && (
+                      <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
+                        {[
+                          { label: "Date",      val: ocrResult.extracted_date || "—" },
+                          { label: "Amount",    val: ocrResult.extracted_amount != null ? `M${Number(ocrResult.extracted_amount).toFixed(2)}` : "—" },
+                          { label: "Reference", val: ocrResult.extracted_reference || "—" },
+                        ].map(({ label, val }) => (
+                          <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", background: "var(--surface-soft)", borderRadius: 8, fontSize: 13 }}>
+                            <span style={{ color: "var(--muted)" }}>{label}</span>
+                            <span style={{ fontWeight: 700, color: "var(--text)" }}>{val}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
+          ) : page === "SLA_REPORTS" ? (
+            <SlaReports onBack={() => setPage("REPORTS")} />
           ) : page === "ADVANCE" ? (
             !canOpenAdvanceForm ? (
               <div className="card" style={{ padding: 24 }}>
@@ -2389,20 +3386,20 @@ export default function App() {
                   <div className="card" style={{ marginBottom: 12, padding: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                       <span>{selectedTravelType.name}</span>
-                      <b>{fmtMoney(selectedTravelRate)} per {selectedTravelUnitLabel}</b>
+                      <b>{fmtMoney(selectedTravelRate, selectedTravelType?.currency)} per {selectedTravelUnitLabel}</b>
                     </div>
                     {(selectedTravelType.rate_exco > 0 || selectedTravelType.rate_ceo > 0) && (
                       <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap", fontSize: 13, opacity: 0.78 }}>
-                        <span>General Staff: {fmtMoney(selectedTravelType.rate_general_staff)}</span>
-                        <span>EXCO: {fmtMoney(selectedTravelType.rate_exco)}</span>
-                        <span>CEO: {fmtMoney(selectedTravelType.rate_ceo)}</span>
+                        <span>General Staff: {fmtMoney(selectedTravelType.rate_general_staff, selectedTravelType.currency)}</span>
+                        <span>EXCO: {fmtMoney(selectedTravelType.rate_exco, selectedTravelType.currency)}</span>
+                        <span>CEO: {fmtMoney(selectedTravelType.rate_ceo, selectedTravelType.currency)}</span>
                       </div>
                     )}
                     <div style={{ marginTop: 8, fontSize: 13, opacity: 0.78 }}>
                       {selectedTravelType.location_mode === "DISTRICT" ? "Use Lesotho districts for local travel." : "Use country, city, and South African province where applicable."}
                     </div>
                   </div>
-                  <table className="breakdown-table">
+                  <table className="travel-table">
                     <thead>
                       <tr>
                         <th>Date</th>
@@ -2513,24 +3510,24 @@ export default function App() {
                               style={{ width: 80 }}
                             />
                           </td>
-                          <td>{fmtMoney((Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * selectedTravelRate)}</td>
+                          <td>{fmtMoney((Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * selectedTravelRate, selectedTravelType?.currency)}</td>
                           <td>
                             <button
-                              className="icon-button danger"
+                              className="travel-delete-btn"
                               onClick={() => deleteRow(idx)}
                               type="button"
                               title="Delete row"
                               aria-label="Delete row"
                             >
-                              <Trash2 size={16} aria-hidden />
+                              <Trash2 size={15} aria-hidden />
                             </button>
                           </td>
                         </tr>
                       ))}
                       <tr>
-                        <td colSpan={6}>
-                          <button className="button small-button" onClick={addRow} type="button">
-                            Add row
+                        <td colSpan={6} style={{ textAlign: "center", padding: "10px 0" }}>
+                          <button className="ep-btn" onClick={addRow} type="button" style={{ padding: "7px 20px", fontSize: "0.85rem" }}>
+                            <Plus size={14} /> Add row
                           </button>
                         </td>
                       </tr>
@@ -2555,6 +3552,34 @@ export default function App() {
                       )}
                     </tbody>
                   </table>
+
+                  {/* ── Accommodation notice for multi-day local travel ── */}
+                  {selectedTravelType?.location_mode === "DISTRICT" && rows.length > 1 && (() => {
+                    const destinations = [...new Set(
+                      rows.slice(0, -1)   // exclude last return-home row
+                        .map((r) => r.destinationDistrict)
+                        .filter(Boolean)
+                    )];
+                    if (!destinations.length) return null;
+                    return (
+                      <div className="accommodation-notice">
+                        <Hotel size={18} className="accommodation-notice-icon" />
+                        <div>
+                          <strong>Accommodation may be required</strong> — this is a {rows.length}-day local trip.
+                          <div style={{ fontSize: "0.82rem", color: "var(--muted)", margin: "3px 0 6px" }}>
+                            The requester may need accommodation in the following destination district{destinations.length > 1 ? "s" : ""}. HR will process accommodation during review.
+                          </div>
+                          <div className="accommodation-notice-districts">
+                            {destinations.map((d) => (
+                              <span key={d} className="accommodation-notice-district">
+                                <Hotel size={11} /> {d}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </>
               )}
 
@@ -2563,12 +3588,116 @@ export default function App() {
                 <input type="text" value={amountInWords} readOnly />
               </div>
 
+              {advanceWorkflowFound === false && (
+                <div className="form-section" style={{ marginTop: 24, border: "1px solid #e2c96e", borderRadius: 8, padding: "16px 18px", background: "#fffdf0" }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Custom Approval Chain</div>
+                  <div style={{ fontSize: 13, color: "#7a6a00", marginBottom: 18 }}>
+                    No workflow is configured for your department/section. Define the approvers for this request.
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                    {chainPositionTypes.map((pt) => {
+                      const selected = customApprovalChain.find(s => s.label === pt.name);
+
+                      // Counter Signed By: teammates + people in same section/dept + managers/HODs
+                      // Approved By: managers, HODs, EXCO, Chief Officers only
+                      const myId = profile?.id || me?.userId || "";
+                      const myTeamId    = profile?.team_id    || null;
+                      const mySectionId = profile?.section_id || null;
+                      const myDept      = (profile?.department || "").toLowerCase();
+
+                      const isPermanent = (u: { employment_type?: string | null }) =>
+                        String(u.employment_type || "").toUpperCase() === "PERMANENT";
+
+                      const pool = pt.code === "COUNTER_SIGNER"
+                        ? staffDirectory.filter(u =>
+                            u.is_active !== false &&
+                            isPermanent(u) &&
+                            u.role !== "ADMIN" &&
+                            u.id !== myId &&
+                            myTeamId !== null &&
+                            u.team_id === myTeamId
+                          )
+                        : pt.code === "APPROVED_BY"
+                          ? staffDirectory.filter(u =>
+                              u.is_active !== false &&
+                              isPermanent(u) &&
+                              u.id !== myId &&
+                              ["MANAGER", "HOD", "EXCO", "CHIEF_OFFICER"].includes(u.role)
+                            )
+                          : staffDirectory.filter(u =>
+                              u.is_active !== false && isPermanent(u) && u.role !== "EMPLOYEE" && u.role !== "ADMIN" && u.id !== myId
+                            );
+                      const ptSubtitle = pt.code === "COUNTER_SIGNER"
+                        ? "Supervisor or Manager to confirm your request details"
+                        : pt.code === "APPROVED_BY"
+                          ? "GM or Executive of your Department to approve the request"
+                          : null;
+
+                      return (
+                        <div key={pt.id}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: ptSubtitle ? 1 : 6 }}>
+                            <User size={15} style={{ color: "var(--muted, #6b7280)", flexShrink: 0 }} aria-hidden />
+                            <span style={{ fontWeight: 600, fontSize: 14 }}>
+                              {pt.name} <span style={{ color: "#c0392b" }}>*</span>
+                            </span>
+                          </div>
+                          {ptSubtitle && <div style={{ fontSize: 12, color: "#78716c", marginBottom: 6, paddingLeft: 21 }}>{ptSubtitle}</div>}
+                          <select
+                            value={selected?.user_id ?? ""}
+                            onChange={(e) => {
+                              const uid = e.target.value;
+                              if (!uid) {
+                                setCustomApprovalChain(prev => prev.filter(s => s.label !== pt.name));
+                                return;
+                              }
+                              const u = pool.find(p => p.id === uid);
+                              if (!u) return;
+                              const userName = u.full_name || u.email;
+                              setCustomApprovalChain(prev => {
+                                const without = prev.filter(s => s.label !== pt.name);
+                                const insertAt = chainPositionTypes.findIndex(p => p.id === pt.id);
+                                const before = without.filter(s => chainPositionTypes.findIndex(p => p.name === s.label) < insertAt);
+                                const after  = without.filter(s => chainPositionTypes.findIndex(p => p.name === s.label) >= insertAt);
+                                return [...before, { label: pt.name, user_id: uid, user_name: userName }, ...after];
+                              });
+                            }}
+                            style={{ width: "100%", padding: "9px 12px", borderRadius: 7, border: `1px solid ${selected ? "#b6d4a8" : "#d1d5db"}`, fontSize: 14, background: selected ? "#f0fdf4" : "#f9fafb", color: "var(--text)", cursor: "pointer" }}
+                          >
+                            <option value="">— Select a person —</option>
+                            {pool.map(u => (
+                              <option key={u.id} value={u.id}>
+                                {u.full_name || u.email}{u.title ? ` — ${u.title}` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="footer-buttons">
                 <button className="button" onClick={() => {
                   setEditingAdvanceId(null);
                   setEditingAdvanceStatus(null);
                   setPage(editingAdvanceId ? "MY_REQUESTS" : "HOME");
                 }}>Cancel</button>
+                {editingAdvanceId && ["DRAFT","SUBMITTED"].includes(editingAdvanceStatus || "") && (
+                  <button className="button" style={{ color: "#dc3545", borderColor: "#dc3545" }}
+                    onClick={async () => {
+                      const confirmed = await confirmAction({ title: "Revoke advance request?", text: "This will cancel the request.", confirmButtonText: "Revoke" });
+                      if (!confirmed) return;
+                      try {
+                        await api.revokeAdvance(editingAdvanceId);
+                        setEditingAdvanceId(null);
+                        setEditingAdvanceStatus(null);
+                        setPage("MY_REQUESTS");
+                        await refresh();
+                      } catch (e: any) { alert("Error: " + e.message); }
+                    }}>Revoke</button>
+                )}
                 <button className="button" onClick={async () => {
                     try {
                       const trimmedEmpNumber = empNumber.trim();
@@ -2709,6 +3838,11 @@ export default function App() {
                         }
                       }
 
+                      if (advanceWorkflowFound === false && customApprovalChain.length === 0) {
+                        alert("Please add at least one approver to the custom approval chain.");
+                        return;
+                      }
+
                       // build the minimal payload for the generic endpoint
                       const base: any = {
                         type: advanceType,
@@ -2717,6 +3851,9 @@ export default function App() {
                       };
                       if (isOnBehalfRequest) {
                         base.beneficiary_user_id = requestForUserId;
+                      }
+                      if (advanceWorkflowFound === false && customApprovalChain.length > 0) {
+                        base.override_chain = customApprovalChain;
                       }
                       if (paymentMethod === "ECOCASH") {
                         base.ecocash_number = normalizedEcocash;
@@ -2820,7 +3957,41 @@ export default function App() {
                     </div>
                     <div>
                       <dt>Approval Route</dt>
-                      <dd>Manager - Finance</dd>
+                      <dd>
+                        {advanceApprovalChain.length ? (
+                          <span className="approval-route-chain">
+                            {advanceApprovalChain.map((step, i) => (
+                              <span key={i} className="approval-route-chain">
+                                {i > 0 && <span className="approval-route-arrow">→</span>}
+                                <span
+                                  className={`approval-route-step${step.name ? " has-tooltip" : ""}`}
+                                  title={step.name || undefined}
+                                >
+                                  {step.label}
+                                </span>
+                              </span>
+                            ))}
+                          </span>
+                        ) : customApprovalChain.length ? (
+                          <span className="approval-route-chain">
+                            {customApprovalChain.map((step, i) => (
+                              <span key={i} className="approval-route-chain">
+                                {i > 0 && <span className="approval-route-arrow">→</span>}
+                                <span
+                                  className="approval-route-step has-tooltip"
+                                  title={step.user_name}
+                                >
+                                  {step.label}
+                                </span>
+                              </span>
+                            ))}
+                          </span>
+                        ) : advanceWorkflowFound === null ? (
+                          <span style={{ color: "#aaa", fontSize: 12 }}>Loading…</span>
+                        ) : (
+                          <span style={{ color: "#b45309", fontSize: 12 }}>No workflow — define below</span>
+                        )}
+                      </dd>
                     </div>
                   </dl>
                   <div className="summary-note">
@@ -3054,9 +4225,9 @@ export default function App() {
                           <td>
                             {(a.status === "DRAFT" || a.status === "SUBMITTED") && (
                               <button
-                                className="button small-button"
+                                className="ep-icon-btn"
+                                title="Edit"
                                 onClick={async () => {
-                                  // fetch full details before navigating to form so we can populate rows etc
                                   try {
                                     const detail: any = await api.advanceDetail(a.id);
                                     populateAdvanceForm(detail, a);
@@ -3066,34 +4237,15 @@ export default function App() {
                                   }
                                 }}
                               >
-                                Edit
-                              </button>
-                            )}
-                            {(a.status === "SUBMITTED" || a.status === "PENDING" || a.status === "DRAFT") && (
-                              <button
-                                className="button small-button"
-                                onClick={async () => {
-                                  if (window.confirm("Are you sure you want to revoke this advance request?")) {
-                                    try {
-                                      await api.revokeAdvance(a.id);
-                                      alert("Advance request revoked successfully!");
-                                      await refresh();
-                                    } catch (e: any) {
-                                      alert("Error revoking request: " + e.message);
-                                    }
-                                  }
-                                }}
-                                style={{ backgroundColor: '#dc3545', color: 'white', marginLeft: 4 }}
-                              >
-                                Revoke
+                                <Edit3 size={15} aria-hidden />
                               </button>
                             )}
                             <button
-                              className="button small-button"
+                              className="ep-icon-btn"
+                              title="Track"
                               onClick={() => showAdvanceHistory(a.id)}
-                              style={{ marginLeft: 4 }}
                             >
-                              Track
+                              <RefreshCw size={14} aria-hidden />
                             </button>
                             {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
                               <button
@@ -3153,39 +4305,13 @@ export default function App() {
               </div>
             </div>
           ) : page === "SETTINGS" ? (
-            <div className="admin-page">
-              <div className="page-heading">
-                <div>
-                  <h2>Administration Settings</h2>
-                  <p>Configure and manage system settings, users, roles, and organization structure.</p>
+            <div className="ep-page">
+              <div className="ep-breadcrumb"><span className="ep-breadcrumb-active">Settings</span></div>
+              <div className="ep-header">
+                <div className="ep-header-text">
+                  <h1 className="ep-title">Settings</h1>
+                  <p className="ep-subtitle">Manage your profile and account preferences.</p>
                 </div>
-                <div className="last-updated-card">
-                  <span>Last Updated</span>
-                  <strong>{nowLabel}</strong>
-                </div>
-              </div>
-
-              <div className="admin-overview-grid">
-                <button type="button" onClick={() => setAdminUsersOpen((current) => !current)}>
-                  <span className="overview-icon blue">users</span>
-                  <strong>User Management</strong>
-                  <small>Manage users and roles</small>
-                </button>
-                <button type="button" onClick={() => setSectionManagementOpen((current) => !current)}>
-                  <span className="overview-icon green">org</span>
-                  <strong>Departments</strong>
-                  <small>Manage departments</small>
-                </button>
-                <button type="button" onClick={() => setGroupAssignmentOpen((current) => !current)}>
-                  <span className="overview-icon violet">roles</span>
-                  <strong>System Roles</strong>
-                  <small>Configure permissions</small>
-                </button>
-                <button type="button" onClick={() => setTravelSettingsOpen((current) => !current)}>
-                  <span className="overview-icon orange">travel</span>
-                  <strong>Travel Setup</strong>
-                  <small>Rates and locations</small>
-                </button>
               </div>
 
 <SettingsAccordion
@@ -3201,752 +4327,98 @@ export default function App() {
                   <div>Role: {displayRoleLabel(role)}</div>
                 </SettingsAccordion>
 
-              {canManageTravelSettings && (
-                <SettingsAccordion
-                  title="Travel Types, Rates & Locations"
-                  subtitle="Maintain Local Travel Allowance, CMA, and any other travel request setup."
-                  open={travelSettingsOpen}
-                  onToggle={() => setTravelSettingsOpen((current) => !current)}
-                >
-                  <div style={{ display: "grid", gap: 16 }}>
-                    <div className="card" style={{ padding: 20 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-                        <h3 style={{ margin: 0 }}>Travel Types</h3>
-                        <button className="button small-button" onClick={() => void loadTravelTypes()} disabled={travelTypesLoading}>
-                          {travelTypesLoading ? "Loading..." : "Refresh"}
-                        </button>
-                      </div>
+              <SettingsAccordion
+                title="Display Size"
+                subtitle="Adjust the text and UI size to your preference. Changes apply immediately and are saved for your device."
+                open={displayAccordionOpen}
+                onToggle={() => setDisplayAccordionOpen(c => !c)}
+              >
+                {(() => {
+                  const STEPS = [0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2];
+                  const LABELS: Record<number, string> = {
+                    0.8: "XS", 0.85: "S", 0.9: "S+", 0.95: "M−",
+                    1.0: "M", 1.05: "M+", 1.1: "L", 1.15: "L+", 1.2: "XL"
+                  };
+                  const idx = STEPS.indexOf(uiScale);
+                  const canDec = idx > 0;
+                  const canInc = idx < STEPS.length - 1;
+                  const pct = Math.round(uiScale * 100);
 
-                      <div style={{ overflowX: "auto", marginBottom: 16 }}>
-                        <table className="table">
-                          <thead>
-                            <tr>
-                              <th>Name</th>
-                              <th>Location</th>
-                              <th>Rate</th>
-                              <th>General Staff</th>
-                              <th>EXCO</th>
-                              <th>CEO</th>
-                              <th>Action</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {travelTypes.map((type) => (
-                              <tr key={type.id}>
-                                <td>{type.name}</td>
-                                <td>{type.location_mode === "DISTRICT" ? "Districts" : "Countries / Cities"}</td>
-                                <td>{type.rate_kind === "DAILY" ? "Daily" : "Meal"}</td>
-                                <td>{fmtMoney(type.rate_general_staff)}</td>
-                                <td>{fmtMoney(type.rate_exco)}</td>
-                                <td>{fmtMoney(type.rate_ceo)}</td>
-                                <td>
-                                  <button className="icon-button" onClick={() => setEditingTravelType(type)} title="Edit travel type" aria-label="Edit travel type" style={{ marginRight: 8 }}>
-                                    <Edit3 size={16} aria-hidden />
-                                  </button>
-                                  <button className="icon-button danger" onClick={() => void deleteTravelType(type.id)} title="Delete travel type" aria-label="Delete travel type">
-                                    <Trash2 size={16} aria-hidden />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                  return (
+                    <div>
+                      {/* Controls row */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                        <button
+                          onClick={() => canDec && setUiScale(STEPS[idx - 1])}
+                          disabled={!canDec}
+                          style={{
+                            width: 40, height: 40, borderRadius: "50%", border: "2px solid var(--border)",
+                            background: canDec ? "var(--surface)" : "var(--surface-soft)",
+                            cursor: canDec ? "pointer" : "not-allowed",
+                            color: canDec ? "var(--text)" : "var(--muted)",
+                            fontSize: 22, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                          title="Decrease size"
+                        >−</button>
 
-                      <div style={{ display: "grid", gap: 8 }}>
-                        <input placeholder="New travel type name" value={newTravelTypeName} onChange={(e) => setNewTravelTypeName(e.target.value)} />
-                        <div className="form-grid-2" style={{ marginBottom: 0 }}>
-                          <select value={newTravelTypeLocationMode} onChange={(e) => setNewTravelTypeLocationMode(e.target.value as "DISTRICT" | "COUNTRY_CITY")}>
-                            <option value="COUNTRY_CITY">Countries / Cities</option>
-                            <option value="DISTRICT">Districts</option>
-                          </select>
-                          <select value={newTravelTypeRateKind} onChange={(e) => setNewTravelTypeRateKind(e.target.value as "MEAL" | "DAILY")}>
-                            <option value="DAILY">Daily rate</option>
-                            <option value="MEAL">Meal rate</option>
-                          </select>
-                        </div>
-                        <div className="form-grid-3" style={{ marginBottom: 0 }}>
-                          <input type="number" min="0" step="0.01" placeholder="General Staff rate" value={newTravelTypeGeneralRate} onChange={(e) => setNewTravelTypeGeneralRate(e.target.value)} />
-                          <input type="number" min="0" step="0.01" placeholder="EXCO rate" value={newTravelTypeExcoRate} onChange={(e) => setNewTravelTypeExcoRate(e.target.value)} />
-                          <input type="number" min="0" step="0.01" placeholder="CEO rate" value={newTravelTypeCeoRate} onChange={(e) => setNewTravelTypeCeoRate(e.target.value)} />
-                        </div>
-                        <div>
-                          <button className="button small-button" onClick={() => void createTravelType()}>Add Travel Type</button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {editingTravelType && (
-                      <div className="review-modal-backdrop">
-                        <div className="review-modal-shell" style={{ maxWidth: 560 }}>
-                          <div className="review-modal-header" style={{ alignItems: "center" }}>
-                            <div>
-                              <div className="review-modal-eyebrow">Edit Travel Type</div>
-                              <h3 style={{ margin: 0 }}>{editingTravelType.name || "Travel type"}</h3>
-                            </div>
-                            <button className="icon-button" type="button" onClick={() => setEditingTravelType(null)} aria-label="Close edit modal">
-                              <X size={18} aria-hidden />
-                            </button>
-                          </div>
-                          <div className="review-modal-grid" style={{ gap: 10 }}>
-                            <label>
-                              Name
-                              <input
-                                type="text"
-                                value={editingTravelType.name}
-                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, name: e.target.value } : null)}
-                              />
-                            </label>
-                            <label>
-                              Location
-                              <select
-                                value={editingTravelType.location_mode}
-                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, location_mode: e.target.value as "DISTRICT" | "COUNTRY_CITY" } : null)}
-                              >
-                                <option value="COUNTRY_CITY">Countries / Cities</option>
-                                <option value="DISTRICT">Districts</option>
-                              </select>
-                            </label>
-                            <label>
-                              Rate kind
-                              <select
-                                value={editingTravelType.rate_kind}
-                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_kind: e.target.value as "MEAL" | "DAILY" } : null)}
-                              >
-                                <option value="DAILY">Daily rate</option>
-                                <option value="MEAL">Meal rate</option>
-                              </select>
-                            </label>
-                            <label>
-                              General Staff rate
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={String(editingTravelType.rate_general_staff)}
-                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_general_staff: Number(e.target.value) || 0 } : null)}
-                              />
-                            </label>
-                            <label>
-                              EXCO rate
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={String(editingTravelType.rate_exco)}
-                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_exco: Number(e.target.value) || 0 } : null)}
-                              />
-                            </label>
-                            <label>
-                              CEO rate
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={String(editingTravelType.rate_ceo)}
-                                onChange={(e) => setEditingTravelType((current) => current ? { ...current, rate_ceo: Number(e.target.value) || 0 } : null)}
-                              />
-                            </label>
-                          </div>
-                          <div className="review-modal-actions" style={{ justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-                            <button className="button small-button button-subtle" type="button" onClick={() => setEditingTravelType(null)}>Cancel</button>
-                            <button className="button button-primary" type="button" onClick={() => void saveEditedTravelType()}>Save</button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="card" style={{ padding: 20 }}>
-                      <h3 style={{ marginTop: 0 }}>Travel Locations</h3>
-                      <div style={{ display: "grid", gap: 8 }}>
-                        <select value={newTravelLocationTypeId} onChange={(e) => setNewTravelLocationTypeId(e.target.value)}>
-                          <option value="">Select travel type</option>
-                          {travelTypes.map((type) => (
-                            <option key={type.id} value={type.id}>{type.name}</option>
-                          ))}
-                        </select>
-                        {travelTypes.find((type) => type.id === newTravelLocationTypeId)?.location_mode === "DISTRICT" ? (
-                          <input placeholder="District" value={newTravelLocationDistrict} onChange={(e) => setNewTravelLocationDistrict(e.target.value)} />
-                        ) : (
-                          <>
-                            <input placeholder="Country" value={newTravelLocationCountry} onChange={(e) => setNewTravelLocationCountry(e.target.value)} />
-                            {newTravelLocationCountry.trim().toLowerCase() === "south africa" && (
-                              <select value={newTravelLocationProvince} onChange={(e) => setNewTravelLocationProvince(e.target.value)}>
-                                <option value="">Select province</option>
-                                {SOUTH_AFRICA_PROVINCES.map((province) => (
-                                  <option key={province} value={province}>{province}</option>
-                                ))}
-                              </select>
-                            )}
-                            <input placeholder="City" value={newTravelLocationCity} onChange={(e) => setNewTravelLocationCity(e.target.value)} />
-                          </>
-                        )}
-                        <div>
-                          <button className="button small-button" onClick={() => void createTravelLocation()}>Add Location</button>
-                        </div>
-                      </div>
-
-                      <div style={{ overflowX: "auto", marginTop: 16 }}>
-                        <table className="table">
-                          <thead>
-                            <tr><th>Travel Type</th><th>District</th><th>Country</th><th>Province</th><th>City</th></tr>
-                          </thead>
-                          <tbody>
-                            {travelTypes.flatMap((type) => (type.locations || []).map((location, index) => (
-                              <tr key={`${type.id}-${location.id || index}`}>
-                                <td>{type.name}</td>
-                                <td>{location.district || "—"}</td>
-                                <td>{location.country || "—"}</td>
-                                <td>{location.province || "—"}</td>
-                                <td>{location.city || "—"}</td>
-                              </tr>
-                            ))).length === 0 ? (
-                              <tr><td colSpan={5} style={{ textAlign: "center" }}>No locations</td></tr>
-                            ) : (
-                              travelTypes.flatMap((type) => (type.locations || []).map((location, index) => (
-                                <tr key={`${type.id}-${location.id || index}`}>
-                                  <td>{type.name}</td>
-                                  <td>{location.district || "—"}</td>
-                                  <td>{location.country || "—"}</td>
-                                  <td>{location.province || "—"}</td>
-                                  <td>{location.city || "—"}</td>
-                                </tr>
-                              )))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    <div className="card" style={{ padding: 20 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                        <h3 style={{ margin: 0 }}>Hotels</h3>
-                        <button className="button small-button" onClick={() => void loadHotels()} disabled={hotelsLoading}>
-                          {hotelsLoading ? "Loading..." : "Refresh"}
-                        </button>
-                      </div>
-
-                      <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
-                        <input placeholder="Hotel name" value={newHotelName} onChange={(e) => setNewHotelName(e.target.value)} />
-                        <select value={newHotelDistrict} onChange={(e) => setNewHotelDistrict(e.target.value)}>
-                          <option value="">Local district (optional)</option>
-                          {districts.map((district) => (
-                            <option key={district} value={district}>{district}</option>
-                          ))}
-                        </select>
-                        <input placeholder="Country (for CMA/other travel)" value={newHotelCountry} onChange={(e) => setNewHotelCountry(e.target.value)} />
-                        {newHotelCountry.trim().toLowerCase() === "south africa" && (
-                          <select value={newHotelProvince} onChange={(e) => setNewHotelProvince(e.target.value)}>
-                            <option value="">Select province</option>
-                            {SOUTH_AFRICA_PROVINCES.map((province) => (
-                              <option key={province} value={province}>{province}</option>
-                            ))}
-                          </select>
-                        )}
-                        <input placeholder="City (for CMA/other travel)" value={newHotelCity} onChange={(e) => setNewHotelCity(e.target.value)} />
-                        <input placeholder="Address (optional)" value={newHotelAddress} onChange={(e) => setNewHotelAddress(e.target.value)} />
-                        <input placeholder="Contact (optional)" value={newHotelContact} onChange={(e) => setNewHotelContact(e.target.value)} />
-                        <select value={newHotelDepartment} onChange={(e) => setNewHotelDepartment(e.target.value)}>
-                          <option value="">Assign department (optional)</option>
-                          {departmentOptions.map(d => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                        <div>
-                          <button className="button small-button" onClick={() => void createHotel()}>Add Hotel</button>
-                        </div>
-                      </div>
-
-                      <div style={{ overflowX: "auto" }}>
-                        <table className="table">
-                          <thead>
-                            <tr><th>Name</th><th>District</th><th>Country</th><th>Province</th><th>City</th><th>Department</th><th>Contact</th><th>Address</th></tr>
-                          </thead>
-                          <tbody>
-                            {hotels.length === 0 ? (
-                              <tr><td colSpan={8} style={{ textAlign: "center" }}>No hotels</td></tr>
-                            ) : (
-                              hotels.map(h => (
-                                <tr key={h.id}>
-                                  <td>{h.name}</td>
-                                  <td>{h.district || "—"}</td>
-                                  <td>{h.country || "—"}</td>
-                                  <td>{h.province || "—"}</td>
-                                  <td>{h.city || "—"}</td>
-                                  <td>{h.department || "—"}</td>
-                                  <td>{h.contact || "—"}</td>
-                                  <td>{h.address || "—"}</td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                </SettingsAccordion>
-              )}
-
-              {role === "ADMIN" || role === "MANAGER" || role === "CHIEF_OFFICER" ? (
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                    <h3 style={{ margin: 0 }}>User Department Groups and Roles</h3>
-                    <button className="button small-button" onClick={() => void loadAdminUsers()} disabled={adminUsersLoading}>
-                      {adminUsersLoading ? "Loading..." : "Refresh"}
-                    </button>
-                  </div>
-
-                  {role === "ADMIN" && (
-                    <SettingsAccordion
-                      title="Section & Department Management"
-                      subtitle="Create and manage sections first, then add departments under those sections."
-                      open={sectionManagementOpen}
-                      onToggle={() => setSectionManagementOpen((current) => !current)}
-                    >
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, marginBottom: 24 }}>
-                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 20, background: "var(--surface-soft)" }}>
-                          <h3 style={{ marginTop: 0 }}>Create Section</h3>
-                          <div style={{ display: "grid", gap: 16 }}>
-                            <label style={{ display: "grid", gap: 6 }}>
-                              <span style={{ fontWeight: 600 }}>Section Name <span style={{ color: "#dc2626" }}>*</span></span>
-                              <input
-                                value={newSectionName}
-                                onChange={(e) => setNewSectionName(e.target.value)}
-                                placeholder="Enter section name"
-                              />
-                            </label>
-                            <label style={{ display: "grid", gap: 6 }}>
-                              <span style={{ fontWeight: 600 }}>Section EXCO Owner</span>
-                              {leadershipSelect(leadershipUsers.exco, newSectionExcoId, "Select EXCO owner", setNewSectionExcoId)}
-                            </label>
-                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                              <button className="button small-button" onClick={() => void createSection()}>
-                                Create Section
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 20, background: "var(--surface-soft)" }}>
-                          <h3 style={{ marginTop: 0 }}>Create Department</h3>
-                          <div style={{ display: "grid", gap: 16 }}>
-                            <label style={{ display: "grid", gap: 6 }}>
-                              <span style={{ fontWeight: 600 }}>Department Name <span style={{ color: "#dc2626" }}>*</span></span>
-                              <input
-                                value={newDepartmentName}
-                                onChange={(e) => setNewDepartmentName(e.target.value)}
-                                placeholder="Enter department name"
-                              />
-                            </label>
-                            <label style={{ display: "grid", gap: 6 }}>
-                              <span style={{ fontWeight: 600 }}>Section <span style={{ color: "#dc2626" }}>*</span></span>
-                              <select value={newDepartmentSectionId} onChange={(e) => setNewDepartmentSectionId(e.target.value)}>
-                                <option value="">Select section</option>
-                                {sectionOptions.map((section) => (
-                                  <option key={section.id} value={section.id}>
-                                    {section.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label style={{ display: "grid", gap: 6 }}>
-                              <span style={{ fontWeight: 600 }}>Manager</span>
-                              {leadershipSelect(leadershipUsers.managers, newDepartmentManagerId, "Select manager", setNewDepartmentManagerId)}
-                            </label>
-                            <label style={{ display: "grid", gap: 6 }}>
-                              <span style={{ fontWeight: 600 }}>EXCO Owner</span>
-                              {leadershipSelect(leadershipUsers.exco, newDepartmentExcoId, "Select EXCO owner", setNewDepartmentExcoId)}
-                            </label>
-                            <label style={{ display: "grid", gap: 6 }}>
-                              <span style={{ fontWeight: 600 }}>Status</span>
-                              <select value={newDepartmentActive ? "ACTIVE" : "INACTIVE"} onChange={(e) => setNewDepartmentActive(e.target.value === "ACTIVE")}>
-                                <option value="ACTIVE">Active</option>
-                                <option value="INACTIVE">Inactive</option>
-                              </select>
-                            </label>
-                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                              <button className="button small-button" onClick={() => void createDepartment()}>
-                                Create Department
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ marginBottom: 16 }}>
-                        <h4 style={{ margin: "12px 0 8px" }}>Organization Structure</h4>
-                        <div style={{ overflowX: "auto" }}>
-                          <table className="table" style={{ width: "100%" }}>
-                            <thead>
-                              <tr>
-                                <th>Name</th>
-                                <th>Type</th>
-                                <th>Manager</th>
-                                <th>EXCO Owner</th>
-                                <th style={{ width: 170 }}>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {sectionOptions.length === 0 && departmentRows.length === 0 ? (
-                                <tr><td colSpan={5} style={{ textAlign: "center" }}>No organization structure</td></tr>
-                              ) : null}
-                              {sectionOptions.map((section) => {
-                                const childDepartments = departmentRows.filter((department) => department.section_id === section.id);
-                                const collapsed = Boolean(collapsedSections[section.id]);
-                                return (
-                                  <React.Fragment key={section.id}>
-                                    <tr>
-                                      <td style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                        <button
-                                          className="icon-button"
-                                          onClick={() => setCollapsedSections((s) => ({ ...s, [section.id]: !s[section.id] }))}
-                                          title={collapsed ? 'Expand section' : 'Collapse section'}
-                                          aria-label={collapsed ? 'Expand section' : 'Collapse section'}
-                                          style={{ marginRight: 4 }}
-                                        >
-                                          {collapsed ? <ChevronDown size={16} aria-hidden /> : <ChevronUp size={16} aria-hidden />}
-                                        </button>
-                                        <strong>{section.name}</strong>
-                                      </td>
-                                      <td><span className="status-pill status-pill-info">Section</span></td>
-                                      <td>—</td>
-                                      <td>
-                                        {leadershipSelect(leadershipUsers.exco, section.exco_user_id, "No section owner", (value) =>
-                                          void updateSectionLeadership(section, value || null)
-                                        )}
-                                      </td>
-                                      <td>
-                                        <button className="icon-button" onClick={() => void editSection(section.id, section.name)} title="Edit section" aria-label="Edit section" style={{ marginRight: 8 }}>
-                                          <Edit3 size={16} aria-hidden />
-                                        </button>
-                                        <button className="icon-button danger" onClick={() => void deleteSection(section.id, section.name)} title="Delete section" aria-label="Delete section">
-                                          <Trash2 size={16} aria-hidden />
-                                        </button>
-                                      </td>
-                                    </tr>
-                                    {!collapsed && childDepartments.map((department) => renderDepartmentOrgRow(department, true))}
-                                  </React.Fragment>
-                                );
-                              })}
-                              {departmentRows.filter((department) => !department.section_id).map((department) => renderDepartmentOrgRow(department))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </SettingsAccordion>
-                  )}
-
-                  <SettingsAccordion
-                    title="User Group & Role Assignment"
-                    subtitle="Assign users to departments and roles within your organization."
-                    open={groupAssignmentOpen}
-                    onToggle={() => setGroupAssignmentOpen((current) => !current)}
-                  >
-                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-                      <select
-                        value={groupAssignUserId}
-                        onChange={(e) => setGroupAssignUserId(e.target.value)}
-                      >
-                        <option value="">Select user to assign department group</option>
-                        {adminUsers.map((user) => (
-                          <option key={user.id} value={user.id}>
-                            {(user.full_name || user.email) + (user.employee_no ? ` (${user.employee_no})` : "")}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={groupAssignDepartment}
-                        onChange={(e) => setGroupAssignDepartment(e.target.value)}
-                        disabled={!groupAssignUserId}
-                      >
-                        <option value="">Select department group</option>
-                        {departmentOptions.map((department) => (
-                          <option key={department} value={department}>
-                            {department}
-                          </option>
-                        ))}
-                      </select>
-                      <button className="button small-button" onClick={() => void assignUserToGroup()}>
-                        Assign Department Group
-                      </button>
-                    </div>
-
-                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-                      <select value={departmentRoleDepartment} onChange={(e) => setDepartmentRoleDepartment(e.target.value)}>
-                        <option value="">Select department group</option>
-                        {departmentOptions.map((department) => (
-                          <option key={department} value={department}>{department}</option>
-                        ))}
-                      </select>
-                      <select
-                        value={departmentRoleUserId}
-                        onChange={(e) => setDepartmentRoleUserId(e.target.value)}
-                        disabled={!departmentRoleDepartment}
-                      >
-                        <option value="">Select user</option>
-                        {adminUsers
-                          .filter((user) => user.department === departmentRoleDepartment)
-                          .map((user) => (
-                            <option key={user.id} value={user.id}>
-                              {(user.full_name || user.email) + (user.employee_no ? ` (${user.employee_no})` : "")}
-                            </option>
-                          ))}
-                      </select>
-                      <select value={departmentRoleValue} onChange={(e) => setDepartmentRoleValue(e.target.value)}>
-                        <option value="EMPLOYEE">Employee</option>
-                        <option value="MANAGER">Manager</option>
-                        <option value="HR_MANAGER">HR Manager</option>
-                        <option value="AUTH_OFFICER">HR</option>
-                        <option value="CHIEF_OFFICER">Chief Officer</option>
-                        <option value="FINANCE">Finance</option>
-                        {role === "ADMIN" && <option value="ADMIN">Admin</option>}
-                      </select>
-                      <button className="button small-button" onClick={() => void updateDepartmentRole()}>
-                        Assign Role To User
-                      </button>
-                    </div>
-
-                    <div style={{ marginBottom: 16, display: "grid", gap: 10 }}>
-                      {departmentOptions.map((department) => {
-                        const members = adminUsers.filter((user) => user.department === department);
-                        const managers = members.filter((user) => user.role === "MANAGER").map((user) => user.full_name || user.email);
-                        const hrManagers = members.filter((user) => user.role === "HR_MANAGER").map((user) => user.full_name || user.email);
-                        const hrUsers = members.filter((user) => user.role === "AUTH_OFFICER").map((user) => user.full_name || user.email);
-                        const chiefs = members.filter((user) => user.role === "CHIEF_OFFICER").map((user) => user.full_name || user.email);
-                        const financeUsers = members.filter((user) => user.role === "FINANCE").map((user) => user.full_name || user.email);
-                        return (
-                          <div key={department} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
-                            <div><b>{department}</b></div>
-                            <div style={{ fontSize: 13, opacity: 0.8 }}>Managers: {managers.length ? managers.join(", ") : "None assigned"}</div>
-                            <div style={{ fontSize: 13, opacity: 0.8 }}>HR Managers: {hrManagers.length ? hrManagers.join(", ") : "None assigned"}</div>
-                            <div style={{ fontSize: 13, opacity: 0.8 }}>HR: {hrUsers.length ? hrUsers.join(", ") : "None assigned"}</div>
-                            <div style={{ fontSize: 13, opacity: 0.8 }}>Chief Officers: {chiefs.length ? chiefs.join(", ") : "None assigned"}</div>
-                            <div style={{ fontSize: 13, opacity: 0.8 }}>Finance: {financeUsers.length ? financeUsers.join(", ") : "None assigned"}</div>
-                            <div style={{ fontSize: 13, opacity: 0.8 }}>Requests route to the assigned department manager, assigned EXCO owner, then Finance.</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </SettingsAccordion>
-
-                  <SettingsAccordion
-                    title="Manager Delegations"
-                    subtitle="Create a delegation assignment and track active delegations."
-                    open={delegationsOpen}
-                    onToggle={() => setDelegationsOpen((current) => !current)}
-                  >
-                    <div style={{ marginBottom: 20, display: "grid", gap: 12, border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div>
-                          <h4 style={{ margin: 0 }}>Manager Delegations</h4>
-                          <div style={{ fontSize: 13, opacity: 0.8 }}>Create and manage active delegation assignments.</div>
-                        </div>
-                        <button className="button small-button" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
-                          {delegationsLoading ? "Refreshing..." : "Refresh"}
-                        </button>
-                      </div>
-
-                      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
-                        {role === "ADMIN" ? (
-                          <>
-                            <div>
-                              <label style={{ display: "block", marginBottom: 6 }}>Manager</label>
-                              <select
-                                value={delegationManagerId}
-                                onChange={(e) => setDelegationManagerId(e.target.value)}
-                              >
-                                <option value="">Select manager</option>
-                                {adminUsers
-                                  .filter((user) => user.role === "MANAGER")
-                                  .map((user) => (
-                                    <option key={user.id} value={user.id}>
-                                      {user.full_name || user.email}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-                            <div>
-                              <label style={{ display: "block", marginBottom: 6 }}>Delegate</label>
-                              <select
-                                value={delegationDelegateId}
-                                onChange={(e) => setDelegationDelegateId(e.target.value)}
-                                disabled={!delegationManagerId}
-                              >
-                                <option value="">Select delegate</option>
-                                {adminUsers
-                                  .filter((user) => user.department === adminUsers.find((u) => u.id === delegationManagerId)?.department)
-                                  .filter((user) => user.id !== delegationManagerId)
-                                  .map((user) => (
-                                    <option key={user.id} value={user.id}>
-                                      {user.full_name || user.email}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div>
-                              <label style={{ display: "block", marginBottom: 6 }}>Manager</label>
-                              <input value={profile?.full_name || ""} readOnly />
-                            </div>
-                            <div>
-                              <label style={{ display: "block", marginBottom: 6 }}>Delegate</label>
-                              <select
-                                value={delegationDelegateId}
-                                onChange={(e) => setDelegationDelegateId(e.target.value)}
-                              >
-                                <option value="">Select delegate</option>
-                                {adminUsers
-                                  .filter((user) => user.department === profile?.department)
-                                  .filter((user) => user.id !== profile?.id)
-                                  .map((user) => (
-                                    <option key={user.id} value={user.id}>
-                                      {user.full_name || user.email}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-                          </>
-                        )}
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div>
-                            <label style={{ display: "block", marginBottom: 6 }}>From</label>
-                            <input
-                              type="date"
-                              value={delegationFromDate}
-                              onChange={(e) => setDelegationFromDate(e.target.value)}
+                        {/* Step dots */}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          {STEPS.map((s) => (
+                            <button
+                              key={s}
+                              onClick={() => setUiScale(s)}
+                              title={`${Math.round(s * 100)}% — ${LABELS[s]}`}
+                              style={{
+                                width: s === uiScale ? 28 : 18,
+                                height: s === uiScale ? 28 : 18,
+                                borderRadius: "50%",
+                                border: s === uiScale ? "2px solid #3b82f6" : "2px solid var(--border)",
+                                background: s === uiScale ? "#3b82f6" : "var(--surface-soft)",
+                                cursor: "pointer",
+                                transition: "all 0.15s",
+                                padding: 0,
+                              }}
                             />
-                          </div>
-                          <div>
-                            <label style={{ display: "block", marginBottom: 6 }}>To</label>
-                            <input
-                              type="date"
-                              value={delegationToDate}
-                              onChange={(e) => setDelegationToDate(e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-                        <button className="button small-button" onClick={() => void createDelegation()}>
-                          Create Delegation
-                        </button>
-                        <button className="button small-button" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
-                          {delegationsLoading ? "Refreshing..." : "Reload Delegations"}
-                        </button>
-                      </div>
-
-                      <div style={{ marginTop: 16 }}>
-                        <h4 style={{ margin: "0 0 10px" }}>Active Delegations</h4>
-                        {delegations.length === 0 ? (
-                          <div style={{ color: "#6b7280" }}>No active delegations.</div>
-                        ) : (
-                          <div style={{ overflowX: "auto" }}>
-                            <table className="table">
-                              <thead>
-                                <tr>
-                                  <th>Manager</th>
-                                  <th>Delegate</th>
-                                  <th>Department</th>
-                                  <th>From</th>
-                                  <th>To</th>
-                                  <th>Actions</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {delegations.map((delegation) => {
-                                  const manager = adminUsers.find((u) => u.id === delegation.manager_id);
-                                  const delegate = adminUsers.find((u) => u.id === delegation.delegate_id);
-                                  return (
-                                    <tr key={delegation.id}>
-                                      <td>{manager?.full_name || manager?.email || "—"}</td>
-                                      <td>{delegate?.full_name || delegate?.email || "—"}</td>
-                                      <td>{manager?.department || delegate?.department || "—"}</td>
-                                      <td>{delegation.from_date || "—"}</td>
-                                      <td>{delegation.to_date || "—"}</td>
-                                      <td>
-                                        <button className="button small-button" onClick={() => void endDelegation(delegation.id)}>
-                                          End
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </SettingsAccordion>
-
-                  <SettingsAccordion
-                    title="Admin Users"
-                    subtitle="View and manage users, departments, and roles."
-                    open={adminUsersOpen}
-                    onToggle={() => setAdminUsersOpen((current) => !current)}
-                  >
-                    <div style={{ overflowX: "auto" }}>
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Name</th>
-                            <th>Email</th>
-                            <th>Department</th>
-                            <th>Employment Type</th>
-                            <th>Employment No.</th>
-                            <th>Role</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {adminUsers.map((user) => (
-                            <tr key={user.id}>
-                              <td>{user.full_name || "—"}</td>
-                              <td>{user.email}</td>
-                              <td>
-                                {role === "ADMIN" ? (
-                                  <select value={user.department || ""} onChange={(e) => void updateUserDepartment(user.id, e.target.value)}>
-                                    <option value="" disabled>Unassigned</option>
-                                    {departmentOptions.map((department) => (
-                                      <option key={department} value={department}>
-                                        {department}
-                                      </option>
-                                    ))}
-                                  </select>
-                                ) : (
-                                  user.department || "—"
-                                )}
-                              </td>
-                              <td>{fmtEmploymentType(user.employment_type)}</td>
-                              <td>{user.employee_no || "—"}</td>
-                              <td>
-                                <select value={user.role} onChange={(e) => void updateAdminUserRole(user.id, e.target.value)}>
-                                  <option value="EMPLOYEE">Employee</option>
-                                  <option value="MANAGER">Manager</option>
-                                  <option value="HR_MANAGER">HR Manager</option>
-                                  <option value="AUTH_OFFICER">HR</option>
-                                  <option value="CHIEF_OFFICER">Chief Officer</option>
-                                  <option value="FINANCE">Finance</option>
-                                  <option value="ADMIN">Admin</option>
-                                </select>
-                              </td>
-                            </tr>
                           ))}
-                          {adminUsers.length === 0 && (
-                            <tr>
-                              <td colSpan={6} style={{ textAlign: "center" }}>No users found.</td>
-                            </tr>
+                        </div>
+
+                        <button
+                          onClick={() => canInc && setUiScale(STEPS[idx + 1])}
+                          disabled={!canInc}
+                          style={{
+                            width: 40, height: 40, borderRadius: "50%", border: "2px solid var(--border)",
+                            background: canInc ? "var(--surface)" : "var(--surface-soft)",
+                            cursor: canInc ? "pointer" : "not-allowed",
+                            color: canInc ? "var(--text)" : "var(--muted)",
+                            fontSize: 22, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                          title="Increase size"
+                        >+</button>
+
+                        {/* Label + reset */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontWeight: 700, fontSize: 15, color: "#3b82f6", minWidth: 44 }}>{pct}%</span>
+                          <span style={{ fontSize: 13, color: "var(--muted)" }}>{LABELS[uiScale]}</span>
+                          {uiScale !== 1.0 && (
+                            <button
+                              onClick={() => setUiScale(1.0)}
+                              style={{ fontSize: 12, color: "#3b82f6", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", borderRadius: 4, textDecoration: "underline" }}
+                            >Reset</button>
                           )}
-                        </tbody>
-                      </table>
+                        </div>
+                      </div>
+
+                      {/* Live preview */}
+                      <div style={{ marginTop: 18, padding: "14px 18px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                        <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Preview</div>
+                        <div style={{ fontWeight: 700, fontSize: "1.1rem", color: "var(--text)", marginBottom: 4 }}>Advance Request — Approval Workflow</div>
+                        <div style={{ fontSize: "0.88rem", color: "var(--muted)" }}>Submit your request and track each approval stage in real time.</div>
+                      </div>
                     </div>
-                  </SettingsAccordion>
-                </div>
-              ) : (
-                <div className="card" style={{ padding: 20 }}>
-                  Role management is only available to administrators, managers, and chief officers.
-                </div>
-              )}
+                  );
+                })()}
+              </SettingsAccordion>
+
             </div>
           ) : (
             <>
@@ -3974,22 +4446,22 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="stat-grid">
+              <div className="ep-kpi-row">
                 <div className="stat-card stat-card-blue">
-                  <div className="title">Pending Advances</div>
-                  <div className="value">{pendingAdvCount}</div>
+                  <span className="stat-icon"><ClipboardList size={28} /></span>
+                  <div><div className="stat-value">{pendingAdvCount}</div><div className="stat-label">Pending Advances</div></div>
                 </div>
                 <div className="stat-card stat-card-gold">
-                  <div className="title">Pending Clearances</div>
-                  <div className="value">{pendingClaimCount}</div>
+                  <span className="stat-icon"><FileText size={28} /></span>
+                  <div><div className="stat-value">{pendingClaimCount}</div><div className="stat-label">Pending Clearances</div></div>
                 </div>
                 <div className="stat-card stat-card-rose">
-                  <div className="title">Awaiting My Approval</div>
-                  <div className="value">{inboxCount}</div>
+                  <span className="stat-icon"><Mail size={28} /></span>
+                  <div><div className="stat-value">{inboxCount}</div><div className="stat-label">Awaiting My Approval</div></div>
                 </div>
                 <div className="stat-card stat-card-green">
-                  <div className="title">Monthly Spend</div>
-                  <div className="value">{fmtMoney(monthlySpend)}</div>
+                  <span className="stat-icon"><BarChart3 size={28} /></span>
+                  <div><div className="stat-value">{fmtMoney(monthlySpend)}</div><div className="stat-label">Monthly Spend</div></div>
                 </div>
               </div>
 
@@ -4058,10 +4530,11 @@ export default function App() {
                         <td>{advanceStageLabel(a.status, a.type)}</td>
                         <td>{fmtMoney(a.requested_total)}</td>
                         <td>{fmtMoney(a.approved_total)}</td>
-                        <td>
+                        <td style={{ display: "flex", gap: 4, alignItems: "center" }}>
                           {(a.status === "DRAFT" || a.status === "SUBMITTED") && (
                             <button
-                              className="button small-button"
+                              className="ep-icon-btn"
+                              title="Edit"
                               onClick={async () => {
                                 try {
                                   const detail: any = await api.advanceDetail(a.id);
@@ -4072,34 +4545,15 @@ export default function App() {
                                 }
                               }}
                             >
-                              Edit
-                            </button>
-                          )}
-                          {(a.status === "SUBMITTED" || a.status === "PENDING" || a.status === "DRAFT") && (
-                            <button
-                              className="button small-button"
-                              onClick={async () => {
-                                if (window.confirm("Are you sure you want to revoke this advance request?")) {
-                                  try {
-                                    await api.revokeAdvance(a.id);
-                                    alert("Advance request revoked successfully!");
-                                    await refresh();
-                                  } catch (e: any) {
-                                    alert("Error revoking request: " + e.message);
-                                  }
-                                }
-                              }}
-                              style={{ backgroundColor: '#dc3545', color: 'white', marginLeft: 4 }}
-                            >
-                              Revoke
+                              <Edit3 size={15} aria-hidden />
                             </button>
                           )}
                           <button
-                            className="button small-button"
+                            className="ep-icon-btn"
+                            title="Track"
                             onClick={() => showAdvanceHistory(a.id)}
-                            style={{ marginLeft: 4 }}
                           >
-                            Track
+                            <RefreshCw size={14} aria-hidden />
                           </button>
                           {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
                             <button
@@ -4208,7 +4662,14 @@ export default function App() {
                       {historyEvents.map((e: any) => (
                         <tr key={e.id}>
                           <td>{e.created_at ? new Date(e.created_at).toLocaleString() : "-"}</td>
-                          <td>{e.actor_name ? `${e.actor_name}${e.actor_role ? ` (${e.actor_role})` : ""}` : "System"}</td>
+                          <td>
+                            {e.actor_name ? `${e.actor_name}${e.actor_role ? ` (${e.actor_role})` : ""}` : "System"}
+                            {e.after_json?.acting_for?.name && (
+                              <div style={{ fontSize: 12, color: "#6b7280" }}>
+                                acting on behalf of {e.after_json.acting_for.name}
+                              </div>
+                            )}
+                          </td>
                           <td>{e.action}</td>
                           <td>{e.after_json?.status || "-"}</td>
                         </tr>

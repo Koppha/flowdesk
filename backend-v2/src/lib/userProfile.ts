@@ -7,6 +7,9 @@ export type UserAccountState = {
   full_name: string | null;
   employee_no: string | null;
   department: string | null;
+  division_id: string | null;
+  section_id: string | null;
+  team_id: string | null;
   employment_type: string | null;
   profile_completed: boolean | null;
   is_active: boolean;
@@ -25,7 +28,7 @@ export function isProfileComplete(user: Pick<UserAccountState, "full_name" | "de
 
 export async function getUserAccountState(userId: string) {
   const rows = await query<UserAccountState>(
-    `SELECT id, role, full_name, employee_no, department, employment_type, profile_completed, is_active
+    `SELECT id, role, full_name, employee_no, department, division_id, section_id, team_id, employment_type, profile_completed, is_active
      FROM users
      WHERE id=$1`,
     [userId]
@@ -53,5 +56,5 @@ export function isPermanentEmployee(user: Pick<UserAccountState, "employment_typ
 export function canCreateAdvanceOnBehalf(user: Pick<UserAccountState, "employment_type" | "role">) {
   const role = String(user.role || "").trim().toUpperCase();
   if (isPermanentEmployee(user)) return true;
-  return ["MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN"].includes(role);
+  return ["HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "CEO", "EXCO"].includes(role);
 }

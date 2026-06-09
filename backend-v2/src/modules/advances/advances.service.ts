@@ -20,8 +20,10 @@ export async function getAdvanceById(id: string) {
     purpose: string | null;
     payment_account: string | null;
     requester_department: string | null;
+    override_chain: Array<{ label: string; user_id: string; user_name: string }> | null;
   }>(
     `SELECT ar.id, ar.requester_id, ar.created_by_id, ar.status, ar.requested_total, ar.approved_total, ar.type, ar.purpose, ar.payment_account,
+            ar.override_chain,
             u.department AS requester_department
        FROM advance_requests ar
        JOIN users u ON u.id = ar.requester_id
@@ -40,11 +42,12 @@ export async function createAdvance(args: {
   payment_method: "ECOCASH" | "BANK";
   payment_account?: string | null;
   requested_total: number;
+  override_chain?: Array<{ label: string; user_id: string; user_name: string }> | null;
 }) {
   const rows = await query<{ id: string }>(
     `INSERT INTO advance_requests
-      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, override_chain)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      RETURNING id`,
     [
       args.requesterId,
@@ -54,7 +57,8 @@ export async function createAdvance(args: {
       args.project_number ?? null,
       args.payment_method,
       args.payment_account ?? null,
-      args.requested_total
+      args.requested_total,
+      args.override_chain?.length ? JSON.stringify(args.override_chain) : null
     ]
   );
 

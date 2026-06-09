@@ -1,265 +1,464 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api";
-import { ChevronLeft, ChevronRight, Edit3, Trash2, UserPlus, X } from "lucide-react";
+import { confirmAction } from "./alerts";
+import { ChevronRight, Edit3, Search, Trash2, UserCheck, UserPlus, Users, X } from "lucide-react";
+import UserPicker, { type PickableUser } from "./UserPicker";
+import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
+import { useStaffDirectory } from "./useStaffDirectory";
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const EMPTY_ORG: OrgSelection = {
+  divisionId: null, divisionName: null,
+  department: null, departmentId: null,
+  sectionId: null, sectionName: null,
+  teamId: null, teamName: null,
+};
+
+function orgPath(u: any) {
+  return [u.division_name, u.department, u.section_name, u.team_name].filter(Boolean).join(" › ");
+}
+
+// ─── ExcoOnboarding ───────────────────────────────────────────────────────────
 
 export default function ExcoOnboarding() {
-  const [loading, setLoading] = useState(false);
-  const [users, setUsers] = useState<any[]>([]);
+  const { staff: users, loading, reload } = useStaffDirectory();
   const [search, setSearch] = useState("");
-  const filterRole = "EXCO";
-  const [sections, setSections] = useState<string[]>([]);
+  const [statusView, setStatusView] = useState<"active" | "inactive">("active");
+
+  // Add modal
+  const [showAddModal, setShowAddModal] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [newFirstName, setNewFirstName] = useState("");
   const [newSurname, setNewSurname] = useState("");
   const [newEmployeeNo, setNewEmployeeNo] = useState("");
-  const [newDepartment, setNewDepartment] = useState("");
   const [newTitle, setNewTitle] = useState("");
+  const [newIsActive, setNewIsActive] = useState(true);
+  const [newOrg, setNewOrg] = useState<OrgSelection>(EMPTY_ORG);
+  const [creating, setCreating] = useState(false);
+
+  // Assign existing user
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assignOrg, setAssignOrg] = useState<OrgSelection>(EMPTY_ORG);
+  const [assigning, setAssigning] = useState(false);
+
+  // Edit modal
+  const [editingUser, setEditingUser] = useState<any | null>(null);
   const [editingFirstName, setEditingFirstName] = useState("");
   const [editingSurname, setEditingSurname] = useState("");
-  const [newIsActive, setNewIsActive] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [editingUser, setEditingUser] = useState<null | any>(null);
-  const [creating, setCreating] = useState(false);
+  const [editingOrg, setEditingOrg] = useState<OrgSelection>(EMPTY_ORG);
+
 
   useEffect(() => {
     if (!editingUser) {
-      setEditingFirstName("");
-      setEditingSurname("");
+      setEditingFirstName(""); setEditingSurname(""); setEditingOrg(EMPTY_ORG);
       return;
     }
     const parts = (editingUser.full_name || "").trim().split(/\s+/);
     setEditingFirstName(parts.shift() || "");
     setEditingSurname(parts.join(" ") || "");
+    setEditingOrg(orgSelectionFromUser(editingUser));
   }, [editingUser]);
 
-  async function load() {
-    setLoading(true);
+  // ─── Actions ─────────────────────────────────────────────────────────────
+
+  function resetAddForm() {
+    setNewEmail(""); setNewFirstName(""); setNewSurname("");
+    setNewEmployeeNo(""); setNewTitle(""); setNewIsActive(true);
+    setNewOrg(EMPTY_ORG);
+  }
+
+  async function handleCreate() {
+    if (!newEmail.trim() || !newFirstName.trim() || !newSurname.trim() || !newTitle.trim()) {
+      alert("Please fill in all required fields (name, email, title).");
+      return;
+    }
+    setCreating(true);
     try {
-      const all = await api.adminUsers();
-      setUsers(Array.isArray(all) ? all : []);
-      const secs = await api.sections();
-      setSections(Array.isArray(secs) ? secs.map((s: any) => (typeof s === "string" ? s : s.name || s.id || "")).filter(Boolean) : []);
-    } catch (e: any) {
-      alert("Error loading users: " + e.message);
+      const fullName = [newFirstName.trim(), newSurname.trim()].filter(Boolean).join(" ");
+      const created: any = await api.createUser({
+        email: newEmail.trim(),
+        full_name: fullName,
+        employee_no: newEmployeeNo.trim() || undefined,
+        department: newOrg.department || undefined,
+        division_id: newOrg.divisionId || undefined,
+        section_id: newOrg.sectionId || undefined,
+        team_id: newOrg.teamId || undefined,
+        role: "EXCO",
+        title: newTitle.trim(),
+        is_active: newIsActive,
+      });
+      // Explicitly save all org fields via updateUser
+      if (newOrg.divisionId || newOrg.sectionId || newOrg.teamId) {
+        await api.updateUser(created.id, {
+          division_id: newOrg.divisionId ?? null,
+          section_id: newOrg.sectionId ?? null,
+          team_id: newOrg.teamId ?? null,
+        });
+      }
+      resetAddForm();
+      setShowAddModal(false);
+      await reload();
+    } catch (err: any) {
+      alert("Error creating user: " + err.message);
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   }
 
-  useEffect(() => { void load(); }, []);
-
-  async function assignExco(userId: string) {
-    if (!confirm("Assign EXCO role to this user?")) return;
+  async function handleSaveEdit() {
+    if (!editingUser) return;
     try {
-      const updated = await api.updateUserRole(userId, { role: "EXCO" });
-      setUsers((cur) => cur.map((u) => (u.id === userId ? updated : u)));
-      alert("Assigned EXCO role.");
+      const fullName = [editingFirstName.trim(), editingSurname.trim()].filter(Boolean).join(" ");
+      await api.updateUser(editingUser.id, {
+        full_name: fullName,
+        employee_no: editingUser.employee_no,
+        title: editingUser.title,
+        email: editingUser.email,
+        department: editingOrg.department ?? editingUser.department,
+        division_id: editingOrg.divisionId ?? null,
+        section_id: editingOrg.sectionId ?? null,
+        team_id: editingOrg.teamId ?? null,
+      });
+      setEditingUser(null);
+      await reload();
+    } catch (e: any) {
+      alert("Error saving: " + e.message);
+    }
+  }
+
+  async function handleAssignExisting(user: PickableUser) {
+    setAssigning(true);
+    try {
+      await api.updateUserRole(user.id, { role: "EXCO" });
+      await api.updateUser(user.id, {
+        department: assignOrg.department ?? undefined,
+        division_id: assignOrg.divisionId ?? null,
+        section_id: assignOrg.sectionId ?? null,
+        team_id: assignOrg.teamId ?? null,
+      });
+      setShowAssignModal(false);
+      setAssignOrg(EMPTY_ORG);
+      await reload();
     } catch (e: any) {
       alert("Error assigning EXCO: " + e.message);
+    } finally {
+      setAssigning(false);
     }
   }
 
-  async function removeExco(userId: string) {
-    if (!confirm("Remove EXCO role from this user?")) return;
-    try {
-      const updated = await api.updateUserRole(userId, { role: "EMPLOYEE" });
-      setUsers((cur) => cur.map((u) => (u.id === userId ? updated : u)));
-      alert("Removed EXCO role.");
-    } catch (e: any) {
-      alert("Error removing EXCO: " + e.message);
-    }
-  }
+  // ─── Filtered list ────────────────────────────────────────────────────────
 
-  const shown = users.filter((u) => {
-    if (filterRole && (u.role || "").toUpperCase() !== filterRole.toUpperCase()) return false;
-    if (!search) return true;
-    const needle = search.toLowerCase();
-    return (u.full_name || "").toLowerCase().includes(needle) || (u.email || "").toLowerCase().includes(needle) || (u.employee_no || "").toLowerCase().includes(needle);
+  const excoMembers = users.filter((u) => (u.role || "").toUpperCase() === "EXCO");
+  const statusCounts = {
+    active:   excoMembers.filter((u) => u.is_active !== false).length,
+    inactive: excoMembers.filter((u) => u.is_active === false).length,
+  };
+
+  const shown = excoMembers.filter((u) => {
+    if (statusView === "inactive" ? u.is_active !== false : u.is_active === false) return false;
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      (u.full_name || "").toLowerCase().includes(q) ||
+      (u.email || "").toLowerCase().includes(q) ||
+      (u.employee_no || "").toLowerCase().includes(q) ||
+      (u.department || "").toLowerCase().includes(q) ||
+      (u.division_name || "").toLowerCase().includes(q)
+    );
   });
 
+  // ─── Render ───────────────────────────────────────────────────────────────
+
   return (
-    <div style={{ padding: 16 }}>
-      <h2>EXCO Onboarding</h2>
-      <p className="subtitle">Manage EXCO assignments and onboard EXCO members.</p>
+    <div className="ep-page">
+      <div className="ep-breadcrumb">
+        <span>Administration</span>
+        <ChevronRight size={13} />
+        <span>Organizational Structure</span>
+        <ChevronRight size={13} />
+        <span className="ep-breadcrumb-active">EXCO Members</span>
+      </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div>
-          <strong>EXCO Members</strong>
-          <div className="subtitle">Create and manage Executive Committee (EXCO) members.</div>
+      <div className="ep-header">
+        <div className="ep-header-text">
+          <h1 className="ep-title">EXCO Members</h1>
+          <p className="ep-subtitle">Manage Executive Committee members and their position in the org hierarchy.</p>
         </div>
-        <div>
-          <button className="button button-primary" onClick={() => setShowForm((s) => !s)}><UserPlus size={17} aria-hidden />{showForm ? 'Close' : 'Add EXCO Member'}</button>
+        <div className="ep-actions">
+          <button className="ep-btn-outline" onClick={() => void reload()}>Refresh</button>
+          <button className="ep-btn-outline" onClick={() => { setAssignOrg(EMPTY_ORG); setShowAssignModal(true); }}>
+            <UserCheck size={15} aria-hidden /> Assign Existing User
+          </button>
+          <button className="ep-btn" onClick={() => { resetAddForm(); setShowAddModal(true); }}>
+            <UserPlus size={15} aria-hidden /> Create New Account
+          </button>
         </div>
       </div>
 
-      {showForm && (
-        <div style={{ display: 'grid', gap: 8, marginBottom: 16, background: '#fff', padding: 16, borderRadius: 8 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
-            <div>
-              <label>First Name *</label>
-              <input placeholder="Enter first name" value={newFirstName} onChange={(e) => setNewFirstName(e.target.value)} />
-            </div>
-            <div>
-              <label>Surname *</label>
-              <input placeholder="Enter surname" value={newSurname} onChange={(e) => setNewSurname(e.target.value)} />
-            </div>
-            <div>
-              <label>Employee Number</label>
-              <input placeholder="Enter employee number" value={newEmployeeNo} onChange={(e) => setNewEmployeeNo(e.target.value)} />
-            </div>
-            <div>
-              <label>Position / Title *</label>
-              <input placeholder="Enter position or title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} />
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 12 }}>
-            <div>
-              <label>Email *</label>
-              <input placeholder="Enter email address" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
-            </div>
-            <div>
-              <label>Section *</label>
-              <select value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)}>
-                <option value="">Select section</option>
-                {sections.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
-                <input type="checkbox" checked={newIsActive} onChange={(e) => setNewIsActive(e.target.checked)} /> Active
-              </label>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', gap: 8 }}>
-              <button className="button small-button" onClick={() => { setShowForm(false); setNewEmail(''); setNewFirstName(''); setNewSurname(''); setNewEmployeeNo(''); setNewDepartment(''); setNewTitle(''); setNewIsActive(true); }}>Cancel</button>
-              <button className="button button-primary" onClick={async () => {
-                if (!newEmail.trim() || !newFirstName.trim() || !newSurname.trim() || !newTitle.trim() || !newDepartment.trim()) return alert('Please fill required fields');
-                setCreating(true);
-                try {
-                  const fullName = [newFirstName.trim(), newSurname.trim()].filter(Boolean).join(' ');
-                  await api.createUser({ email: newEmail.trim(), full_name: fullName, employee_no: newEmployeeNo.trim() || undefined, section: newDepartment || undefined, role: 'EXCO', title: newTitle.trim(), is_active: !!newIsActive });
-                  setNewEmail(''); setNewFirstName(''); setNewSurname(''); setNewEmployeeNo(''); setNewDepartment(''); setNewTitle(''); setNewIsActive(true); setShowForm(false);
-                  await load();
-                  alert('EXCO member saved.');
-                } catch (err: any) {
-                  alert('Error creating user: ' + err.message);
-                } finally { setCreating(false); }
-              }} disabled={creating}>Save EXCO Member</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-            <input placeholder="Search EXCO members" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <button className="button" onClick={() => void load()}>Refresh</button>
-      </div>
-
-      {loading ? <div>Loading...</div> : (
-        <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
-          <table className="table compact" style={{ width: '100%' }}>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Employee No</th>
-                <th>Position / Title</th>
-                <th>Section</th>
-                <th>Email</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((u) => (
-                <tr key={u.id}>
-                  <td style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 18, background: '#eef2ff', display: 'grid', placeItems: 'center', fontWeight: 600 }}>{(u.full_name || u.email).split(' ').map((p: string)=>p[0]).slice(0,2).join('')}</div>
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{u.full_name || u.email}</div>
-                    </div>
-                  </td>
-                  <td>{u.employee_no || '—'}</td>
-                  <td>{u.title || '—'}</td>
-                  <td>{u.department || '—'}</td>
-                  <td>{u.email}</td>
-                  <td>{u.is_active ? <span className="status-pill status-pill-success">Active</span> : <span className="status-pill status-pill-warning">Inactive</span>}</td>
-                  <td>
-                    <button className="icon-button" title="Edit" onClick={() => setEditingUser(u)} style={{ marginRight: 8 }}>
-                      <Edit3 size={16} aria-hidden />
-                    </button>
-                    <button className="icon-button danger" title="Deactivate" onClick={() => {
-                      if (!confirm('Deactivate this user?')) return;
-                      api.updateUserRole(u.id, { role: u.role || 'EMPLOYEE', is_active: false }).then((updated) => { setUsers((cur) => cur.map((x) => x.id === u.id ? updated : x)); alert('User deactivated'); }).catch((e) => alert('Error: ' + e.message));
-                    }}>
-                      <Trash2 size={16} aria-hidden />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>Showing {shown.length} entries</div>
-            <div>
-              <button className="button small-button"><ChevronLeft size={16} aria-hidden /></button>
-              <button className="button small-button">1</button>
-              <button className="button small-button"><ChevronRight size={16} aria-hidden /></button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {editingUser && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
-          <div className="card" style={{ width: 720, maxWidth: '95%', padding: 20, position: "relative" }}>
-            <h3>Edit EXCO Member</h3>
-            <button className="icon-button leadership-icon-button" type="button" onClick={() => setEditingUser(null)} aria-label="Close edit modal" style={{ position: "absolute", right: 16, top: 16 }}>
-              <X size={17} aria-hidden />
+      {/* ── Table ── */}
+      <div className="ep-panel">
+        {/* Active / Inactive view toggle — deactivated members get their own
+            section instead of being mixed into the working roster */}
+        <div style={{ display: "flex", gap: 6, padding: "14px 16px 0" }}>
+          {([
+            { key: "active",   label: `Active (${statusCounts.active})` },
+            { key: "inactive", label: `Inactive (${statusCounts.inactive})` },
+          ] as const).map(({ key, label }) => (
+            <button key={key} type="button" onClick={() => setStatusView(key)}
+              style={{
+                padding: "6px 14px", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                border: statusView === key ? "1px solid #3b82f6" : "1px solid var(--border)",
+                background: statusView === key ? "#eff6ff" : "var(--surface-soft)",
+                color: statusView === key ? "#1d4ed8" : "var(--muted)",
+              }}>
+              {label}
             </button>
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <div>
-                  <label>First Name</label>
-                  <input value={editingFirstName} onChange={(e) => setEditingFirstName(e.target.value)} />
+          ))}
+        </div>
+        <div className="ep-panel-head">
+          <div className="ep-panel-title">
+            EXCO Members
+            <span style={{ marginLeft: 8, fontSize: "0.8rem", color: "var(--muted)", fontWeight: 400 }}>
+              {shown.length} member{shown.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="ep-search">
+            <Search size={14} />
+            <input placeholder="Search by name, email, division, department…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="ep-table-wrap">
+          {loading ? (
+            <div className="ep-loading"><p>Loading…</p></div>
+          ) : shown.length === 0 ? (
+            <div className="ep-empty">
+              <Users size={32} style={{ opacity: 0.25 }} />
+              <p>{statusView === "inactive" ? "No inactive EXCO members." : "No EXCO members found. Use the buttons above to add one."}</p>
+            </div>
+          ) : (
+            <table className="ep-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Employee No</th>
+                  <th>Title</th>
+                  <th>Org Position</th>
+                  <th>Email</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((u) => (
+                  <tr key={u.id}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg,#6d28d9,#9333ea)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: "0.85rem", flexShrink: 0 }}>
+                          {(u.full_name || u.email).split(" ").map((p: string) => p[0]).slice(0, 2).join("").toUpperCase()}
+                        </span>
+                        <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{u.full_name || u.email}</div>
+                      </div>
+                    </td>
+                    <td style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{u.employee_no || "—"}</td>
+                    <td style={{ fontSize: "0.85rem" }}>{u.title || "—"}</td>
+                    <td style={{ fontSize: "0.82rem" }}>
+                      <span style={{ color: "var(--muted)" }}>
+                        {orgPath(u) || u.department || "—"}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: "0.83rem", color: "var(--muted)" }}>{u.email}</td>
+                    <td>
+                      <span className={`status-pill ${u.is_active ? "status-pill-success" : "status-pill-danger"}`}>
+                        {u.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button className="ep-icon-btn" title="Edit" onClick={() => setEditingUser(u)}>
+                          <Edit3 size={13} aria-hidden />
+                        </button>
+                        {u.is_active !== false ? (
+                          <button className="ep-icon-btn" style={{ color: "#dc2626" }} title="Deactivate" onClick={async () => {
+                            const confirmed = await confirmAction({
+                              title: "Deactivate user?",
+                              text: "Deactivate this user?",
+                              confirmButtonText: "Deactivate"
+                            });
+                            if (!confirmed) return;
+                            void api.updateUserRole(u.id, { role: u.role || "EMPLOYEE", is_active: false })
+                              .then(() => reload())
+                              .catch((e: any) => alert("Error: " + e.message));
+                          }}>
+                            <Trash2 size={13} aria-hidden />
+                          </button>
+                        ) : (
+                          <button className="ep-icon-btn" style={{ color: "#16a34a" }} title="Reactivate" onClick={async () => {
+                            const confirmed = await confirmAction({
+                              title: "Reactivate user?",
+                              text: "Reactivate this user? They will be able to log in again.",
+                              confirmButtonText: "Reactivate"
+                            });
+                            if (!confirmed) return;
+                            void api.updateUserRole(u.id, { role: u.role || "EXCO", is_active: true })
+                              .then(() => reload())
+                              .catch((e: any) => alert("Error: " + e.message));
+                          }}>
+                            <UserCheck size={13} aria-hidden />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* ── Add EXCO Modal ── */}
+      {showAddModal && (
+        <div className="ep-modal-overlay" onClick={() => setShowAddModal(false)}>
+          <div className="ep-modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <div className="ep-modal-head">
+              <div>
+                <h2 className="ep-modal-title">Add EXCO Member</h2>
+                <p className="ep-modal-sub">Create a new Executive Committee member and place them in the org hierarchy.</p>
+              </div>
+              <button className="ep-icon-btn" onClick={() => setShowAddModal(false)}><X size={18} /></button>
+            </div>
+
+            <div className="ep-modal-body">
+              <div className="ep-form-row">
+                <div className="ep-form-group">
+                  <label>First Name <span className="ep-required">*</span></label>
+                  <input className="ep-form-input" placeholder="First name" value={newFirstName} onChange={(e) => setNewFirstName(e.target.value)} />
                 </div>
-                <div>
-                  <label>Surname</label>
-                  <input value={editingSurname} onChange={(e) => setEditingSurname(e.target.value)} />
+                <div className="ep-form-group">
+                  <label>Surname <span className="ep-required">*</span></label>
+                  <input className="ep-form-input" placeholder="Surname" value={newSurname} onChange={(e) => setNewSurname(e.target.value)} />
                 </div>
-                <div>
-                  <label>Employee Number</label>
-                  <input value={editingUser.employee_no || ''} onChange={(e) => setEditingUser({ ...editingUser, employee_no: e.target.value })} />
+              </div>
+              <div className="ep-form-row">
+                <div className="ep-form-group">
+                  <label>Email / Username <span className="ep-required">*</span></label>
+                  <input className="ep-form-input" placeholder="user@etl.co.ls" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
                 </div>
-                <div>
-                  <label>Position / Title</label>
-                  <input value={editingUser.title || ''} onChange={(e) => setEditingUser({ ...editingUser, title: e.target.value })} />
+                <div className="ep-form-group">
+                  <label>Position / Title <span className="ep-required">*</span></label>
+                  <input className="ep-form-input" placeholder="e.g. Chief Financial Officer" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} />
                 </div>
-                <div>
-                  <label>Section</label>
-                  <select value={editingUser.department || ''} onChange={(e) => setEditingUser({ ...editingUser, department: e.target.value })}>
-                    <option value="">(No section)</option>
-                    {sections.map((d) => <option key={d} value={d}>{d}</option>)}
+              </div>
+              <div className="ep-form-row">
+                <div className="ep-form-group">
+                  <label>Employee Number <span style={{ fontSize: 11, color: "var(--muted)" }}>(optional)</span></label>
+                  <input className="ep-form-input" placeholder="EMP-0042" value={newEmployeeNo} onChange={(e) => setNewEmployeeNo(e.target.value)} />
+                </div>
+                <div className="ep-form-group">
+                  <label>Status</label>
+                  <select className="ep-form-select" value={newIsActive ? "active" : "inactive"} onChange={(e) => setNewIsActive(e.target.value === "active")}>
+                    <option value="active">● Active</option>
+                    <option value="inactive">○ Inactive</option>
                   </select>
                 </div>
-                <div>
-                  <label>Email</label>
-                  <input value={editingUser.email || ''} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} />
+              </div>
+
+              {/* Org placement */}
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 4 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+                  Org Placement
                 </div>
+                <OrgPicker value={newOrg} onChange={setNewOrg} showTeam={false} />
               </div>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <button className="button small-button" onClick={() => setEditingUser(null)}>Cancel</button>
-                <button className="button button-primary" onClick={async () => {
-                  try {
-                    const fullName = [editingFirstName.trim(), editingSurname.trim()].filter(Boolean).join(' ');
-                    const updated = await api.updateUser(editingUser.id, { full_name: fullName, employee_no: editingUser.employee_no, title: editingUser.title, department: editingUser.department, email: editingUser.email });
-                    setEditingUser(null);
-                    await load();
-                    alert('User saved');
-                  } catch (e: any) { alert('Error saving: ' + e.message); }
-                }}>Save</button>
-              </div>
+            </div>
+
+            <div className="ep-modal-footer">
+              <button className="ep-btn-outline" onClick={() => setShowAddModal(false)} disabled={creating}>Cancel</button>
+              <button className="ep-btn" disabled={creating} onClick={() => void handleCreate()}>
+                {creating ? "Creating…" : "Add EXCO Member"}
+              </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Edit EXCO Modal ── */}
+      {editingUser && (
+        <div className="ep-modal-overlay" onClick={() => setEditingUser(null)}>
+          <div className="ep-modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <div className="ep-modal-head">
+              <div>
+                <h2 className="ep-modal-title">Edit EXCO Member</h2>
+                <p className="ep-modal-sub">Update <strong>{editingUser.full_name || editingUser.email}</strong></p>
+              </div>
+              <button className="ep-icon-btn" onClick={() => setEditingUser(null)}><X size={18} /></button>
+            </div>
+
+            <div className="ep-modal-body">
+              <div className="ep-form-row">
+                <div className="ep-form-group">
+                  <label>First Name</label>
+                  <input className="ep-form-input" value={editingFirstName} onChange={(e) => setEditingFirstName(e.target.value)} />
+                </div>
+                <div className="ep-form-group">
+                  <label>Surname</label>
+                  <input className="ep-form-input" value={editingSurname} onChange={(e) => setEditingSurname(e.target.value)} />
+                </div>
+              </div>
+              <div className="ep-form-row">
+                <div className="ep-form-group">
+                  <label>Email</label>
+                  <input className="ep-form-input" value={editingUser.email || ""} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} />
+                </div>
+                <div className="ep-form-group">
+                  <label>Position / Title</label>
+                  <input className="ep-form-input" value={editingUser.title || ""} onChange={(e) => setEditingUser({ ...editingUser, title: e.target.value })} />
+                </div>
+              </div>
+              <div className="ep-form-group">
+                <label>Employee Number</label>
+                <input className="ep-form-input" value={editingUser.employee_no || ""} onChange={(e) => setEditingUser({ ...editingUser, employee_no: e.target.value })} />
+              </div>
+
+              {/* Org placement */}
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 4 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+                  Org Placement
+                </div>
+                <OrgPicker value={editingOrg} onChange={setEditingOrg} showTeam={false} />
+              </div>
+            </div>
+
+            <div className="ep-modal-footer">
+              <button className="ep-btn-outline" onClick={() => setEditingUser(null)}>Cancel</button>
+              <button className="ep-btn" onClick={() => void handleSaveEdit()}>Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Assign Existing User ── */}
+      {showAssignModal && (
+        <UserPicker
+          title="Assign Existing User as EXCO"
+          subtitle="Search and select an employee to promote to EXCO."
+          users={users}
+          excludeRoles={[]}
+          onClose={() => setShowAssignModal(false)}
+          onSelect={handleAssignExisting}
+          saving={assigning}
+          saveLabel="Assign as EXCO"
+          extra={
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
+                Org Placement (optional)
+              </div>
+              <OrgPicker value={assignOrg} onChange={setAssignOrg} showTeam={false} />
+            </div>
+          }
+        />
       )}
     </div>
   );

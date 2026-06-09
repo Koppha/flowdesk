@@ -17,10 +17,6 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE advance_type AS ENUM ('TRAVEL_SUBSISTENCE','CMA','SALARY','LOAN');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
   CREATE TYPE payment_method AS ENUM ('ECOCASH','BANK','CASH','OTHER');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -177,7 +173,7 @@ CREATE TABLE IF NOT EXISTS advance_requests (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   requester_id uuid NOT NULL REFERENCES users(id),
   created_by_id uuid NOT NULL REFERENCES users(id),
-  type text NOT NULL DEFAULT 'TRAVEL_SUBSISTENCE',
+  type text NOT NULL,
   purpose text,
   project_number text,
   payment_method payment_method NOT NULL DEFAULT 'ECOCASH',
@@ -457,3 +453,30 @@ CREATE TABLE IF NOT EXISTS audit_log (
   after_json jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS admin_feature_permissions (
+  feature_key text PRIMARY KEY,
+  allowed_roles text[] NOT NULL DEFAULT '{}'::text[],
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  INSERT INTO admin_feature_permissions (feature_key, allowed_roles) VALUES
+    ('user_management',      ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('roles_permissions',    ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('travel_setup',         ARRAY['ADMIN','HR_MANAGER','AUTH_OFFICER']),
+    ('org_structure',        ARRAY['ADMIN']),
+    ('team_roster',          ARRAY['ADMIN']),
+    ('sections_departments', ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('ceo_management',       ARRAY['ADMIN']),
+    ('employees',            ARRAY['ADMIN']),
+    ('exco_members',         ARRAY['ADMIN','MANAGER']),
+    ('managers',             ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('leadership_assignments',ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('workflow_builder',     ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('request_types',        ARRAY['ADMIN']),
+    ('reporting_lines',      ARRAY['ADMIN','MANAGER','CHIEF_OFFICER'])
+  ON CONFLICT (feature_key) DO NOTHING;
+END;
+$$ LANGUAGE plpgsql;
