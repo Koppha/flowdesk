@@ -8,7 +8,7 @@ import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departm
 export const reportingLinesRouter = Router();
 reportingLinesRouter.use(requireAuth);
 // GET /reporting-lines/stats
-reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (_req, res, next) => {
+reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (_req, res, next) => {
     try {
         const [totalRows, managersRows, hodsRows, excoRows] = await Promise.all([
             query(`SELECT COUNT(*) FROM users WHERE is_active = true AND role::text != 'ADMIN'`),
@@ -28,7 +28,7 @@ reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFIC
     }
 });
 // GET /reporting-lines
-reportingLinesRouter.get("/", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (req, res, next) => {
+reportingLinesRouter.get("/", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req, res, next) => {
     try {
         const department = String(req.query.department || "").trim();
         const search = String(req.query.search || "").trim();
@@ -85,7 +85,7 @@ reportingLinesRouter.get("/", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"])
     }
 });
 // GET /reporting-lines/hierarchy/:department
-reportingLinesRouter.get("/hierarchy/:department", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (req, res, next) => {
+reportingLinesRouter.get("/hierarchy/:department", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req, res, next) => {
     try {
         const department = decodeURIComponent(String(req.params.department || "").trim());
         const leadership = await getDepartmentLeadership(department);

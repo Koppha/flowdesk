@@ -26,7 +26,7 @@ async function ensureUserSchema() {
     await ensureEnumColumnValue("advance_requests", "status", "HR_OFFICER");
     await ensureEnumColumnValue("advance_requests", "status", "HR_MANAGER_REVIEW");
     await ensureEnumColumnValue("advance_requests", "status", "HR_REVIEW");
-    await ensureEnumColumnValue("advance_requests", "status", "CHIEF_OFFICER_REVIEW");
+    await ensureEnumColumnValue("advance_requests", "status", "COUNTERSIGNED");
     await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
     await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");
     await ensureEnumColumnValue("clearance_claims", "status", "HR_MANAGER_REVIEW");
@@ -92,13 +92,23 @@ async function ensureUserSchema() {
     )
   `);
     await query(`UPDATE advance_requests SET created_by_id = requester_id WHERE created_by_id IS NULL`);
-    await query(`UPDATE advance_requests SET status='SUBMITTED', updated_at=now() WHERE status::text='COUNTERSIGNED'`);
+    await query(`UPDATE advance_requests SET status='HR_MANAGER_REVIEW', updated_at=now() WHERE status::text='CHIEF_OFFICER_REVIEW'`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES workflows(id)`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_step_order int`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS approval_chain jsonb`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES workflows(id)`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS workflow_step_order int`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS approval_chain jsonb`);
     await query(`UPDATE users
         SET employment_type = COALESCE(NULLIF(employment_type, ''), 'PERMANENT')`);
     await query(`UPDATE users
         SET role='EMPLOYEE',
             updated_at=now()
       WHERE role::text='COUNTERSIGN'`);
+    await query(`UPDATE users
+        SET role='EXCO',
+            updated_at=now()
+      WHERE role::text='CHIEF_OFFICER'`);
     await query(`UPDATE users
         SET profile_completed =
           CASE
@@ -395,18 +405,6 @@ async function ensureWorkflowSchema() {
         await ensureEnumTypeValue("workflow_request_type", requestType);
     }
     await query(`
-    CREATE TABLE IF NOT EXISTS position_types (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      name text NOT NULL,
-      code text UNIQUE NOT NULL,
-      description text,
-      applies_to workflow_request_type[] NOT NULL DEFAULT ARRAY['ADVANCE_REQUEST']::workflow_request_type[],
-      is_active boolean NOT NULL DEFAULT true,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    )
-  `);
-    await query(`
     CREATE TABLE IF NOT EXISTS workflows (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       name text NOT NULL,
@@ -425,7 +423,7 @@ async function ensureWorkflowSchema() {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
       step_order integer NOT NULL,
-      position_type_id uuid REFERENCES position_types(id),
+      position_type_code text NOT NULL DEFAULT 'CUSTOM',
       position_name text NOT NULL,
       description text,
       is_required boolean NOT NULL DEFAULT false,
@@ -448,36 +446,69 @@ async function ensureWorkflowSchema() {
       condition_field text NOT NULL,
       condition_operator text NOT NULL,
       condition_value text NOT NULL,
-      additional_position_type_id uuid REFERENCES position_types(id),
+      additional_position_type_code text,
+      additional_position_name text,
       is_active boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
-    await query(`CREATE INDEX IF NOT EXISTS idx_position_types_code ON position_types(code)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_workflow_rules_workflow ON workflow_rules(workflow_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_workflows_request_type ON workflows(request_type)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_workflows_department ON workflows(department)`);
+    await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS position_type_code text`);
+    await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_type_code text`);
+    await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_name text`);
     await query(`
-    INSERT INTO position_types (name, code, description, applies_to)
-    VALUES
-      ('Employee', 'EMPLOYEE', 'Request Initiator', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('HOD', 'HOD', 'Department Head', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('Manager', 'MANAGER', 'Department Manager', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('EXCO Owner', 'EXCO_OWNER', 'Executive Committee Member', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('Finance', 'FINANCE', 'Finance Approval', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('Procurement', 'PROCUREMENT', 'Procurement Manager', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('HR Review', 'HR_REVIEW', 'HR Review', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('Legal Review', 'LEGAL_REVIEW', 'Legal Department', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[]),
-      ('CEO', 'CEO', 'Chief Executive Officer', ARRAY['ADVANCE_REQUEST','TRAVEL_REQUEST','ACCOMMODATION_REQUEST','OVERTIME_REQUEST','PROCUREMENT_REQUEST','CLEARANCE_REQUEST','PETTY_CASH_REQUEST','CUSTOM_WORKFLOW','CLAIM_REQUEST']::workflow_request_type[])
-    ON CONFLICT (code) DO UPDATE
-      SET name = EXCLUDED.name,
-          description = EXCLUDED.description,
-          applies_to = EXCLUDED.applies_to,
-          is_active = true,
-          updated_at = now();
+    DO $$
+    BEGIN
+      IF to_regclass('public.position_types') IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'workflow_steps' AND column_name = 'position_type_id'
+         ) THEN
+        EXECUTE $migration$
+          UPDATE workflow_steps ws
+             SET position_type_code = COALESCE(NULLIF(trim(ws.position_type_code), ''), pt.code, NULLIF(trim(ws.position_name), ''), 'CUSTOM')
+            FROM position_types pt
+           WHERE ws.position_type_id = pt.id
+             AND (ws.position_type_code IS NULL OR trim(ws.position_type_code) = '')
+        $migration$;
+      END IF;
+
+      IF to_regclass('public.position_types') IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'workflow_rules' AND column_name = 'additional_position_type_id'
+         ) THEN
+        EXECUTE $migration$
+          UPDATE workflow_rules wr
+             SET additional_position_type_code = COALESCE(NULLIF(trim(wr.additional_position_type_code), ''), pt.code),
+                 additional_position_name = COALESCE(NULLIF(trim(wr.additional_position_name), ''), pt.name)
+            FROM position_types pt
+           WHERE wr.additional_position_type_id = pt.id
+             AND (
+               wr.additional_position_type_code IS NULL OR trim(wr.additional_position_type_code) = ''
+               OR wr.additional_position_name IS NULL OR trim(wr.additional_position_name) = ''
+             )
+        $migration$;
+      END IF;
+    END $$;
   `);
+    await query(`UPDATE workflow_steps SET position_type_code = COALESCE(NULLIF(trim(position_type_code), ''), NULLIF(trim(position_name), ''), 'CUSTOM')`);
+    await query(`ALTER TABLE workflow_steps ALTER COLUMN position_type_code SET DEFAULT 'CUSTOM'`);
+    await query(`ALTER TABLE workflow_steps ALTER COLUMN position_type_code SET NOT NULL`);
+    await query(`ALTER TABLE workflow_steps DROP CONSTRAINT IF EXISTS workflow_steps_position_type_id_fkey`);
+    await query(`ALTER TABLE workflow_rules DROP CONSTRAINT IF EXISTS workflow_rules_additional_position_type_id_fkey`);
+    await query(`ALTER TABLE workflow_steps DROP COLUMN IF EXISTS position_type_id`);
+    await query(`ALTER TABLE workflow_rules DROP COLUMN IF EXISTS additional_position_type_id`);
+    await query(`DROP INDEX IF EXISTS idx_position_types_code`);
+    await query(`DROP TABLE IF EXISTS position_types`);
+    // Sticky workflows are permanent defaults; Temporary workflows have a bounded validity window
+    await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS workflow_type text NOT NULL DEFAULT 'STICKY'`);
+    await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS valid_from  timestamptz`);
+    await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS valid_until timestamptz`);
 }
 async function ensureEmploymentTypesSchema() {
     await query(`

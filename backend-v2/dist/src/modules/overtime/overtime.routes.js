@@ -409,8 +409,8 @@ overtimeRouter.post("/requests/:id/approve-cto", async (req, res, next) => {
             throw notFound();
         if (row.status !== "HOD_APPROVED")
             throw badRequest("Request must be HOD_APPROVED first");
-        if (!["ADMIN", "CHIEF_OFFICER"].includes(req.user.role))
-            throw forbidden("Only CTO/Chief Officer can give final approval");
+        if (!["ADMIN", "EXCO"].includes(req.user.role))
+            throw forbidden("Only ADMIN/EXCO can give final approval");
         await query(`UPDATE overtime_requests
        SET status='APPROVED',
            cto_approved_by_id=$2,
@@ -432,7 +432,7 @@ overtimeRouter.post("/requests/:id/reject", async (req, res, next) => {
         if (!["SUBMITTED", "SUPERVISOR_APPROVED", "HOD_APPROVED"].includes(row.status)) {
             throw badRequest("Request cannot be rejected at this stage");
         }
-        if (!["MANAGER", "HOD", "ADMIN", "CHIEF_OFFICER"].includes(req.user.role))
+        if (!["MANAGER", "HOD", "ADMIN", "EXCO"].includes(req.user.role))
             throw forbidden();
         const reason = String(req.body?.reason || "").trim() || null;
         await query(`UPDATE overtime_requests

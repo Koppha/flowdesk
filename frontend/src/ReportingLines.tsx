@@ -142,8 +142,6 @@ function roleLabel(role: string) {
     HOD: "Head of Department",
     MANAGER: "Manager",
     HR_MANAGER: "HR Manager",
-    AUTH_OFFICER: "Auth Officer",
-    CHIEF_OFFICER: "Chief Officer",
     FINANCE: "Finance",
     EXCO: "EXCO Member",
     CEO: "Chief Executive Officer",
@@ -1120,8 +1118,8 @@ export default function ReportingLines() {
                     >
                       <option value="">— Select manager —</option>
                       {(() => {
-                        const LEADERSHIP_ROLES = ["CEO", "EXCO", "CHIEF_OFFICER", "HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER"];
-                        const rolePriority: Record<string, number> = { CEO: 0, EXCO: 1, CHIEF_OFFICER: 2, HOD: 3, MANAGER: 4, HR_MANAGER: 5, AUTH_OFFICER: 6 };
+                        const LEADERSHIP_ROLES = ["CEO", "EXCO", "HOD", "MANAGER", "HR_MANAGER"];
+                        const rolePriority: Record<string, number> = { CEO: 0, EXCO: 1, HOD: 2, MANAGER: 3, HR_MANAGER: 4 };
                         const sameTeamIds = new Set(employees.map(e => e.id));
                         const leadership = allUsers
                           .filter(u => u.id !== editRow.id && u.is_active && LEADERSHIP_ROLES.includes(u.role))

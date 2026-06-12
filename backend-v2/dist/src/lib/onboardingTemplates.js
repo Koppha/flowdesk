@@ -64,15 +64,6 @@ export const ONBOARDING_TEMPLATES = {
         accentColor: "6d28d9",
         teamsTitle: "New Executive Onboarded"
     },
-    CHIEF_OFFICER: {
-        heading: "WELCOME — YOUR ACCOUNT HAS BEEN CREATED",
-        intro: ({ roleLabel }) => `An account has been created for you on the Advance Clearance System as ${roleLabel}.`,
-        responsibility: ({ roleLabel }) => `As ${roleLabel}, requests that pass manager-level review will be routed to you for senior approval before moving on to HR and Finance.`,
-        closing: LEADERSHIP_CLOSING,
-        subject: (roleLabel) => `[Welcome] Your ${roleLabel} account is ready — Advance Clearance System`,
-        accentColor: "1d4ed8",
-        teamsTitle: "New Approver Onboarded"
-    },
     HOD: {
         heading: "WELCOME — YOUR ACCOUNT HAS BEEN CREATED",
         intro: ({ roleLabel, department }) => `An account has been created for you on the Advance Clearance System as ${roleLabel}${department ? ` for ${department}` : ""}.`,
@@ -99,15 +90,6 @@ export const ONBOARDING_TEMPLATES = {
         subject: (roleLabel) => `[Welcome] Your ${roleLabel} account is ready — Advance Clearance System`,
         accentColor: "be185d",
         teamsTitle: "New HR Lead Onboarded"
-    },
-    AUTH_OFFICER: {
-        heading: "WELCOME — YOUR ACCOUNT HAS BEEN CREATED",
-        intro: ({ roleLabel }) => `An account has been created for you on the Advance Clearance System as ${roleLabel}.`,
-        responsibility: () => `As an HR Officer, you'll handle HR-stage reviews — including travel, accommodation, and clearance requests — and help keep staff records up to date.`,
-        closing: LEADERSHIP_CLOSING,
-        subject: (roleLabel) => `[Welcome] Your ${roleLabel} account is ready — Advance Clearance System`,
-        accentColor: "be185d",
-        teamsTitle: "New HR Officer Onboarded"
     },
     FINANCE: {
         heading: "WELCOME — YOUR ACCOUNT HAS BEEN CREATED",

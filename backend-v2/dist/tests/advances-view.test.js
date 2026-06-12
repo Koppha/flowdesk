@@ -51,12 +51,12 @@ describe("advance view access", () => {
             type: "TRAVEL_SUBSISTENCE"
         })).toBe(true);
     });
-    it("allows chief officers to view advances awaiting Chief Officer review", () => {
+    it("allows EXCO to view advances awaiting EXCO review", () => {
         expect(canViewAdvance({
-            role: "CHIEF_OFFICER",
+            role: "EXCO",
             requesterId: "requester-1",
             createdById: "creator-2",
-            userId: "chief-officer-1",
+            userId: "exco-1",
             status: "CHIEF_OFFICER_REVIEW",
             type: "TRAVEL_SUBSISTENCE"
         })).toBe(true);

@@ -41,6 +41,14 @@ type DepartmentRow = {
   hod_user_id?: string | null;
 };
 
+type SectionRow = {
+  id: string;
+  name: string;
+  department_id?: string | null;
+  manager_user_id?: string | null;
+  hod_user_id?: string | null;
+};
+
 type OrgDivision = { id: string; name: string; active: boolean };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -73,8 +81,8 @@ const ROLE_COLOR: Record<string, string> = {
   MANAGER: "#15803d",
 };
 
-function RoleBadge({ role }: { role: string | null | undefined }) {
-  const label = ROLE_LABEL[role ?? ""] ?? role ?? "";
+function RoleBadge({ role, label }: { role: string | null | undefined; label?: string }) {
+  const text = label ?? ROLE_LABEL[role ?? ""] ?? role ?? "";
   const color = ROLE_COLOR[role ?? ""] ?? "#6b7280";
   return (
     <span style={{
@@ -87,7 +95,7 @@ function RoleBadge({ role }: { role: string | null | undefined }) {
       color,
       border: `1px solid ${color}44`,
     }}>
-      {label}
+      {text}
     </span>
   );
 }
@@ -99,6 +107,7 @@ export default function ManagersOnboarding() {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [departmentRows, setDepartmentRows] = useState<DepartmentRow[]>([]);
+  const [sectionRows, setSectionRows] = useState<SectionRow[]>([]);
   const [divisions, setDivisions] = useState<OrgDivision[]>([]);
   const [search, setSearch] = useState("");
   const [divisionFilter, setDivisionFilter] = useState("ALL");
@@ -127,6 +136,9 @@ export default function ManagersOnboarding() {
   const [editingTypeId, setEditingTypeId] = useState("");
   const [editingRole, setEditingRole] = useState<"HOD" | "MANAGER">("MANAGER");
 
+  // Per-row "add another department" selection in the management table
+  const [addDeptSelection, setAddDeptSelection] = useState<Record<string, string>>({});
+
   // Assign existing user state
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignRole, setAssignRole] = useState<"HOD" | "MANAGER">("MANAGER");
@@ -154,12 +166,14 @@ export default function ManagersOnboarding() {
   async function load() {
     setLoading(true);
     try {
-      const [departmentAssignmentRows, divData, typeData] = await Promise.all([
+      const [departmentAssignmentRows, sectionAssignmentRows, divData, typeData] = await Promise.all([
         api.departmentsWithSections(),
+        api.sections().catch(() => []),
         api.divisions().catch(() => []),
         api.managerTypes().catch(() => [])
       ]);
       setDepartmentRows(Array.isArray(departmentAssignmentRows) ? departmentAssignmentRows : []);
+      setSectionRows(Array.isArray(sectionAssignmentRows) ? sectionAssignmentRows : []);
       setDivisions(Array.isArray(divData) ? divData : []);
       const types = Array.isArray(typeData) ? typeData : [];
       setManagerTypes(types);
@@ -255,13 +269,41 @@ export default function ManagersOnboarding() {
       .map((d) => d.name);
   }
 
-  async function setDepartmentManager(departmentName: string, userId: string, role: "HOD" | "MANAGER") {
+  async function setDepartmentManager(departmentName: string, userId: string, role: "HOD" | "MANAGER", opts: { setPrimary?: boolean } = {}) {
     const dept = departmentRows.find((d) => d.name === departmentName);
     const patch = role === "HOD"
       ? { name: departmentName, hod_user_id: userId }
       : { name: departmentName, manager_user_id: userId };
     await api.updateDepartment(departmentName, patch);
-    if (dept?.id) await api.updateUser(userId, { department: departmentName });
+    if (dept?.id && opts.setPrimary) await api.updateUser(userId, { department: departmentName });
+  }
+
+  async function unassignDepartmentManager(departmentName: string, role: "HOD" | "MANAGER") {
+    const patch = role === "HOD"
+      ? { name: departmentName, hod_user_id: null }
+      : { name: departmentName, manager_user_id: null };
+    await api.updateDepartment(departmentName, patch);
+  }
+
+  function assignedSections(userId: string) {
+    return sectionRows
+      .filter((s) => s.manager_user_id === userId || s.hod_user_id === userId)
+      .map((s) => s.name);
+  }
+
+  async function setSectionManager(sectionId: string, userId: string | null, role: "HOD" | "MANAGER") {
+    await api.setSectionOwner(sectionId, { role, user_id: userId });
+  }
+
+  // Automatically assign a manager/HOD as the owner of the department and
+  // section in their org placement, mirroring how their org path is set.
+  async function autoAssignOrgPlacement(userId: string, role: "HOD" | "MANAGER", org: OrgSelection, opts: { setPrimary?: boolean } = {}) {
+    if (org.department) {
+      await setDepartmentManager(org.department, userId, role, opts);
+    }
+    if (org.sectionId) {
+      await setSectionManager(org.sectionId, userId, role);
+    }
   }
 
   async function handleAssignExisting(user: PickableUser) {
@@ -269,7 +311,7 @@ export default function ManagersOnboarding() {
     try {
       await api.updateUserRole(user.id, { role: assignRole });
       const dept = assignOrg.department || assignDept;
-      if (dept) await setDepartmentManager(dept, user.id, assignRole);
+      if (dept) await autoAssignOrgPlacement(user.id, assignRole, { ...assignOrg, department: dept }, { setPrimary: true });
       // Save org IDs
       await api.updateUser(user.id, {
         division_id: assignOrg.divisionId ?? null,
@@ -377,7 +419,7 @@ export default function ManagersOnboarding() {
         is_active: newIsActive,
       });
       if (assignAsDepartmentManager) {
-        await setDepartmentManager(effectiveDept, created.id, newRole);
+        await autoAssignOrgPlacement(created.id, effectiveRole, { ...newOrg, department: effectiveDept }, { setPrimary: true });
       }
       resetAddForm();
       setShowAddModal(false);
@@ -740,7 +782,14 @@ export default function ManagersOnboarding() {
                         </span>
                       </div>
                     </td>
-                    <td><RoleBadge role={mgr.role} /></td>
+                    <td>
+                      {(() => {
+                        const matchingType = managerTypes.find((t) => t.name === mgr.title);
+                        return matchingType
+                          ? <RoleBadge role={matchingType.role} label={matchingType.name} />
+                          : <RoleBadge role={mgr.role} />;
+                      })()}
+                    </td>
                     <td>
                       <span style={{ fontSize: 12, color: "var(--muted)" }}>
                         {orgPath || mgr.department || "—"}
@@ -749,20 +798,54 @@ export default function ManagersOnboarding() {
                     <td>{mgr.title || "—"}</td>
                     <td>{mgr.email}</td>
                     <td>
-                      {assigned.length ? (
-                        <span className="status-pill status-pill-success">
-                          <CheckCircle2 size={13} aria-hidden /> {assigned.join(", ")}
-                        </span>
-                      ) : (
-                        <button
-                          className="link-button"
-                          type="button"
-                          disabled={!mgr.department}
-                          onClick={() => mgr.department && void setDepartmentManager(mgr.department, mgr.id, (mgr.role ?? "MANAGER") as "HOD" | "MANAGER").then(() => Promise.all([load(), reloadStaff()]))}
-                        >
-                          Assign to department
-                        </button>
-                      )}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                        {assigned.map((deptName) => (
+                          <span key={deptName} className="status-pill status-pill-success" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <CheckCircle2 size={13} aria-hidden /> {deptName}
+                            <button
+                              className="icon-button"
+                              type="button"
+                              title={`Remove from ${deptName}`}
+                              style={{ width: 16, height: 16, padding: 0 }}
+                              onClick={() => void unassignDepartmentManager(deptName, (mgr.role ?? "MANAGER") as "HOD" | "MANAGER").then(() => Promise.all([load(), reloadStaff()]))}
+                            >
+                              <X size={11} aria-hidden />
+                            </button>
+                          </span>
+                        ))}
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <select
+                            value={addDeptSelection[mgr.id] ?? ""}
+                            onChange={(e) => setAddDeptSelection((prev) => ({ ...prev, [mgr.id]: e.target.value }))}
+                            style={{ fontSize: 11, padding: "2px 4px", maxWidth: 140 }}
+                          >
+                            <option value="">Add department…</option>
+                            {[...deptsByDivision.entries()].map(([divName, depts]) => (
+                              <optgroup key={divName} label={divName}>
+                                {depts.filter((d) => !assigned.includes(d.name)).map((d) => (
+                                  <option key={d.name} value={d.name}>{d.name}</option>
+                                ))}
+                              </optgroup>
+                            ))}
+                          </select>
+                          <button
+                            className="link-button"
+                            type="button"
+                            disabled={!addDeptSelection[mgr.id]}
+                            onClick={() => {
+                              const deptName = addDeptSelection[mgr.id];
+                              if (!deptName) return;
+                              void setDepartmentManager(deptName, mgr.id, (mgr.role ?? "MANAGER") as "HOD" | "MANAGER", { setPrimary: assigned.length === 0 })
+                                .then(() => {
+                                  setAddDeptSelection((prev) => ({ ...prev, [mgr.id]: "" }));
+                                  return Promise.all([load(), reloadStaff()]);
+                                });
+                            }}
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </div>
                     </td>
                     <td>
                       {mgr.is_active !== false

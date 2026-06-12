@@ -7,8 +7,6 @@ export const ROLE_LABELS: Record<string, string> = {
   MANAGER:       "Manager",
   HOD:           "HOD",
   HR_MANAGER:    "HR Manager",
-  AUTH_OFFICER:  "HR Officer",
-  CHIEF_OFFICER: "Chief Officer",
   EXCO:          "EXCO",
   CEO:           "CEO",
   ADMIN:         "Admin",

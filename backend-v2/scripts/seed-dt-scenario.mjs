@@ -8,7 +8,7 @@
  *   - (Re)creates the DT Advance Request workflow with the 6-step chain:
  *       Employee → Manager/Supervisor → HOD → HR Manager → HR → Finance
  *   - Creates the DT Clearance workflow with the 5-step chain:
- *       Employee → HOD → EXCO Owner → HR → Finance
+ *       Employee → HOD → EXCO Member → HR → Finance
  *
  * Run once:  node scripts/seed-dt-scenario.mjs
  */

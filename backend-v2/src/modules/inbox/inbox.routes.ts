@@ -16,14 +16,36 @@ type InboxRule =
       advance_type?: string;
     }>;
 
+// Reverse of canApproveStep's roleMap (workflowEngine.ts) — the workflow step
+// position_type_codes that a given role may act on when a step has no specific
+// assigned approver (approver_id IS NULL).
+function positionTypeCodesForRole(role: Role): string[] {
+  switch (role) {
+    case "MANAGER":      return ["MANAGER"];
+    case "HOD":          return ["HOD"];
+    case "EXCO":         return ["EXCO_OWNER"];
+    case "HR_MANAGER":   return ["HR_REVIEW", "HR_MANAGER_REVIEW"];
+    case "FINANCE":      return ["FINANCE"];
+    default:             return [];
+  }
+}
+
 function allowedInboxForRole(role: Role): InboxRule | null {
   switch (role) {
+    case "HOD":
+      return [
+        { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
+        { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
+        { doc_type: "ADVANCE", status: "HR_REVIEW" },
+        { doc_type: "ADVANCE", status: "HR_OFFICER" },
+        { doc_type: "ADVANCE", status: "APPROVED" },
+      ];
     case "MANAGER":
       return [
         { doc_type: "ADVANCE", status: "SUBMITTED" },
+        { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
         { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
         { doc_type: "ADVANCE", status: "HR_REVIEW" },
-        { doc_type: "ADVANCE", status: "CHIEF_OFFICER_REVIEW" },
         { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "CLAIM", status: "SUBMITTED" },
@@ -50,24 +72,14 @@ function allowedInboxForRole(role: Role): InboxRule | null {
         { doc_type: "OVERTIME_CLAIM", status: "FINANCE_VERIFIED" },
         { doc_type: "OVERTIME_CLAIM", status: "EARNINGS_RECORDED" }
       ];
-    case "AUTH_OFFICER":
-      return [
-        { doc_type: "ADVANCE", status: "HR_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_OFFICER" },
-        { doc_type: "ADVANCE", status: "APPROVED" },
-        { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
-        { doc_type: "CLAIM", status: "HR_OFFICER" },
-        { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
-        { doc_type: "CLAIM", status: "FINANCE_VERIFIED" }
-      ];
-    case "CHIEF_OFFICER":
+    case "EXCO":
       return [
         { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
         { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
         { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
         { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
-        { doc_type: "ADVANCE", status: "CHIEF_OFFICER_REVIEW" },
+        { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
         { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
         { doc_type: "ADVANCE", status: "HR_REVIEW" },
         { doc_type: "ADVANCE", status: "HR_OFFICER" },
@@ -149,10 +161,140 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     const delegation = await getActiveManagerDelegation(req.user!.userId);
     const effectiveRole = delegation && role !== "MANAGER" ? "MANAGER" : role;
     const rule = allowedInboxForRole(effectiveRole);
-    if (!rule) return res.json({ items: [] });
 
     const items: any[] = [];
 
+    // Load workflow-driven advances where it is this user's turn to act.
+    // Matches either a step with a specific assigned approver, or — when the
+    // current step has no assigned approver — a step whose position_type_code
+    // falls under this user's role (role-based fallback, mirrors canApproveStep).
+    const loadWorkflowAdvancesForUser = async (userId: string, roleCodes: string[]) => {
+      const rows = await query<any>(
+        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+                ar.workflow_step_order,
+                ar.approval_chain->ar.workflow_step_order->>'approver_id'   AS current_step_approver_id,
+                ar.approval_chain->ar.workflow_step_order->>'position_name' AS current_step_position_name,
+                COALESCE((ar.approval_chain->ar.workflow_step_order->>'requires_accommodation')::boolean, false) AS current_step_requires_accommodation,
+                u.full_name AS requester_name
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+          WHERE ar.approval_chain IS NOT NULL
+            AND ar.status NOT IN ('DRAFT','PAID','REJECTED','CANCELLED','APPROVED')
+            AND (
+              (ar.approval_chain->ar.workflow_step_order->>'approver_id') = $1
+              OR (
+                (ar.approval_chain->ar.workflow_step_order->>'approver_id') IS NULL
+                AND (ar.approval_chain->ar.workflow_step_order->>'position_type_code') = ANY($2::text[])
+              )
+            )
+          ORDER BY ar.created_at DESC`,
+        [userId, roleCodes]
+      );
+      for (const a of rows) {
+        items.push({
+          doc_type: "ADVANCE",
+          id: a.id,
+          status: a.status,
+          advance_type: a.type,
+          requested_total: Number(a.requested_total),
+          approved_total: Number(a.approved_total),
+          purpose: a.purpose,
+          requester_name: a.requester_name,
+          workflow_step_order: a.workflow_step_order,
+          current_step_approver_id: a.current_step_approver_id,
+          current_step_position_name: a.current_step_position_name,
+          current_step_requires_accommodation: a.current_step_requires_accommodation
+        });
+      }
+    };
+
+    // Advances where this user was named as the final ("Finance Officer")
+    // approval step and that step has now completed (status APPROVED) — they
+    // still need to mark the advance as paid even though their account role
+    // may not be FINANCE. ADMIN ("ALL") gets everything via the
+    // allWorkflowRows + loadAdvanceByStatus("APPROVED") queries below, so skip
+    // it there.
+    const loadFinalStepApprovedAdvancesForUser = async (userId: string) => {
+      const rows = await query<any>(
+        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+                u.full_name AS requester_name
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+          WHERE ar.approval_chain IS NOT NULL
+            AND ar.status = 'APPROVED'
+            AND (ar.approval_chain->(jsonb_array_length(ar.approval_chain) - 1)->>'approver_id') = $1
+          ORDER BY ar.created_at DESC`,
+        [userId]
+      );
+      for (const a of rows) {
+        items.push({
+          doc_type: "ADVANCE",
+          id: a.id,
+          status: a.status,
+          advance_type: a.type,
+          requested_total: Number(a.requested_total),
+          approved_total: Number(a.approved_total),
+          purpose: a.purpose,
+          requester_name: a.requester_name,
+          is_final_step_approver: true
+        });
+      }
+    };
+
+    // Load workflow-driven clearance claims where it is this user's turn to
+    // act. Mirrors loadWorkflowAdvancesForUser, but for clearance_claims.
+    const loadWorkflowClaimsForUser = async (userId: string, roleCodes: string[]) => {
+      const rows = await query<any>(
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount,
+                c.workflow_step_order,
+                c.approval_chain->c.workflow_step_order->>'approver_id'   AS current_step_approver_id,
+                c.approval_chain->c.workflow_step_order->>'position_name' AS current_step_position_name,
+                u.full_name AS claimant_name
+           FROM clearance_claims c
+           JOIN users u ON u.id = c.claimant_id
+          WHERE c.approval_chain IS NOT NULL
+            AND c.status NOT IN ('DRAFT','SETTLED','REJECTED','FINANCE_VERIFIED')
+            AND (
+              (c.approval_chain->c.workflow_step_order->>'approver_id') = $1
+              OR (
+                (c.approval_chain->c.workflow_step_order->>'approver_id') IS NULL
+                AND (c.approval_chain->c.workflow_step_order->>'position_type_code') = ANY($2::text[])
+              )
+            )
+          ORDER BY c.created_at DESC`,
+        [userId, roleCodes]
+      );
+      for (const c of rows) {
+        items.push({
+          doc_type: "CLAIM",
+          id: c.id,
+          status: c.status,
+          claim_total: Number(c.claim_total),
+          advance_amount: Number(c.advance_amount),
+          balance_amount: Number(c.balance_amount),
+          claimant_name: c.claimant_name,
+          workflow_step_order: c.workflow_step_order,
+          current_step_approver_id: c.current_step_approver_id,
+          current_step_position_name: c.current_step_position_name
+        });
+      }
+    };
+
+    // Workflow-driven advances for this user (their pending approval steps).
+    // Runs regardless of `rule` so a step with a specific assigned_user_id is
+    // visible even if the user's role has no general inbox rule (e.g. an
+    // EMPLOYEE individually named as a workflow approver). ADMIN ("ALL") gets
+    // everything via the allWorkflowRows query below, so skip it there.
+    if (rule !== "ALL") {
+      await loadWorkflowAdvancesForUser(delegation?.manager_id || req.user!.userId, positionTypeCodesForRole(effectiveRole));
+      await loadFinalStepApprovedAdvancesForUser(req.user!.userId);
+      await loadWorkflowClaimsForUser(delegation?.manager_id || req.user!.userId, positionTypeCodesForRole(effectiveRole));
+    }
+
+    if (!rule) return res.json({ items });
+
+    // Load legacy (non-workflow) advances by status.
+    // The ownership filter still applies so each role only sees their own dept advances.
     const loadAdvanceByStatus = async (status: string, advanceType?: string) => {
       const params: unknown[] = [status];
       let typeFilter = "";
@@ -162,22 +304,33 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         params.push(advanceType);
         typeFilter = ` AND ar.type = $${params.length}`;
       }
-      let ownershipFilter = "";
+      // Exclude workflow-driven advances — those are handled by loadWorkflowAdvancesForUser.
+      // APPROVED is the exception: workflow-driven advances leave the active-step
+      // query once approved, but FINANCE/ADMIN still need to see them here to
+      // mark them paid, so include workflow-driven advances for that status.
+      let ownershipFilter = status === "APPROVED" ? "" : " AND ar.approval_chain IS NULL";
       if (effectiveRole === "MANAGER" && status === "SUBMITTED") {
         params.push(delegation?.manager_id || req.user!.userId);
-        ownershipFilter = ` AND d.manager_user_id = $${params.length}`;
+        ownershipFilter += ` AND d.manager_user_id = $${params.length}`;
       }
-      if (role === "CHIEF_OFFICER" && status === "CHIEF_OFFICER_REVIEW") {
+      if (role === "HOD" && status === "COUNTERSIGNED") {
         params.push(req.user!.userId);
-        ownershipFilter = ` AND d.exco_user_id = $${params.length}`;
+        ownershipFilter += ` AND d.hod_user_id = $${params.length}`;
+      }
+      if (role === "EXCO" && status === "COUNTERSIGNED") {
+        params.push(req.user!.userId);
+        ownershipFilter += ` AND d.exco_user_id = $${params.length}`;
       }
       const rows = await query<any>(
-        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose, u.full_name AS requester_name
-         FROM advance_requests ar
-         JOIN users u ON u.id = ar.requester_id
-         LEFT JOIN departments d ON lower(trim(d.name)) = lower(trim(u.department))
-         WHERE ar.status = $1${typeFilter}${ownershipFilter}
-         ORDER BY ar.created_at DESC`,
+        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+                u.full_name AS requester_name,
+                NULL::text AS current_step_approver_id,
+                NULL::int  AS workflow_step_order
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN departments d ON lower(trim(d.name)) = lower(trim(u.department))
+          WHERE ar.status = $1${typeFilter}${ownershipFilter}
+          ORDER BY ar.created_at DESC`,
         params
       );
       for (const a of rows) {
@@ -189,7 +342,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           requested_total: Number(a.requested_total),
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
-          requester_name: a.requester_name
+          requester_name: a.requester_name,
+          workflow_step_order: a.workflow_step_order,
+          current_step_approver_id: a.current_step_approver_id
         });
       }
     };
@@ -200,6 +355,13 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       if (effectiveRole === "MANAGER" && status === "SUBMITTED") {
         params.push(delegation?.manager_id || req.user!.userId);
         ownershipFilter = ` AND d.manager_user_id = $${params.length}`;
+      }
+      // Exclude workflow-driven claims — those are handled by loadWorkflowClaimsForUser.
+      // FINANCE_VERIFIED is the exception: workflow-driven claims leave the
+      // active-step query once their chain completes, but FINANCE/ADMIN still
+      // need to see them here to settle, so include them for that status.
+      if (status !== "FINANCE_VERIFIED") {
+        ownershipFilter += " AND c.approval_chain IS NULL";
       }
       const rows = await query<any>(
         `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, u.full_name AS claimant_name
@@ -299,8 +461,67 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     };
 
     if (rule === "ALL") {
+      // Workflow-driven advances (ADMIN sees everyone's pending steps)
+      const allWorkflowRows = await query<any>(
+        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+                ar.workflow_step_order,
+                ar.approval_chain->ar.workflow_step_order->>'approver_id'   AS current_step_approver_id,
+                ar.approval_chain->ar.workflow_step_order->>'position_name' AS current_step_position_name,
+                COALESCE((ar.approval_chain->ar.workflow_step_order->>'requires_accommodation')::boolean, false) AS current_step_requires_accommodation,
+                u.full_name AS requester_name
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+          WHERE ar.approval_chain IS NOT NULL
+            AND ar.status NOT IN ('DRAFT','PAID','REJECTED','CANCELLED','APPROVED')
+          ORDER BY ar.created_at DESC`
+      );
+      for (const a of allWorkflowRows) {
+        items.push({
+          doc_type: "ADVANCE",
+          id: a.id,
+          status: a.status,
+          advance_type: a.type,
+          requested_total: Number(a.requested_total),
+          approved_total: Number(a.approved_total),
+          purpose: a.purpose,
+          requester_name: a.requester_name,
+          workflow_step_order: a.workflow_step_order,
+          current_step_approver_id: a.current_step_approver_id,
+          current_step_position_name: a.current_step_position_name,
+          current_step_requires_accommodation: a.current_step_requires_accommodation
+        });
+      }
+      // Workflow-driven clearance claims (ADMIN sees everyone's pending steps)
+      const allWorkflowClaimRows = await query<any>(
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount,
+                c.workflow_step_order,
+                c.approval_chain->c.workflow_step_order->>'approver_id'   AS current_step_approver_id,
+                c.approval_chain->c.workflow_step_order->>'position_name' AS current_step_position_name,
+                u.full_name AS claimant_name
+           FROM clearance_claims c
+           JOIN users u ON u.id = c.claimant_id
+          WHERE c.approval_chain IS NOT NULL
+            AND c.status NOT IN ('DRAFT','SETTLED','REJECTED','FINANCE_VERIFIED')
+          ORDER BY c.created_at DESC`
+      );
+      for (const c of allWorkflowClaimRows) {
+        items.push({
+          doc_type: "CLAIM",
+          id: c.id,
+          status: c.status,
+          claim_total: Number(c.claim_total),
+          advance_amount: Number(c.advance_amount),
+          balance_amount: Number(c.balance_amount),
+          claimant_name: c.claimant_name,
+          workflow_step_order: c.workflow_step_order,
+          current_step_approver_id: c.current_step_approver_id,
+          current_step_position_name: c.current_step_position_name
+        });
+      }
+
+      // Legacy (non-workflow) advances by status
       await loadAdvanceByStatus("SUBMITTED");
-      await loadAdvanceByStatus("CHIEF_OFFICER_REVIEW");
+      await loadAdvanceByStatus("COUNTERSIGNED");
       await loadAdvanceByStatus("HR_MANAGER_REVIEW");
       await loadAdvanceByStatus("HR_REVIEW");
       await loadAdvanceByStatus("HR_OFFICER");

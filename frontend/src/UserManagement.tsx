@@ -35,8 +35,6 @@ const ROLES: { value: string; label: string; color: string; bg: string }[] = [
   { value: "MANAGER",       label: "Manager",       color: "#0f766e", bg: "#ccfbf1" },
   { value: "HOD",           label: "HOD",           color: "#6d28d9", bg: "#ede9fe" },
   { value: "HR_MANAGER",    label: "HR Manager",    color: "#b45309", bg: "#fef3c7" },
-  { value: "AUTH_OFFICER",  label: "HR Officer",    color: "#c2410c", bg: "#ffedd5" },
-  { value: "CHIEF_OFFICER", label: "Chief Officer", color: "#1e40af", bg: "#e0f2fe" },
   { value: "FINANCE",       label: "Finance",       color: "#166534", bg: "#dcfce7" },
   { value: "EXCO",          label: "EXCO",          color: "#7c3aed", bg: "#f3e8ff" },
   { value: "CEO",           label: "CEO",           color: "#be185d", bg: "#fce7f3" },

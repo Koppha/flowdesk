@@ -19,8 +19,8 @@ let advanceId = "";
 let claimId = "";
 const requesterToken = signToken({ userId: requesterId, role: "EMPLOYEE", department: DEPARTMENT });
 const managerToken = signToken({ userId: managerId, role: "MANAGER", department: DEPARTMENT });
-const chiefOfficerToken = signToken({ userId: chiefOfficerId, role: "CHIEF_OFFICER", department: DEPARTMENT });
-const authOfficerToken = signToken({ userId: authOfficerId, role: "AUTH_OFFICER" });
+const chiefOfficerToken = signToken({ userId: chiefOfficerId, role: "EXCO", department: DEPARTMENT });
+const authOfficerToken = signToken({ userId: authOfficerId, role: "MANAGER" });
 const hrManagerToken = signToken({ userId: hrManagerId, role: "HR_MANAGER" });
 const financeToken = signToken({ userId: financeId, role: "FINANCE" });
 const app = createApp();
@@ -47,8 +47,8 @@ describe("travel advance and clearance end-to-end workflow", () => {
        VALUES
         ($1, 'TAC001', 'Requester User', 'tac-requester@example.com', 'x', 'EMPLOYEE', $7, 'PERMANENT', true, true),
         ($2, 'TAC002', 'Manager User', 'tac-manager@example.com', 'x', 'MANAGER', $7, 'PERMANENT', true, true),
-        ($3, 'TAC003', 'Chief Officer User', 'tac-chief@example.com', 'x', 'CHIEF_OFFICER', $7, 'PERMANENT', true, true),
-        ($4, 'TAC004', 'Auth Officer User', 'tac-auth@example.com', 'x', 'AUTH_OFFICER', $7, 'PERMANENT', true, true),
+        ($3, 'TAC003', 'EXCO User', 'tac-chief@example.com', 'x', 'EXCO', $7, 'PERMANENT', true, true),
+        ($4, 'TAC004', 'Auth Officer User', 'tac-auth@example.com', 'x', 'MANAGER', $7, 'PERMANENT', true, true),
         ($5, 'TAC005', 'HR Manager User', 'tac-hrmanager@example.com', 'x', 'HR_MANAGER', $7, 'PERMANENT', true, true),
         ($6, 'TAC006', 'Finance User', 'tac-finance@example.com', 'x', 'FINANCE', $7, 'PERMANENT', true, true)`, [requesterId, managerId, chiefOfficerId, authOfficerId, hrManagerId, financeId, DEPARTMENT]);
         await query(`INSERT INTO departments (id, name, manager_user_id, exco_user_id, active)
@@ -108,14 +108,14 @@ describe("travel advance and clearance end-to-end workflow", () => {
             .send({});
         expect(submitResp.status).toBe(200);
         expect(submitResp.body.status).toBe("SUBMITTED");
-        // 4. Department manager approves; an EXCO owner is assigned, so it escalates to Chief Officer review
+        // 4. Department manager approves; an EXCO member is assigned, so it escalates to Chief Officer review
         const managerApprove = await request(app)
             .post(`/advances/${advanceId}/approve`)
             .set("Authorization", `Bearer ${managerToken}`)
             .send({ approved_total: 200 });
         expect(managerApprove.status).toBe(200);
         expect(managerApprove.body.status).toBe("CHIEF_OFFICER_REVIEW");
-        // 5. Chief Officer (EXCO owner) approves; advance moves into the HR officer payment queue
+        // 5. Chief Officer (EXCO member) approves; advance moves into the HR officer payment queue
         const chiefApprove = await request(app)
             .post(`/advances/${advanceId}/approve`)
             .set("Authorization", `Bearer ${chiefOfficerToken}`)

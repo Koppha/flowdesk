@@ -120,6 +120,8 @@ export const api = {
   updateSection: (id: string, data: { name: string; exco_user_id?: string | null; department_id?: string | null; active?: boolean; is_business_partner?: boolean; division_ids?: string[] }) =>
     req(`/auth/sections/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteSection: (id: string) => req(`/auth/sections/${id}`, { method: "DELETE" }),
+  setSectionOwner: (id: string, data: { role: "HOD" | "MANAGER"; user_id: string | null }) =>
+    req(`/auth/sections/${id}/owner`, { method: "PUT", body: JSON.stringify(data) }),
   divisions: () => req("/auth/divisions"),
   createDivision: (name: string, description?: string | null) => req("/auth/divisions", { method: "POST", body: JSON.stringify({ name, description }) }),
   updateDivision: (id: string, data: { name: string; description?: string | null; active?: boolean }) => req(`/auth/divisions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
@@ -153,7 +155,6 @@ export const api = {
     if (advanceSubType) params.push(`advance_sub_type=${encodeURIComponent(advanceSubType)}`);
     return req(`/workflows/resolve?${params.join("&")}`);
   },
-  positionTypes: () => req("/workflows/position-types"),
   chainApprovers: () => req("/workflows/chain-approvers"),
   workflowExcoMembers: () => req("/workflows/exco-members"),
   createDelegation: (data: any) => req("/auth/delegations", { method: "POST", body: JSON.stringify(data) }),
@@ -223,6 +224,8 @@ export const api = {
     req(`/advances/${id}/approve`, { method: "POST", body: JSON.stringify({ approved_total, comments }) }),
   markAdvancePaid: (id: string, paid_reference: string) => req(`/advances/${id}/mark-paid`, { method: "POST", body: JSON.stringify({ paid_reference }) }),
 
+  approveClaim: (id: string, comments?: string) => req(`/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
+  rejectClaim: (id: string, comments: string) => req(`/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   managerApproveClaim: (id: string, comments?: string) => req(`/claims/${id}/manager-approve`, { method: "POST", body: JSON.stringify({ comments }) }),
   authApproveClaim: (id: string, comments?: string) => req(`/claims/${id}/auth-officer-approve`, { method: "POST", body: JSON.stringify({ comments }) }),
   hrManagerApproveClaim: (id: string, comments?: string) => req(`/claims/${id}/hr-manager-approve`, { method: "POST", body: JSON.stringify({ comments }) }),

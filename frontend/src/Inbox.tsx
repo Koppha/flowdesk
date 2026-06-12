@@ -12,6 +12,11 @@ type InboxItem =
       approved_total: number;
       purpose: string | null;
       requester_name: string;
+      advance_type?: string;
+      workflow_step_order?: number | null;
+      current_step_approver_id?: string | null;
+      current_step_position_name?: string | null;
+      current_step_requires_accommodation?: boolean;
     }
   | {
       doc_type: "ACCOMMODATION";
@@ -31,6 +36,9 @@ type InboxItem =
       advance_amount: number;
       balance_amount: number;
       claimant_name: string;
+      workflow_step_order?: number | null;
+      current_step_approver_id?: string | null;
+      current_step_position_name?: string | null;
     }
   | {
       doc_type: "OVERTIME_REQUEST";
@@ -79,6 +87,30 @@ function fmtDate(value: any) {
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+interface AccommodationEntry {
+  district: string;
+  provider: string;
+  checkIn: string;
+  checkOut: string;
+  amount: string;
+  notes: string;
+  quotation: File | null;
+}
+
+function normalizeDateInputValue(value: any) {
+  if (!value) return "";
+  const s = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  // Use local date components (not toISOString) so that UTC-serialized
+  // timestamps for local-midnight dates round-trip to the same calendar day.
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function lineAmount(line: any) {
   return Number(line.line_total || 0) || Number(line.meals || 0) || Number(line.lunch || 0) + Number(line.dinner || 0);
 }
@@ -90,12 +122,8 @@ function lineMealCount(line: any) {
 
 function displayRoleLabel(value: string | null | undefined) {
   switch (value) {
-    case "AUTH_OFFICER":
-      return "HR";
     case "HR_MANAGER":
       return "HR Manager";
-    case "CHIEF_OFFICER":
-      return "Chief Officer";
     default:
       return value || "Unknown";
   }
@@ -300,7 +328,7 @@ export default function Inbox(props: { onBack?: () => void }) {
                             <th>Status</th>
                             <th>Amount</th>
                             <th>Context</th>
-                            <th>Action</th>
+                            <th className="inbox-actions-header">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -320,9 +348,15 @@ export default function Inbox(props: { onBack?: () => void }) {
                               </td>
                               <td className="inbox-money">{itemAmount(it)}</td>
                               <td className="inbox-context">{itemContext(it)}</td>
-                              <td>
-                                <button className="button small-button button-primary inbox-review-button" onClick={() => setSelected(it)}>
-                                  Review
+                              <td className="inbox-actions-cell">
+                                <button
+                                  type="button"
+                                  className="inbox-review-button"
+                                  onClick={() => setSelected(it)}
+                                  aria-label={`Review ${docTypeLabel(it.doc_type)} for ${itemOwner(it)}`}
+                                  title="Review"
+                                >
+                                  <RefreshCw size={15} aria-hidden="true" />
                                 </button>
                               </td>
                             </tr>
@@ -385,19 +419,14 @@ export default function Inbox(props: { onBack?: () => void }) {
 
 function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void; onDone: () => Promise<void> }) {
   const { item, role } = props;
+  const me = getUserFromToken();
   const [detail, setDetail] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [comments, setComments] = useState("");
   const [paidRef, setPaidRef] = useState("");
   const [settleRef, setSettleRef] = useState("");
   const [settleMethod, setSettleMethod] = useState<"ECOCASH" | "BANK">("ECOCASH");
-  const [accommodationLocation, setAccommodationLocation] = useState("");
-  const [accommodationProvider, setAccommodationProvider] = useState("");
-  const [accommodationCheckIn, setAccommodationCheckIn] = useState("");
-  const [accommodationCheckOut, setAccommodationCheckOut] = useState("");
-  const [accommodationAmount, setAccommodationAmount] = useState("");
-  const [accommodationNotes, setAccommodationNotes] = useState("");
-  const [accommodationQuotation, setAccommodationQuotation] = useState<File | null>(null);
+  const [accommodationEntries, setAccommodationEntries] = useState<AccommodationEntry[]>([]);
   const [accommodationHotels, setAccommodationHotels] = useState<any[]>([]);
   const [travelTypes, setTravelTypes] = useState<TravelType[]>([]);
   const [busy, setBusy] = useState(false);
@@ -449,84 +478,145 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     return Array.from(districts);
   }, [isTravelAdvance, detail?.lines]);
 
-  // Auto-fill check-in / check-out from travel line dates
-  const travelDateRange = useMemo(() => {
-    if (!isTravelAdvance || !detail?.lines?.length) return { first: "", last: "" };
-    const dates = (detail.lines as any[]).map((l: any) => String(l.trip_date || l.date || "")).filter(Boolean).sort();
-    return { first: dates[0] || "", last: dates[dates.length - 1] || "" };
+  // Auto-fill check-in / check-out per destination district from travel line dates.
+  // Check-in is the date the traveller arrives at the district (the line whose
+  // destination is that district); check-out is the date of the next leg
+  // departing that district (i.e. the following line's date).
+  const destinationDateRanges = useMemo(() => {
+    const ranges = new Map<string, { checkIn: string; checkOut: string }>();
+    if (!isTravelAdvance || !detail?.lines) return ranges;
+    const lines: any[] = detail.lines || [];
+    const outboundLines = lines.length > 1 ? lines.slice(0, -1) : lines;
+    outboundLines.forEach((line: any, idx: number) => {
+      const location = String(line.location || "").trim();
+      if (!location.includes("→")) return;
+      const destination = location.split("→")[1]?.trim();
+      if (!destination) return;
+      const checkIn = normalizeDateInputValue(line.line_date || line.trip_date || line.date);
+      const nextLine = lines[idx + 1];
+      const checkOut = nextLine ? normalizeDateInputValue(nextLine.line_date || nextLine.trip_date || nextLine.date) : checkIn;
+      const existing = ranges.get(destination);
+      if (!existing) {
+        ranges.set(destination, { checkIn, checkOut });
+      } else {
+        existing.checkOut = checkOut;
+      }
+    });
+    return ranges;
   }, [isTravelAdvance, detail?.lines]);
+
+  // For workflow-driven advances, use the current_step_approver_id set by the backend.
+  // For legacy advances (no approver_id), fall back to role+status checks.
+  const isWorkflowDriven = item.doc_type === "ADVANCE" && item.current_step_approver_id !== undefined;
+  const isMyWorkflowStep = isWorkflowDriven && item.current_step_approver_id === me?.userId;
+  // The current step is an accommodation-only step (e.g. HR preparing
+  // accommodation before forwarding to Finance) — at this step the assignee
+  // attaches the accommodation booking instead of approving/rejecting.
+  const isAccommodationStep = isWorkflowDriven && Boolean((item as any).current_step_requires_accommodation);
+  const inProgressStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER"];
 
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
-    ((role === "MANAGER" && item.status === "SUBMITTED") ||
-      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
-      (role === "AUTH_OFFICER" && item.status === "HR_REVIEW") ||
-      (role === "CHIEF_OFFICER" && item.status === "CHIEF_OFFICER_REVIEW"));
+    (isWorkflowDriven
+      ? isMyWorkflowStep && !isAccommodationStep
+      : ((role === "MANAGER" && item.status === "SUBMITTED") ||
+          (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+          (role === "HOD" && item.status === "COUNTERSIGNED") ||
+          (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+          (role === "MANAGER" && item.status === "HR_REVIEW") ||
+          (role === "EXCO" && item.status === "COUNTERSIGNED")));
   const canRejectAdvance =
     item.doc_type === "ADVANCE" &&
-    ((role === "MANAGER" && item.status === "SUBMITTED") ||
-      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
-      (role === "AUTH_OFFICER" && item.status === "HR_REVIEW") ||
-      (role === "CHIEF_OFFICER" && item.status === "CHIEF_OFFICER_REVIEW") ||
-      (role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(item.status)) ||
-      (role === "ADMIN" && ["SUBMITTED", "CHIEF_OFFICER_REVIEW", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status)));
+    (isWorkflowDriven
+      ? isMyWorkflowStep && !isAccommodationStep
+      : ((role === "MANAGER" && item.status === "SUBMITTED") ||
+          (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+          (role === "HOD" && item.status === "COUNTERSIGNED") ||
+          (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+          (role === "MANAGER" && item.status === "HR_REVIEW") ||
+          (role === "EXCO" && item.status === "COUNTERSIGNED") ||
+          (role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(item.status)) ||
+          (role === "ADMIN" && inProgressStatuses.includes(item.status))));
   const canApproveAdvance =
     item.doc_type === "ADVANCE" &&
-    ((role === "MANAGER" && item.status === "SUBMITTED") ||
-      (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
-      (role === "CHIEF_OFFICER" && item.status === "CHIEF_OFFICER_REVIEW"));
-  const canMarkPaid = item.doc_type === "ADVANCE" && role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(item.status);
+    (isWorkflowDriven
+      ? isMyWorkflowStep && !isAccommodationStep
+      : ((role === "MANAGER" && item.status === "SUBMITTED") ||
+          (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+          (role === "HOD" && item.status === "COUNTERSIGNED") ||
+          (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
+          (role === "EXCO" && item.status === "COUNTERSIGNED")));
+  const canMarkPaid =
+    item.doc_type === "ADVANCE" &&
+    (role === "FINANCE" || role === "ADMIN" || Boolean((item as any).is_final_step_approver)) &&
+    ["HR_OFFICER", "APPROVED"].includes(item.status);
   const canCreateAccommodation =
     item.doc_type === "ADVANCE" &&
-    role === "AUTH_OFFICER" &&
-    ["HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status) &&
     isTravelAdvance &&
     usesDistrictAccommodation &&   // local travel only
-    isMultiDayTravel;              // must be more than 1 day
+    isMultiDayTravel &&            // must be more than 1 day
+    (isWorkflowDriven
+      ? isMyWorkflowStep && isAccommodationStep
+      : (role === "MANAGER" && ["HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status)));
   const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
   const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
 
-  const canManagerApprove = item.doc_type === "CLAIM" && role === "MANAGER" && item.status === "SUBMITTED";
-  const canChiefApprove = item.doc_type === "CLAIM" && role === "CHIEF_OFFICER" && item.status === "MANAGER_APPROVED";
-  const canAuthApproveClaim = item.doc_type === "CLAIM" && role === "AUTH_OFFICER" && item.status === "CHIEF_OFFICER_APPROVED";
-  const canHrManagerApproveClaim = item.doc_type === "CLAIM" && role === "HR_MANAGER" && item.status === "HR_OFFICER";
-  const canFinanceVerify = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "HR_MANAGER_REVIEW";
+  // Workflow-driven clearance claims (e.g. "Travel Clearance DT") expose the
+  // current step's approver via current_step_approver_id, mirroring advances.
+  const isWorkflowDrivenClaim = item.doc_type === "CLAIM" && item.current_step_approver_id !== undefined;
+  const isMyClaimWorkflowStep = isWorkflowDrivenClaim && item.current_step_approver_id === me?.userId;
+  const canApproveClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
+  const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
+
+  const canManagerApprove = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "MANAGER" && item.status === "SUBMITTED";
+  const canChiefApprove = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "EXCO" && item.status === "MANAGER_APPROVED";
+  const canAuthApproveClaim = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "MANAGER" && item.status === "CHIEF_OFFICER_APPROVED";
+  const canHrManagerApproveClaim = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "HR_MANAGER" && item.status === "HR_OFFICER";
+  const canFinanceVerify = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "FINANCE" && item.status === "HR_MANAGER_REVIEW";
   const canSettle = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "FINANCE_VERIFIED";
 
   const noActionMessage = (() => {
-    if (item.doc_type === "ADVANCE" && role === "MANAGER" && item.status !== "SUBMITTED") {
-      return "This advance is visible for reference only because manager approval is only required on submitted advances.";
+    if (item.doc_type === "ADVANCE" && role === "MANAGER" && !["SUBMITTED", "HR_MANAGER_REVIEW"].includes(item.status)) {
+      return "This advance is visible for reference only.";
     }
-    if (item.doc_type === "CLAIM" && role === "MANAGER" && item.status !== "SUBMITTED") {
+    if (item.doc_type === "CLAIM" && isWorkflowDrivenClaim && !isMyClaimWorkflowStep) {
+      return `This clearance is visible for reference only — it is currently awaiting ${item.current_step_position_name || "the next approver"}.`;
+    }
+    if (item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "MANAGER" && item.status !== "SUBMITTED") {
       return "This claim is visible for reference only because manager approval is only required on submitted claims.";
     }
     return "No action available for your role on this item.";
   })();
-
-  const districtHotels = useMemo(
-    () => accommodationHotels.filter((hotel) => hotel.district === accommodationLocation),
-    [accommodationHotels, accommodationLocation]
-  );
 
   useEffect(() => {
     if (!canCreateAccommodation) return;
     api.hotels()
       .then((rows: any[]) => setAccommodationHotels(rows || []))
       .catch((e: any) => setError(String(e.message)));
-    // Auto-populate destination district if only one
-    if (destinationDistricts.length === 1) {
-      setAccommodationLocation(destinationDistricts[0]);
-    }
-    // Auto-populate check-in / check-out from travel dates
-    if (travelDateRange.first) setAccommodationCheckIn(travelDateRange.first);
-    if (travelDateRange.last)  setAccommodationCheckOut(travelDateRange.last);
-  }, [canCreateAccommodation, destinationDistricts, travelDateRange]);
+    // Build one accommodation entry per destination district, auto-filling
+    // check-in / check-out from the travel line dates for that district.
+    setAccommodationEntries((prev) => {
+      if (prev.length) return prev;
+      const districts = destinationDistricts.length ? destinationDistricts : [""];
+      return districts.map((district) => {
+        const range = destinationDateRanges.get(district);
+        return {
+          district,
+          provider: "",
+          checkIn: range?.checkIn || "",
+          checkOut: range?.checkOut || "",
+          amount: "",
+          notes: "",
+          quotation: null
+        };
+      });
+    });
+  }, [canCreateAccommodation, destinationDistricts, destinationDateRanges]);
 
-  useEffect(() => {
-    if (!accommodationProvider) return;
-    if (districtHotels.some((hotel) => hotel.name === accommodationProvider)) return;
-    setAccommodationProvider("");
-  }, [districtHotels, accommodationProvider]);
+  function updateAccommodationEntry(index: number, patch: Partial<AccommodationEntry>) {
+    setAccommodationEntries((prev) => prev.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
+  }
+
 
   async function act(fn: () => Promise<any>) {
     setBusy(true);
@@ -564,38 +654,49 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   }
 
   function handleCreateAccommodation() {
-    const amount = Number(accommodationAmount || 0);
-    if (!accommodationLocation.trim()) {
+    if (!accommodationEntries.length) {
       setError("Accommodation location is required.");
       return;
     }
-    if (!accommodationProvider.trim()) {
-      setError("Select an onboarded hotel for the district.");
-      return;
-    }
-    if (amount <= 0) {
-      setError("Accommodation amount must be greater than 0.");
-      return;
+    for (const entry of accommodationEntries) {
+      if (!entry.district.trim()) {
+        setError("Accommodation location is required.");
+        return;
+      }
+      if (!entry.provider.trim()) {
+        setError("Enter or select a hotel/provider.");
+        return;
+      }
+      if (Number(entry.amount || 0) <= 0) {
+        setError("Accommodation amount must be greater than 0.");
+        return;
+      }
     }
 
     void act(async () => {
-      const createResp = await api.createAccommodationRequest({
-        advance_request_id: item.id,
-        location: accommodationLocation.trim(),
-        provider: accommodationProvider.trim() || undefined,
-        check_in: accommodationCheckIn || undefined,
-        check_out: accommodationCheckOut || undefined,
-        amount,
-        notes: accommodationNotes.trim() || undefined
-      });
-      if (accommodationQuotation) {
-        const form = new FormData();
-        form.append("file", accommodationQuotation);
-        await api.uploadAccommodationQuotation(createResp.id, form);
+      // Each destination gets its own draft accommodation request. Only the
+      // last one is sent to finance, which advances the advance's workflow
+      // step once for the whole batch (and the backend marks any remaining
+      // sibling drafts as SUBMITTED at the same time).
+      let lastId: string | null = null;
+      for (const entry of accommodationEntries) {
+        const createResp = await api.createAccommodationRequest({
+          advance_request_id: item.id,
+          location: entry.district.trim(),
+          provider: entry.provider.trim() || undefined,
+          check_in: entry.checkIn || undefined,
+          check_out: entry.checkOut || undefined,
+          amount: Number(entry.amount || 0),
+          notes: entry.notes.trim() || undefined
+        });
+        if (entry.quotation) {
+          const form = new FormData();
+          form.append("file", entry.quotation);
+          await api.uploadAccommodationQuotation(createResp.id, form);
+        }
+        lastId = createResp.id;
       }
-      await api.sendAccommodationToFinance(createResp.id);
-      const requestedTotal = item.doc_type === "ADVANCE" ? item.requested_total : 0;
-      await api.approveAdvance(item.id, Number(detail?.requested_total || requestedTotal || 0), comments);
+      if (lastId) await api.sendAccommodationToFinance(lastId);
     });
   }
 
@@ -699,9 +800,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                         {(detail.trips || []).map((t: any) => (
                           <tr key={t.id}>
                             <td>{fmtDate(t.trip_date)}</td>
-                            <td>{(t.from_place || "—") + " → " + (t.to_place || "—")}</td>
+                            <td>{t.to_place ? `${t.from_place || "—"} → ${t.to_place}` : (t.from_place || "—")}</td>
                             <td>{fmt(t.petrol_allowance)}</td>
-                            <td>{fmt((t.breakfast || 0) + (t.lunch || 0) + (t.dinner || 0))}</td>
+                            <td>{fmt(Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0))}</td>
                             <td>{fmt(t.other_expenses)}</td>
                             <td>{fmt(t.line_total)}</td>
                           </tr>
@@ -763,64 +864,83 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     </div>
                   </div>
 
-                  <div className="review-form-grid review-form-grid-3">
-                    <label>
-                      <span>Destination District <span style={{ color: "#dc2626" }}>*</span></span>
-                      <select className="review-control" value={accommodationLocation} onChange={(e) => setAccommodationLocation(e.target.value)}>
-                        <option value="">
-                          {destinationDistricts.length === 0
-                            ? "No destinations found"
-                            : destinationDistricts.length === 1
-                              ? destinationDistricts[0]
-                              : "Select district"}
-                        </option>
-                        {destinationDistricts.length > 1 && destinationDistricts.map((district) => (
-                          <option key={district} value={district}>{district}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Hotel / Provider</span>
-                      <select className="review-control" value={accommodationProvider} onChange={(e) => setAccommodationProvider(e.target.value)} disabled={!accommodationLocation}>
-                        <option value="">{!accommodationLocation ? "Select district first" : districtHotels.length === 0 ? "No hotels in this district" : "Select hotel"}</option>
-                        {districtHotels.map((hotel) => (
-                          <option key={hotel.id} value={hotel.name}>{hotel.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Amount (M)</span>
-                      <input className="review-control" type="number" min="0" step="0.01" placeholder="0.00" value={accommodationAmount} onChange={(e) => setAccommodationAmount(e.target.value)} />
-                    </label>
-                    <label>
-                      <span>Check In <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(auto-filled)</span></span>
-                      <input className="review-control" type="date" value={accommodationCheckIn} onChange={(e) => setAccommodationCheckIn(e.target.value)} />
-                    </label>
-                    <label>
-                      <span>Check Out <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(auto-filled)</span></span>
-                      <input className="review-control" type="date" value={accommodationCheckOut} onChange={(e) => setAccommodationCheckOut(e.target.value)} />
-                    </label>
-                    <label>
-                      <span>Notes</span>
-                      <input className="review-control" placeholder="Optional notes…" value={accommodationNotes} onChange={(e) => setAccommodationNotes(e.target.value)} />
-                    </label>
-                    <label className="review-wide-field">
-                      <span>Quotation File <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(Optional)</span></span>
-                      <input
-                        className="review-control"
-                        type="file"
-                        accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
-                        onChange={(e) => setAccommodationQuotation(e.target.files?.[0] || null)}
-                      />
-                    </label>
-                  </div>
+                  {accommodationEntries.map((entry, idx) => {
+                    const datalistId = `accommodation-hotel-options-${idx}`;
+                    const entryHotels = accommodationHotels.filter((hotel) => hotel.district === entry.district);
+                    return (
+                      <div key={idx} style={{ marginBottom: idx < accommodationEntries.length - 1 ? 16 : 0 }}>
+                        {accommodationEntries.length > 1 && (
+                          <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 6, color: "#1d4ed8" }}>
+                            Destination {idx + 1}: {entry.district || "—"}
+                          </div>
+                        )}
+                        <div className="review-form-grid review-form-grid-3">
+                          <label>
+                            <span>Destination District <span style={{ color: "#dc2626" }}>*</span></span>
+                            {destinationDistricts.length > 0 ? (
+                              <input className="review-control" value={entry.district} disabled />
+                            ) : (
+                              <input
+                                className="review-control"
+                                value={entry.district}
+                                onChange={(e) => updateAccommodationEntry(idx, { district: e.target.value })}
+                                placeholder="Enter district"
+                              />
+                            )}
+                          </label>
+                          <label>
+                            <span>Hotel / Provider</span>
+                            <input
+                              className="review-control"
+                              list={datalistId}
+                              value={entry.provider}
+                              onChange={(e) => updateAccommodationEntry(idx, { provider: e.target.value })}
+                              disabled={!entry.district}
+                              placeholder={!entry.district ? "Enter district first" : entryHotels.length === 0 ? "Type hotel/provider name" : "Search or type hotel name"}
+                              autoComplete="off"
+                            />
+                            <datalist id={datalistId}>
+                              {entryHotels.map((hotel) => (
+                                <option key={hotel.id} value={hotel.name} />
+                              ))}
+                            </datalist>
+                          </label>
+                          <label>
+                            <span>Amount (M)</span>
+                            <input className="review-control" type="number" min="0" step="0.01" placeholder="0.00" value={entry.amount} onChange={(e) => updateAccommodationEntry(idx, { amount: e.target.value })} />
+                          </label>
+                          <label>
+                            <span>Check In <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(auto-filled)</span></span>
+                            <input className="review-control" type="date" value={entry.checkIn} onChange={(e) => updateAccommodationEntry(idx, { checkIn: e.target.value })} />
+                          </label>
+                          <label>
+                            <span>Check Out <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(auto-filled)</span></span>
+                            <input className="review-control" type="date" value={entry.checkOut} onChange={(e) => updateAccommodationEntry(idx, { checkOut: e.target.value })} />
+                          </label>
+                          <label>
+                            <span>Notes</span>
+                            <input className="review-control" placeholder="Optional notes…" value={entry.notes} onChange={(e) => updateAccommodationEntry(idx, { notes: e.target.value })} />
+                          </label>
+                          <label className="review-wide-field">
+                            <span>Quotation File <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>(Optional)</span></span>
+                            <input
+                              className="review-control"
+                              type="file"
+                              accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+                              onChange={(e) => updateAccommodationEntry(idx, { quotation: e.target.files?.[0] || null })}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
               <div className="review-form-grid review-form-grid-2">
                 <label>
                   <span>
-                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
+                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
                   </span>
                   <textarea
                     className="review-control review-textarea"
@@ -830,7 +950,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       if (rollbackError) setRollbackError(null);
                       if (error === "Enter comments before rejecting this advance.") setError(null);
                     }}
-                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Enter reason for rollback/reject" : ""}
+                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim ? "Enter reason for rollback/reject" : ""}
                   />
                   {rollbackError && (
                     <div className="review-warning">
@@ -887,7 +1007,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   <>
                     {canApproveAdvance && (
                       <button className="button small-button button-primary" disabled={busy} onClick={handleApproveAdvance}>
-                        {role === "HR_MANAGER" ? "Send to HR" : role === "CHIEF_OFFICER" ? "Chief Officer Approve" : "Approve Advance"}
+                        {role === "HR_MANAGER" ? "Send to HR" : role === "EXCO" ? "EXCO Approve" : "Approve Advance"}
                       </button>
                     )}
                     {canRejectAdvance && (
@@ -939,6 +1059,22 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
+                {canApproveClaim && (
+                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.approveClaim(item.id, comments))}>
+                    Approve Clearance
+                  </button>
+                )}
+
+                {canRejectClaim && (
+                  <button
+                    className="button small-button button-danger"
+                    disabled={busy || !comments.trim()}
+                    onClick={() => act(() => api.rejectClaim(item.id, comments.trim()))}
+                  >
+                    Reject Clearance
+                  </button>
+                )}
+
                 {canManagerApprove && (
                   <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.managerApproveClaim(item.id, comments))}>
                     Certify Clearance
@@ -975,7 +1111,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canManagerApprove || canAuthApproveClaim || canChiefApprove || canFinanceVerify || canSettle)) && (
+                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canApproveClaim || canRejectClaim || canManagerApprove || canAuthApproveClaim || canChiefApprove || canFinanceVerify || canSettle)) && (
                   <div className="review-empty-note">{noActionMessage}</div>
                 )}
               </div>

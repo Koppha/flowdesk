@@ -10,11 +10,10 @@ export type Role =
   | "HOD"
   | "MANAGER"
   | "HR_MANAGER"
-  | "AUTH_OFFICER"
-  | "CHIEF_OFFICER"
   | "FINANCE"
   | "ADMIN"
-  | "EXCO";
+  | "EXCO"
+  | "CEO";
 
 export type AuthPayload = {
   userId: string;

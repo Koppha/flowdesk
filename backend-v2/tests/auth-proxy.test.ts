@@ -10,7 +10,7 @@ const otherDeptId = "00000000-0000-0000-0000-000000000013";
 let dbAvailable = false;
 const app = createApp();
 
-const chiefToken = signToken({ userId: chiefId, role: "CHIEF_OFFICER" });
+const chiefToken = signToken({ userId: chiefId, role: "EXCO" });
 
 describe("auth proxy role assignment", () => {
   beforeAll(async () => {
@@ -26,7 +26,7 @@ describe("auth proxy role assignment", () => {
     await query(`DELETE FROM users WHERE id IN ($1,$2,$3)`, [chiefId, proxyId, otherDeptId]);
     await query(
       `INSERT INTO users (id, employee_no, full_name, email, password_hash, role, department)
-       VALUES ($1, 'CHIEF001', 'Chief Officer User', 'chief@example.com', 'x', 'CHIEF_OFFICER', 'Operations'),
+       VALUES ($1, 'CHIEF001', 'EXCO User', 'chief@example.com', 'x', 'EXCO', 'Operations'),
               ($2, 'EMP001', 'Proxy Candidate', 'proxy@example.com', 'x', 'EMPLOYEE', 'Operations'),
               ($3, 'EMP002', 'Other Department User', 'other@example.com', 'x', 'EMPLOYEE', 'Finance')`,
       [chiefId, proxyId, otherDeptId]
@@ -53,9 +53,9 @@ describe("auth proxy role assignment", () => {
     const assignResp = await request(app)
       .post(`/auth/users/${proxyId}/role`)
       .set("Authorization", `Bearer ${chiefToken}`)
-      .send({ role: "CHIEF_OFFICER" });
+      .send({ role: "EXCO" });
 
     expect(assignResp.status).toBe(200);
-    expect(assignResp.body.role).toBe("CHIEF_OFFICER");
+    expect(assignResp.body.role).toBe("EXCO");
   });
 });

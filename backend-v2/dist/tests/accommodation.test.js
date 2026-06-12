@@ -8,7 +8,7 @@ const hrId = "00000000-0000-0000-0000-000000000002";
 const financeId = "00000000-0000-0000-0000-000000000003";
 const advanceId = "00000000-0000-0000-0000-000000000010";
 let accommodationId = "";
-const hrToken = signToken({ userId: hrId, role: "AUTH_OFFICER" });
+const hrToken = signToken({ userId: hrId, role: "MANAGER" });
 const financeToken = signToken({ userId: financeId, role: "FINANCE" });
 const app = createApp();
 let dbAvailable = false;
@@ -29,7 +29,7 @@ describe("accommodation workflow", () => {
         await query(`DELETE FROM users WHERE id IN ($1,$2,$3)`, [requesterId, hrId, financeId]);
         await query(`INSERT INTO users (id, employee_no, full_name, email, password_hash, role)
        VALUES ($1, 'EMP001', 'Requester User', 'requester@example.com', 'x', 'EMPLOYEE'),
-              ($2, 'EMP002', 'HR User', 'hr@example.com', 'x', 'AUTH_OFFICER'),
+              ($2, 'EMP002', 'HR User', 'hr@example.com', 'x', 'MANAGER'),
               ($3, 'EMP003', 'Finance User', 'finance@example.com', 'x', 'FINANCE')`, [requesterId, hrId, financeId]);
         await query(`INSERT INTO advance_requests
          (id, requester_id, created_by_id, type, purpose, requested_total, approved_total, status)

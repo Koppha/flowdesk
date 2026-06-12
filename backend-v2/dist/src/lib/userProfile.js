@@ -39,5 +39,5 @@ export function canCreateAdvanceOnBehalf(user) {
     const role = String(user.role || "").trim().toUpperCase();
     if (isPermanentEmployee(user))
         return true;
-    return ["HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "CEO", "EXCO"].includes(role);
+    return ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "CEO", "EXCO"].includes(role);
 }

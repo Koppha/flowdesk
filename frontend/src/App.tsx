@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale } from "./api";
 import AttendanceModule from "./AttendanceModule";
@@ -18,6 +18,10 @@ import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker"
 import TeamRoster from "./TeamRoster";
 import UserManagement from "./UserManagement";
 import SlaReports from "./SlaReports";
+import ReportAdvances from "./ReportAdvances";
+import ReportApprovalPerformance from "./ReportApprovalPerformance";
+import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
+import ReportAuditTrail from "./ReportAuditTrail";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import { confirmAction } from "./alerts";
 import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
@@ -173,11 +177,13 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
+type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_REQUESTS" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER";
+
 export default function App() {
   const empTypes = useEmploymentTypes();
   const [token, setTok] = useState(getToken());
-  const [email, setEmail] = useState("employee@example.com");
-  const [password, setPassword] = useState("pass123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -261,9 +267,34 @@ export default function App() {
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
   const [inboxCount, setInboxCount] = useState(0);
-  const [page, setPage] = useState<"HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_REQUESTS" | "REPORTS" | "SLA_REPORTS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER">("HOME");
+  const [page, setRawPage] = useState<AppPage>("HOME");
+
+  // The app is a single-page client that switches "pages" via state only, with
+  // no URL changes. Without pushing history entries, the browser back button
+  // has nothing of ours to go back to and navigates the user out of the app
+  // entirely. Push a history entry on every navigation, and on back/forward
+  // restore the previous in-app page instead of leaving the SPA.
+  const setPage = useCallback((next: AppPage) => {
+    setRawPage((current) => {
+      if (current !== next) {
+        window.history.pushState({ appPage: next }, "");
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    window.history.replaceState({ appPage: "HOME" }, "");
+    const onPopState = (event: PopStateEvent) => {
+      const next = (event.state && event.state.appPage) as AppPage | undefined;
+      setRawPage(next || "HOME");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   const [theme, setTheme] = useState<"light" | "dark">((getTheme() as "light" | "dark") || "light");
   const [uiScale, setUiScale] = useState<number>(getUiScale);
+  const [submittingAdvance, setSubmittingAdvance] = useState(false);
   const [editingAdvanceId, setEditingAdvanceId] = useState<string | null>(null);
   const [editingAdvanceStatus, setEditingAdvanceStatus] = useState<string | null>(null);
   const [editingClaimId, setEditingClaimId] = useState<string | null>(null);
@@ -281,6 +312,7 @@ export default function App() {
   const [editingSectionObj, setEditingSectionObj] = useState<null | { id: string; name: string; exco_user_id?: string | null }>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyAdvanceId, setHistoryAdvanceId] = useState<string | null>(null);
+  const [historyAdvanceDetail, setHistoryAdvanceDetail] = useState<any | null>(null);
   const [historyEvents, setHistoryEvents] = useState<any[]>([]);
   const [aiAnomalies, setAiAnomalies] = useState<any | null>(null);
   const [nlPrompt, setNlPrompt] = useState("show rejected salary advances this month by department");
@@ -308,8 +340,6 @@ export default function App() {
       case "CEO":          return "Chief Executive Officer";
       case "ADMIN":        return "Administrator";
       case "EXCO":         return "EXCO Member";
-      case "CHIEF_OFFICER":return "Chief Officer";
-      case "AUTH_OFFICER": return "HR";
       case "HR_MANAGER":   return "HR Manager";
       case "HOD":          return "Head of Department";
       case "MANAGER":      return "Manager";
@@ -320,7 +350,6 @@ export default function App() {
   }
 
   function displayUserLabel(value: string | null | undefined, roleValue: string | null | undefined) {
-    if (roleValue === "AUTH_OFFICER") return "HR";
     if (roleValue === "HR_MANAGER") return "HR Manager";
     if (!value) return "User";
     if (value === "Authorising Officer") return "HR";
@@ -332,7 +361,7 @@ export default function App() {
   }
 
   function isApproverRole(value: string | null | undefined) {
-    return ["HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO", "CEO"].includes(String(value || "").trim().toUpperCase());
+    return ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"].includes(String(value || "").trim().toUpperCase());
   }
 
   function formatPersonLabel(user: { full_name: string | null; email?: string; employee_no?: string | null }) {
@@ -343,7 +372,7 @@ export default function App() {
   function leadershipStatus(department: any) {
     if (!department.hod_user_id) return "No HOD assigned to this department.";
     if (!department.manager_user_id) return "No manager assigned to this department.";
-    if (!department.exco_user_id) return "No EXCO owner assigned to this department.";
+    if (!department.exco_user_id) return "No EXCO member assigned to this department.";
     return "Ready";
   }
 
@@ -391,7 +420,7 @@ export default function App() {
           )}
         </td>
         <td>
-          {leadershipSelect(leadershipUsers.exco, department.exco_user_id, "No EXCO owner", (value) =>
+          {leadershipSelect(leadershipUsers.exco, department.exco_user_id, "No EXCO member", (value) =>
             void updateDepartmentLeadership(department, { exco_user_id: value || null })
           )}
         </td>
@@ -507,7 +536,13 @@ export default function App() {
   };
   const updateRow = (index: number, field: string, value: any) => {
     const copy = [...rows];
-    (copy[index] as any)[field] = field === "meals" ? (Number(value) || 0) : value;
+    if (field === "meals") {
+      const meals = Number(value) || 0;
+      const maxMeals = selectedTravelType?.rate_kind === "DAILY" ? Infinity : (index === 0 ? 3 : 2);
+      (copy[index] as any).meals = Math.min(Math.max(meals, 0), maxMeals);
+    } else {
+      (copy[index] as any)[field] = value;
+    }
     if (field === "country" && String(value).toLowerCase() !== "south africa") {
       copy[index].province = "";
     }
@@ -661,19 +696,19 @@ export default function App() {
   const userInitials = initials(userName);
   const roleName = displayRoleLabel(role);
   const FEATURE_DEFAULTS: Record<string, string[]> = {
-    user_management:        ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-    roles_permissions:      ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-    travel_setup:           ["ADMIN", "HR_MANAGER", "AUTH_OFFICER"],
+    user_management:        ["ADMIN", "MANAGER", "EXCO"],
+    roles_permissions:      ["ADMIN", "MANAGER", "EXCO"],
+    travel_setup:           ["ADMIN", "HR_MANAGER", "MANAGER"],
     org_structure:          ["ADMIN"],
     team_roster:            ["ADMIN"],
     ceo_management:         ["ADMIN"],
     employees:              ["ADMIN"],
     exco_members:           ["ADMIN", "MANAGER"],
-    managers:               ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-    leadership_assignments: ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-    workflow_builder:       ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    managers:               ["ADMIN", "MANAGER", "EXCO"],
+    leadership_assignments: ["ADMIN", "MANAGER", "EXCO"],
+    workflow_builder:       ["ADMIN", "MANAGER", "EXCO"],
     request_types:          ["ADMIN"],
-    reporting_lines:        ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+    reporting_lines:        ["ADMIN", "MANAGER", "EXCO"],
   };
 
   function canAccessFeature(key: string): boolean {
@@ -744,10 +779,13 @@ export default function App() {
         const chain: any[] = Array.isArray(result?.chain) ? result.chain : [];
         const filtered = chain.filter((s: any) => s.position_type_code !== "EMPLOYEE");
         setAdvanceApprovalChain(
-          filtered.map((s: any) => ({
-            label: s.approval_mode === "ANY_ONE" ? `${s.position_name} (Group)` : s.position_name,
-            name: s.approver_name || null
-          }))
+          filtered.map((s: any) => {
+            const title = s.approver_title || s.position_name;
+            return {
+              label: s.approval_mode === "ANY_ONE" ? `${title} (Group)` : title,
+              name: s.approver_name || null
+            };
+          })
         );
         const found = filtered.length > 0;
         setAdvanceWorkflowFound(found);
@@ -1502,9 +1540,14 @@ export default function App() {
     setHistoryOpen(true);
     setHistoryLoading(true);
     setHistoryAdvanceId(advanceId);
+    setHistoryAdvanceDetail(advances.find((advance: any) => advance.id === advanceId) || null);
     setHistoryEvents([]);
     try {
-      const events: any[] = await api.advanceHistory(advanceId);
+      const [detail, events] = await Promise.all([
+        api.advanceDetail(advanceId).catch(() => advances.find((advance: any) => advance.id === advanceId) || null),
+        api.advanceHistory(advanceId)
+      ]);
+      setHistoryAdvanceDetail(detail);
       setHistoryEvents(events);
     } catch (e: any) {
       setHistoryEvents([{ error: e.message }]);
@@ -1567,30 +1610,19 @@ export default function App() {
     setPage("ADVANCE");
   }
 
-  function advanceStageLabel(status: string, type?: string) {
+  function advanceStageLabel(status: string, _type?: string) {
     switch (status) {
-      case "DRAFT":
-        return "Draft (not submitted)";
-      case "SUBMITTED":
-        return "Waiting Manager Approval";
-      case "CHIEF_OFFICER_REVIEW":
-        return "Waiting EXCO Approval";
-      case "HR_MANAGER_REVIEW":
-        return "Waiting HR Manager Approval";
-      case "HR_REVIEW":
-        return "Waiting HR Approval";
-      case "HR_OFFICER":
-        return "Waiting Finance Payment";
-      case "APPROVED":
-        return "Waiting Finance Payment";
-      case "PAID":
-        return "Completed";
-      case "CANCELLED":
-        return "Cancelled";
-      case "REJECTED":
-        return "Rejected";
-      default:
-        return status;
+      case "DRAFT":             return "Draft (not submitted)";
+      case "SUBMITTED":         return "Pending Approval";
+      case "COUNTERSIGNED":     return "Pending HOD / EXCO Approval";
+      case "HR_MANAGER_REVIEW": return "Pending HR Manager Approval";
+      case "HR_REVIEW":         return "Pending HR Review";
+      case "HR_OFFICER":        return "Pending Finance Payment";
+      case "APPROVED":          return "Approved — Awaiting Payment";
+      case "PAID":              return "Completed";
+      case "CANCELLED":         return "Cancelled";
+      case "REJECTED":          return "Rejected";
+      default:                  return humanizeToken(status);
     }
   }
 
@@ -1617,6 +1649,243 @@ export default function App() {
       default:
         return status;
     }
+  }
+
+  function humanizeToken(value: any) {
+    const abbrevs = new Set(["HR", "HOD", "EXCO", "CEO", "CFO", "COO", "SLA", "ID"]);
+    const text = String(value || "—").replace(/_/g, " ");
+    return text.replace(/\b\w+\b/g, (word) => {
+      const up = word.toUpperCase();
+      return abbrevs.has(up) ? up : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    });
+  }
+
+  function formatTrackingDate(value: any, includeTime = true) {
+    if (!value) return "—";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      ...(includeTime ? { hour: "2-digit", minute: "2-digit" } : {})
+    });
+  }
+
+  function requestNumber(advance: any) {
+    const created = new Date(advance?.created_at || Date.now());
+    const year = Number.isNaN(created.getTime()) ? new Date().getFullYear() : created.getFullYear();
+    const digits = String(advance?.id || "").replace(/\D/g, "").slice(-5);
+    const fallback = String(advance?.id || "00000").replace(/-/g, "").slice(0, 5).toUpperCase();
+    return `ADV-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
+  }
+
+  function actionDisplayLabel(value: any) {
+    switch (String(value || "")) {
+      case "ADVANCE_CREATE":
+        return "Created advance request";
+      case "ADVANCE_LINES_UPDATE":
+        return "Added travel details and lines";
+      case "ADVANCE_SUBMIT":
+        return "Submitted request";
+      case "ADVANCE_APPROVE":
+        return "Approved request";
+      case "ADVANCE_ROLLBACK":
+        return "Returned request";
+      case "ADVANCE_REJECT":
+        return "Rejected request";
+      case "ADVANCE_MARK_PAID":
+        return "Marked as paid";
+      case "ADVANCE_CANCEL":
+        return "Cancelled request";
+      default:
+        return humanizeToken(value);
+    }
+  }
+
+  function statusToneClass(value: any) {
+    const status = String(value || "").toUpperCase();
+    if (["REJECTED", "CANCELLED"].includes(status) || status.includes("REJECT")) return "tracking-tone-danger";
+    if (["PAID", "APPROVED", "HR_OFFICER"].includes(status)) return "tracking-tone-success";
+    if (["DRAFT"].includes(status)) return "tracking-tone-neutral";
+    return "tracking-tone-progress";
+  }
+
+  function trackingDuration(from: any, to?: any) {
+    if (!from) return "—";
+    const start = new Date(from).getTime();
+    const end = to ? new Date(to).getTime() : Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return "—";
+    const totalMinutes = Math.max(0, Math.round((end - start) / 60000));
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const minutes = totalMinutes % 60;
+    if (days > 0) return `${days} Day${days === 1 ? "" : "s"} ${hours} Hour${hours === 1 ? "" : "s"}`;
+    if (hours > 0) return `${hours} Hour${hours === 1 ? "" : "s"} ${minutes} Minute${minutes === 1 ? "" : "s"}`;
+    return `${minutes} Minute${minutes === 1 ? "" : "s"}`;
+  }
+
+  function eventStatus(event: any) {
+    return event?.after_json?.status || event?.before_json?.status || "";
+  }
+
+  function eventActor(event: any) {
+    if (!event?.actor_name) return "System";
+    return `${event.actor_name}${event.actor_role ? ` (${humanizeToken(event.actor_role)})` : ""}`;
+  }
+
+  function eventForTransition(events: any[], beforeStatuses: string[], afterStatuses: string[]) {
+    return events.find((event: any) => {
+      const before = String(event?.before_json?.status || "").toUpperCase();
+      const after = String(event?.after_json?.status || "").toUpperCase();
+      return String(event?.action || "") === "ADVANCE_APPROVE" && beforeStatuses.includes(before) && afterStatuses.includes(after);
+    });
+  }
+
+  function buildTrackingStages(advance: any, events: any[]) {
+    const currentStatus = String(advance?.status || "DRAFT").toUpperCase();
+    const terminalFailed = ["REJECTED", "CANCELLED"].includes(currentStatus);
+    const terminalDone   = ["APPROVED", "PAID"].includes(currentStatus);
+
+    const createEvent = events.find((e: any) => e.action === "ADVANCE_CREATE");
+    const submitEvent = events.find((e: any) => e.action === "ADVANCE_SUBMIT");
+    const paidEvent   = events.find((e: any) => e.action === "ADVANCE_MARK_PAID" || e?.after_json?.status === "PAID");
+
+    // ── Workflow-driven tracking ───────────────────────────────────────────────
+    if (Array.isArray(advance?.approval_chain) && advance.approval_chain.length > 0) {
+      const chain: any[] = advance.approval_chain;
+      const currentStepIdx: number =
+        typeof advance.workflow_step_order === "number" ? advance.workflow_step_order : 0;
+
+      const stages: any[] = [
+        {
+          key: "draft",
+          label: "Draft",
+          state: "done",
+          date: createEvent?.created_at || advance?.created_at || "",
+          actor: createEvent?.actor_name || "",
+          status: "Created"
+        },
+        {
+          key: "submitted",
+          label: "Submitted",
+          state: currentStatus === "DRAFT" ? "waiting" : "done",
+          date: submitEvent?.created_at || advance?.submitted_at || "",
+          actor: submitEvent?.actor_name || "",
+          status: currentStatus === "DRAFT" ? "Waiting" : "Submitted"
+        }
+      ];
+
+      chain.forEach((step: any, idx: number) => {
+        // Match the approve audit event that advanced past this step (workflow_step === idx + 1)
+        const approveEvent = events.find(
+          (e: any) => e.action === "ADVANCE_APPROVE" && Number(e?.after_json?.workflow_step ?? -1) === idx + 1
+        ) ?? null;
+        const isActive = !terminalFailed && !terminalDone && currentStepIdx === idx;
+        const isDone   = terminalDone || currentStepIdx > idx;
+        const actorName = approveEvent?.actor_name || step.approver_name || "";
+        stages.push({
+          key: `step-${idx}`,
+          label: step.approver_title || step.position_name,
+          state: terminalFailed && isActive ? "danger" : isActive ? "active" : isDone ? "done" : "waiting",
+          date: approveEvent?.created_at || "",
+          actor: actorName,
+          status: isActive ? "In Progress" : isDone ? "Approved" : "Waiting"
+        });
+      });
+
+      const paidState = currentStatus === "PAID" ? "done" : currentStatus === "APPROVED" ? "active" : "waiting";
+      stages.push({
+        key: "paid",
+        label: "Paid",
+        state: paidState,
+        date: paidEvent?.created_at || advance?.paid_at || "",
+        actor: paidEvent?.actor_name || "",
+        status: currentStatus === "PAID" ? "Completed" : "Waiting"
+      });
+
+      if (terminalFailed) {
+        const failedEvent = events.find((e: any) => ["ADVANCE_REJECT", "ADVANCE_CANCEL"].includes(String(e.action || "")));
+        stages.push({
+          key: "closed",
+          label: humanizeToken(currentStatus),
+          state: "danger",
+          date: failedEvent?.created_at || advance?.updated_at,
+          actor: failedEvent?.actor_name || "",
+          status: humanizeToken(currentStatus)
+        });
+      }
+      return stages;
+    }
+
+    // ── Legacy (no workflow chain) — keep existing stage logic ─────────────────
+    const managerEvent  = eventForTransition(events, ["SUBMITTED"], ["COUNTERSIGNED", "HR_MANAGER_REVIEW"]);
+    const hodEvent      = eventForTransition(events, ["COUNTERSIGNED"], ["HR_MANAGER_REVIEW"]);
+    const hrManagerEvent = eventForTransition(events, ["HR_MANAGER_REVIEW"], ["HR_REVIEW"]);
+    const hrEvent       = eventForTransition(events, ["HR_REVIEW"], ["HR_OFFICER", "APPROVED"]);
+    const financeEvent  = eventForTransition(events, ["HR_OFFICER", "APPROVED"], ["APPROVED", "PAID"]);
+
+    const managerDest = String(managerEvent?.after_json?.status || "").toUpperCase();
+    const throughCountersigned = managerDest === "COUNTERSIGNED" || currentStatus === "COUNTERSIGNED";
+    const skippedMiddle = Boolean(managerEvent) && !throughCountersigned;
+
+    const order: Record<string, number> = {
+      DRAFT: 0, SUBMITTED: 1, COUNTERSIGNED: 2,
+      HR_MANAGER_REVIEW: 3, HR_REVIEW: 4, HR_OFFICER: 5, APPROVED: 6, PAID: 7
+    };
+    const currentOrder = order[currentStatus] ?? (terminalFailed ? -1 : 0);
+
+    const stage = (key: string, label: string, pendingStatuses: string[], doneOrder: number, event: any, fallbackDate?: any) => {
+      const active = pendingStatuses.includes(currentStatus);
+      const done = Boolean(event) || currentOrder >= doneOrder;
+      return {
+        key, label,
+        state: terminalFailed && active ? "danger" : active ? "active" : done ? "done" : "waiting",
+        date: event?.created_at || fallbackDate || "",
+        actor: event?.actor_name || "",
+        status: active ? "In Progress" : done ? "Approved" : "Waiting"
+      };
+    };
+
+    const stages: any[] = [
+      stage("draft", "Draft", ["DRAFT"], 0, createEvent, advance?.created_at),
+      {
+        ...stage("submitted", "Submitted", [], 1, submitEvent, advance?.submitted_at),
+        state: currentStatus === "DRAFT" ? "waiting" : "done",
+        status: currentStatus === "DRAFT" ? "Waiting" : "Submitted"
+      },
+      stage("manager", "Manager Approval", ["SUBMITTED"], 1, managerEvent)
+    ];
+
+    if (throughCountersigned) {
+      stages.push(stage("hod", "HOD / EXCO Approval", ["COUNTERSIGNED"], 2, hodEvent));
+    } else if (!skippedMiddle) {
+      stages.push(stage("hod", "HOD / EXCO Approval", ["COUNTERSIGNED"], 2, null));
+    }
+
+    stages.push(
+      stage("hr-manager", "HR Manager Review", ["HR_MANAGER_REVIEW"], 3, hrManagerEvent),
+      stage("hr", "HR Review", ["HR_REVIEW"], 4, hrEvent),
+      stage("finance", "Finance Approval", ["HR_OFFICER", "APPROVED"], 6, financeEvent),
+      {
+        ...stage("paid", "Paid", ["PAID"], 7, paidEvent, advance?.paid_at),
+        status: currentStatus === "PAID" ? "Completed" : "Waiting"
+      }
+    );
+
+    if (terminalFailed) {
+      const failedEvent = events.find((e: any) => ["ADVANCE_REJECT", "ADVANCE_CANCEL"].includes(String(e.action || "")));
+      stages.push({
+        key: "closed",
+        label: humanizeToken(currentStatus),
+        state: "danger",
+        date: failedEvent?.created_at || advance?.updated_at,
+        actor: failedEvent?.actor_name || "",
+        status: humanizeToken(currentStatus)
+      });
+    }
+
+    return stages;
   }
 
   function parsePaymentAccount(method: "ECOCASH" | "BANK", raw: string) {
@@ -1849,6 +2118,246 @@ export default function App() {
   const requestSummaryPayment = paymentMethod || "—";
   const requestSummaryAmount = fmtMoney(totalRequested());
   const requestSummaryDate = requestDate ? new Date(requestDate).toLocaleDateString("en-GB") : "—";
+
+  function renderAdvanceTrackingModal() {
+    const advance = historyAdvanceDetail || advances.find((item: any) => item.id === historyAdvanceId) || {};
+    const error = historyEvents[0]?.error;
+    const events = error ? [] : historyEvents;
+    const currentStatus = String(advance.status || eventStatus(events[events.length - 1]) || "DRAFT").toUpperCase();
+    const stages = buildTrackingStages({ ...advance, status: currentStatus }, events);
+    const activeStage = stages.find((stage: any) => stage.state === "active" || stage.state === "danger")
+      || stages.find((stage: any) => stage.state === "waiting")
+      || stages[stages.length - 1];
+    const createdAt = advance.created_at || events[0]?.created_at;
+    const closedAt = advance.paid_at || events.find((event: any) => ["ADVANCE_MARK_PAID", "ADVANCE_REJECT", "ADVANCE_CANCEL"].includes(String(event.action || "")))?.created_at;
+    const submittedAt = advance.submitted_at || events.find((event: any) => event.action === "ADVANCE_SUBMIT")?.created_at;
+    const targetMs = 2 * 24 * 60 * 60 * 1000;
+    const createdTime = createdAt ? new Date(createdAt).getTime() : Date.now();
+    const expectedCompletion = Number.isFinite(createdTime) ? new Date(createdTime + targetMs) : null;
+    const elapsedEnd = closedAt ? new Date(closedAt).getTime() : Date.now();
+    const elapsedMs = Number.isFinite(createdTime) && Number.isFinite(elapsedEnd) ? Math.max(0, elapsedEnd - createdTime) : 0;
+    const remainingMs = Math.max(0, targetMs - elapsedMs);
+    const withinSla = elapsedMs <= targetMs && !["REJECTED", "CANCELLED"].includes(currentStatus);
+    const approvalRows = stages.filter((stage: any) => !["draft", "submitted"].includes(stage.key));
+    const commentEvents = events.filter((event: any) => event?.after_json?.comments);
+    const requester = advance.requester_name || profile?.full_name || me?.fullName || me?.username || "Unknown";
+    const department = advance.department || profile?.department || me?.department || "—";
+    const businessUnit = advance.division_name || profile?.division_name || "—";
+    const requestType = travelTypeLabel(advance.type, travelTypes);
+    const amount = Number(advance.approved_total || advance.requested_total || 0);
+
+    return (
+      <div className="tracking-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tracking-modal-title">
+        <div className="tracking-modal-shell">
+          <div className="tracking-modal-header">
+            <div className="tracking-title-group">
+              <span className="tracking-title-icon"><GitBranch size={28} aria-hidden /></span>
+              <div>
+                <h2 id="tracking-modal-title">Advance Tracking</h2>
+                <p>Track the progress and status of your advance request</p>
+              </div>
+            </div>
+            <button className="tracking-close-icon" type="button" onClick={() => setHistoryOpen(false)} aria-label="Close tracking">
+              <X size={22} aria-hidden />
+            </button>
+          </div>
+
+          {historyLoading ? (
+            <div className="tracking-loading"><RefreshCw className="rl-spin" size={22} /> Loading tracking details...</div>
+          ) : error ? (
+            <div className="tracking-error">Error loading history: {error}</div>
+          ) : (
+            <>
+              <section className="tracking-summary-band">
+                <div className="tracking-summary-lead">
+                  <span className="tracking-doc-icon"><FileText size={25} aria-hidden /></span>
+                  <div>
+                    <span>Request No.</span>
+                    <strong>{requestNumber(advance)}</strong>
+                    <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>{humanizeToken(currentStatus)}</em>
+                  </div>
+                </div>
+                <div>
+                  <span>Current Stage</span>
+                  <strong>{advanceStageLabel(currentStatus, advance.type)}</strong>
+                  <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>
+                    {["PAID", "REJECTED", "CANCELLED"].includes(currentStatus) ? humanizeToken(currentStatus) : "In Progress"}
+                  </em>
+                </div>
+                <div>
+                  <span>Submitted On</span>
+                  <strong>{formatTrackingDate(submittedAt || createdAt)}</strong>
+                </div>
+                <div>
+                  <span>Requested By</span>
+                  <strong>{requester}</strong>
+                  <small>{displayRoleLabel(profile?.role || me?.role || "EMPLOYEE")}</small>
+                </div>
+              </section>
+
+              <section className="tracking-card tracking-progress-card">
+                <h3>Request Progress</h3>
+                <div className="tracking-progress-strip">
+                  {stages.map((stage: any, index: number) => (
+                    <div key={stage.key} className={`tracking-progress-step is-${stage.state}`}>
+                      {index < stages.length - 1 && <span className="tracking-progress-line" aria-hidden />}
+                      <span className="tracking-step-icon">
+                        {stage.state === "done" ? <CheckCircle2 size={22} aria-hidden /> : stage.state === "danger" ? <X size={21} aria-hidden /> : stage.state === "active" ? <User size={21} aria-hidden /> : <Clock3 size={20} aria-hidden />}
+                      </span>
+                      <strong>{stage.label}</strong>
+                      <em>{stage.status}</em>
+                      {stage.actor && <small>{stage.actor}</small>}
+                      {stage.date && <small>{formatTrackingDate(stage.date)}</small>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <div className="tracking-content-grid">
+                <div className="tracking-main-stack">
+                  <section className="tracking-card">
+                    <h3>Activity Timeline</h3>
+                    {events.length === 0 ? (
+                      <div className="tracking-empty">No history found for this request yet.</div>
+                    ) : (
+                      <div className="tracking-timeline">
+                        {events.map((event: any) => (
+                          <div className="tracking-timeline-item" key={event.id}>
+                            <div className="tracking-timeline-date">{formatTrackingDate(event.created_at)}</div>
+                            <span className={`tracking-timeline-icon ${statusToneClass(eventStatus(event))}`}>
+                              {event.action === "ADVANCE_APPROVE" ? <CheckCircle2 size={18} aria-hidden /> : event.action === "ADVANCE_SUBMIT" ? <Plane size={18} aria-hidden /> : event.action === "ADVANCE_CREATE" ? <FileText size={18} aria-hidden /> : <GitBranch size={18} aria-hidden />}
+                            </span>
+                            <div>
+                              <strong>{eventActor(event)}</strong>
+                              <p>{actionDisplayLabel(event.action)}</p>
+                              {event?.after_json?.acting_for?.name && <small>Acting on behalf of {event.after_json.acting_for.name}</small>}
+                            </div>
+                            <em className={`tracking-status-pill ${statusToneClass(eventStatus(event))}`}>{eventStatus(event) ? humanizeToken(eventStatus(event)) : "—"}</em>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="tracking-card">
+                    <h3>Approval Journey</h3>
+                    <div className="tracking-table-wrap">
+                      <table className="tracking-table">
+                        <thead>
+                          <tr>
+                            <th>Step</th>
+                            <th>Approver</th>
+                            <th>Status</th>
+                            <th>Action Date</th>
+                            <th>Comments</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {approvalRows.map((stage: any, index: number) => (
+                            <tr key={stage.key}>
+                              <td>{index + 1}</td>
+                              <td>{stage.actor || (stage.state === "done" ? "System" : "Pending")}</td>
+                              <td><span className={`tracking-mini-status is-${stage.state}`}>{stage.status}</span></td>
+                              <td>{stage.date ? formatTrackingDate(stage.date) : "—"}</td>
+                              <td>{commentEvents.find((event: any) => event.created_at === stage.date)?.after_json?.comments || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section className="tracking-card">
+                    <h3>Comments</h3>
+                    {commentEvents.length === 0 ? (
+                      <div className="tracking-empty">No comments captured for this request.</div>
+                    ) : commentEvents.map((event: any) => (
+                      <div className="tracking-comment" key={`comment-${event.id}`}>
+                        <span>{initials(event.actor_name || "System")}</span>
+                        <div>
+                          <strong>{eventActor(event)}</strong>
+                          <time>{formatTrackingDate(event.created_at)}</time>
+                          <p>{event.after_json.comments}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </section>
+
+                  <details className="tracking-audit-log">
+                    <summary>Technical Audit Log</summary>
+                    <div className="tracking-table-wrap">
+                      <table className="tracking-table">
+                        <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>New Status</th></tr></thead>
+                        <tbody>
+                          {events.map((event: any) => (
+                            <tr key={`audit-${event.id}`}>
+                              <td>{formatTrackingDate(event.created_at)}</td>
+                              <td>{eventActor(event)}</td>
+                              <td>{event.action}</td>
+                              <td>{eventStatus(event) || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                </div>
+
+                <aside className="tracking-side-stack">
+                  <section className="tracking-card">
+                    <h3>Request Summary</h3>
+                    <dl className="tracking-detail-list">
+                      <div><dt>Request No.</dt><dd>{requestNumber(advance)}</dd></div>
+                      <div><dt>Request Type</dt><dd>{requestType}</dd></div>
+                      <div><dt>Business Unit</dt><dd>{businessUnit}</dd></div>
+                      <div><dt>Department</dt><dd>{department}</dd></div>
+                      <div><dt>Amount Requested</dt><dd>{fmtMoney(amount)}</dd></div>
+                      <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
+                    </dl>
+                  </section>
+
+                  <section className="tracking-card">
+                    <h3><Clock3 size={17} aria-hidden /> SLA Information</h3>
+                    <dl className="tracking-detail-list">
+                      <div><dt>Current Stage</dt><dd>{activeStage?.label || "—"}</dd></div>
+                      <div><dt>SLA Target</dt><dd>2 Days</dd></div>
+                      <div><dt>Elapsed Time</dt><dd>{trackingDuration(createdAt, closedAt)}</dd></div>
+                      <div><dt>Remaining Time</dt><dd>{trackingDuration(Date.now() - remainingMs, Date.now())}</dd></div>
+                    </dl>
+                    <div className={`tracking-sla-banner ${withinSla ? "is-good" : "is-risk"}`}>
+                      <ShieldCheck size={18} aria-hidden />
+                      <strong>{withinSla ? "Within SLA" : "SLA Attention Required"}</strong>
+                    </div>
+                  </section>
+
+                  <section className="tracking-card">
+                    <h3><User size={17} aria-hidden /> Current Owner</h3>
+                    <div className="tracking-owner">
+                      <strong>{activeStage?.label || "Requester"}</strong>
+                      <span>{advanceStageLabel(currentStatus, advance.type)}</span>
+                      <button type="button"><Mail size={15} aria-hidden /> Send Reminder</button>
+                    </div>
+                  </section>
+
+                  <section className="tracking-card">
+                    <h3><Clock3 size={17} aria-hidden /> Expected Completion</h3>
+                    <div className="tracking-owner">
+                      <strong>{expectedCompletion ? formatTrackingDate(expectedCompletion) : "—"}</strong>
+                      <span>Based on SLA</span>
+                    </div>
+                  </section>
+                </aside>
+              </div>
+            </>
+          )}
+
+          <div className="tracking-modal-footer">
+            <button className="button small-button" type="button" onClick={() => setHistoryOpen(false)}>Close</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!token) {
     return (
@@ -2145,8 +2654,8 @@ export default function App() {
               <label>Manager</label>
               {leadershipSelect(leadershipUsers.managers, editingDepartmentObj.manager_user_id || '', 'No manager', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, manager_user_id: v || null }))}
 
-              <label>EXCO Owner</label>
-              {leadershipSelect(leadershipUsers.exco, editingDepartmentObj.exco_user_id || '', 'No EXCO owner', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, exco_user_id: v || null }))}
+              <label>EXCO Member</label>
+              {leadershipSelect(leadershipUsers.exco, editingDepartmentObj.exco_user_id || '', 'No EXCO member', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, exco_user_id: v || null }))}
 
               <label>
                 <input type="checkbox" checked={!!editingDepartmentObj.active} onChange={(e) => setEditingDepartmentObj({ ...editingDepartmentObj, active: e.target.checked })} /> Active
@@ -2169,8 +2678,8 @@ export default function App() {
               <label>Name</label>
               <input value={editingSectionObj.name} onChange={(e) => setEditingSectionObj({ ...editingSectionObj, name: e.target.value })} />
 
-              <label>EXCO Owner</label>
-              {leadershipSelect(leadershipUsers.exco, editingSectionObj.exco_user_id || '', 'No EXCO owner', (v: string) => setEditingSectionObj({ ...editingSectionObj, exco_user_id: v || null }))}
+              <label>EXCO Member</label>
+              {leadershipSelect(leadershipUsers.exco, editingSectionObj.exco_user_id || '', 'No EXCO member', (v: string) => setEditingSectionObj({ ...editingSectionObj, exco_user_id: v || null }))}
 
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
                 <button className="button small-button" onClick={cancelEditSection}>Cancel</button>
@@ -2195,7 +2704,16 @@ export default function App() {
           <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
           <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
-          <a href="#" className={navItemClass(page === "REPORTS")} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports</a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+            <div className="sidebar-subnav">
+              <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
+              <a href="#" className={navItemClass(page === "REPORT_APPROVAL")} onClick={(e) => { e.preventDefault(); setPage("REPORT_APPROVAL"); }}><Users size={14} aria-hidden />Approval Performance</a>
+              <a href="#" className={navItemClass(page === "SLA_REPORTS")} onClick={(e) => { e.preventDefault(); setPage("SLA_REPORTS"); }}><BarChart3 size={14} aria-hidden />SLA Reports</a>
+              <a href="#" className={navItemClass(page === "REPORT_WORKFLOW")} onClick={(e) => { e.preventDefault(); setPage("REPORT_WORKFLOW"); }}><GitBranch size={14} aria-hidden />Workflow Analytics</a>
+              <a href="#" className={navItemClass(page === "REPORT_AUDIT")} onClick={(e) => { e.preventDefault(); setPage("REPORT_AUDIT"); }}><ShieldCheck size={14} aria-hidden />Audit Trail</a>
+            </div>
+          </div>
           <div className="sidebar-section-label">Administration</div>
           {(canAccessFeature("user_management") || canAccessFeature("roles_permissions")) && (
             <div className={`sidebar-group ${["USER_MANAGEMENT", "ROLES_PERMISSIONS"].includes(page) ? "open" : ""}`}>
@@ -2417,8 +2935,6 @@ export default function App() {
                       { key: "HOD",           label: "HOD" },
                       { key: "MANAGER",       label: "Manager" },
                       { key: "HR_MANAGER",    label: "HR Manager" },
-                      { key: "AUTH_OFFICER",  label: "HR" },
-                      { key: "CHIEF_OFFICER", label: "Chief Officer" },
                       { key: "FINANCE",       label: "Finance" },
                       { key: "EXCO",          label: "EXCO" },
                       { key: "CEO",           label: "CEO" },
@@ -2441,20 +2957,20 @@ export default function App() {
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
-                      user_management:        ["ADMIN","MANAGER","CHIEF_OFFICER"],
-                      roles_permissions:      ["ADMIN","MANAGER","CHIEF_OFFICER"],
-                      travel_setup:           ["ADMIN","HR_MANAGER","AUTH_OFFICER"],
+                      user_management:        ["ADMIN","MANAGER","EXCO"],
+                      roles_permissions:      ["ADMIN","MANAGER","EXCO"],
+                      travel_setup:           ["ADMIN","HR_MANAGER","MANAGER"],
                       org_structure:          ["ADMIN"],
                       team_roster:            ["ADMIN"],
 
                       ceo_management:         ["ADMIN"],
                       employees:              ["ADMIN"],
                       exco_members:           ["ADMIN","MANAGER"],
-                      managers:               ["ADMIN","MANAGER","CHIEF_OFFICER"],
-                      leadership_assignments: ["ADMIN","MANAGER","CHIEF_OFFICER"],
-                      workflow_builder:       ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                      managers:               ["ADMIN","MANAGER","EXCO"],
+                      leadership_assignments: ["ADMIN","MANAGER","EXCO"],
+                      workflow_builder:       ["ADMIN","MANAGER","EXCO"],
                       request_types:          ["ADMIN"],
-                      reporting_lines:        ["ADMIN","MANAGER","CHIEF_OFFICER"],
+                      reporting_lines:        ["ADMIN","MANAGER","EXCO"],
                     };
                     function toggleRole(featureKey: string, roleKey: string) {
                       if (roleKey === "ADMIN") return;
@@ -2894,40 +3410,35 @@ export default function App() {
               {/* Report module cards */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 24 }}>
                 {([
-                  { icon: <BarChart3 size={26} />, color: "#3b82f6", bg: "#eff6ff", title: "SLA Reports", desc: "Track processing times, breach rates, and SLA compliance by department.", action: () => setPage("SLA_REPORTS"), live: true },
-                  { icon: <FileText size={26} />, color: "#8b5cf6", bg: "#ede9fe", title: "Advance Analysis", desc: "Breakdown of advance requests by type, status, and value.", action: null, live: false },
-                  { icon: <ClipboardList size={26} />, color: "#059669", bg: "#d1fae5", title: "Clearance Summary", desc: "Clearance submission and approval rates over time.", action: null, live: false },
-                  { icon: <Zap size={26} />, color: "#f59e0b", bg: "#fef3c7", title: "AI Anomaly Flags", desc: `${(aiAnomalies?.duplicateClaims?.length || 0) + (aiAnomalies?.unusualAdvances?.length || 0) + (aiAnomalies?.repeatedRollbacks?.length || 0)} total flags detected across all records.`, action: null, live: false },
-                ] as const).map(({ icon, color, bg, title, desc, action, live }) => (
+                  { icon: <FileText size={26} />, color: "#3b82f6", bg: "#eff6ff", title: "Advance Requests", desc: "Full admin view of all advance requests with filters and export.", action: () => setPage("REPORT_ADVANCES"), live: true },
+                  { icon: <Users size={26} />, color: "#059669", bg: "#d1fae5", title: "Approval Performance", desc: "Approval rates, processing times, and department breakdowns.", action: () => setPage("REPORT_APPROVAL"), live: true },
+                  { icon: <BarChart3 size={26} />, color: "#8b5cf6", bg: "#ede9fe", title: "SLA Reports", desc: "Track processing times, breach rates, and SLA compliance by department.", action: () => setPage("SLA_REPORTS"), live: true },
+                  { icon: <GitBranch size={26} />, color: "#f59e0b", bg: "#fef3c7", title: "Workflow Analytics", desc: "Workflow coverage, step complexity, and usage by request type.", action: () => setPage("REPORT_WORKFLOW"), live: true },
+                  { icon: <ShieldCheck size={26} />, color: "#dc2626", bg: "#fee2e2", title: "Audit Trail", desc: "Chronological log of all advance and clearance activity.", action: () => setPage("REPORT_AUDIT"), live: true },
+                ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}
                     onClick={() => action?.()}
                     style={{
                       background: "white", borderRadius: 12, border: `1px solid #e8edf2`,
                       boxShadow: "0 1px 4px rgba(0,0,0,0.06)", padding: 20,
-                      cursor: action ? "pointer" : "default",
+                      cursor: "pointer",
                       transition: "box-shadow 0.15s, transform 0.15s",
                       display: "flex", flexDirection: "column", gap: 12,
                     }}
-                    onMouseEnter={e => { if (action) { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(0,0,0,0.12)"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)"; } }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(0,0,0,0.12)"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)"; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 1px 4px rgba(0,0,0,0.06)"; (e.currentTarget as HTMLDivElement).style.transform = ""; }}
                   >
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
                       <span style={{ width: 46, height: 46, borderRadius: 12, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color }}>{icon}</span>
-                      {live ? (
-                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 99, background: "#d1fae5", color: "#065f46" }}>Live</span>
-                      ) : (
-                        <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 99, background: "#f1f5f9", color: "#94a3b8" }}>Coming soon</span>
-                      )}
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 99, background: "#d1fae5", color: "#065f46" }}>Live</span>
                     </div>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>{title}</div>
                       <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>{desc}</div>
                     </div>
-                    {action && (
-                      <div style={{ fontSize: 13, color, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
-                        View Report <ChevronRight />
-                      </div>
-                    )}
+                    <div style={{ fontSize: 13, color, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+                      View Report <ChevronRight />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3175,6 +3686,14 @@ export default function App() {
             </div>
           ) : page === "SLA_REPORTS" ? (
             <SlaReports onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_ADVANCES" ? (
+            <ReportAdvances advances={advances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_APPROVAL" ? (
+            <ReportApprovalPerformance advances={advances} onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_WORKFLOW" ? (
+            <ReportWorkflowAnalytics advances={advances} onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_AUDIT" ? (
+            <ReportAuditTrail advances={advances} claims={claims} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
           ) : page === "ADVANCE" ? (
             !canOpenAdvanceForm ? (
               <div className="card" style={{ padding: 24 }}>
@@ -3504,6 +4023,7 @@ export default function App() {
                             <input
                               type="number"
                               min="0"
+                              max={selectedTravelType?.rate_kind === "DAILY" ? undefined : (idx === 0 ? 3 : 2)}
                               step="1"
                               value={String(Number.isFinite(Number(r.meals)) ? r.meals : 0)}
                               onChange={e => updateRow(idx, "meals", e.target.value === "" ? 0 : Number(e.target.value))}
@@ -3588,7 +4108,7 @@ export default function App() {
                 <input type="text" value={amountInWords} readOnly />
               </div>
 
-              {advanceWorkflowFound === false && (
+              {advanceWorkflowFound === false && advanceType && (
                 <div className="form-section" style={{ marginTop: 24, border: "1px solid #e2c96e", borderRadius: 8, padding: "16px 18px", background: "#fffdf0" }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>Custom Approval Chain</div>
                   <div style={{ fontSize: 13, color: "#7a6a00", marginBottom: 18 }}>
@@ -3623,7 +4143,7 @@ export default function App() {
                               u.is_active !== false &&
                               isPermanent(u) &&
                               u.id !== myId &&
-                              ["MANAGER", "HOD", "EXCO", "CHIEF_OFFICER"].includes(u.role)
+                              ["MANAGER", "HOD", "EXCO"].includes(u.role)
                             )
                           : staffDirectory.filter(u =>
                               u.is_active !== false && isPermanent(u) && u.role !== "EMPLOYEE" && u.role !== "ADMIN" && u.id !== myId
@@ -3698,7 +4218,8 @@ export default function App() {
                       } catch (e: any) { alert("Error: " + e.message); }
                     }}>Revoke</button>
                 )}
-                <button className="button" onClick={async () => {
+                <button className="button" disabled={submittingAdvance} onClick={async () => {
+                    setSubmittingAdvance(true);
                     try {
                       const trimmedEmpNumber = empNumber.trim();
                       const trimmedRequesterName = requesterName.trim();
@@ -3922,10 +4443,12 @@ export default function App() {
                       await refresh();
                       setPage("HOME");
                       setEditingAdvanceStatus(null);
-                    } catch (e: any) { 
+                    } catch (e: any) {
                       alert("Error: " + e.message);
+                    } finally {
+                      setSubmittingAdvance(false);
                     }
-                  }}>{editingAdvanceId ? "Update & Submit" : "Submit"}</button>
+                  }}>{submittingAdvance ? "Submitting…" : (editingAdvanceId ? "Update & Submit" : "Submit")}</button>
               </div>
                 </div>
                 <aside className="request-summary-card">
@@ -3986,6 +4509,8 @@ export default function App() {
                               </span>
                             ))}
                           </span>
+                        ) : !advanceType ? (
+                          <span style={{ color: "#aaa", fontSize: 12 }}>Select advance type to view approval route</span>
                         ) : advanceWorkflowFound === null ? (
                           <span style={{ color: "#aaa", fontSize: 12 }}>Loading…</span>
                         ) : (
@@ -4611,75 +5136,7 @@ export default function App() {
               </div>
             </>
           )}
-          {historyOpen && (
-            <div
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(0,0,0,0.35)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                zIndex: 1000
-              }}
-            >
-              <div
-                style={{
-                  background: "var(--surface)",
-                  color: "var(--text)",
-                  border: "1px solid var(--border)",
-                  width: "min(900px, 94vw)",
-                  maxHeight: "80vh",
-                  overflow: "auto",
-                  padding: 16,
-                  borderRadius: 12,
-                  boxSizing: "border-box"
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <h3 style={{ margin: 0 }}>Advance Tracking History</h3>
-                  <button className="button small-button" onClick={() => setHistoryOpen(false)}>
-                    Close
-                  </button>
-                </div>
-                {historyLoading ? (
-                  <div>Loading history...</div>
-                ) : historyEvents.length === 0 ? (
-                  <div>No history found for this request yet.</div>
-                ) : historyEvents[0]?.error ? (
-                  <div style={{ color: "crimson" }}>Error loading history: {historyEvents[0].error}</div>
-                ) : (
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>When</th>
-                        <th>Actor</th>
-                        <th>Action</th>
-                        <th>New Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historyEvents.map((e: any) => (
-                        <tr key={e.id}>
-                          <td>{e.created_at ? new Date(e.created_at).toLocaleString() : "-"}</td>
-                          <td>
-                            {e.actor_name ? `${e.actor_name}${e.actor_role ? ` (${e.actor_role})` : ""}` : "System"}
-                            {e.after_json?.acting_for?.name && (
-                              <div style={{ fontSize: 12, color: "#6b7280" }}>
-                                acting on behalf of {e.after_json.acting_for.name}
-                              </div>
-                            )}
-                          </td>
-                          <td>{e.action}</td>
-                          <td>{e.after_json?.status || "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          )}
+          {historyOpen && renderAdvanceTrackingModal()}
           </div>
         </div>
       </div>

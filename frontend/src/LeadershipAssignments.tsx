@@ -123,7 +123,7 @@ function statusLabel(status: AssignmentStatus) {
     case "no-manager":
       return "No Manager";
     case "no-exco":
-      return "No EXCO Owner";
+      return "No EXCO Member";
     case "inactive":
       return "Inactive";
     default:
@@ -312,7 +312,7 @@ export default function LeadershipAssignments() {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Leadership Assignments</h1>
-          <p className="ep-subtitle">Assign HODs, Managers, and EXCO Owners to departments. These assignments drive the approval workflow.</p>
+          <p className="ep-subtitle">Assign HODs, Managers, and EXCO Members to departments. These assignments drive the approval workflow.</p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" type="button" onClick={() => void load()}><RefreshCw size={14} />Refresh</button>
@@ -336,7 +336,7 @@ export default function LeadershipAssignments() {
         </button>
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("ALL")}>
           <span className="leadership-stat-icon"><Network size={26} aria-hidden /></span>
-          <div><strong>{stats.withExco}</strong><small>With EXCO Owner</small></div>
+          <div><strong>{stats.withExco}</strong><small>With EXCO Member</small></div>
         </button>
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("INCOMPLETE")}>
           <span className="leadership-stat-icon"><TriangleAlert size={26} aria-hidden /></span>
@@ -365,7 +365,7 @@ export default function LeadershipAssignments() {
           <option value="INCOMPLETE">Needs Assignment</option>
           <option value="no-hod">No HOD</option>
           <option value="no-manager">No Manager</option>
-          <option value="no-exco">No EXCO Owner</option>
+          <option value="no-exco">No EXCO Member</option>
           <option value="unassigned">Unassigned</option>
           <option value="inactive">Inactive</option>
         </select>
@@ -622,9 +622,9 @@ export default function LeadershipAssignments() {
                 </select>
               </label>
               <label>
-                <span>EXCO Owner</span>
+                <span>EXCO Member</span>
                 <select value={draftExcoId} onChange={(event) => setDraftExcoId(event.target.value)}>
-                  <option value="">No EXCO owner</option>
+                  <option value="">No EXCO member</option>
                   {excoUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name || user.email}</option>)}
                 </select>
               </label>

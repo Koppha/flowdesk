@@ -30,14 +30,14 @@ export const travelRouter = Router();
 travelRouter.use(requireAuth);
 travelRouter.get("/types", async (req, res, next) => {
     try {
-        const includeInactive = ["HR_MANAGER", "AUTH_OFFICER", "ADMIN"].includes(req.user.role);
+        const includeInactive = ["HR_MANAGER", "MANAGER", "ADMIN"].includes(req.user.role);
         return res.json(await listTravelTypes(includeInactive));
     }
     catch (err) {
         return next(err);
     }
 });
-travelRouter.post("/types", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+travelRouter.post("/types", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const parsed = TravelTypeSchema.safeParse(req.body);
         if (!parsed.success)
@@ -80,7 +80,7 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"])
         return next(err);
     }
 });
-travelRouter.put("/types/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+travelRouter.put("/types/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const parsed = TravelTypeUpdateSchema.safeParse(req.body);
         if (!parsed.success)
@@ -114,7 +114,7 @@ travelRouter.put("/types/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN
         return next(err);
     }
 });
-travelRouter.delete("/types/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+travelRouter.delete("/types/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const rows = await query(`DELETE FROM travel_types WHERE id=$1 RETURNING id`, [req.params.id]);
         if (!rows[0])
@@ -125,7 +125,7 @@ travelRouter.delete("/types/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "AD
         return next(err);
     }
 });
-travelRouter.post("/locations", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+travelRouter.post("/locations", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const parsed = TravelLocationSchema.safeParse(req.body);
         if (!parsed.success)
@@ -174,7 +174,7 @@ travelRouter.post("/locations", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMI
         return next(err);
     }
 });
-travelRouter.put("/locations/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+travelRouter.put("/locations/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const parsed = TravelLocationSchema.partial().safeParse(req.body);
         if (!parsed.success)

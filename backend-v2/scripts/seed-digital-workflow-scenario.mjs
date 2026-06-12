@@ -15,7 +15,7 @@
  *   - The Advance Request workflow (6 steps):
  *       Employee → Manager/Supervisor → HOD → HR Manager → HR → Finance
  *   - The Clearance workflow (5 steps):
- *       Employee → HOD → EXCO Owner → HR → Finance
+ *       Employee → HOD → EXCO Member → HR → Finance
  *
  * Run:  node scripts/seed-digital-workflow-scenario.mjs
  * Optionally override the department name:  DEPARTMENT_NAME="My Dept" node scripts/seed-digital-workflow-scenario.mjs
@@ -69,7 +69,7 @@ const POSITIONS = [
   { key: "hrManager", role: "HR_MANAGER", label: "HR Manager", leads: null },
   { key: "hrOfficer", role: "AUTH_OFFICER", label: "HR Officer", leads: null },
   { key: "finance", role: "FINANCE", label: "Finance", leads: null },
-  { key: "exco", role: "EXCO", label: "EXCO Owner", leads: "exco_user_id" },
+  { key: "exco", role: "EXCO", label: "EXCO Member", leads: "exco_user_id" },
 ];
 
 function shuffle(arr) {
@@ -248,7 +248,7 @@ async function main() {
   const ptEmployee = await ensurePositionType(client, "EMPLOYEE", "Employee", "Request initiator");
   const ptManager = await ensurePositionType(client, "MANAGER", "Manager", "Department manager review");
   const ptHod = await ensurePositionType(client, "HOD", "Head of Department", "HOD approval");
-  const ptExco = await ensurePositionType(client, "EXCO_OWNER", "EXCO Owner", "Executive committee approval");
+  const ptExco = await ensurePositionType(client, "EXCO_OWNER", "EXCO Member", "Executive committee approval");
   const ptHrReview = await ensurePositionType(client, "HR_REVIEW", "HR", "HR officer review");
   const ptFinance = await ensurePositionType(client, "FINANCE", "Finance", "Finance authorisation and payment");
   const ptHrManager = await ensurePositionType(client, "HR_MANAGER_REVIEW", "HR Manager", "HR Manager review and approval");

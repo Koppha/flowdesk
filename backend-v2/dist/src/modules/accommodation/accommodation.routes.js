@@ -8,6 +8,11 @@ import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
+import { advanceWorkflowStep, getAdvanceById } from "../advances/advances.service.js";
+import { canApproveStep } from "../../lib/workflowEngine.js";
+import { getActiveManagerDelegation } from "../../lib/delegations.js";
+import { notifyAdvanceTask } from "../../lib/notifications.js";
+import { getAdvanceNotificationContext, writeAdvanceAudit } from "../advances/advances.routes.js";
 const LESOTHO_DISTRICTS = [
     "Butha-Buthe",
     "Leribe",
@@ -81,7 +86,7 @@ accommodationRouter.get("/hotels", async (_req, res, next) => {
         return next(err);
     }
 });
-accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const body = HotelCreateSchema.safeParse(req.body);
         if (!body.success)
@@ -104,7 +109,7 @@ accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "AUTH_OFFICER", "
         return next(err);
     }
 });
-accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const body = HotelUpdateSchema.safeParse(req.body);
         if (!body.success)
@@ -127,7 +132,7 @@ accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER"
         return next(err);
     }
 });
-accommodationRouter.delete("/hotels/:id", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+accommodationRouter.delete("/hotels/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const rows = await query(`DELETE FROM accommodation_hotels WHERE id=$1 RETURNING id`, [req.params.id]);
         if (!rows[0])
@@ -147,7 +152,7 @@ accommodationRouter.get("/meal-value", async (_req, res, next) => {
         return next(err);
     }
 });
-accommodationRouter.put("/meal-value", requireRole(["HR_MANAGER", "AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+accommodationRouter.put("/meal-value", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req, res, next) => {
     try {
         const body = MealValueSchema.safeParse(req.body);
         if (!body.success)
@@ -197,7 +202,7 @@ async function getAccommodationById(id) {
 function canViewAccommodation(args) {
     if (args.role === "ADMIN" || args.role === "FINANCE")
         return true;
-    if (args.role === "AUTH_OFFICER" && args.row.created_by_id === args.userId)
+    if (args.role === "MANAGER" && args.row.created_by_id === args.userId)
         return true;
     if (args.row.requester_id === args.userId)
         return true;
@@ -215,7 +220,7 @@ accommodationRouter.get("/", async (req, res, next) => {
         else if (req.user.role === "FINANCE" || req.user.role === "ADMIN") {
             where = "";
         }
-        else if (req.user.role === "AUTH_OFFICER") {
+        else if (req.user.role === "MANAGER") {
             params.push(req.user.userId);
             where = "WHERE acc.created_by_id=$1";
         }
@@ -238,20 +243,30 @@ accommodationRouter.get("/", async (req, res, next) => {
         return next(err);
     }
 });
-accommodationRouter.post("/", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+accommodationRouter.post("/", async (req, res, next) => {
     try {
         const parsed = CreateAccommodationSchema.safeParse(req.body);
         if (!parsed.success)
             throw badRequest("Invalid accommodation payload", parsed.error.flatten());
-        const advance = (await query(`SELECT ar.id, ar.requester_id, ar.type, ar.status
-           FROM advance_requests ar
-          WHERE ar.id=$1`, [parsed.data.advance_request_id]))[0];
+        const advance = await getAdvanceById(parsed.data.advance_request_id);
         if (!advance)
             throw badRequest("Linked advance not found");
         if (!(await isTravelAdvanceType(advance.type)))
             throw badRequest("Accommodation requests can only be linked to travel advances");
-        if (advance.status !== "HR_REVIEW") {
-            throw badRequest("Travel advance must be in HR review stage before accommodation can be booked");
+        // Only the person whose turn it currently is on the advance's approval chain
+        // (i.e. the assigned HR/accommodation step) may attach an accommodation booking.
+        const role = req.user.role;
+        if (role !== "ADMIN") {
+            if (!advance.approval_chain?.length)
+                throw badRequest("This advance does not have an active approval workflow.");
+            const chain = advance.approval_chain;
+            const currentStep = chain[advance.workflow_step_order ?? 0];
+            if (!currentStep)
+                throw badRequest("All workflow steps have been completed");
+            const delegated = await getActiveManagerDelegation(req.user.userId);
+            if (!canApproveStep(currentStep, req.user.userId, role, delegated?.manager_id)) {
+                throw forbidden(`You are not the assigned approver for step: ${currentStep.position_name}`);
+            }
         }
         const rows = await query(`INSERT INTO accommodation_requests
         (advance_request_id, requester_id, created_by_id, location, provider, check_in, check_out, amount, notes, status)
@@ -279,7 +294,7 @@ accommodationRouter.post("/", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req
         return next(err);
     }
 });
-accommodationRouter.post("/:id/upload-quotation", requireRole(["AUTH_OFFICER", "ADMIN"]), upload.single("file"), async (req, res, next) => {
+accommodationRouter.post("/:id/upload-quotation", upload.single("file"), async (req, res, next) => {
     try {
         const row = await getAccommodationById(req.params.id);
         if (!row)
@@ -312,7 +327,10 @@ accommodationRouter.post("/:id/upload-quotation", requireRole(["AUTH_OFFICER", "
         return next(err);
     }
 });
-accommodationRouter.post("/:id/send-to-finance", requireRole(["AUTH_OFFICER", "ADMIN"]), async (req, res, next) => {
+// HR sends the accommodation booking to Finance and, in the same action,
+// forwards the linked advance request to the next workflow step — HR does not
+// separately "approve" the advance at this stage.
+accommodationRouter.post("/:id/send-to-finance", async (req, res, next) => {
     try {
         const row = await getAccommodationById(req.params.id);
         if (!row)
@@ -333,7 +351,60 @@ accommodationRouter.post("/:id/send-to-finance", requireRole(["AUTH_OFFICER", "A
             before: { status: row.status },
             after: { status: "SUBMITTED" }
         });
-        return res.json({ ok: true, status: "SUBMITTED" });
+        // Multi-destination trips can have several accommodation bookings (one per
+        // destination district) attached to the same advance. They are all created
+        // as DRAFT, but only the last one triggers send-to-finance, which advances
+        // the advance's workflow step once for the whole batch — so submit any
+        // remaining sibling drafts alongside it here.
+        const siblingDrafts = await query(`UPDATE accommodation_requests
+          SET status='SUBMITTED',
+              updated_at=now()
+        WHERE advance_request_id=$1 AND id<>$2 AND status='DRAFT' AND created_by_id=$3
+        RETURNING id`, [row.advance_request_id, req.params.id, req.user.userId]);
+        for (const sibling of siblingDrafts) {
+            await writeAccommodationAudit({
+                actorId: req.user.userId,
+                accommodationId: sibling.id,
+                action: "ACCOMMODATION_SEND_TO_FINANCE",
+                before: { status: "DRAFT" },
+                after: { status: "SUBMITTED" }
+            });
+        }
+        const userId = req.user.userId;
+        const role = req.user.role;
+        const adv = await getAdvanceById(row.advance_request_id);
+        let advanceStatus = null;
+        if (adv) {
+            const delegated = await getActiveManagerDelegation(userId);
+            const result = await advanceWorkflowStep({ adv, userId, role, delegatedManagerId: delegated?.manager_id });
+            advanceStatus = result.nextStatus;
+            await writeAdvanceAudit({
+                actorId: userId,
+                advanceId: adv.id,
+                action: "ADVANCE_APPROVE",
+                before: { status: adv.status, approved_total: Number(adv.approved_total || 0) },
+                after: {
+                    status: result.nextStatus,
+                    approved_total: Number(adv.approved_total || adv.requested_total),
+                    workflow_step: result.newStepOrder,
+                    step_name: result.hasMore ? adv.approval_chain[result.newStepOrder].position_name : "Complete"
+                }
+            });
+            const notificationContext = await getAdvanceNotificationContext(adv.id);
+            if (notificationContext) {
+                await notifyAdvanceTask({
+                    advanceId: adv.id,
+                    status: result.nextStatus,
+                    advanceType: notificationContext.type,
+                    requesterName: notificationContext.full_name,
+                    requesterEmail: notificationContext.email,
+                    department: notificationContext.department,
+                    requestedTotal: Number(notificationContext.requested_total),
+                    nextApprover: result.nextApprover
+                });
+            }
+        }
+        return res.json({ ok: true, status: "SUBMITTED", advance_status: advanceStatus });
     }
     catch (err) {
         return next(err);

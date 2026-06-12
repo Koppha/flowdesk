@@ -13,12 +13,12 @@ describe("claim view access", () => {
     ).toBe(true);
   });
 
-  it("allows chief officers to view claims after manager approval", () => {
+  it("allows EXCO to view claims after manager approval", () => {
     expect(
       canViewClaim({
-        role: "CHIEF_OFFICER",
+        role: "EXCO",
         claimantId: "claimant-1",
-        userId: "chief-1",
+        userId: "exco-1",
         status: "CHIEF_OFFICER_APPROVED"
       })
     ).toBe(true);

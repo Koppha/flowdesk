@@ -4,9 +4,10 @@ import { requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
+import { normalizeWorkflowRouteCode, workflowRouteLabel } from "../../lib/workflowRouting.js";
 const WorkflowStepSchema = z.object({
     step_order: z.coerce.number().int().min(1),
-    position_type_id: z.string().uuid().optional(),
+    position_type_code: z.string().trim().optional(),
     assigned_user_id: z.string().uuid().optional().nullable(),
     approval_mode: z.enum(["SINGLE", "ANY_ONE"]).optional().default("SINGLE"),
     approval_group_name: z.string().trim().optional().nullable(),
@@ -19,14 +20,16 @@ const WorkflowStepSchema = z.object({
     escalation_days: z.coerce.number().int().nonnegative().optional(),
     is_final_approval: z.boolean().optional(),
     is_system_step: z.boolean().optional(),
-    is_active: z.boolean().optional()
+    is_active: z.boolean().optional(),
+    requires_accommodation: z.boolean().optional()
 });
 const WorkflowRuleSchema = z.object({
     rule_name: z.string().trim().min(1),
     condition_field: z.string().trim().min(1),
     condition_operator: z.string().trim().min(1),
     condition_value: z.string().trim().min(1),
-    additional_position_type_id: z.string().uuid().optional(),
+    additional_position_type_code: z.string().trim().optional(),
+    additional_position_name: z.string().trim().optional(),
     is_active: z.boolean().optional()
 });
 const CreateWorkflowSchema = z.object({
@@ -38,6 +41,9 @@ const CreateWorkflowSchema = z.object({
     team: z.string().trim().nullish(),
     description: z.string().trim().nullish(),
     status: z.enum(["DRAFT", "ACTIVE", "INACTIVE"]).default("DRAFT"),
+    workflow_type: z.enum(["STICKY", "TEMPORARY"]).default("STICKY"),
+    valid_from: z.string().datetime({ offset: true }).nullish(),
+    valid_until: z.string().datetime({ offset: true }).nullish(),
     steps: z.array(WorkflowStepSchema).min(1, "At least one workflow step is required"),
     rules: z.array(WorkflowRuleSchema).optional()
 });
@@ -50,15 +56,23 @@ const UpdateWorkflowSchema = z.object({
     team: z.string().trim().nullish(),
     description: z.string().trim().nullish(),
     status: z.enum(["DRAFT", "ACTIVE", "INACTIVE"]).optional(),
+    workflow_type: z.enum(["STICKY", "TEMPORARY"]).optional(),
+    valid_from: z.string().datetime({ offset: true }).nullish(),
+    valid_until: z.string().datetime({ offset: true }).nullish(),
     steps: z.array(WorkflowStepSchema).optional(),
     rules: z.array(WorkflowRuleSchema).optional()
 });
 export const workflowsRouter = Router();
 workflowsRouter.use(requireAuth);
 async function ensureAssignedUserColumn() {
+    await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS position_type_code text`);
     await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS assigned_user_id uuid REFERENCES users(id)`);
     await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS approval_mode text NOT NULL DEFAULT 'SINGLE'`);
     await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS approval_group_name text`);
+    await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS requires_accommodation boolean NOT NULL DEFAULT false`);
+    await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_type_code text`);
+    await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_name text`);
+    await query(`UPDATE workflow_steps SET position_type_code = COALESCE(NULLIF(trim(position_type_code), ''), NULLIF(trim(position_name), ''), 'CUSTOM')`);
 }
 async function ensureWorkflowScopeColumns() {
     await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS section text`);
@@ -73,11 +87,11 @@ async function insertWorkflowSteps(workflowId, steps) {
     const params = [];
     steps.forEach((step) => {
         const baseIndex = params.length + 1;
-        params.push(workflowId, step.step_order, step.position_type_id || null, step.assigned_user_id || null, step.approval_mode ?? "SINGLE", step.approval_group_name || null, step.position_name, step.description || null, step.is_required ?? false, step.skip_if_unassigned ?? false, step.allow_delegation ?? false, step.comments_required ?? false, step.escalation_days ?? 0, step.is_final_approval ?? false, step.is_system_step ?? false, step.is_active ?? true);
-        values.push(`($${baseIndex},$${baseIndex + 1},$${baseIndex + 2},$${baseIndex + 3},$${baseIndex + 4},$${baseIndex + 5},$${baseIndex + 6},$${baseIndex + 7},$${baseIndex + 8},$${baseIndex + 9},$${baseIndex + 10},$${baseIndex + 11},$${baseIndex + 12},$${baseIndex + 13},$${baseIndex + 14},$${baseIndex + 15})`);
+        params.push(workflowId, step.step_order, normalizeWorkflowRouteCode(step.position_type_code, step.position_name), step.assigned_user_id || null, step.approval_mode ?? "SINGLE", step.approval_group_name || null, step.position_name, step.description || null, step.is_required ?? false, step.skip_if_unassigned ?? false, step.allow_delegation ?? false, step.comments_required ?? false, step.escalation_days ?? 0, step.is_final_approval ?? false, step.is_system_step ?? false, step.is_active ?? true, step.requires_accommodation ?? false);
+        values.push(`($${baseIndex},$${baseIndex + 1},$${baseIndex + 2},$${baseIndex + 3},$${baseIndex + 4},$${baseIndex + 5},$${baseIndex + 6},$${baseIndex + 7},$${baseIndex + 8},$${baseIndex + 9},$${baseIndex + 10},$${baseIndex + 11},$${baseIndex + 12},$${baseIndex + 13},$${baseIndex + 14},$${baseIndex + 15},$${baseIndex + 16})`);
     });
     await query(`INSERT INTO workflow_steps
-      (workflow_id, step_order, position_type_id, assigned_user_id, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active)
+      (workflow_id, step_order, position_type_code, assigned_user_id, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active, requires_accommodation)
      VALUES ${values.join(",")}`, params);
 }
 async function insertWorkflowRules(workflowId, rules) {
@@ -87,15 +101,16 @@ async function insertWorkflowRules(workflowId, rules) {
     const params = [];
     rules.forEach((rule) => {
         const baseIndex = params.length + 1;
-        params.push(workflowId, rule.rule_name, rule.condition_field, rule.condition_operator, rule.condition_value, rule.additional_position_type_id || null, rule.is_active ?? true);
-        values.push(`($${baseIndex},$${baseIndex + 1},$${baseIndex + 2},$${baseIndex + 3},$${baseIndex + 4},$${baseIndex + 5},$${baseIndex + 6})`);
+        params.push(workflowId, rule.rule_name, rule.condition_field, rule.condition_operator, rule.condition_value, normalizeWorkflowRouteCode(rule.additional_position_type_code, rule.additional_position_name), rule.additional_position_name || workflowRouteLabel(rule.additional_position_type_code, null), rule.is_active ?? true);
+        values.push(`($${baseIndex},$${baseIndex + 1},$${baseIndex + 2},$${baseIndex + 3},$${baseIndex + 4},$${baseIndex + 5},$${baseIndex + 6},$${baseIndex + 7})`);
     });
     await query(`INSERT INTO workflow_rules
-      (workflow_id, rule_name, condition_field, condition_operator, condition_value, additional_position_type_id, is_active)
+      (workflow_id, rule_name, condition_field, condition_operator, condition_value, additional_position_type_code, additional_position_name, is_active)
      VALUES ${values.join(",")}`, params);
 }
 workflowsRouter.get("/", async (req, res, next) => {
     try {
+        await ensureAssignedUserColumn();
         const requestType = String(req.query.requestType || "").trim();
         const department = String(req.query.department || "").trim();
         const status = String(req.query.status || "").trim().toUpperCase();
@@ -127,7 +142,7 @@ workflowsRouter.get("/", async (req, res, next) => {
                  json_build_object(
                    'id', ws.id,
                    'step_order', ws.step_order,
-                   'position_type_id', ws.position_type_id,
+                   'position_type_code', ws.position_type_code,
                    'position_name', ws.position_name,
                    'description', ws.description,
                    'is_required', ws.is_required,
@@ -137,7 +152,8 @@ workflowsRouter.get("/", async (req, res, next) => {
                    'escalation_days', ws.escalation_days,
                    'is_final_approval', ws.is_final_approval,
                    'is_system_step', ws.is_system_step,
-                   'is_active', ws.is_active
+                   'is_active', ws.is_active,
+                   'requires_accommodation', ws.requires_accommodation
                  )
                  ORDER BY ws.step_order
                ) FILTER (WHERE ws.id IS NOT NULL),
@@ -181,15 +197,6 @@ workflowsRouter.get("/exco-members", async (_req, res, next) => {
         return next(err);
     }
 });
-workflowsRouter.get("/position-types", async (_req, res, next) => {
-    try {
-        const rows = await query(`SELECT * FROM position_types WHERE is_active = true ORDER BY name ASC`);
-        return res.json(rows);
-    }
-    catch (err) {
-        return next(err);
-    }
-});
 workflowsRouter.get("/resolve", async (req, res, next) => {
     try {
         const requestType = String(req.query.requestType || "").trim();
@@ -214,6 +221,8 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
           AND (
             advance_sub_type IS NULL OR trim(advance_sub_type) = ''
             OR ($4 <> '' AND lower(trim(advance_sub_type)) = lower(trim($4)))
+            -- "TRAVEL" sub-type covers all travel advance types (anything other than SALARY/LOAN)
+            OR ($4 <> '' AND lower(trim(advance_sub_type)) = 'travel' AND upper(trim($4)) NOT IN ('SALARY','LOAN'))
           )
         ORDER BY
           CASE
@@ -223,13 +232,19 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
             WHEN $4 <> '' AND lower(trim(COALESCE(advance_sub_type,''))) = lower(trim($4))
                  AND (section IS NULL OR trim(section) = '')
                  AND lower(trim(COALESCE(department,''))) = lower(trim($2)) THEN 1
-            WHEN (advance_sub_type IS NULL OR trim(advance_sub_type) = '')
+            WHEN $4 <> '' AND upper(trim($4)) NOT IN ('SALARY','LOAN') AND lower(trim(COALESCE(advance_sub_type,''))) = 'travel'
                  AND lower(trim(COALESCE(section,''))) = lower(trim($3))
                  AND lower(trim(COALESCE(department,''))) = lower(trim($2)) THEN 2
-            WHEN (advance_sub_type IS NULL OR trim(advance_sub_type) = '')
+            WHEN $4 <> '' AND upper(trim($4)) NOT IN ('SALARY','LOAN') AND lower(trim(COALESCE(advance_sub_type,''))) = 'travel'
                  AND (section IS NULL OR trim(section) = '')
                  AND lower(trim(COALESCE(department,''))) = lower(trim($2)) THEN 3
-            ELSE 4
+            WHEN (advance_sub_type IS NULL OR trim(advance_sub_type) = '')
+                 AND lower(trim(COALESCE(section,''))) = lower(trim($3))
+                 AND lower(trim(COALESCE(department,''))) = lower(trim($2)) THEN 4
+            WHEN (advance_sub_type IS NULL OR trim(advance_sub_type) = '')
+                 AND (section IS NULL OR trim(section) = '')
+                 AND lower(trim(COALESCE(department,''))) = lower(trim($2)) THEN 5
+            ELSE 6
           END,
           updated_at DESC, created_at DESC
         LIMIT 1`, [requestType, department, section, advanceSubType]);
@@ -237,23 +252,21 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
         if (!workflow)
             return res.json({ workflow: null, chain: [], tasks: [], warnings: ["No active workflow found."] });
         const [steps, rules, leadership] = await Promise.all([
-            query(`SELECT ws.*, pt.code AS position_type_code,
+            query(`SELECT ws.*,
                 u.full_name AS assigned_user_name, u.email AS assigned_user_email
            FROM workflow_steps ws
-           LEFT JOIN position_types pt ON pt.id = ws.position_type_id
            LEFT JOIN users u ON u.id = ws.assigned_user_id
           WHERE ws.workflow_id=$1 AND ws.is_active = true
           ORDER BY ws.step_order ASC`, [workflow.id]),
-            query(`SELECT wr.*, pt.name AS additional_position_name, pt.code AS additional_position_code
+            query(`SELECT wr.*
            FROM workflow_rules wr
-           LEFT JOIN position_types pt ON pt.id = wr.additional_position_type_id
           WHERE wr.workflow_id=$1 AND wr.is_active = true
           ORDER BY wr.created_at ASC`, [workflow.id]),
             getDepartmentLeadership(department)
         ]);
         const warnings = [];
         const chain = steps.flatMap((step) => {
-            const code = step.position_type_code || step.position_name;
+            const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
             const approverId = code === "HOD"
                 ? leadership.hod_user_id
                 : code === "MANAGER"
@@ -295,8 +308,8 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
                     amount === value;
             return matched ? [{
                     rule_name: rule.rule_name,
-                    position_name: rule.additional_position_name || "Additional Approval",
-                    position_type_code: rule.additional_position_code || "",
+                    position_name: rule.additional_position_name || workflowRouteLabel(rule.additional_position_type_code, "Additional Approval"),
+                    position_type_code: normalizeWorkflowRouteCode(rule.additional_position_type_code, rule.additional_position_name),
                     condition: `${rule.condition_field} ${rule.condition_operator} ${rule.condition_value}`
                 }] : [];
         });
@@ -308,6 +321,7 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
 });
 workflowsRouter.get("/:id", async (req, res, next) => {
     try {
+        await ensureAssignedUserColumn();
         const workflowId = String(req.params.id || "").trim();
         if (!workflowId)
             throw notFound();
@@ -315,10 +329,9 @@ workflowsRouter.get("/:id", async (req, res, next) => {
         const workflow = workflowRows[0];
         if (!workflow)
             throw notFound();
-        const steps = await query(`SELECT ws.*, pt.code AS position_type_code,
+        const steps = await query(`SELECT ws.*,
               u.full_name AS assigned_user_name, u.email AS assigned_user_email
          FROM workflow_steps ws
-         LEFT JOIN position_types pt ON pt.id = ws.position_type_id
          LEFT JOIN users u ON u.id = ws.assigned_user_id
         WHERE ws.workflow_id=$1 ORDER BY ws.step_order ASC`, [workflowId]);
         const rules = await query(`SELECT * FROM workflow_rules WHERE workflow_id=$1 ORDER BY created_at ASC`, [workflowId]);
@@ -328,16 +341,16 @@ workflowsRouter.get("/:id", async (req, res, next) => {
         return next(err);
     }
 });
-workflowsRouter.post("/", requireRole(["ADMIN"]), async (req, res, next) => {
+workflowsRouter.post("/", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req, res, next) => {
     try {
         const parsed = CreateWorkflowSchema.safeParse(req.body);
         if (!parsed.success) {
             throw badRequest("Invalid workflow payload", parsed.error.flatten());
         }
         await ensureWorkflowScopeColumns();
-        const workflowRow = (await query(`INSERT INTO workflows (name, request_type, advance_sub_type, department, section, team, description, status, created_by_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         RETURNING id`, [parsed.data.name, parsed.data.request_type, parsed.data.advance_sub_type || null, parsed.data.department || null, parsed.data.section || null, parsed.data.team || null, parsed.data.description || null, parsed.data.status, req.user.userId]))[0];
+        const workflowRow = (await query(`INSERT INTO workflows (name, request_type, advance_sub_type, department, section, team, description, status, workflow_type, valid_from, valid_until, created_by_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         RETURNING id`, [parsed.data.name, parsed.data.request_type, parsed.data.advance_sub_type || null, parsed.data.department || null, parsed.data.section || null, parsed.data.team || null, parsed.data.description || null, parsed.data.status, parsed.data.workflow_type ?? "STICKY", parsed.data.valid_from || null, parsed.data.valid_until || null, req.user.userId]))[0];
         await insertWorkflowSteps(workflowRow.id, parsed.data.steps);
         await insertWorkflowRules(workflowRow.id, parsed.data.rules || []);
         return res.status(201).json({ id: workflowRow.id });
@@ -346,7 +359,7 @@ workflowsRouter.post("/", requireRole(["ADMIN"]), async (req, res, next) => {
         return next(err);
     }
 });
-workflowsRouter.put("/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+workflowsRouter.put("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req, res, next) => {
     try {
         const parsed = UpdateWorkflowSchema.safeParse(req.body);
         if (!parsed.success) {
@@ -386,6 +399,18 @@ workflowsRouter.put("/:id", requireRole(["ADMIN"]), async (req, res, next) => {
         if (parsed.data.status !== undefined) {
             updates.push(`status=$${params.length + 1}`);
             params.push(parsed.data.status);
+        }
+        if (parsed.data.workflow_type !== undefined) {
+            updates.push(`workflow_type=$${params.length + 1}`);
+            params.push(parsed.data.workflow_type);
+        }
+        if (parsed.data.valid_from !== undefined) {
+            updates.push(`valid_from=$${params.length + 1}`);
+            params.push(parsed.data.valid_from || null);
+        }
+        if (parsed.data.valid_until !== undefined) {
+            updates.push(`valid_until=$${params.length + 1}`);
+            params.push(parsed.data.valid_until || null);
         }
         if (updates.length > 0) {
             params.push(req.params.id);
@@ -440,7 +465,7 @@ workflowsRouter.get("/chain-approvers", async (req, res, next) => {
         return next(err);
     }
 });
-workflowsRouter.delete("/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+workflowsRouter.delete("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req, res, next) => {
     try {
         const rows = await query(`DELETE FROM workflows WHERE id=$1 RETURNING id`, [req.params.id]);
         if (!rows[0])

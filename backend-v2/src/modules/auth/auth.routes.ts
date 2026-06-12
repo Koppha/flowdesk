@@ -8,7 +8,7 @@ import { query } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
-import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
+import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
 import { notifyProfileCompleted, notifyUserOnboarded } from "../../lib/notifications.js";
 
 const LoginSchema = z
@@ -26,8 +26,8 @@ export const authRouter = Router();
 
 function assertRoleAssignmentAllowed(req: AuthedRequest, target: { department: string | null; role?: string | null }, nextRole: string) {
   if (req.user!.role === "ADMIN") return;
-  if (req.user!.role !== "MANAGER" && req.user!.role !== "CHIEF_OFFICER") {
-    throw forbidden("Only admins, managers, and chief officers can assign roles");
+  if (req.user!.role !== "MANAGER" && req.user!.role !== "EXCO") {
+    throw forbidden("Only admins, managers, and EXCO members can assign roles");
   }
 
   const department = String(req.user!.department || "").trim();
@@ -58,7 +58,7 @@ const ProfileSchema = z
   });
 
 const UpdateUserRoleSchema = z.object({
-  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO", "CEO"]),
+  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]),
   is_active: z.boolean().optional()
 });
 
@@ -73,7 +73,7 @@ const CreateUserSchema = z.object({
   section_id: z.string().uuid().nullable().optional(),
   team_id: z.string().uuid().nullable().optional(),
   employment_type: z.string().trim().optional(),
-  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "AUTH_OFFICER", "CHIEF_OFFICER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
+  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
   is_active: z.boolean().optional()
 });
 
@@ -530,6 +530,21 @@ authRouter.put("/sections/:id", requireRole(["ADMIN"]), async (req: AuthedReques
   }
 });
 
+const SectionOwnerSchema = z.object({
+  role: z.enum(["HOD", "MANAGER"]),
+  user_id: z.string().uuid().nullable(),
+});
+
+authRouter.put("/sections/:id/owner", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = SectionOwnerSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid section owner payload", parsed.error.flatten());
+    return res.json(await setSectionOwner(req.params.id, parsed.data.role, parsed.data.user_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 authRouter.delete("/sections/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     return res.json(await deleteSectionGroup(req.params.id));
@@ -546,7 +561,7 @@ authRouter.get("/departments-with-sections", async (_req: AuthedRequest, res, ne
   }
 });
 
-authRouter.get("/leadership-users", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (_req: AuthedRequest, res, next) => {
+authRouter.get("/leadership-users", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (_req: AuthedRequest, res, next) => {
   try {
     return res.json(await listEligibleLeadershipUsers());
   } catch (err) {
@@ -806,7 +821,7 @@ async function requireUserManagementAccess(req: AuthedRequest, res: any, next: a
       `SELECT allowed_roles FROM admin_feature_permissions WHERE feature_key = 'user_management' LIMIT 1`,
       []
     );
-    const allowed: string[] = rows[0]?.allowed_roles ?? ["ADMIN", "MANAGER", "CHIEF_OFFICER"];
+    const allowed: string[] = rows[0]?.allowed_roles ?? ["ADMIN", "MANAGER", "EXCO"];
     if (allowed.includes(req.user.role)) return next();
     return res.status(403).json({ error: "Forbidden" });
   } catch {
@@ -984,7 +999,7 @@ authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER"]), async
   }
 });
 
-authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (req: AuthedRequest, res, next) => {
+authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateUserRoleSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid user update payload", parsed.error.flatten());
@@ -1077,7 +1092,7 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
 });
 
 // Admin: update user attributes
-authRouter.put("/users/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateUserSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid user payload", parsed.error.flatten());
@@ -1192,7 +1207,7 @@ authRouter.delete("/manager-types/:id", requireRole(["ADMIN"]), async (req: Auth
 
 // ---------------------------------------------------------------------------
 
-authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER", "CHIEF_OFFICER"]), async (req: AuthedRequest, res, next) => {
+authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateUserRoleSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid department role payload", parsed.error.flatten());
@@ -1292,19 +1307,19 @@ const FEATURE_KEYS = [
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
-  user_management:       ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-  roles_permissions:     ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-  travel_setup:          ["ADMIN", "HR_MANAGER", "AUTH_OFFICER"],
+  user_management:       ["ADMIN", "MANAGER", "EXCO"],
+  roles_permissions:     ["ADMIN", "MANAGER", "EXCO"],
+  travel_setup:          ["ADMIN", "HR_MANAGER", "MANAGER"],
   org_structure:         ["ADMIN"],
   team_roster:           ["ADMIN"],
   ceo_management:        ["ADMIN"],
   employees:             ["ADMIN"],
   exco_members:          ["ADMIN", "MANAGER"],
-  managers:              ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-  leadership_assignments:["ADMIN", "MANAGER", "CHIEF_OFFICER"],
-  workflow_builder:      ["ADMIN", "MANAGER", "CHIEF_OFFICER"],
+  managers:              ["ADMIN", "MANAGER", "EXCO"],
+  leadership_assignments:["ADMIN", "MANAGER", "EXCO"],
+  workflow_builder:      ["ADMIN", "MANAGER", "EXCO"],
   request_types:         ["ADMIN"],
-  reporting_lines:       ["ADMIN", "MANAGER", "CHIEF_OFFICER"]
+  reporting_lines:       ["ADMIN", "MANAGER", "EXCO"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {

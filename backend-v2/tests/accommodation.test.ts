@@ -10,7 +10,7 @@ const financeId = "00000000-0000-0000-0000-000000000003";
 const advanceId = "00000000-0000-0000-0000-000000000010";
 let accommodationId = "";
 
-const hrToken = signToken({ userId: hrId, role: "AUTH_OFFICER" });
+const hrToken = signToken({ userId: hrId, role: "MANAGER" });
 const financeToken = signToken({ userId: financeId, role: "FINANCE" });
 
 const app = createApp();
@@ -35,7 +35,7 @@ describe("accommodation workflow", () => {
     await query(
       `INSERT INTO users (id, employee_no, full_name, email, password_hash, role)
        VALUES ($1, 'EMP001', 'Requester User', 'requester@example.com', 'x', 'EMPLOYEE'),
-              ($2, 'EMP002', 'HR User', 'hr@example.com', 'x', 'AUTH_OFFICER'),
+              ($2, 'EMP002', 'HR User', 'hr@example.com', 'x', 'MANAGER'),
               ($3, 'EMP003', 'Finance User', 'finance@example.com', 'x', 'FINANCE')`,
       [requesterId, hrId, financeId]
     );

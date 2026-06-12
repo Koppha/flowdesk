@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api } from "./api";
+import { useStaffDirectory, isActiveStaff } from "./useStaffDirectory";
 import {
   AlertTriangle,
   Check,
@@ -60,6 +61,7 @@ type WorkflowStep = {
   isFinalApproval: boolean;
   isSystemStep: boolean;
   isActive: boolean;
+  requiresAccommodation: boolean;
 };
 
 type WorkflowRule = {
@@ -133,12 +135,10 @@ const POSITION_TYPE_FALLBACKS: PositionType[] = [
   { id: "pos-hod", code: "HOD", name: "HOD", description: "Department Head", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-manager", code: "MANAGER", name: "Manager", description: "Department Manager", applies_to: ALL_REQUEST_TYPES, is_active: true },
   // EXCO_OWNER kept as internal code for routing — never shown as a generic card; named EXCO members replace it in the UI
-  // Internal routing code — display name kept as "EXCO Member" so it never surfaces as "EXCO Owner"
+  // Internal routing code; display name stays user-facing as "EXCO Member".
   { id: "pos-exco", code: "EXCO_OWNER", name: "EXCO Member", description: "Executive Committee Member", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-finance", code: "FINANCE", name: "Finance", description: "Finance Approval", applies_to: ALL_REQUEST_TYPES, is_active: true },
-  { id: "pos-procurement", code: "PROCUREMENT", name: "Procurement", description: "Procurement Manager", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-hr-review", code: "HR_REVIEW", name: "HR Review", description: "HR Review", applies_to: ALL_REQUEST_TYPES, is_active: true },
-  { id: "pos-legal", code: "LEGAL_REVIEW", name: "Legal Review", description: "Legal Department", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-ceo", code: "CEO", name: "CEO", description: "Chief Executive Officer", applies_to: ALL_REQUEST_TYPES, is_active: true }
 ];
 
@@ -187,7 +187,7 @@ const TEMPLATE_DEFINITIONS: Array<{ id: string; name: string; description: strin
 const EMPTY_METADATA: WorkflowMetadata = {
   name: "",
   requestType: "ADVANCE_REQUEST",
-  advanceSubType: "",
+  advanceSubType: "SALARY",
   department: "",
   section: "",
   team: "",
@@ -195,11 +195,12 @@ const EMPTY_METADATA: WorkflowMetadata = {
   status: "DRAFT"
 };
 
-const ADVANCE_SUB_TYPES = [
+const ADVANCE_SUB_TYPES_STATIC = [
   { value: "SALARY", label: "Salary Advance" },
   { value: "LOAN",   label: "Loan" },
   { value: "TRAVEL", label: "Travel / Per Diem" },
 ];
+
 
 const DEFAULT_RULES: WorkflowRule[] = [
   {
@@ -226,10 +227,6 @@ function generateId() {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `id-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function isUuid(value: string | undefined | null) {
-  return typeof value === "string" && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
 }
 
 function requestTypeLabel(value: string, options?: Array<{ value: string; label: string }>) {
@@ -295,6 +292,9 @@ export default function WorkflowBuilder() {
   const [extraPositions, setExtraPositions] = useState<PositionType[]>([]);
   const [addPositionPicker, setAddPositionPicker] = useState<{ department: string; role: "HOD" | "MANAGER" }>({ department: "", role: "HOD" });
   const [showAddPosition, setShowAddPosition] = useState(false);
+  const [addPanelMode, setAddPanelMode] = useState<"position" | "member">("position");
+  const [addMemberPicker, setAddMemberPicker] = useState<{ department: string; team: string; userId: string }>({ department: "", team: "", userId: "" });
+  const { staff } = useStaffDirectory();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
   const [metadata, setMetadata] = useState<WorkflowMetadata>(EMPTY_METADATA);
   const [selectedTemplateId, setSelectedTemplateId] = useState("STANDARD");
@@ -320,6 +320,36 @@ export default function WorkflowBuilder() {
     const custom = customRequestTypes.filter((c) => !BUILTIN_REQUEST_TYPES.some((b) => b.value === c.value));
     return [...BUILTIN_REQUEST_TYPES, ...custom];
   }, [customRequestTypes]);
+
+  const advanceSubTypes = ADVANCE_SUB_TYPES_STATIC;
+
+  // Splits "Advance Request" into its sub-types (Salary, Loan, Travel) so each can be picked directly.
+  const step1RequestTypeOptions = useMemo(() => {
+    const expanded: { value: string; label: string }[] = [];
+    for (const type of requestTypeOptions) {
+      if (type.value === "ADVANCE_REQUEST") {
+        for (const sub of advanceSubTypes) {
+          expanded.push({ value: `ADVANCE_REQUEST:${sub.value}`, label: sub.label });
+        }
+      } else {
+        expanded.push(type);
+      }
+    }
+    return expanded;
+  }, [requestTypeOptions, advanceSubTypes]);
+
+  const step1RequestTypeValue =
+    metadata.requestType === "ADVANCE_REQUEST"
+      ? `ADVANCE_REQUEST:${metadata.advanceSubType || "SALARY"}`
+      : metadata.requestType;
+
+  function handleStep1RequestTypeChange(value: string) {
+    if (value.startsWith("ADVANCE_REQUEST:")) {
+      updateMetadata({ requestType: "ADVANCE_REQUEST", advanceSubType: value.split(":")[1] });
+    } else {
+      updateMetadata({ requestType: value, advanceSubType: "" });
+    }
+  }
 
   function toggleRow(id: string) {
     setExpandedRows((prev) => {
@@ -351,8 +381,9 @@ export default function WorkflowBuilder() {
     return excoMembers.map((member) => ({
       ...base,
       id: `exco-member-${member.id}`,
-      name: member.full_name,
-      description: member.title ? `${member.title}${member.department ? ` — ${member.department}` : ""}` : (member.department || "EXCO Member"),
+      description: member.full_name
+        ? `${member.full_name}${member.department ? ` — ${member.department}` : ""}`
+        : `Unassigned — ${base.description}`,
       assignedUserId: member.id
     }));
   }, [availablePositionTypes, excoMembers]);
@@ -360,44 +391,44 @@ export default function WorkflowBuilder() {
   const scopedPositionTypes = useMemo(() => {
     const byCode = (code: string) => availablePositionTypes.find((position) => position.code === code);
 
-    // Pinned positions always present regardless of department scope
-    const hrCard   = byCode("HR_REVIEW");
-    const finCard  = byCode("FINANCE");
-    const ceoCard  = byCode("CEO");
-
     if (!metadata.department) {
       const base = availablePositionTypes.filter((p) => p.code !== "EXCO_OWNER" && p.code !== "HR_REVIEW" && p.code !== "FINANCE" && p.code !== "CEO");
       const excoBlock = excoMemberCards.length ? excoMemberCards : (byCode("EXCO_OWNER") ? [byCode("EXCO_OWNER")!] : []);
-      return [...base, ...excoBlock, ...(hrCard ? [hrCard] : []), ...(finCard ? [finCard] : []), ...(ceoCard ? [ceoCard] : []), ...extraPositions];
+      return [...base, ...excoBlock, ...extraPositions];
     }
 
     const dept = departments.find((department) => getDepartmentName(department) === metadata.department);
-    const personLabel = (name: string | null | undefined) => (name ? `${name} — ${metadata.department}` : `Unassigned — ${metadata.department}`);
+
+    // When a section is selected, prefer the section's own leadership over the department's
+    const orgDept = orgStructure.departments.find((d) => d?.name === metadata.department);
+    const orgSection = metadata.section
+      ? orgStructure.sections.find((s) => s?.name === metadata.section && s?.department_id === orgDept?.id)
+      : null;
+
+    const scopeLabel = metadata.section ? `${metadata.section}, ${metadata.department}` : metadata.department;
+    const scopeKey = metadata.section ? `${metadata.department}-${metadata.section}` : metadata.department;
+    const personLabel = (name: string | null | undefined) => (name ? `${name} — ${scopeLabel}` : `Unassigned — ${scopeLabel}`);
+
     const cards: PositionType[] = [];
 
     const hod = byCode("HOD");
-    if (hod) cards.push({ ...hod, id: `scoped-hod-${metadata.department}`, description: personLabel(dept?.hod_name) });
+    if (hod) cards.push({ ...hod, id: `scoped-hod-${scopeKey}`, description: personLabel(orgSection?.hod_name ?? dept?.hod_name) });
 
     const manager = byCode("MANAGER");
-    if (manager) cards.push({ ...manager, id: `scoped-manager-${metadata.department}`, description: personLabel(dept?.manager_name) });
+    if (manager) cards.push({ ...manager, id: `scoped-manager-${scopeKey}`, description: personLabel(orgSection?.manager_name ?? dept?.manager_name) });
 
     // Named EXCO members — global, not scoped to department
     excoMemberCards.forEach((card) => cards.push(card));
     if (!excoMemberCards.length) {
       const exco = byCode("EXCO_OWNER");
-      if (exco) cards.push({ ...exco, id: `scoped-exco-${metadata.department}`, description: personLabel(dept?.exco_name) });
+      if (exco) cards.push({ ...exco, id: `scoped-exco-${scopeKey}`, description: personLabel(orgSection?.exco_name ?? dept?.exco_name) });
     }
-
-    // HR and Finance are always pinned
-    if (hrCard)  cards.push(hrCard);
-    if (finCard) cards.push(finCard);
-    if (ceoCard) cards.push(ceoCard);
 
     // Extra positions added by admin from other departments/sections
     extraPositions.forEach((p) => cards.push(p));
 
     return cards;
-  }, [availablePositionTypes, departments, metadata.department, excoMemberCards, extraPositions]);
+  }, [availablePositionTypes, departments, orgStructure, metadata.department, metadata.section, excoMemberCards, extraPositions]);
 
   const selectedStep = useMemo(() => steps.find((step) => step.id === selectedStepId) || steps[0] || null, [steps, selectedStepId]);
 
@@ -456,6 +487,46 @@ export default function WorkflowBuilder() {
       }
     ]);
     setAddPositionPicker({ department: "", role: "HOD" });
+    setShowAddPosition(false);
+  }
+
+  const deptMembers = useMemo(() => {
+    if (!addMemberPicker.department) return [];
+    return staff.filter((u) => isActiveStaff(u) && u.department === addMemberPicker.department);
+  }, [staff, addMemberPicker.department]);
+
+  const teamOptionsForMember = useMemo(() => {
+    return Array.from(new Set(deptMembers.map((u) => u.team_name).filter(Boolean) as string[]))
+      .sort((a, b) => a.localeCompare(b));
+  }, [deptMembers]);
+
+  const memberOptions = useMemo(() => {
+    return deptMembers
+      .filter((u) => !addMemberPicker.team || u.team_name === addMemberPicker.team)
+      .sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
+  }, [deptMembers, addMemberPicker.team]);
+
+  function addExtraMember() {
+    if (!addMemberPicker.department || !addMemberPicker.userId) return;
+    const member = memberOptions.find((u) => u.id === addMemberPicker.userId);
+    if (!member) return;
+    const id = `extra-member-${member.id}`;
+    if (extraPositions.some((p) => p.id === id)) return;
+    const base = activePositionTypes.find((p) => p.code === "MANAGER") || POSITION_TYPE_FALLBACKS.find((p) => p.code === "MANAGER")!;
+    const scopeLabel = member.team_name ? `${member.team_name}, ${addMemberPicker.department}` : addMemberPicker.department;
+    setExtraPositions((prev) => [
+      ...prev,
+      {
+        id,
+        code: base.code,
+        name: member.full_name || member.email,
+        description: `${member.full_name || member.email} — ${scopeLabel}`,
+        applies_to: base.applies_to,
+        is_active: true,
+        assignedUserId: member.id
+      }
+    ]);
+    setAddMemberPicker({ department: "", team: "", userId: "" });
     setShowAddPosition(false);
   }
 
@@ -539,8 +610,7 @@ export default function WorkflowBuilder() {
   async function loadInitialData() {
     setLoading(true);
     try {
-      const [positionResult, workflowResult, departmentResult, orgStructureResult, excoResult, requestTypesResult, usersResult] = await Promise.all([
-        api.positionTypes(),
+      const [workflowResult, departmentResult, orgStructureResult, excoResult, requestTypesResult, usersResult] = await Promise.all([
         api.workflows(),
         api.departmentsWithSections(),
         api.orgStructure(),
@@ -548,11 +618,6 @@ export default function WorkflowBuilder() {
         api.requestTypes(),
         api.adminUsers()
       ]);
-      if (Array.isArray(positionResult) && positionResult.length > 0) {
-        const merged = POSITION_TYPE_FALLBACKS.map((fallback) => positionResult.find((type: PositionType) => type.code === fallback.code) || fallback);
-        const extras = positionResult.filter((type: PositionType) => !POSITION_TYPE_FALLBACKS.some((fallback) => fallback.code === type.code));
-        setPositionTypes([...merged, ...extras]);
-      }
       setWorkflows(Array.isArray(workflowResult) ? workflowResult.map(normalizeWorkflow) : []);
       setDepartments(Array.isArray(departmentResult) ? departmentResult : []);
       if (orgStructureResult && typeof orgStructureResult === "object") {
@@ -612,10 +677,8 @@ export default function WorkflowBuilder() {
   }
 
   function normalizeStep(raw: any, workflowId: string | null = null, index = 0): WorkflowStep {
-    const positionTypeId = raw.position_type_id || raw.positionTypeId || null;
     const rawCode = raw.position_type_code || raw.positionTypeCode || "";
     const positionType =
-      positionTypes.find((type) => type.id === positionTypeId) ||
       positionTypes.find((type) => type.code === rawCode) ||
       positionTypes.find((type) => type.name === raw.position_name) ||
       POSITION_TYPE_FALLBACKS.find((fallback) => fallback.code === rawCode || fallback.name === raw.position_name);
@@ -624,7 +687,7 @@ export default function WorkflowBuilder() {
       id: raw.id || generateId(),
       workflowId,
       stepOrder: Number(raw.step_order ?? raw.stepOrder ?? index + 1),
-      positionTypeId: isUuid(positionTypeId) ? positionTypeId : positionType?.id || null,
+      positionTypeId: positionType?.id || null,
       positionTypeCode: positionType?.code || rawCode || "",
       assignedUserId: raw.assigned_user_id || raw.assignedUserId || null,
       approvalMode: (raw.approval_mode || raw.approvalMode || "SINGLE") as "SINGLE" | "ANY_ONE",
@@ -638,11 +701,17 @@ export default function WorkflowBuilder() {
       escalationDays: Number(raw.escalation_days ?? raw.escalationDays ?? 0),
       isFinalApproval: raw.is_final_approval ?? raw.isFinalApproval ?? false,
       isSystemStep: raw.is_system_step ?? raw.isSystemStep ?? false,
-      isActive: raw.is_active ?? raw.isActive ?? true
+      isActive: raw.is_active ?? raw.isActive ?? true,
+      requiresAccommodation: raw.requires_accommodation ?? raw.requiresAccommodation ?? false
     };
   }
 
   function normalizeRule(raw: any, workflowId: string | null = null): WorkflowRule {
+    const rawCode = raw.additional_position_type_code || raw.additionalPositionTypeCode || raw.additional_position_code || raw.additionalPositionCode || "";
+    const positionType =
+      positionTypes.find((type) => type.code === rawCode || type.id === rawCode) ||
+      positionTypes.find((type) => type.name === raw.additional_position_name) ||
+      POSITION_TYPE_FALLBACKS.find((fallback) => fallback.code === rawCode || fallback.name === raw.additional_position_name);
     return {
       id: raw.id || generateId(),
       workflowId,
@@ -650,7 +719,7 @@ export default function WorkflowBuilder() {
       conditionField: raw.condition_field || raw.conditionField || "Amount",
       conditionOperator: raw.condition_operator || raw.conditionOperator || ">",
       conditionValue: raw.condition_value || raw.conditionValue || "",
-      additionalPositionTypeId: raw.additional_position_type_id || raw.additionalPositionTypeId || "",
+      additionalPositionTypeId: positionType?.id || raw.additionalPositionTypeId || rawCode || "",
       isActive: raw.is_active ?? raw.isActive ?? true
     };
   }
@@ -679,6 +748,7 @@ export default function WorkflowBuilder() {
       isFinalApproval: isFinal,
       isSystemStep: isEmployee,
       isActive: true,
+      requiresAccommodation: false,
       ...overrides,
       approvalMode: overrides.approvalMode ?? "SINGLE",
       approvalGroupName: overrides.approvalGroupName ?? null
@@ -718,7 +788,7 @@ export default function WorkflowBuilder() {
 
   function startNewWorkflow() {
     setMode("create");
-    resetDesigner({ name: "Advance Request Workflow", description: "Approval workflow for advance requests requiring manager and finance approval." });
+    resetDesigner();
     setScreen("DETAILS");
   }
 
@@ -835,11 +905,11 @@ export default function WorkflowBuilder() {
     switch (step.positionTypeCode) {
       case "MANAGER":     roles = ["MANAGER", "HOD"]; break;
       case "HOD":         roles = ["HOD"]; break;
-      case "EXCO_OWNER":  roles = ["EXCO", "CHIEF_OFFICER"]; break;
+      case "EXCO_OWNER":  roles = ["EXCO"]; break;
       case "FINANCE":     roles = ["FINANCE"]; break;
       case "CEO":         roles = ["CEO"]; break;
       case "HR_REVIEW":
-        roles = (nameLower.includes("manager")) ? ["HR_MANAGER"] : ["AUTH_OFFICER", "HR_MANAGER"];
+        roles = (nameLower.includes("manager")) ? ["HR_MANAGER"] : ["MANAGER", "HR_MANAGER"];
         break;
       default:            roles = allUsers.map(u => u.role);
     }
@@ -856,20 +926,16 @@ export default function WorkflowBuilder() {
     return `${rule.conditionField} ${operator} M${rule.conditionValue}`;
   }
 
-  function resolvePositionTypeId(positionTypeId: string | undefined | null, positionTypeCode?: string) {
-    if (isUuid(positionTypeId)) return positionTypeId;
+  function resolvePositionCode(positionTypeId: string | undefined | null, positionTypeCode?: string) {
     const normalizedCode = String(positionTypeCode || "").trim();
-    if (normalizedCode) {
-      const matchedType = positionTypes.find((type) => type.code === normalizedCode);
-      if (matchedType && isUuid(matchedType.id)) return matchedType.id;
-    }
+    if (normalizedCode) return normalizedCode;
     if (positionTypeId) {
-      const fallback = POSITION_TYPE_FALLBACKS.find((type) => type.id === positionTypeId);
-      const fallbackCode = fallback?.code || positionTypeId;
-      const matchedType = positionTypes.find((type) => type.code === fallbackCode || type.id === fallbackCode);
-      if (matchedType && isUuid(matchedType.id)) return matchedType.id;
+      const matchedType =
+        positionTypes.find((type) => type.id === positionTypeId || type.code === positionTypeId) ||
+        POSITION_TYPE_FALLBACKS.find((type) => type.id === positionTypeId || type.code === positionTypeId);
+      return matchedType?.code || positionTypeId;
     }
-    return undefined;
+    return "";
   }
 
   function workflowPayload(targetStatus?: WorkflowStatus) {
@@ -885,7 +951,7 @@ export default function WorkflowBuilder() {
       steps: steps.map((step) => ({
         workflow_id: selectedWorkflowId || undefined,
         step_order: step.stepOrder,
-        position_type_id: resolvePositionTypeId(step.positionTypeId, step.positionTypeCode),
+        position_type_code: resolvePositionCode(step.positionTypeId, step.positionTypeCode),
         assigned_user_id: step.assignedUserId || undefined,
         approval_mode: step.approvalMode,
         approval_group_name: step.approvalGroupName || undefined,
@@ -898,14 +964,16 @@ export default function WorkflowBuilder() {
         escalation_days: step.escalationDays,
         is_final_approval: step.isFinalApproval,
         is_system_step: step.isSystemStep,
-        is_active: step.isActive
+        is_active: step.isActive,
+        requires_accommodation: step.requiresAccommodation
       })),
       rules: rules.map((rule) => ({
         rule_name: rule.ruleName,
         condition_field: rule.conditionField,
         condition_operator: rule.conditionOperator,
         condition_value: rule.conditionValue,
-        additional_position_type_id: resolvePositionTypeId(rule.additionalPositionTypeId),
+        additional_position_type_code: resolvePositionCode(rule.additionalPositionTypeId),
+        additional_position_name: resolvePositionLabel(rule.additionalPositionTypeId),
         is_active: rule.isActive
       }))
     };
@@ -1230,7 +1298,7 @@ export default function WorkflowBuilder() {
                           <span className="workflow-request-chip">{requestTypeLabel(workflow.requestType)}</span>
                           {workflow.advanceSubType && (
                             <span style={{ display: "block", fontSize: 11, marginTop: 3, color: "var(--muted)", fontWeight: 500 }}>
-                              {ADVANCE_SUB_TYPES.find(t => t.value === workflow.advanceSubType)?.label ?? workflow.advanceSubType}
+                              {advanceSubTypes.find((t) => t.value === workflow.advanceSubType)?.label ?? workflow.advanceSubType}
                             </span>
                           )}
                         </td>
@@ -1305,8 +1373,8 @@ export default function WorkflowBuilder() {
               </label>
               <label>
                 <span>Request Type <sup>*</sup></span>
-                <select value={metadata.requestType} onChange={(event) => updateMetadata({ requestType: event.target.value })}>
-                  {requestTypeOptions.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                <select value={step1RequestTypeValue} onChange={(event) => handleStep1RequestTypeChange(event.target.value)}>
+                  {step1RequestTypeOptions.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
                 </select>
               </label>
               <label>
@@ -1348,9 +1416,9 @@ export default function WorkflowBuilder() {
             <h3>Request Type</h3>
             <p>Select the request type this workflow will be used for.</p>
             <div className="workflow-radio-list">
-              {requestTypeOptions.map((type) => (
+              {step1RequestTypeOptions.map((type) => (
                 <label key={type.value}>
-                  <input type="radio" checked={metadata.requestType === type.value} onChange={() => updateMetadata({ requestType: type.value })} />
+                  <input type="radio" checked={step1RequestTypeValue === type.value} onChange={() => handleStep1RequestTypeChange(type.value)} />
                   <span>{type.label}</span>
                 </label>
               ))}
@@ -1437,19 +1505,29 @@ export default function WorkflowBuilder() {
           </label>
           <label className="workflow-config-field">
             <span>Request Type</span>
-            <select value={metadata.requestType} onChange={(event) => updateMetadata({ requestType: event.target.value, advanceSubType: "" })} disabled={readOnly}>
-              {requestTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            <select
+              value={metadata.requestType === "ADVANCE_REQUEST" && metadata.advanceSubType ? `ADVANCE_REQUEST:${metadata.advanceSubType}` : metadata.requestType}
+              onChange={(event) => {
+                const val = event.target.value;
+                if (val.startsWith("ADVANCE_REQUEST:")) {
+                  updateMetadata({ requestType: "ADVANCE_REQUEST", advanceSubType: val.split(":")[1] });
+                } else {
+                  updateMetadata({ requestType: val, advanceSubType: "" });
+                }
+              }}
+              disabled={readOnly}
+            >
+              <optgroup label="Advance Request">
+                <option value="ADVANCE_REQUEST">All Advances (any type)</option>
+                {advanceSubTypes.map((opt) => (
+                  <option key={opt.value} value={`ADVANCE_REQUEST:${opt.value}`}>{opt.label}</option>
+                ))}
+              </optgroup>
+              {requestTypeOptions.filter((o) => o.value !== "ADVANCE_REQUEST").map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </label>
-          {metadata.requestType === "ADVANCE_REQUEST" && (
-            <label className="workflow-config-field">
-              <span>Advance Type</span>
-              <select value={metadata.advanceSubType} onChange={(event) => updateMetadata({ advanceSubType: event.target.value })} disabled={readOnly}>
-                <option value="">All Advance Types</option>
-                {ADVANCE_SUB_TYPES.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-              </select>
-            </label>
-          )}
           <label className="workflow-config-field workflow-config-department">
             <span>Department</span>
             <select value={metadata.department} onChange={(event) => updateMetadata({ department: event.target.value, section: "", team: "" })} disabled={readOnly}>
@@ -1585,7 +1663,11 @@ export default function WorkflowBuilder() {
                 <label>
                   <span>Position <sup>*</sup></span>
                   <select value={selectedStep.positionTypeCode} onChange={(event) => updateStepPosition(selectedStep.id, event.target.value)} disabled={readOnly || selectedStep.isSystemStep}>
-                    {detailPositionOptions.map((position) => <option key={position.code} value={position.code}>{position.name}</option>)}
+                    {detailPositionOptions.map((position) => (
+                      <option key={position.id} value={position.code}>
+                        {position.code === "EXCO_OWNER" ? `${position.name} — ${position.description}` : position.name}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 {!selectedStep.isSystemStep && (() => {
@@ -1686,6 +1768,10 @@ export default function WorkflowBuilder() {
                     <input type="checkbox" checked={selectedStep.isFinalApproval} onChange={(event) => updateStep(selectedStep.id, { isFinalApproval: event.target.checked })} disabled={readOnly} />
                     <span>Final Approval</span>
                   </label>
+                  <label className="workflow-checkbox">
+                    <input type="checkbox" checked={selectedStep.requiresAccommodation} onChange={(event) => updateStep(selectedStep.id, { requiresAccommodation: event.target.checked })} disabled={readOnly} />
+                    <span>Only required if accommodation is needed (overnight travel)</span>
+                  </label>
                 </div>
                 <label>
                   <span>Escalation Days</span>
@@ -1746,33 +1832,91 @@ export default function WorkflowBuilder() {
             {!readOnly && (
               <div style={{ padding: "10px 0 4px" }}>
                 {showAddPosition ? (
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                    <select
-                      value={addPositionPicker.department}
-                      onChange={(e) => setAddPositionPicker((p) => ({ ...p, department: e.target.value }))}
-                      style={{ flex: 1, minWidth: 140, fontSize: 13 }}
-                    >
-                      <option value="">Choose department…</option>
-                      {otherDeptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                    <select
-                      value={addPositionPicker.role}
-                      onChange={(e) => setAddPositionPicker((p) => ({ ...p, role: e.target.value as "HOD" | "MANAGER" }))}
-                      style={{ fontSize: 13 }}
-                    >
-                      <option value="HOD">HOD</option>
-                      <option value="MANAGER">Manager</option>
-                    </select>
-                    <button type="button" className="button button-subtle small-button" onClick={addExtraPosition} disabled={!addPositionPicker.department}>
-                      <Plus size={13} aria-hidden /> Add
-                    </button>
-                    <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(false)}>
-                      <X size={13} aria-hidden />
-                    </button>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        type="button"
+                        className={`button small-button ${addPanelMode === "position" ? "" : "button-subtle"}`}
+                        onClick={() => setAddPanelMode("position")}
+                        style={{ flex: 1 }}
+                      >
+                        Position
+                      </button>
+                      <button
+                        type="button"
+                        className={`button small-button ${addPanelMode === "member" ? "" : "button-subtle"}`}
+                        onClick={() => setAddPanelMode("member")}
+                        style={{ flex: 1 }}
+                      >
+                        Team member
+                      </button>
+                    </div>
+
+                    {addPanelMode === "position" ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <select
+                          value={addPositionPicker.department}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, department: e.target.value }))}
+                          style={{ flex: 1, minWidth: 140, fontSize: 13 }}
+                        >
+                          <option value="">Choose department…</option>
+                          {otherDeptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <select
+                          value={addPositionPicker.role}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, role: e.target.value as "HOD" | "MANAGER" }))}
+                          style={{ fontSize: 13 }}
+                        >
+                          <option value="HOD">HOD</option>
+                          <option value="MANAGER">Manager</option>
+                        </select>
+                        <button type="button" className="button button-subtle small-button" onClick={addExtraPosition} disabled={!addPositionPicker.department}>
+                          <Plus size={13} aria-hidden /> Add
+                        </button>
+                        <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(false)}>
+                          <X size={13} aria-hidden />
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <select
+                          value={addMemberPicker.department}
+                          onChange={(e) => setAddMemberPicker({ department: e.target.value, team: "", userId: "" })}
+                          style={{ flex: 1, minWidth: 140, fontSize: 13 }}
+                        >
+                          <option value="">Choose department…</option>
+                          {departmentOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <select
+                          value={addMemberPicker.team}
+                          onChange={(e) => setAddMemberPicker((p) => ({ ...p, team: e.target.value, userId: "" }))}
+                          disabled={!addMemberPicker.department || teamOptionsForMember.length === 0}
+                          style={{ flex: 1, minWidth: 120, fontSize: 13 }}
+                        >
+                          <option value="">All teams…</option>
+                          {teamOptionsForMember.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <select
+                          value={addMemberPicker.userId}
+                          onChange={(e) => setAddMemberPicker((p) => ({ ...p, userId: e.target.value }))}
+                          disabled={!addMemberPicker.department || memberOptions.length === 0}
+                          style={{ flex: 1, minWidth: 140, fontSize: 13 }}
+                        >
+                          <option value="">Choose person…</option>
+                          {memberOptions.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                        </select>
+                        <button type="button" className="button button-subtle small-button" onClick={addExtraMember} disabled={!addMemberPicker.userId}>
+                          <Plus size={13} aria-hidden /> Add
+                        </button>
+                        <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(false)}>
+                          <X size={13} aria-hidden />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(true)} style={{ width: "100%" }}>
-                    <Plus size={14} aria-hidden /> Add position from another department
+                    <Plus size={14} aria-hidden /> Add position or team member from another department
                   </button>
                 )}
               </div>

@@ -312,7 +312,7 @@ export default function CeoManagement() {
             {[
               { icon: <Crown size={20} />, role: "CEO", desc: "Top of the organization. No manager assigned. All EXCO members report here.", color: "#6d28d9" },
               { icon: <Star size={20} />, role: "EXCO Member", desc: "Section heads. Report to the CEO. Own one or more departments/sections.", color: "#7c3aed" },
-              { icon: <Shield size={20} />, role: "HOD (Head of Dept)", desc: "Department heads. Report to their EXCO owner.", color: "#1d4ed8" },
+              { icon: <Shield size={20} />, role: "HOD (Head of Dept)", desc: "Department heads. Report to their EXCO member.", color: "#1d4ed8" },
               { icon: <UserCheck size={20} />, role: "Manager", desc: "Report to HOD if assigned, otherwise to EXCO.", color: "#166534" },
               { icon: <Users size={20} />, role: "Employees", desc: "Report to their department manager.", color: "#b45309" },
             ].map((item) => (
@@ -488,7 +488,6 @@ export default function CeoManagement() {
                   <label>Assign new role <span className="ep-required">*</span></label>
                   <select className="ep-form-select" value={reassignToRole} onChange={(e) => setReassignToRole(e.target.value)}>
                     <option value="EXCO">EXCO Member</option>
-                    <option value="CHIEF_OFFICER">Chief Officer</option>
                     <option value="MANAGER">Manager</option>
                     <option value="HR_MANAGER">HR Manager</option>
                     <option value="HOD">Head of Department</option>

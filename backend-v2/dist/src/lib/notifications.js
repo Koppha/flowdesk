@@ -141,16 +141,16 @@ function statusLabel(status) {
 export async function notifyAdvanceTask(args) {
     const requester = args.requesterName || "Requester";
     const department = args.department || null;
-    // ── Determine who the next approver role is ────────────────────────────────
+    // ── Determine who the next approver role is (legacy fallback) ──────────────
     let role = null;
     if (args.status === "SUBMITTED")
         role = "MANAGER";
-    if (args.status === "CHIEF_OFFICER_REVIEW")
-        role = "CHIEF_OFFICER";
+    if (args.status === "COUNTERSIGNED")
+        role = "HOD";
     if (args.status === "HR_MANAGER_REVIEW")
         role = "HR_MANAGER";
     if (args.status === "HR_REVIEW")
-        role = "AUTH_OFFICER";
+        role = "HR_MANAGER";
     if (args.status === "HR_OFFICER")
         role = "FINANCE";
     if (args.status === "APPROVED")
@@ -164,14 +164,54 @@ export async function notifyAdvanceTask(args) {
         ...(args.comments ? [["Comments", args.comments]] : [])
     ]);
     // ── Notify approver ────────────────────────────────────────────────────────
-    if (role) {
+    if (args.nextApprover?.email) {
         try {
-            const recipientDept = ["HR_MANAGER", "AUTH_OFFICER", "FINANCE"].includes(role) ? null : department;
+            const roleLabel = args.nextApprover.title || "Approver";
+            const approverMsg = [
+                header(`ADVANCE REQUEST — ACTION REQUIRED`),
+                ``,
+                `Hello ${args.nextApprover.name || ""},`.trim(),
+                ``,
+                `An advance request requires your ${roleLabel} approval.`,
+                ``,
+                details,
+                ``,
+                `Please log in to review and take action on this request.`,
+                ``,
+                footer()
+            ].join("\n");
+            await sendMail({
+                to: [args.nextApprover.email],
+                subject: `[Action Required] Advance request awaiting ${roleLabel} approval`,
+                text: approverMsg
+            });
+            sendTeamsCard({
+                title: "Advance Request — Action Required",
+                summary: `Advance request from ${requester} awaiting ${roleLabel} approval`,
+                subtitle: `Requires ${roleLabel} action`,
+                color: "f59e0b",
+                facts: [
+                    { name: "Requester", value: requester },
+                    { name: "Department", value: department || "—" },
+                    { name: "Type", value: args.advanceType.replace(/_/g, " ") },
+                    { name: "Amount", value: fmt(args.requestedTotal) },
+                    { name: "Status", value: statusLabel(args.status) },
+                    ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
+                ]
+            }).catch((e) => logger.warn("teams_advance_approver_failed", { error: serializeError(e) }));
+        }
+        catch (error) {
+            logger.warn("advance_approver_notification_failed", {
+                advance_id: args.advanceId, status: args.status, error: serializeError(error)
+            });
+        }
+    }
+    else if (role) {
+        try {
+            const recipientDept = ["HR_MANAGER", "FINANCE"].includes(role) ? null : department;
             const approverRecipients = args.status === "SUBMITTED"
                 ? await getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
-                : args.status === "CHIEF_OFFICER_REVIEW"
-                    ? await getAssignedDepartmentOwnerRecipients(department, "exco_user_id")
-                    : await getRecipients(role, recipientDept);
+                : await getRecipients(role, recipientDept);
             if (approverRecipients.length > 0) {
                 const roleLabel = role.replace(/_/g, " ");
                 const approverMsg = [
@@ -219,7 +259,7 @@ export async function notifyAdvanceTask(args) {
         try {
             const requesterMessages = {
                 SUBMITTED: `Your advance request has been submitted and is awaiting manager approval.`,
-                CHIEF_OFFICER_REVIEW: `Your advance request has been approved by your manager and is now pending Chief Officer review.`,
+                COUNTERSIGNED: `Your advance request has been approved by your manager and is now pending HOD / EXCO review.`,
                 HR_MANAGER_REVIEW: `Your advance request is progressing and is now under HR Manager review.`,
                 HR_REVIEW: `Your advance request is under HR review.`,
                 HR_OFFICER: `Your advance request has been approved and is being processed for payment.`,
@@ -432,9 +472,9 @@ export async function notifyClaimTask(args) {
     if (args.status === "SUBMITTED")
         roles = ["MANAGER"];
     if (args.status === "MANAGER_APPROVED")
-        roles = ["CHIEF_OFFICER"];
+        roles = ["EXCO"];
     if (args.status === "CHIEF_OFFICER_APPROVED")
-        roles = ["AUTH_OFFICER"];
+        roles = ["MANAGER"];
     if (args.status === "HR_OFFICER")
         roles = ["HR_MANAGER"];
     if (args.status === "HR_MANAGER_REVIEW")
@@ -443,7 +483,7 @@ export async function notifyClaimTask(args) {
         roles = ["FINANCE"];
     if (roles.length > 0) {
         try {
-            const allRecipients = (await Promise.all(roles.map((role) => role === "AUTH_OFFICER" || role === "FINANCE"
+            const allRecipients = (await Promise.all(roles.map((role) => args.status === "CHIEF_OFFICER_APPROVED" || role === "FINANCE"
                 ? getRecipients(role, null)
                 : args.status === "SUBMITTED"
                     ? getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
@@ -496,8 +536,8 @@ export async function notifyClaimTask(args) {
         try {
             const claimantMessages = {
                 SUBMITTED: `Your clearance claim has been submitted and is awaiting manager approval.`,
-                MANAGER_APPROVED: `Your clearance claim has been approved by your manager and is now pending Chief Officer review.`,
-                CHIEF_OFFICER_APPROVED: `Your clearance claim has been approved by the Chief Officer and is now with HR for processing.`,
+                MANAGER_APPROVED: `Your clearance claim has been approved by your manager and is now pending EXCO review.`,
+                CHIEF_OFFICER_APPROVED: `Your clearance claim has been approved by EXCO and is now with HR for processing.`,
                 HR_OFFICER: `Your clearance claim is being reviewed by HR Management.`,
                 HR_MANAGER_REVIEW: `Your clearance claim has been reviewed by HR and forwarded to Finance for verification.`,
                 FINANCE_VERIFIED: `Your clearance claim has been verified by Finance and is awaiting final settlement.`

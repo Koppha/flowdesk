@@ -1,0 +1,75 @@
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  NODE_ENV: "test"
+
+backend_test:
+  stage: test
+  tags: [build]
+  script:
+    - cd backend-v2
+    - npm ci
+    - npm run build
+    - npm test
+  artifacts:
+    paths:
+      - backend-v2/dist
+    expire_in: 1h
+
+frontend_build:
+  stage: build
+  tags: [build]
+  script:
+    - cd frontend
+    - npm ci
+    - npm run build
+  artifacts:
+    paths:
+      - frontend/dist
+    expire_in: 1h
+
+package_release:
+  stage: build
+  tags: [build]
+  needs:
+    - backend_test
+    - frontend_build
+  script:
+    - mkdir -p release
+    - tar -czf release/backend.tar.gz -C backend-v2 dist package.json package-lock.json
+    - tar -czf release/frontend.tar.gz -C frontend dist
+  artifacts:
+    paths:
+      - release/
+    expire_in: 1 day
+
+.deploy_template: &deploy_template
+  stage: deploy
+  tags: [build]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  needs:
+    - package_release
+  before_script:
+    - which ssh-agent || apt-get update -y && apt-get install -y openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan -H "$PROD_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+  script:
+    - scp release/backend.tar.gz release/frontend.tar.gz deploy/remote-deploy.sh "$DEPLOY_USER@$PROD_HOST:/tmp/"
+    - ssh "$DEPLOY_USER@$PROD_HOST" "chmod +x /tmp/remote-deploy.sh && /tmp/remote-deploy.sh $CI_COMMIT_SHA"
+
+deploy_prod1:
+  <<: *deploy_template
+  variables:
+    PROD_HOST: $PROD1_HOST
+
+deploy_prod2:
+  <<: *deploy_template
+  variables:
+    PROD_HOST: $PROD2_HOST

@@ -5,13 +5,15 @@
 DO $$ BEGIN
   CREATE TYPE role_type AS ENUM (
     'EMPLOYEE',
+    'HOD',
     'MANAGER',
     'HR_MANAGER',
     'AUTH_OFFICER',
     'CHIEF_OFFICER',
     'FINANCE',
     'ADMIN',
-    'EXCO'
+    'EXCO',
+    'CEO'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 

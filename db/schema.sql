@@ -6,13 +6,15 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 DO $$ BEGIN
   CREATE TYPE role_type AS ENUM (
     'EMPLOYEE',
+    'HOD',
     'MANAGER',
     'HR_MANAGER',
     'AUTH_OFFICER',
     'CHIEF_OFFICER',
     'FINANCE',
     'ADMIN',
-    'EXCO'
+    'EXCO',
+    'CEO'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -44,7 +46,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE approval_step AS ENUM (
-    'MANAGER','HR_MANAGER','AUTH_OFFICER','CHIEF_OFFICER','FINANCE'
+    'MANAGER','HR_MANAGER','CHIEF_OFFICER','FINANCE'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -55,17 +57,6 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   CREATE TYPE workflow_request_type AS ENUM ('ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-CREATE TABLE IF NOT EXISTS position_types (
-  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name text NOT NULL,
-  code text UNIQUE NOT NULL,
-  description text,
-  applies_to workflow_request_type[] NOT NULL DEFAULT ARRAY['ADVANCE_REQUEST']::workflow_request_type[],
-  is_active boolean NOT NULL DEFAULT true,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
 
 CREATE TABLE IF NOT EXISTS workflows (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -82,7 +73,7 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
   step_order integer NOT NULL,
-  position_type_id uuid REFERENCES position_types(id),
+  position_type_code text NOT NULL DEFAULT 'CUSTOM',
   position_name text NOT NULL,
   description text,
   is_required boolean NOT NULL DEFAULT false,
@@ -93,6 +84,7 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
   is_final_approval boolean NOT NULL DEFAULT false,
   is_system_step boolean NOT NULL DEFAULT false,
   is_active boolean NOT NULL DEFAULT true,
+  requires_accommodation boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -104,7 +96,8 @@ CREATE TABLE IF NOT EXISTS workflow_rules (
   condition_field text NOT NULL,
   condition_operator text NOT NULL,
   condition_value text NOT NULL,
-  additional_position_type_id uuid REFERENCES position_types(id),
+  additional_position_type_code text,
+  additional_position_name text,
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -113,29 +106,8 @@ CREATE TABLE IF NOT EXISTS workflow_rules (
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_rules_workflow ON workflow_rules(workflow_id);
 
-CREATE INDEX IF NOT EXISTS idx_position_types_code ON position_types(code);
-
 CREATE INDEX IF NOT EXISTS idx_workflows_request_type ON workflows(request_type);
 CREATE INDEX IF NOT EXISTS idx_workflows_department ON workflows(department);
-
-CREATE OR REPLACE FUNCTION insert_default_workflow_position_types() RETURNS void AS $$
-BEGIN
-  INSERT INTO position_types (name, code, description, applies_to)
-    VALUES
-      ('Employee', 'EMPLOYEE', 'Request Initiator', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('HOD', 'HOD', 'Department Head', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('Manager', 'MANAGER', 'Department Manager', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('EXCO Owner', 'EXCO_OWNER', 'Executive Committee Member', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('Finance', 'FINANCE', 'Finance Approval', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('Procurement', 'PROCUREMENT', 'Procurement Manager', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('HR Review', 'HR_REVIEW', 'HR Review', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('Legal Review', 'LEGAL_REVIEW', 'Legal Department', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST']),
-      ('CEO', 'CEO', 'Chief Executive Officer', ARRAY['ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST'])
-  ON CONFLICT (code) DO NOTHING;
-END;
-$$ LANGUAGE plpgsql;
-
-SELECT insert_default_workflow_position_types();
 
 CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -463,20 +435,20 @@ CREATE TABLE IF NOT EXISTS admin_feature_permissions (
 DO $$
 BEGIN
   INSERT INTO admin_feature_permissions (feature_key, allowed_roles) VALUES
-    ('user_management',      ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
-    ('roles_permissions',    ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
-    ('travel_setup',         ARRAY['ADMIN','HR_MANAGER','AUTH_OFFICER']),
+    ('user_management',      ARRAY['ADMIN','MANAGER','EXCO']),
+    ('roles_permissions',    ARRAY['ADMIN','MANAGER','EXCO']),
+    ('travel_setup',         ARRAY['ADMIN','HR_MANAGER','MANAGER']),
     ('org_structure',        ARRAY['ADMIN']),
     ('team_roster',          ARRAY['ADMIN']),
-    ('sections_departments', ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('sections_departments', ARRAY['ADMIN','MANAGER','EXCO']),
     ('ceo_management',       ARRAY['ADMIN']),
     ('employees',            ARRAY['ADMIN']),
     ('exco_members',         ARRAY['ADMIN','MANAGER']),
-    ('managers',             ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
-    ('leadership_assignments',ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
-    ('workflow_builder',     ARRAY['ADMIN','MANAGER','CHIEF_OFFICER']),
+    ('managers',             ARRAY['ADMIN','MANAGER','EXCO']),
+    ('leadership_assignments',ARRAY['ADMIN','MANAGER','EXCO']),
+    ('workflow_builder',     ARRAY['ADMIN','MANAGER','EXCO']),
     ('request_types',        ARRAY['ADMIN']),
-    ('reporting_lines',      ARRAY['ADMIN','MANAGER','CHIEF_OFFICER'])
+    ('reporting_lines',      ARRAY['ADMIN','MANAGER','EXCO'])
   ON CONFLICT (feature_key) DO NOTHING;
 END;
 $$ LANGUAGE plpgsql;
