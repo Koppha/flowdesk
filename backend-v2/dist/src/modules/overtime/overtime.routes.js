@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { requireAuth } from "../../lib/auth.js";
+import { isFinanceDept, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getUserAccountState, isProfileComplete } from "../../lib/userProfile.js";
@@ -504,7 +504,7 @@ overtimeRouter.post("/claims/:id/finance-verify", async (req, res, next) => {
             throw notFound();
         if (row.status !== "HR_NOTED")
             throw badRequest("Claim must be HR_NOTED first");
-        if (!["FINANCE", "ADMIN"].includes(req.user.role))
+        if (req.user.role !== "ADMIN" && !isFinanceDept(req.user.department))
             throw forbidden("Only Finance can verify");
         const body = req.body ?? {};
         await query(`UPDATE overtime_claims

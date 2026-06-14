@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
+import { AuthedRequest, isFinanceDept, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { advanceWorkflowStep, createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } from "./advances.service.js";
@@ -10,7 +10,10 @@ import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceTask } from "..
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
-import { canApproveStep, chainStepToStatus, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, chainStepToStatus, getPendingGroup, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { getUserGroups } from "../../lib/permissionGroups.js";
+import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
+import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
 
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 
@@ -114,6 +117,14 @@ const ActionCommentSchema = z.object({
 export const advancesRouter = Router();
 advancesRouter.use(requireAuth);
 
+// Roll back / reject on legacy (non-workflow) advances: allowed for the usual
+// approval-chain roles, or for anyone in the Finance department (org structure).
+function requireAdvanceActionAccess(req: AuthedRequest, _res: import("express").Response, next: import("express").NextFunction) {
+  const role = req.user!.role;
+  if (["MANAGER", "HOD", "EXCO", "ADMIN"].includes(role) || isFinanceDept(req.user!.department)) return next();
+  return next(forbidden());
+}
+
 function toPaymentAccount(args: {
   payment_method: "ECOCASH" | "BANK";
   payment_account?: string;
@@ -199,29 +210,29 @@ export async function getAdvanceNotificationContext(advanceId: string) {
   )[0] ?? null;
 }
 
-export function canViewAdvance(args: {
+export async function canViewAdvance(args: {
   role: string; requesterId: string; createdById: string; userId: string;
-  status: string; type: string; approvalChain?: ChainStep[] | null;
+  approvalChain?: ChainStep[] | null; managerChainIds?: string[];
 }) {
   if (args.role === "ADMIN") return true;
   if (args.requesterId === args.userId) return true;
   if (args.createdById === args.userId) return true;
 
-  // For workflow-driven advances, anyone in the approval chain can view
+  // Anyone in the workflow's resolved approval chain can view
   if (args.approvalChain?.length) {
     if (args.approvalChain.some(s => s.approver_id === args.userId)) return true;
+    // "Team: X" (ANY_ONE) steps list the department HOD as approver_id for
+    // routing purposes, but any member of that permission group is a real
+    // participant in the chain and should be able to track the request.
+    if (args.approvalChain.some(s => s.approval_group_name)) {
+      const groups = await getUserGroups(args.userId);
+      if (args.approvalChain.some(s => s.approval_group_name && groups.includes(s.approval_group_name))) return true;
+    }
   }
 
-  // Legacy role-based visibility for advances without a workflow chain
-  const roleAllowedStatuses: Record<string, string[]> = {
-    MANAGER:       ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
-    HOD:           ["COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
-    HR_MANAGER:    ["HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
-    EXCO:          ["COUNTERSIGNED", "CHIEF_OFFICER_REVIEW", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED", "PAID"],
-    FINANCE:       ["HR_OFFICER", "APPROVED", "PAID"]
-  };
+  // Anyone in the requester's management chain (org structure) can view
+  if (args.managerChainIds?.includes(args.userId)) return true;
 
-  if (roleAllowedStatuses[args.role]?.includes(args.status)) return true;
   return false;
 }
 
@@ -390,7 +401,8 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       )
     )[0];
     if (!adv) throw notFound();
-    if (!canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, status: adv.status, type: adv.type, approvalChain: (adv as any).approval_chain })) {
+    const managerChainIds = await getManagerChainIds(adv.requester_id);
+    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, managerChainIds }))) {
       throw forbidden();
     }
 
@@ -429,6 +441,41 @@ advancesRouter.get("/:id/history", async (req: AuthedRequest, res, next) => {
       [req.params.id]
     );
     return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+advancesRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
+  try {
+    const adv = (
+      await query<any>(
+        `SELECT ar.*,
+                u.full_name AS requester_name,
+                u.department AS department,
+                creator.full_name AS created_by_name,
+                tt.currency AS currency
+         FROM advance_requests ar
+         JOIN users u ON u.id = ar.requester_id
+         JOIN users creator ON creator.id = ar.created_by_id
+         LEFT JOIN travel_types tt ON tt.code = ar.type
+         WHERE ar.id=$1`,
+        [req.params.id]
+      )
+    )[0];
+    if (!adv) throw notFound();
+    const managerChainIds = await getManagerChainIds(adv.requester_id);
+    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: adv.approval_chain, managerChainIds }))) {
+      throw forbidden();
+    }
+
+    const lines = await query<any>(`SELECT line_date, location FROM advance_lines WHERE advance_request_id=$1 ORDER BY line_date`, [req.params.id]);
+
+    const doc = buildAdvanceRequestPdf(adv, lines);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="advance-${req.params.id}.pdf"`);
+    doc.pipe(res);
+    doc.end();
   } catch (err) {
     return next(err);
   }
@@ -657,7 +704,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
   }
 });
 
-advancesRouter.post("/:id/rollback", requireRole(["MANAGER", "HOD", "HR_MANAGER", "EXCO", "FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ActionCommentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for rollback", parsed.error.flatten());
@@ -672,11 +719,16 @@ advancesRouter.post("/:id/rollback", requireRole(["MANAGER", "HOD", "HR_MANAGER"
       // Workflow-driven: only the current step's approver (or ADMIN) can roll back
       const chain = adv.approval_chain as ChainStep[];
       const stepIdx = adv.workflow_step_order ?? 0;
-      const currentStep = chain[stepIdx];
-      if (!currentStep) throw badRequest("No active workflow step to roll back");
+      const group = getPendingGroup(chain, stepIdx);
+      if (!group.indices.length) throw badRequest("No active workflow step to roll back");
       const delegated = await getActiveManagerDelegation(userId);
-      if (role !== "ADMIN" && !canApproveStep(currentStep, userId, role, delegated?.manager_id)) {
-        throw forbidden(`You are not the assigned approver for step: ${currentStep.position_name}`);
+      let currentStep: ChainStep | undefined = chain[group.indices[0]];
+      if (role !== "ADMIN") {
+        currentStep = undefined;
+        for (const idx of group.indices) {
+          if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
+        }
+        if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
       }
       // Reset to DRAFT — requester can edit and re-submit, chain re-resolved on next submit
       await query(
@@ -726,7 +778,7 @@ advancesRouter.post("/:id/rollback", requireRole(["MANAGER", "HOD", "HR_MANAGER"
   }
 });
 
-advancesRouter.post("/:id/reject", requireRole(["MANAGER", "HOD", "HR_MANAGER", "EXCO", "FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+advancesRouter.post("/:id/reject", requireAdvanceActionAccess, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ActionCommentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for reject", parsed.error.flatten());
@@ -741,18 +793,23 @@ advancesRouter.post("/:id/reject", requireRole(["MANAGER", "HOD", "HR_MANAGER", 
       // Workflow-driven: only the current step's approver (or ADMIN) can reject
       const chain = adv.approval_chain as ChainStep[];
       const stepIdx = adv.workflow_step_order ?? 0;
-      const currentStep = chain[stepIdx];
-      if (!currentStep) throw badRequest("No active workflow step to reject");
+      const group = getPendingGroup(chain, stepIdx);
+      if (!group.indices.length) throw badRequest("No active workflow step to reject");
       const delegated = await getActiveManagerDelegation(userId);
-      if (role !== "ADMIN" && !canApproveStep(currentStep, userId, role, delegated?.manager_id)) {
-        throw forbidden(`You are not the assigned approver for step: ${currentStep.position_name}`);
+      let currentStep: ChainStep | undefined = chain[group.indices[0]];
+      if (role !== "ADMIN") {
+        currentStep = undefined;
+        for (const idx of group.indices) {
+          if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
+        }
+        if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
       }
     } else {
       // Legacy guards
       if (role === "HR_MANAGER" && adv.status !== "HR_MANAGER_REVIEW") throw forbidden("HR Manager can only reject advances pending HR Manager review");
       if (role === "HOD" && adv.status !== "COUNTERSIGNED") throw forbidden("HOD can only reject advances pending HOD review");
       if (role === "EXCO" && adv.status !== "COUNTERSIGNED") throw forbidden("EXCO can only reject advances pending HOD / EXCO review");
-      if (role === "FINANCE" && !["HR_OFFICER", "APPROVED"].includes(adv.status)) throw forbidden("Finance can only reject HR-approved advances pending payment");
+      if (isFinanceDept(req.user!.department) && !["HR_OFFICER", "APPROVED"].includes(adv.status)) throw forbidden("Finance can only reject HR-approved advances pending payment");
     }
 
     const status: AdvanceStatus = "REJECTED";
@@ -803,6 +860,7 @@ advancesRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res,
     let nextStatus: AdvanceStatus;
     let auditAfter: Record<string, unknown>;
     let nextApprover: { name: string | null; email: string | null; title: string | null } | null = null;
+    let extraApprovers: Array<{ name: string | null; email: string | null; title: string | null }> = [];
 
     if (adv.approval_chain?.length) {
       // ── Workflow-driven path ──────────────────────────────────────────────
@@ -811,15 +869,19 @@ advancesRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res,
         userId,
         role,
         delegatedManagerId: delegated?.manager_id,
+        userDepartment: req.user!.department,
         approvedTotal: parsed.data.approved_total
       });
       nextStatus = result.nextStatus;
       nextApprover = result.nextApprover;
+      extraApprovers = result.nextApprovers.slice(1);
       auditAfter = {
         status: nextStatus,
         approved_total: parsed.data.approved_total,
         workflow_step: result.newStepOrder,
-        step_name: result.hasMore ? (adv.approval_chain as ChainStep[])[result.newStepOrder].position_name : "Complete"
+        step_name: result.stillPending
+          ? result.currentStep.position_name
+          : result.hasMore ? (adv.approval_chain as ChainStep[])[result.newStepOrder].position_name : "Complete"
       };
     } else if (role === "ADMIN") {
       // ── Legacy admin override (no workflow chain) ─────────────────────────
@@ -860,6 +922,33 @@ advancesRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res,
         requestedTotal: Number(notificationContext.requested_total),
         nextApprover
       });
+      for (const extra of extraApprovers) {
+        if (extra.email) {
+          await notifyAdvanceTask({
+            advanceId: adv.id,
+            status: nextStatus,
+            advanceType: notificationContext.type,
+            requesterName: notificationContext.full_name,
+            requesterEmail: notificationContext.email,
+            department: notificationContext.department,
+            requestedTotal: Number(notificationContext.requested_total),
+            nextApprover: extra
+          });
+        }
+      }
+      // Finance completing the final approval also marks the advance as paid
+      // in the same action — send the "paid" notification too.
+      if (nextStatus === "PAID") {
+        await notifyAdvancePaid({
+          advanceId: adv.id,
+          requesterName: notificationContext.full_name,
+          requesterEmail: notificationContext.email,
+          department: notificationContext.department,
+          advanceType: notificationContext.type,
+          approvedTotal: parsed.data.approved_total,
+          paidReference: notificationContext.paid_reference
+        });
+      }
     }
     return res.json({ ok: true, status: nextStatus });
   } catch (err) {
@@ -872,16 +961,16 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
 
-    // Normally only FINANCE/ADMIN can mark an advance as paid. Workflow-driven
-    // advances may instead name a specific person as the final ("Finance
-    // Officer") approval step — that person also needs to be able to mark the
-    // advance paid once their step has completed, even if their account role
-    // isn't FINANCE.
+    // Normally only the Finance department/ADMIN can mark an advance as paid.
+    // Workflow-driven advances may instead name a specific person as the final
+    // ("Finance Officer") approval step — that person also needs to be able to
+    // mark the advance paid once their step has completed, even if they're not
+    // in the Finance department.
     const role = req.user!.role;
     const chain = (adv.approval_chain as { approver_id?: string }[] | null) || [];
     const finalStepApproverId = chain.length ? chain[chain.length - 1].approver_id : undefined;
     const isFinalStepApprover = Boolean(finalStepApproverId) && finalStepApproverId === req.user!.userId;
-    if (role !== "FINANCE" && role !== "ADMIN" && !isFinalStepApprover) {
+    if (role !== "ADMIN" && !isFinanceDept(req.user!.department) && !isFinalStepApprover) {
       throw forbidden("Only Finance can mark an advance as paid");
     }
 

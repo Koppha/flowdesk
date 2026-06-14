@@ -489,7 +489,6 @@ export default function CeoManagement() {
                   <select className="ep-form-select" value={reassignToRole} onChange={(e) => setReassignToRole(e.target.value)}>
                     <option value="EXCO">EXCO Member</option>
                     <option value="MANAGER">Manager</option>
-                    <option value="HR_MANAGER">HR Manager</option>
                     <option value="HOD">Head of Department</option>
                     <option value="EMPLOYEE">Employee</option>
                   </select>

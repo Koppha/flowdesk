@@ -24,6 +24,7 @@ type UserRow = {
   team_name: string | null;
   employment_type: string | null;
   role: string;
+  groups: string[];
   is_active: boolean;
   profile_completed: boolean | null;
 };
@@ -34,7 +35,6 @@ const ROLES: { value: string; label: string; color: string; bg: string }[] = [
   { value: "EMPLOYEE",      label: "Employee",      color: "#1d4ed8", bg: "#dbeafe" },
   { value: "MANAGER",       label: "Manager",       color: "#0f766e", bg: "#ccfbf1" },
   { value: "HOD",           label: "HOD",           color: "#6d28d9", bg: "#ede9fe" },
-  { value: "HR_MANAGER",    label: "HR Manager",    color: "#b45309", bg: "#fef3c7" },
   { value: "FINANCE",       label: "Finance",       color: "#166534", bg: "#dcfce7" },
   { value: "EXCO",          label: "EXCO",          color: "#7c3aed", bg: "#f3e8ff" },
   { value: "CEO",           label: "CEO",           color: "#be185d", bg: "#fce7f3" },
@@ -121,6 +121,7 @@ export default function UserManagement() {
   const [addRole, setAddRole]   = useState("EMPLOYEE");
   const [addActive, setAddActive] = useState(true);
   const [addOrg, setAddOrg]     = useState<OrgSelection>(EMPTY_ORG);
+  const [addGroups, setAddGroups] = useState<string[]>([]);
   const [adding, setAdding]     = useState(false);
 
   // Edit modal
@@ -134,7 +135,11 @@ export default function UserManagement() {
   const [editRole, setEditRole]     = useState("EMPLOYEE");
   const [editActive, setEditActive] = useState(true);
   const [editOrg, setEditOrg]       = useState<OrgSelection>(EMPTY_ORG);
+  const [editGroups, setEditGroups] = useState<string[]>([]);
   const [saving, setSaving]         = useState(false);
+
+  // Permission groups (for membership assignment)
+  const [availableGroups, setAvailableGroups] = useState<{ name: string; member_count: string; dynamic?: boolean }[]>([]);
 
   // ─── Load ─────────────────────────────────────────────────────────────────
 
@@ -152,6 +157,15 @@ export default function UserManagement() {
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await api.permissionGroups();
+        setAvailableGroups(Array.isArray(rows) ? rows : []);
+      } catch { /* ignore */ }
+    })();
+  }, []);
+
   // Populate edit form when a user is selected
   useEffect(() => {
     if (!editing) return;
@@ -165,6 +179,7 @@ export default function UserManagement() {
     setEditRole(editing.role ?? "EMPLOYEE");
     setEditActive(editing.is_active !== false);
     setEditOrg(orgSelectionFromUser(editing));
+    setEditGroups(Array.isArray(editing.groups) ? editing.groups : []);
   }, [editing]);
 
   // ─── Derived ──────────────────────────────────────────────────────────────
@@ -197,7 +212,7 @@ export default function UserManagement() {
   function resetAddForm() {
     setAddFirst(""); setAddSurname(""); setAddEmail(""); setAddEmpNo("");
     setAddTitle(""); setAddEmpType("PERMANENT"); setAddRole("EMPLOYEE");
-    setAddActive(true); setAddOrg(EMPTY_ORG);
+    setAddActive(true); setAddOrg(EMPTY_ORG); setAddGroups([]);
   }
 
   async function handleAdd() {
@@ -217,6 +232,7 @@ export default function UserManagement() {
         employment_type: addEmpType,
         role:            addRole,
         is_active:       addActive,
+        groups:          addGroups,
       });
       resetAddForm();
       setShowAdd(false);
@@ -245,6 +261,7 @@ export default function UserManagement() {
         team_id:         editOrg.teamId      ?? null,
         employment_type: editEmpType,
         is_active:       editActive,
+        groups:          editGroups,
       });
       // Role change goes through its own endpoint
       if (editRole !== editing.role) {
@@ -507,6 +524,24 @@ export default function UserManagement() {
               <Field label="Org Placement" span>
                 <OrgPicker value={addOrg} onChange={setAddOrg} />
               </Field>
+              <Field label="Permission Groups" span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px" }}>
+                  {availableGroups.filter(g => !g.dynamic).map(g => (
+                    <label key={g.name} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: g.name === "ADMIN" ? "default" : "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={addGroups.includes(g.name)}
+                        disabled={g.name === "ADMIN"}
+                        onChange={() => setAddGroups(prev => prev.includes(g.name) ? prev.filter(n => n !== g.name) : [...prev, g.name])}
+                      />
+                      {g.name}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  Leave unselected to default to the group matching the chosen System Role.
+                </div>
+              </Field>
             </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 24 }}>
@@ -557,6 +592,33 @@ export default function UserManagement() {
               </Field>
               <Field label="Org Placement" span>
                 <OrgPicker value={editOrg} onChange={setEditOrg} />
+              </Field>
+              <Field label="Permission Groups" span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px" }}>
+                  {availableGroups.filter(g => !g.dynamic).map(g => (
+                    <label key={g.name} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: g.name === "ADMIN" ? "default" : "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={editGroups.includes(g.name)}
+                        disabled={g.name === "ADMIN"}
+                        onChange={() => setEditGroups(prev => prev.includes(g.name) ? prev.filter(n => n !== g.name) : [...prev, g.name])}
+                      />
+                      {g.name}
+                    </label>
+                  ))}
+                </div>
+                {editGroups.filter(n => availableGroups.find(g => g.name === n)?.dynamic).length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>
+                      Also a member of (based on role &amp; org placement):
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {editGroups.filter(n => availableGroups.find(g => g.name === n)?.dynamic).map(n => (
+                        <span key={n} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "var(--surface-soft)", border: "1px solid var(--border)" }}>{n}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </Field>
             </div>
 

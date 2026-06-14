@@ -1,5 +1,7 @@
 import { query } from "./db.js";
 import { getDepartmentLeadership } from "./departments.js";
+import { isFinanceDept } from "./auth.js";
+import { getUserGroups } from "./permissionGroups.js";
 import { normalizeWorkflowRouteCode } from "./workflowRouting.js";
 import type { AdvanceStatus } from "../modules/advances/advances.types.js";
 
@@ -16,6 +18,22 @@ export interface ChainStep {
   approval_mode: string;
   approval_group_name: string | null;
   requires_accommodation: boolean;
+  parallel_with_previous: boolean;
+  action_type: string;
+  approved?: boolean;
+}
+
+// Returns the contiguous "stage" of chain steps starting at stepIdx: the step
+// at stepIdx plus any immediately-following steps flagged parallel_with_previous.
+// All members of a stage become pending simultaneously and the chain only
+// advances once every member has approved.
+export function getPendingGroup(chain: ChainStep[], stepIdx: number): { indices: number[]; steps: ChainStep[] } {
+  if (stepIdx >= chain.length) return { indices: [], steps: [] };
+  let start = stepIdx;
+  while (start > 0 && chain[start].parallel_with_previous) start--;
+  const indices = [start];
+  for (let i = start + 1; i < chain.length && chain[i].parallel_with_previous; i++) indices.push(i);
+  return { indices, steps: indices.map((i) => chain[i]) };
 }
 
 export async function resolveWorkflowChain(params: {
@@ -93,11 +111,13 @@ export async function resolveWorkflowChain(params: {
       approval_mode: string;
       approval_group_name: string | null;
       requires_accommodation: boolean;
+      parallel_with_previous: boolean;
+      action_type: string;
     }>(
       `SELECT ws.step_order, ws.position_type_code, ws.position_name,
               ws.assigned_user_id, u.full_name AS assigned_user_name, u.title AS assigned_user_title, u.email AS assigned_user_email,
               ws.is_required, ws.skip_if_unassigned, ws.is_final_approval,
-              ws.approval_mode, ws.approval_group_name, ws.requires_accommodation
+              ws.approval_mode, ws.approval_group_name, ws.requires_accommodation, ws.parallel_with_previous, ws.action_type
          FROM workflow_steps ws
          LEFT JOIN users u ON u.id = ws.assigned_user_id
         WHERE ws.workflow_id = $1 AND ws.is_active = true
@@ -108,14 +128,15 @@ export async function resolveWorkflowChain(params: {
   ]);
 
   const chain: ChainStep[] = [];
+  let previousStepPushed = false;
   for (const step of steps) {
     const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
 
     // EMPLOYEE represents the requester, not an approver — exclude from the approval chain.
-    if (code === "EMPLOYEE") continue;
+    if (code === "EMPLOYEE") { previousStepPushed = false; continue; }
 
     // A step flagged as accommodation-only is skipped unless this request needs accommodation.
-    if (step.requires_accommodation && !needsAccommodation) continue;
+    if (step.requires_accommodation && !needsAccommodation) { previousStepPushed = false; continue; }
 
     // A specific assigned user on the step overrides the department-leadership lookup
     // (e.g. a second "Manager" step routed to a different department's manager).
@@ -147,7 +168,7 @@ export async function resolveWorkflowChain(params: {
       code === "EXCO_OWNER" ? leadership.exco_email :
                               null;
 
-    if (!approverId && step.skip_if_unassigned) continue;
+    if (!approverId && step.skip_if_unassigned) { previousStepPushed = false; continue; }
 
     const positionLabel =
       code === "EXCO_OWNER" && leadership.exco_title
@@ -166,8 +187,11 @@ export async function resolveWorkflowChain(params: {
       final_approval: step.is_final_approval,
       approval_mode: step.approval_mode || "SINGLE",
       approval_group_name: step.approval_group_name ?? null,
-      requires_accommodation: step.requires_accommodation
+      requires_accommodation: step.requires_accommodation,
+      parallel_with_previous: (step.parallel_with_previous ?? false) && previousStepPushed,
+      action_type: step.action_type || "APPROVE"
     });
+    previousStepPushed = true;
   }
 
   return { workflowId: (workflow as any).id, chain };
@@ -197,26 +221,41 @@ export function chainStepToStatus(chain: ChainStep[], stepIndex: number): Advanc
 
 // Returns true if userId/userRole is permitted to act on the given workflow step.
 // delegatedManagerId is the manager_id the current user is acting on behalf of (from delegation).
-export function canApproveStep(
+export async function canApproveStep(
   step: ChainStep,
   userId: string,
   userRole: string,
-  delegatedManagerId?: string | null
-): boolean {
+  delegatedManagerId?: string | null,
+  userDepartment?: string | null
+): Promise<boolean> {
+  // ANY_ONE steps (e.g. "Team: X") can be actioned by any member of the named
+  // permission group, regardless of who the step's approver_id is. "Team: X"
+  // groups are scoped to officers — HOD/Manager already have their own
+  // dedicated steps, so they don't double-dip on the team's ANY_ONE step.
+  if (step.approval_mode === "ANY_ONE" && step.approval_group_name) {
+    const isTeamGroup = step.approval_group_name.startsWith("Team: ");
+    const isManagementRole = userRole === "HOD" || userRole === "MANAGER";
+    // HOD/Manager never act on "Team: X" steps, even if they also happen to
+    // be the step's approver_id via department-leadership lookup.
+    if (isTeamGroup && isManagementRole) return false;
+    const groups = await getUserGroups(userId);
+    if (groups.includes(step.approval_group_name)) return true;
+  }
   if (step.approver_id) {
     if (step.approver_id === userId) return true;
     // Delegation: allow if acting on behalf of the assigned manager
     if (step.position_type_code === "MANAGER" && delegatedManagerId && step.approver_id === delegatedManagerId) return true;
     return false;
   }
-  // No specific approver — fall back to role-based
+  // No specific approver — fall back to role-based, except FINANCE which is
+  // now based on org structure (Department: Finance) rather than a role.
+  if (step.position_type_code === "FINANCE") return isFinanceDept(userDepartment);
   const roleMap: Record<string, string[]> = {
     MANAGER:           ["MANAGER"],
     HOD:               ["HOD"],
     EXCO_OWNER:        ["EXCO"],
     HR_MANAGER_REVIEW: ["HR_MANAGER"],
     HR_REVIEW:         ["HR_MANAGER"],
-    FINANCE:           ["FINANCE"],
     CEO:               ["CEO"]
   };
   return (roleMap[step.position_type_code] ?? []).includes(userRole);

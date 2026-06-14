@@ -99,6 +99,16 @@ async function getRecipients(role, department) {
       ORDER BY full_name NULLS LAST, email`, [role, department?.trim() || null]);
     return rows.filter((r) => r.email);
 }
+// Finance approval authority comes from org structure (Department: Finance)
+// rather than a dedicated FINANCE role.
+async function getFinanceRecipients() {
+    const rows = await query(`SELECT email, full_name
+       FROM users
+      WHERE is_active = true
+        AND trim(lower(coalesce(department, ''))) = 'finance'
+      ORDER BY full_name NULLS LAST, email`, []);
+    return rows.filter((r) => r.email);
+}
 async function getAssignedDepartmentOwnerRecipients(department, ownerColumn) {
     if (!department?.trim())
         return [];
@@ -208,10 +218,12 @@ export async function notifyAdvanceTask(args) {
     }
     else if (role) {
         try {
-            const recipientDept = ["HR_MANAGER", "FINANCE"].includes(role) ? null : department;
+            const recipientDept = role === "HR_MANAGER" ? null : department;
             const approverRecipients = args.status === "SUBMITTED"
                 ? await getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
-                : await getRecipients(role, recipientDept);
+                : role === "FINANCE"
+                    ? await getFinanceRecipients()
+                    : await getRecipients(role, recipientDept);
             if (approverRecipients.length > 0) {
                 const roleLabel = role.replace(/_/g, " ");
                 const approverMsg = [
@@ -483,13 +495,15 @@ export async function notifyClaimTask(args) {
         roles = ["FINANCE"];
     if (roles.length > 0) {
         try {
-            const allRecipients = (await Promise.all(roles.map((role) => args.status === "CHIEF_OFFICER_APPROVED" || role === "FINANCE"
-                ? getRecipients(role, null)
-                : args.status === "SUBMITTED"
-                    ? getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
-                    : args.status === "MANAGER_APPROVED"
-                        ? getAssignedDepartmentOwnerRecipients(department, "exco_user_id")
-                        : getRecipients(role, null)))).flat();
+            const allRecipients = (await Promise.all(roles.map((role) => role === "FINANCE"
+                ? getFinanceRecipients()
+                : args.status === "CHIEF_OFFICER_APPROVED"
+                    ? getRecipients(role, null)
+                    : args.status === "SUBMITTED"
+                        ? getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
+                        : args.status === "MANAGER_APPROVED"
+                            ? getAssignedDepartmentOwnerRecipients(department, "exco_user_id")
+                            : getRecipients(role, null)))).flat();
             const unique = Array.from(new Map(allRecipients.map((r) => [r.email, r])).values());
             const roleLabel = roles.map((r) => r.replace(/_/g, " ")).join(" / ");
             if (unique.length > 0) {

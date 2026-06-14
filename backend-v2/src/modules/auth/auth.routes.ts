@@ -10,6 +10,7 @@ import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
 import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
 import { notifyProfileCompleted, notifyUserOnboarded } from "../../lib/notifications.js";
+import { createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, listPermissionGroups, setUserGroups } from "../../lib/permissionGroups.js";
 
 const LoginSchema = z
   .object({
@@ -58,7 +59,7 @@ const ProfileSchema = z
   });
 
 const UpdateUserRoleSchema = z.object({
-  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]),
+  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]),
   is_active: z.boolean().optional()
 });
 
@@ -73,8 +74,9 @@ const CreateUserSchema = z.object({
   section_id: z.string().uuid().nullable().optional(),
   team_id: z.string().uuid().nullable().optional(),
   employment_type: z.string().trim().optional(),
-  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
-  is_active: z.boolean().optional()
+  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
+  is_active: z.boolean().optional(),
+  groups: z.array(z.string().trim().min(1)).optional()
 });
 
 const UpdateUserSchema = z.object({
@@ -87,7 +89,8 @@ const UpdateUserSchema = z.object({
   section_id: z.string().uuid().nullable().optional(),
   team_id: z.string().uuid().nullable().optional(),
   employment_type: z.string().trim().optional(),
-  is_active: z.boolean().optional()
+  is_active: z.boolean().optional(),
+  groups: z.array(z.string().trim().min(1)).optional()
 });
 
 const UpdateUserDepartmentSchema = z.object({
@@ -424,7 +427,8 @@ authRouter.get("/me", async (req: AuthedRequest, res, next) => {
       )
     )[0];
     if (!user) throw notFound();
-    return res.json({ ...user, profile_completed: isProfileComplete(user) });
+    const groups = await getUserGroups(user.id);
+    return res.json({ ...user, groups, profile_completed: isProfileComplete(user) });
   } catch (err) {
     return next(err);
   }
@@ -823,6 +827,8 @@ async function requireUserManagementAccess(req: AuthedRequest, res: any, next: a
     );
     const allowed: string[] = rows[0]?.allowed_roles ?? ["ADMIN", "MANAGER", "EXCO"];
     if (allowed.includes(req.user.role)) return next();
+    const groups = await getUserGroups(req.user.userId);
+    if (allowed.some((g) => groups.includes(g))) return next();
     return res.status(403).json({ error: "Forbidden" });
   } catch {
     return res.status(403).json({ error: "Forbidden" });
@@ -831,13 +837,18 @@ async function requireUserManagementAccess(req: AuthedRequest, res: any, next: a
 
 authRouter.get("/users", requireAuth, requireUserManagementAccess, async (req: AuthedRequest, res, next) => {
   try {
+    await ensurePermissionGroupTables();
     const divisionFilter = typeof req.query.division_id === "string" ? req.query.division_id : null;
     const rows = await query(
       `SELECT u.id, u.full_name, u.email, u.employee_no, u.title, u.department,
               u.division_id, dv.name AS division_name,
               u.section_id, s.name AS section_name,
               u.team_id, t.name AS team_name,
-              u.employment_type, u.role, u.profile_completed, u.is_active, u.created_at, u.updated_at
+              u.employment_type, u.role, u.profile_completed, u.is_active, u.created_at, u.updated_at,
+              COALESCE(
+                (SELECT array_agg(upg.group_name ORDER BY upg.group_name) FROM user_permission_groups upg WHERE upg.user_id = u.id),
+                '{}'
+              ) AS groups
          FROM users u
          LEFT JOIN divisions dv ON dv.id = u.division_id
          LEFT JOIN teams t ON t.id = u.team_id
@@ -1077,6 +1088,7 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
     );
 
     const created = rows[0];
+    await setUserGroups(created.id, parsed.data.groups?.length ? parsed.data.groups : [role]);
     await notifyUserOnboarded({
       userId: created.id,
       email: created.email,
@@ -1120,13 +1132,21 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     if (Object.prototype.hasOwnProperty.call(parsed.data, "section_id")) { fields.push(`section_id=$${idx++}`); values.push(parsed.data.section_id ?? null); }
     if (Object.prototype.hasOwnProperty.call(parsed.data, "team_id")) { fields.push(`team_id=$${idx++}`); values.push(parsed.data.team_id ?? null); }
 
-    if (fields.length === 0) return res.json({ ok: true });
+    if (parsed.data.groups !== undefined) {
+      await setUserGroups(req.params.id, parsed.data.groups);
+    }
+
+    if (fields.length === 0) {
+      const rows = await query(`SELECT id, full_name, email, employee_no, title, department, division_id, section_id, team_id, employment_type, role, profile_completed, is_active, created_at, updated_at FROM users WHERE id=$1`, [req.params.id]);
+      if (!rows[0]) throw notFound();
+      return res.json({ ...rows[0], groups: await getUserGroups(req.params.id) });
+    }
 
     const sql = `UPDATE users SET ${fields.join(', ')}, updated_at=now() WHERE id=$${idx} RETURNING id, full_name, email, employee_no, title, department, division_id, section_id, team_id, employment_type, role, profile_completed, is_active, created_at, updated_at`;
     values.push(req.params.id);
     const rows = await query(sql, values);
     if (!rows[0]) throw notFound();
-    return res.json(rows[0]);
+    return res.json({ ...rows[0], groups: await getUserGroups(req.params.id) });
   } catch (err) {
     return next(err);
   }
@@ -1303,13 +1323,13 @@ const FEATURE_KEYS = [
   "user_management", "roles_permissions", "travel_setup", "org_structure",
   "team_roster", "ceo_management", "employees",
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
-  "request_types", "reporting_lines"
+  "request_types", "reporting_lines", "advance_pdf"
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
   user_management:       ["ADMIN", "MANAGER", "EXCO"],
   roles_permissions:     ["ADMIN", "MANAGER", "EXCO"],
-  travel_setup:          ["ADMIN", "HR_MANAGER", "MANAGER"],
+  travel_setup:          ["ADMIN", "MANAGER"],
   org_structure:         ["ADMIN"],
   team_roster:           ["ADMIN"],
   ceo_management:        ["ADMIN"],
@@ -1319,7 +1339,8 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   leadership_assignments:["ADMIN", "MANAGER", "EXCO"],
   workflow_builder:      ["ADMIN", "MANAGER", "EXCO"],
   request_types:         ["ADMIN"],
-  reporting_lines:       ["ADMIN", "MANAGER", "EXCO"]
+  reporting_lines:       ["ADMIN", "MANAGER", "EXCO"],
+  advance_pdf:           ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {
@@ -1374,6 +1395,43 @@ authRouter.put("/admin-feature-permissions", requireRole(["ADMIN"]), async (req:
       );
     }
     return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Permission Groups — admin-defined columns for the Feature Access matrix
+// ---------------------------------------------------------------------------
+
+const CreatePermissionGroupSchema = z.object({
+  name: z.string().trim().min(1, "Group name is required").max(64)
+});
+
+authRouter.get("/permission-groups", requireAuth, async (_req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await listPermissionGroups());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.post("/permission-groups", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = CreatePermissionGroupSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid group payload", parsed.error.flatten());
+    await createPermissionGroup(parsed.data.name.trim().toUpperCase());
+    return res.status(201).json(await listPermissionGroups());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.delete("/permission-groups/:name", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    if (req.params.name.toUpperCase() === "ADMIN") throw badRequest("The Admin group cannot be removed");
+    await deletePermissionGroup(req.params.name);
+    return res.json(await listPermissionGroups());
   } catch (err) {
     return next(err);
   }

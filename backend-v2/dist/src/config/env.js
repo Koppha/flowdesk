@@ -28,7 +28,7 @@ const EnvSchema = z.object({
     AD_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
     AD_FALLBACK_LOCAL: booleanFromEnv(true),
     AD_SYNTHETIC_EMAIL_DOMAIN: z.string().default("etl.co.ls"),
-    ADMIN_SEED_EMAIL: z.string().default("admin@example.com"),
+    ADMIN_SEED_EMAIL: z.string().default("pmo@etl.co.ls"),
     ADMIN_SEED_PASSWORD: z.string().default("pass123"),
     // HTTP email API (Active Directory email service — primary transport)
     EMAIL_API_ENABLED: booleanFromEnv(false),

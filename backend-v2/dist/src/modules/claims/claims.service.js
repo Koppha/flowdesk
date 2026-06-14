@@ -1,6 +1,6 @@
 import { badRequest, forbidden } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { canApproveStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, getPendingGroup } from "../../lib/workflowEngine.js";
 export function nextClaimStatus(current, action) {
     const map = {
         DRAFT: {},
@@ -49,24 +49,58 @@ export async function getClaimById(id) {
 // Advances a workflow-driven clearance claim to its next chain step. Mirrors
 // advanceWorkflowStep (advances.service.ts) for clearance_claims.
 export async function advanceClaimWorkflowStep(args) {
-    const { claim, userId, role, delegatedManagerId } = args;
+    const { claim, userId, role, delegatedManagerId, userDepartment } = args;
     if (!claim.approval_chain?.length)
         throw badRequest("This clearance does not have an active approval workflow.");
     const chain = claim.approval_chain;
     const stepIdx = claim.workflow_step_order ?? 0;
     if (stepIdx >= chain.length)
         throw badRequest("All workflow steps have been completed");
-    const currentStep = chain[stepIdx];
-    if (role !== "ADMIN" && !canApproveStep(currentStep, userId, role, delegatedManagerId)) {
-        throw forbidden(`You are not the assigned approver for step: ${currentStep.position_name}`);
+    const group = getPendingGroup(chain, stepIdx);
+    let actedIdx = null;
+    if (role === "ADMIN") {
+        actedIdx = group.indices.find((idx) => !chain[idx].approved) ?? group.indices[0];
     }
-    const nextIdx = stepIdx + 1;
-    const hasMore = nextIdx < chain.length;
-    const nextStatus = chainStepToClaimStatus(chain, nextIdx);
-    const newStepOrder = hasMore ? nextIdx : chain.length;
-    await query(`UPDATE clearance_claims SET status=$2, workflow_step_order=$3, updated_at=now() WHERE id=$1`, [claim.id, nextStatus, newStepOrder]);
-    const nextApprover = hasMore
-        ? { name: chain[nextIdx].approver_name, email: chain[nextIdx].approver_email, title: chain[nextIdx].approver_title || chain[nextIdx].position_name }
-        : null;
-    return { nextStatus, newStepOrder, hasMore, currentStep, nextApprover };
+    else {
+        for (const idx of group.indices) {
+            if (chain[idx].approved)
+                continue;
+            if (await canApproveStep(chain[idx], userId, role, delegatedManagerId, userDepartment)) {
+                actedIdx = idx;
+                break;
+            }
+        }
+    }
+    if (actedIdx == null)
+        throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+    const currentStep = chain[actedIdx];
+    const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true } : s));
+    if (role === "ADMIN") {
+        for (const idx of group.indices)
+            newChain[idx] = { ...newChain[idx], approved: true };
+    }
+    const stillPending = group.indices.some((idx) => !newChain[idx].approved);
+    let nextStatus;
+    let newStepOrder;
+    let hasMore;
+    let nextApprovers = [];
+    if (stillPending) {
+        nextStatus = claim.status;
+        newStepOrder = stepIdx;
+        hasMore = true;
+    }
+    else {
+        const nextIdx = group.indices[group.indices.length - 1] + 1;
+        hasMore = nextIdx < newChain.length;
+        nextStatus = chainStepToClaimStatus(newChain, nextIdx);
+        newStepOrder = hasMore ? nextIdx : newChain.length;
+        if (hasMore) {
+            nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
+                name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
+            }));
+        }
+    }
+    await query(`UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4, updated_at=now() WHERE id=$1`, [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain)]);
+    const nextApprover = nextApprovers[0] ?? null;
+    return { nextStatus, newStepOrder, hasMore, currentStep, stillPending, nextApprover, nextApprovers };
 }

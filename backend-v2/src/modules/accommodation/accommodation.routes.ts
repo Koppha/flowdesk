@@ -3,13 +3,13 @@ import path from "path";
 import multer from "multer";
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
+import { AuthedRequest, isFinanceDept, requireAuth, requireFinance, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { advanceWorkflowStep, getAdvanceById } from "../advances/advances.service.js";
-import { canApproveStep, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { notifyAdvanceTask } from "../../lib/notifications.js";
 import { getAdvanceNotificationContext, writeAdvanceAudit } from "../advances/advances.routes.js";
@@ -227,8 +227,8 @@ async function getAccommodationById(id: string) {
   return { ...row, quotations };
 }
 
-function canViewAccommodation(args: { role: string; userId: string; row: any }) {
-  if (args.role === "ADMIN" || args.role === "FINANCE") return true;
+function canViewAccommodation(args: { role: string; department?: string | null; userId: string; row: any }) {
+  if (args.role === "ADMIN" || isFinanceDept(args.department)) return true;
   if (args.role === "MANAGER" && args.row.created_by_id === args.userId) return true;
   if (args.row.requester_id === args.userId) return true;
   return false;
@@ -243,7 +243,7 @@ accommodationRouter.get("/", async (req: AuthedRequest, res, next) => {
     if (mine) {
       params.push(req.user!.userId);
       where = "WHERE acc.created_by_id=$1 OR acc.requester_id=$1";
-    } else if (req.user!.role === "FINANCE" || req.user!.role === "ADMIN") {
+    } else if (req.user!.role === "ADMIN" || isFinanceDept(req.user!.department)) {
       where = "";
     } else if (req.user!.role === "MANAGER") {
       params.push(req.user!.userId);
@@ -286,12 +286,14 @@ accommodationRouter.post("/", async (req: AuthedRequest, res, next) => {
     if (role !== "ADMIN") {
       if (!advance.approval_chain?.length) throw badRequest("This advance does not have an active approval workflow.");
       const chain = advance.approval_chain as ChainStep[];
-      const currentStep = chain[advance.workflow_step_order ?? 0];
-      if (!currentStep) throw badRequest("All workflow steps have been completed");
+      const group = getPendingGroup(chain, advance.workflow_step_order ?? 0);
+      if (!group.indices.length) throw badRequest("All workflow steps have been completed");
       const delegated = await getActiveManagerDelegation(req.user!.userId);
-      if (!canApproveStep(currentStep, req.user!.userId, role, delegated?.manager_id)) {
-        throw forbidden(`You are not the assigned approver for step: ${currentStep.position_name}`);
+      let currentStep: ChainStep | undefined;
+      for (const idx of group.indices) {
+        if (await canApproveStep(chain[idx], req.user!.userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
       }
+      if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
     }
 
     const rows = await query<{ id: string }>(
@@ -461,14 +463,14 @@ accommodationRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
     const row = await getAccommodationById(req.params.id);
     if (!row) throw notFound();
-    if (!canViewAccommodation({ role: req.user!.role, userId: req.user!.userId, row })) throw forbidden();
+    if (!canViewAccommodation({ role: req.user!.role, department: req.user!.department, userId: req.user!.userId, row })) throw forbidden();
     return res.json(row);
   } catch (err) {
     return next(err);
   }
 });
 
-accommodationRouter.post("/:id/mark-paid", requireRole(["FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.post("/:id/mark-paid", requireFinance, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = MarkPaidSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -501,7 +503,7 @@ accommodationRouter.post("/:id/mark-paid", requireRole(["FINANCE", "ADMIN"]), as
   }
 });
 
-accommodationRouter.post("/:id/reject", requireRole(["FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.post("/:id/reject", requireFinance, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = RejectSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for reject", parsed.error.flatten());

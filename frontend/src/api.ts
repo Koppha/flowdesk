@@ -91,6 +91,20 @@ async function req(path: string, options: RequestInit = {}) {
   return json;
 }
 
+async function fetchBlob(path: string) {
+  const token = getToken();
+  const headers: any = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { headers, cache: "no-store" });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    const error = new Error(formatApiError(json, res.statusText));
+    (error as any).status = res.status;
+    throw error;
+  }
+  return res.blob();
+}
+
 export const api = {
   login: (email: string, password: string) => req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => req("/auth/me"),
@@ -162,6 +176,9 @@ export const api = {
   adminFeaturePermissions: () => req("/auth/admin-feature-permissions"),
   updateAdminFeaturePermissions: (features: Record<string, string[]>) =>
     req("/auth/admin-feature-permissions", { method: "PUT", body: JSON.stringify({ features }) }),
+  permissionGroups: () => req("/auth/permission-groups"),
+  createPermissionGroup: (name: string) => req("/auth/permission-groups", { method: "POST", body: JSON.stringify({ name }) }),
+  deletePermissionGroup: (name: string) => req(`/auth/permission-groups/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   advances: () => req("/advances?mine=true"),
   createAdvance: (data: any) => req("/advances", { method: "POST", body: JSON.stringify(data) }),
@@ -219,6 +236,7 @@ export const api = {
   claimDetail: (id: string) => req(`/claims/${id}`),
 
   rollbackAdvance: (id: string, comments?: string) => req(`/advances/${id}/rollback`, { method: "POST", body: JSON.stringify({ comments }) }),
+  advancePdf: (id: string) => fetchBlob(`/advances/${id}/pdf`),
   rejectAdvance: (id: string, comments: string) => req(`/advances/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   approveAdvance: (id: string, approved_total: number, comments?: string) =>
     req(`/advances/${id}/approve`, { method: "POST", body: JSON.stringify({ approved_total, comments }) }),
@@ -226,11 +244,7 @@ export const api = {
 
   approveClaim: (id: string, comments?: string) => req(`/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
   rejectClaim: (id: string, comments: string) => req(`/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
-  managerApproveClaim: (id: string, comments?: string) => req(`/claims/${id}/manager-approve`, { method: "POST", body: JSON.stringify({ comments }) }),
-  authApproveClaim: (id: string, comments?: string) => req(`/claims/${id}/auth-officer-approve`, { method: "POST", body: JSON.stringify({ comments }) }),
-  hrManagerApproveClaim: (id: string, comments?: string) => req(`/claims/${id}/hr-manager-approve`, { method: "POST", body: JSON.stringify({ comments }) }),
-  chiefApproveClaim: (id: string, comments?: string) => req(`/claims/${id}/chief-officer-approve`, { method: "POST", body: JSON.stringify({ comments }) }),
-  financeVerifyClaim: (id: string, comments?: string) => req(`/claims/${id}/finance-verify`, { method: "POST", body: JSON.stringify({ comments }) }),
+  rollbackClaim: (id: string, comments?: string) => req(`/claims/${id}/rollback`, { method: "POST", body: JSON.stringify({ comments }) }),
   settleClaim: (id: string, settled_method: "ECOCASH" | "BANK" | "CASH" | "OTHER", settled_reference: string) =>
     req(`/claims/${id}/settle`, { method: "POST", body: JSON.stringify({ settled_method, settled_reference }) })
   ,

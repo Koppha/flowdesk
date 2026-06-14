@@ -38,6 +38,7 @@ import {
   ChevronUp,
   ClipboardList,
   Clock3,
+  Download,
   Edit3,
   Eye,
   EyeOff,
@@ -253,6 +254,9 @@ export default function App() {
   const [featurePermissions, setFeaturePermissions] = useState<Record<string, string[]>>({});
   const [featurePermOpen, setFeaturePermOpen] = useState(false);
   const [featurePermDraft, setFeaturePermDraft] = useState<Record<string, string[]>>({});
+  const [permissionGroups, setPermissionGroups] = useState<{ name: string; member_count: string; dynamic?: boolean }[]>([]);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [groupSaving, setGroupSaving] = useState(false);
   const [featurePermSaving, setFeaturePermSaving] = useState(false);
   const [delegations, setDelegations] = useState<any[]>([]);
   const [delegationsLoading, setDelegationsLoading] = useState(false);
@@ -538,7 +542,7 @@ export default function App() {
     const copy = [...rows];
     if (field === "meals") {
       const meals = Number(value) || 0;
-      const maxMeals = selectedTravelType?.rate_kind === "DAILY" ? Infinity : (index === 0 ? 3 : 2);
+      const maxMeals = selectedTravelType?.rate_kind === "DAILY" ? Infinity : 3;
       (copy[index] as any).meals = Math.min(Math.max(meals, 0), maxMeals);
     } else {
       (copy[index] as any)[field] = value;
@@ -698,7 +702,7 @@ export default function App() {
   const FEATURE_DEFAULTS: Record<string, string[]> = {
     user_management:        ["ADMIN", "MANAGER", "EXCO"],
     roles_permissions:      ["ADMIN", "MANAGER", "EXCO"],
-    travel_setup:           ["ADMIN", "HR_MANAGER", "MANAGER"],
+    travel_setup:           ["ADMIN", "MANAGER"],
     org_structure:          ["ADMIN"],
     team_roster:            ["ADMIN"],
     ceo_management:         ["ADMIN"],
@@ -709,11 +713,14 @@ export default function App() {
     workflow_builder:       ["ADMIN", "MANAGER", "EXCO"],
     request_types:          ["ADMIN"],
     reporting_lines:        ["ADMIN", "MANAGER", "EXCO"],
+    advance_pdf:            ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
   };
 
   function canAccessFeature(key: string): boolean {
     const allowed = featurePermissions[key] ?? FEATURE_DEFAULTS[key] ?? [];
-    return allowed.includes(role);
+    if (allowed.includes(role)) return true;
+    const myGroups: string[] = profile?.groups ?? [];
+    return allowed.some((g) => myGroups.includes(g));
   }
 
   const canManageTravelSettings = canAccessFeature("travel_setup");
@@ -780,10 +787,14 @@ export default function App() {
         const filtered = chain.filter((s: any) => s.position_type_code !== "EMPLOYEE");
         setAdvanceApprovalChain(
           filtered.map((s: any) => {
-            const title = s.approver_title || s.position_name;
+            const rawTitle = s.approver_title || s.position_name;
+            const isTeamGroup = rawTitle.startsWith("Team: ");
+            const title = isTeamGroup ? rawTitle.slice("Team: ".length) : rawTitle;
             return {
-              label: s.approval_mode === "ANY_ONE" ? `${title} (Group)` : title,
-              name: s.approver_name || null
+              label: title,
+              // "Team: X" steps are approvable by any member of that group, not
+              // the specific individual returned as approver_name (the HOD).
+              name: isTeamGroup ? null : s.approver_name || null
             };
           })
         );
@@ -809,7 +820,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -817,7 +828,8 @@ export default function App() {
       optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox"),
       optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value"),
       optionalStartupData<TravelType[]>(api.travelTypes(), [], "Travel types"),
-      optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions")
+      optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions"),
+      optionalStartupData<{ name: string; member_count: string; dynamic?: boolean }[]>(api.permissionGroups(), [], "Permission groups")
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -831,6 +843,7 @@ export default function App() {
     if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
       setFeaturePermissions(featPermResp.features as Record<string, string[]>);
     }
+    setPermissionGroups(Array.isArray(groupsResp) ? groupsResp : []);
     if (token) {
       try {
         const anomalyRows = await api.aiAnomalies();
@@ -1018,7 +1031,8 @@ export default function App() {
         rate_exco: Number(type.rate_exco) || 0,
         rate_ceo: Number(type.rate_ceo) || 0,
         currency: type.currency ?? "LSL",
-        active: type.active !== false
+        active: type.active !== false,
+        requires_accommodation: type.requires_accommodation ?? false
       });
       await loadTravelTypes();
       alert("Travel type updated.");
@@ -1626,26 +1640,38 @@ export default function App() {
     }
   }
 
-  function clearanceStageLabel(status: string) {
+  function clearanceStageLabel(claim: any) {
+    const status = typeof claim === "string" ? claim : claim?.status;
     switch (status) {
       case "DRAFT":
         return "Draft clearance";
+      case "SETTLED":
+        return "Cleared";
+      case "REJECTED":
+        return "Rejected";
+    }
+
+    if (claim && typeof claim === "object" && Array.isArray(claim.approval_chain) && claim.approval_chain.length > 0) {
+      const chain = claim.approval_chain;
+      const stepIdx = typeof claim.workflow_step_order === "number" ? claim.workflow_step_order : 0;
+      const step = chain[stepIdx];
+      if (step) {
+        return `Waiting on ${step.position_name || step.approver_title || "Approver"}`;
+      }
+    }
+
+    switch (status) {
       case "SUBMITTED":
         return "Waiting Manager Certification";
       case "MANAGER_APPROVED":
-        return "Waiting Chief Officer";
       case "CHIEF_OFFICER_APPROVED":
-        return "Waiting HR Approval";
+        return "Pending Approval";
       case "HR_OFFICER":
         return "Waiting HR Manager Approval";
       case "HR_MANAGER_REVIEW":
         return "Waiting Finance Verification";
       case "FINANCE_VERIFIED":
         return "Waiting Finance Settlement";
-      case "SETTLED":
-        return "Cleared";
-      case "REJECTED":
-        return "Rejected";
       default:
         return status;
     }
@@ -1680,49 +1706,12 @@ export default function App() {
     return `ADV-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
   }
 
-  function actionDisplayLabel(value: any) {
-    switch (String(value || "")) {
-      case "ADVANCE_CREATE":
-        return "Created advance request";
-      case "ADVANCE_LINES_UPDATE":
-        return "Added travel details and lines";
-      case "ADVANCE_SUBMIT":
-        return "Submitted request";
-      case "ADVANCE_APPROVE":
-        return "Approved request";
-      case "ADVANCE_ROLLBACK":
-        return "Returned request";
-      case "ADVANCE_REJECT":
-        return "Rejected request";
-      case "ADVANCE_MARK_PAID":
-        return "Marked as paid";
-      case "ADVANCE_CANCEL":
-        return "Cancelled request";
-      default:
-        return humanizeToken(value);
-    }
-  }
-
   function statusToneClass(value: any) {
     const status = String(value || "").toUpperCase();
     if (["REJECTED", "CANCELLED"].includes(status) || status.includes("REJECT")) return "tracking-tone-danger";
     if (["PAID", "APPROVED", "HR_OFFICER"].includes(status)) return "tracking-tone-success";
     if (["DRAFT"].includes(status)) return "tracking-tone-neutral";
     return "tracking-tone-progress";
-  }
-
-  function trackingDuration(from: any, to?: any) {
-    if (!from) return "—";
-    const start = new Date(from).getTime();
-    const end = to ? new Date(to).getTime() : Date.now();
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return "—";
-    const totalMinutes = Math.max(0, Math.round((end - start) / 60000));
-    const days = Math.floor(totalMinutes / 1440);
-    const hours = Math.floor((totalMinutes % 1440) / 60);
-    const minutes = totalMinutes % 60;
-    if (days > 0) return `${days} Day${days === 1 ? "" : "s"} ${hours} Hour${hours === 1 ? "" : "s"}`;
-    if (hours > 0) return `${hours} Hour${hours === 1 ? "" : "s"} ${minutes} Minute${minutes === 1 ? "" : "s"}`;
-    return `${minutes} Minute${minutes === 1 ? "" : "s"}`;
   }
 
   function eventStatus(event: any) {
@@ -1740,6 +1729,17 @@ export default function App() {
       const after = String(event?.after_json?.status || "").toUpperCase();
       return String(event?.action || "") === "ADVANCE_APPROVE" && beforeStatuses.includes(before) && afterStatuses.includes(after);
     });
+  }
+
+  async function downloadAdvancePdf(advanceId: string) {
+    try {
+      const blob = await api.advancePdf(advanceId);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err: any) {
+      alert(err?.message || "Failed to generate PDF.");
+    }
   }
 
   function buildTrackingStages(advance: any, events: any[]) {
@@ -1776,17 +1776,33 @@ export default function App() {
         }
       ];
 
+      // The pending "stage" is the current step plus any subsequent steps
+      // flagged parallel_with_previous — they become actionable together.
+      let pendingStageStart = currentStepIdx;
+      while (pendingStageStart > 0 && chain[pendingStageStart]?.parallel_with_previous) pendingStageStart--;
+      const pendingStage = new Set<number>();
+      if (pendingStageStart < chain.length) {
+        pendingStage.add(pendingStageStart);
+        for (let i = pendingStageStart + 1; i < chain.length && chain[i]?.parallel_with_previous; i++) pendingStage.add(i);
+      }
+
       chain.forEach((step: any, idx: number) => {
         // Match the approve audit event that advanced past this step (workflow_step === idx + 1)
         const approveEvent = events.find(
           (e: any) => e.action === "ADVANCE_APPROVE" && Number(e?.after_json?.workflow_step ?? -1) === idx + 1
         ) ?? null;
-        const isActive = !terminalFailed && !terminalDone && currentStepIdx === idx;
-        const isDone   = terminalDone || currentStepIdx > idx;
-        const actorName = approveEvent?.actor_name || step.approver_name || "";
+        const stepApproved = Boolean(step.approved);
+        const isDone   = terminalDone || stepApproved || currentStepIdx > idx;
+        const isActive = !terminalFailed && !isDone && pendingStage.has(idx);
+        // "Team: X" steps are approvable by any member of that group, not the
+        // specific individual returned as approver_name/approver_title (the
+        // department HOD) — show the group name instead, with no fixed actor.
+        const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
+        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.approver_title || step.position_name);
+        const actorName = isTeamGroup ? "" : (approveEvent?.actor_name || step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
-          label: step.approver_title || step.position_name,
+          label,
           state: terminalFailed && isActive ? "danger" : isActive ? "active" : isDone ? "done" : "waiting",
           date: approveEvent?.created_at || "",
           actor: actorName,
@@ -2129,15 +2145,10 @@ export default function App() {
       || stages.find((stage: any) => stage.state === "waiting")
       || stages[stages.length - 1];
     const createdAt = advance.created_at || events[0]?.created_at;
-    const closedAt = advance.paid_at || events.find((event: any) => ["ADVANCE_MARK_PAID", "ADVANCE_REJECT", "ADVANCE_CANCEL"].includes(String(event.action || "")))?.created_at;
     const submittedAt = advance.submitted_at || events.find((event: any) => event.action === "ADVANCE_SUBMIT")?.created_at;
     const targetMs = 2 * 24 * 60 * 60 * 1000;
     const createdTime = createdAt ? new Date(createdAt).getTime() : Date.now();
     const expectedCompletion = Number.isFinite(createdTime) ? new Date(createdTime + targetMs) : null;
-    const elapsedEnd = closedAt ? new Date(closedAt).getTime() : Date.now();
-    const elapsedMs = Number.isFinite(createdTime) && Number.isFinite(elapsedEnd) ? Math.max(0, elapsedEnd - createdTime) : 0;
-    const remainingMs = Math.max(0, targetMs - elapsedMs);
-    const withinSla = elapsedMs <= targetMs && !["REJECTED", "CANCELLED"].includes(currentStatus);
     const approvalRows = stages.filter((stage: any) => !["draft", "submitted"].includes(stage.key));
     const commentEvents = events.filter((event: any) => event?.after_json?.comments);
     const requester = advance.requester_name || profile?.full_name || me?.fullName || me?.username || "Unknown";
@@ -2157,6 +2168,11 @@ export default function App() {
                 <p>Track the progress and status of your advance request</p>
               </div>
             </div>
+            {canAccessFeature("advance_pdf") && (
+              <button className="button small-button button-subtle" type="button" onClick={() => downloadAdvancePdf(advance.id)} style={{ marginRight: 8 }}>
+                <Download size={16} aria-hidden /> Download PDF
+              </button>
+            )}
             <button className="tracking-close-icon" type="button" onClick={() => setHistoryOpen(false)} aria-label="Close tracking">
               <X size={22} aria-hidden />
             </button>
@@ -2215,30 +2231,6 @@ export default function App() {
 
               <div className="tracking-content-grid">
                 <div className="tracking-main-stack">
-                  <section className="tracking-card">
-                    <h3>Activity Timeline</h3>
-                    {events.length === 0 ? (
-                      <div className="tracking-empty">No history found for this request yet.</div>
-                    ) : (
-                      <div className="tracking-timeline">
-                        {events.map((event: any) => (
-                          <div className="tracking-timeline-item" key={event.id}>
-                            <div className="tracking-timeline-date">{formatTrackingDate(event.created_at)}</div>
-                            <span className={`tracking-timeline-icon ${statusToneClass(eventStatus(event))}`}>
-                              {event.action === "ADVANCE_APPROVE" ? <CheckCircle2 size={18} aria-hidden /> : event.action === "ADVANCE_SUBMIT" ? <Plane size={18} aria-hidden /> : event.action === "ADVANCE_CREATE" ? <FileText size={18} aria-hidden /> : <GitBranch size={18} aria-hidden />}
-                            </span>
-                            <div>
-                              <strong>{eventActor(event)}</strong>
-                              <p>{actionDisplayLabel(event.action)}</p>
-                              {event?.after_json?.acting_for?.name && <small>Acting on behalf of {event.after_json.acting_for.name}</small>}
-                            </div>
-                            <em className={`tracking-status-pill ${statusToneClass(eventStatus(event))}`}>{eventStatus(event) ? humanizeToken(eventStatus(event)) : "—"}</em>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </section>
-
                   <section className="tracking-card">
                     <h3>Approval Journey</h3>
                     <div className="tracking-table-wrap">
@@ -2314,20 +2306,6 @@ export default function App() {
                       <div><dt>Amount Requested</dt><dd>{fmtMoney(amount)}</dd></div>
                       <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
                     </dl>
-                  </section>
-
-                  <section className="tracking-card">
-                    <h3><Clock3 size={17} aria-hidden /> SLA Information</h3>
-                    <dl className="tracking-detail-list">
-                      <div><dt>Current Stage</dt><dd>{activeStage?.label || "—"}</dd></div>
-                      <div><dt>SLA Target</dt><dd>2 Days</dd></div>
-                      <div><dt>Elapsed Time</dt><dd>{trackingDuration(createdAt, closedAt)}</dd></div>
-                      <div><dt>Remaining Time</dt><dd>{trackingDuration(Date.now() - remainingMs, Date.now())}</dd></div>
-                    </dl>
-                    <div className={`tracking-sla-banner ${withinSla ? "is-good" : "is-risk"}`}>
-                      <ShieldCheck size={18} aria-hidden />
-                      <strong>{withinSla ? "Within SLA" : "SLA Attention Required"}</strong>
-                    </div>
                   </section>
 
                   <section className="tracking-card">
@@ -2930,16 +2908,7 @@ export default function App() {
                   }}
                 >
                   {(() => {
-                    const ROLES_LIST = [
-                      { key: "EMPLOYEE",      label: "Employee" },
-                      { key: "HOD",           label: "HOD" },
-                      { key: "MANAGER",       label: "Manager" },
-                      { key: "HR_MANAGER",    label: "HR Manager" },
-                      { key: "FINANCE",       label: "Finance" },
-                      { key: "EXCO",          label: "EXCO" },
-                      { key: "CEO",           label: "CEO" },
-                      { key: "ADMIN",         label: "Admin" },
-                    ];
+                    const GROUPS_LIST = permissionGroups.map((g) => ({ key: g.name, label: g.name, dynamic: !!g.dynamic }));
                     const FEATURES_LIST = [
                       { key: "user_management",        label: "Users",                    group: "User Management" },
                       { key: "roles_permissions",      label: "Roles & Permissions",      group: "User Management" },
@@ -2954,12 +2923,13 @@ export default function App() {
                       { key: "workflow_builder",       label: "Approval Workflow Builder",group: "Org Structure" },
                       { key: "request_types",          label: "Request Types",            group: "Org Structure" },
                       { key: "reporting_lines",        label: "Reporting Lines",          group: "Org Structure" },
+                      { key: "advance_pdf",            label: "Download Advance PDF",     group: "Advances" },
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
                       user_management:        ["ADMIN","MANAGER","EXCO"],
                       roles_permissions:      ["ADMIN","MANAGER","EXCO"],
-                      travel_setup:           ["ADMIN","HR_MANAGER","MANAGER"],
+                      travel_setup:           ["ADMIN","MANAGER"],
                       org_structure:          ["ADMIN"],
                       team_roster:            ["ADMIN"],
 
@@ -2971,6 +2941,7 @@ export default function App() {
                       workflow_builder:       ["ADMIN","MANAGER","EXCO"],
                       request_types:          ["ADMIN"],
                       reporting_lines:        ["ADMIN","MANAGER","EXCO"],
+                      advance_pdf:            ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                     };
                     function toggleRole(featureKey: string, roleKey: string) {
                       if (roleKey === "ADMIN") return;
@@ -2980,6 +2951,33 @@ export default function App() {
                         : [...current, roleKey];
                       setFeaturePermDraft({ ...draft, [featureKey]: next });
                     }
+                    async function handleAddGroup() {
+                      const name = newGroupName.trim();
+                      if (!name) return;
+                      setGroupSaving(true);
+                      try {
+                        const updated = await api.createPermissionGroup(name);
+                        setPermissionGroups(Array.isArray(updated) ? updated : []);
+                        setNewGroupName("");
+                      } catch (err: any) {
+                        alert(err?.message || "Failed to add group.");
+                      } finally {
+                        setGroupSaving(false);
+                      }
+                    }
+                    async function handleRemoveGroup(name: string) {
+                      if (name === "ADMIN") return;
+                      if (!window.confirm(`Remove the "${name}" group? Users in this group will lose any access granted by it.`)) return;
+                      setGroupSaving(true);
+                      try {
+                        const updated = await api.deletePermissionGroup(name);
+                        setPermissionGroups(Array.isArray(updated) ? updated : []);
+                      } catch (err: any) {
+                        alert(err?.message || "Failed to remove group.");
+                      } finally {
+                        setGroupSaving(false);
+                      }
+                    }
                     const groups = Array.from(new Set(FEATURES_LIST.map((f) => f.group)));
                     return (
                       <div>
@@ -2988,8 +2986,23 @@ export default function App() {
                             <thead>
                               <tr>
                                 <th style={{ textAlign: "left", padding: "6px 10px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", minWidth: 180 }}>Feature</th>
-                                {ROLES_LIST.map((r) => (
-                                  <th key={r.key} style={{ padding: "6px 8px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", textAlign: "center", minWidth: 70, fontSize: 12, fontWeight: 600 }}>{r.label}</th>
+                                {GROUPS_LIST.map((r) => (
+                                  <th key={r.key} style={{ padding: "6px 8px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", textAlign: "center", minWidth: 70, fontSize: 12, fontWeight: 600 }}>
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                                      <span>{r.label}</span>
+                                      {r.key !== "ADMIN" && !r.dynamic && (
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleRemoveGroup(r.key)}
+                                          disabled={groupSaving}
+                                          title={`Remove ${r.label} group`}
+                                          style={{ border: "none", background: "none", cursor: groupSaving ? "not-allowed" : "pointer", color: "var(--text-muted,#6b7280)", fontSize: 12, lineHeight: 1, padding: 0 }}
+                                        >
+                                          ×
+                                        </button>
+                                      )}
+                                    </div>
+                                  </th>
                                 ))}
                               </tr>
                             </thead>
@@ -2999,14 +3012,14 @@ export default function App() {
                                 return (
                                   <React.Fragment key={group}>
                                     <tr>
-                                      <td colSpan={ROLES_LIST.length + 1} style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted,#6b7280)", background: "var(--bg-secondary,#f8fafc)", borderTop: "1px solid var(--border,#e5e7eb)" }}>{group}</td>
+                                      <td colSpan={GROUPS_LIST.length + 1} style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted,#6b7280)", background: "var(--bg-secondary,#f8fafc)", borderTop: "1px solid var(--border,#e5e7eb)" }}>{group}</td>
                                     </tr>
                                     {groupFeatures.map((feat, idx) => {
                                       const allowed = draft[feat.key] ?? DEFAULTS[feat.key] ?? [];
                                       return (
                                         <tr key={feat.key} style={{ background: idx % 2 === 0 ? "transparent" : "var(--bg-secondary,#f8fafc)" }}>
                                           <td style={{ padding: "7px 10px", borderBottom: "1px solid var(--border,#e5e7eb)" }}>{feat.label}</td>
-                                          {ROLES_LIST.map((r) => {
+                                          {GROUPS_LIST.map((r) => {
                                             const checked = allowed.includes(r.key);
                                             const isAdmin = r.key === "ADMIN";
                                             return (
@@ -3030,6 +3043,19 @@ export default function App() {
                               })}
                             </tbody>
                           </table>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14 }}>
+                          <input
+                            type="text"
+                            placeholder="New group name"
+                            value={newGroupName}
+                            onChange={(e) => setNewGroupName(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") void handleAddGroup(); }}
+                            style={{ padding: "6px 10px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 13 }}
+                          />
+                          <button className="ep-btn-outline" type="button" onClick={() => void handleAddGroup()} disabled={groupSaving || !newGroupName.trim()}>
+                            {groupSaving ? "Saving…" : "+ Add Group"}
+                          </button>
                         </div>
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
                           <button className="ep-btn-outline" onClick={() => setFeaturePermDraft({ ...featurePermissions })}>Reset</button>
@@ -3219,13 +3245,22 @@ export default function App() {
                         <label>Travel Type Name <span className="ep-required">*</span></label>
                         <input className="ep-form-input" value={editingTravelType.name} onChange={(e) => setEditingTravelType({ ...editingTravelType, name: e.target.value })} />
                       </div>
-                      <div className="ep-form-group">
-                        <label>Currency <span className="ep-required">*</span></label>
-                        <select className="ep-form-select" value={editingTravelType.currency ?? "LSL"} onChange={(e) => setEditingTravelType({ ...editingTravelType, currency: e.target.value })}>
-                          {CURRENCIES.map(c => (
-                            <option key={c.code} value={c.code}>{c.symbol} — {c.code} ({c.name})</option>
-                          ))}
-                        </select>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>Rate Type <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={editingTravelType.rate_kind} onChange={(e) => setEditingTravelType({ ...editingTravelType, rate_kind: e.target.value as "MEAL" | "DAILY" })}>
+                            <option value="DAILY">Daily Rate</option>
+                            <option value="MEAL">Meal Rate</option>
+                          </select>
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Currency <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={editingTravelType.currency ?? "LSL"} onChange={(e) => setEditingTravelType({ ...editingTravelType, currency: e.target.value })}>
+                            {CURRENCIES.map(c => (
+                              <option key={c.code} value={c.code}>{c.symbol} — {c.code} ({c.name})</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                       <div className="ep-form-row-3">
                         <div className="ep-form-group">
@@ -3248,7 +3283,7 @@ export default function App() {
                     </div>
                     <div className="ep-modal-footer">
                       <button className="ep-btn-outline" onClick={() => setEditingTravelType(null)}>Cancel</button>
-                      <button className="ep-btn" onClick={() => void updateTravelTypeRate(editingTravelType)}>Save Changes</button>
+                      <button className="ep-btn" onClick={() => void saveEditedTravelType()}>Save Changes</button>
                     </div>
                   </div>
                 </div>
@@ -4023,7 +4058,7 @@ export default function App() {
                             <input
                               type="number"
                               min="0"
-                              max={selectedTravelType?.rate_kind === "DAILY" ? undefined : (idx === 0 ? 3 : 2)}
+                              max={selectedTravelType?.rate_kind === "DAILY" ? undefined : 3}
                               step="1"
                               value={String(Number.isFinite(Number(r.meals)) ? r.meals : 0)}
                               onChange={e => updateRow(idx, "meals", e.target.value === "" ? 0 : Number(e.target.value))}
@@ -4120,7 +4155,7 @@ export default function App() {
                       const selected = customApprovalChain.find(s => s.label === pt.name);
 
                       // Counter Signed By: teammates + people in same section/dept + managers/HODs
-                      // Approved By: managers, HODs, EXCO, Chief Officers only
+                      // Approved By: managers, HODs, and other leadership positions only
                       const myId = profile?.id || me?.userId || "";
                       const myTeamId    = profile?.team_id    || null;
                       const mySectionId = profile?.section_id || null;
@@ -4695,9 +4730,8 @@ export default function App() {
                 <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
                   <div>1. Employee captures actual trip expenditure and links the paid advance.</div>
                   <div>2. Manager certifies the trip was duly ordered.</div>
-                  <div>3. Chief Officer approves the clearance.</div>
-                  <div>4. HR confirms the trip was duly authorised.</div>
-                  <div>5. Finance verifies and settles any amount due or refund reference.</div>
+                  <div>3. The configured approval workflow routes the clearance through each approver in turn.</div>
+                  <div>4. Finance verifies and settles any amount due or refund reference.</div>
                 </div>
               </div>
 
@@ -4811,7 +4845,7 @@ export default function App() {
                           <td>{c.month || "—"}</td>
                           <td>{fmtMoney(c.claim_total || 0)}</td>
                           <td>{c.status}</td>
-                          <td>{clearanceStageLabel(c.status)}</td>
+                          <td>{clearanceStageLabel(c)}</td>
                           <td>{new Date(c.created_at).toLocaleDateString()}</td>
                           <td>
                             {c.status === "DRAFT" ? (
@@ -5116,7 +5150,7 @@ export default function App() {
                       <tr key={c.id}>
                         <td>{c.month}</td>
                         <td>{c.status}</td>
-                        <td>{clearanceStageLabel(c.status)}</td>
+                        <td>{clearanceStageLabel(c)}</td>
                         <td>{fmtMoney(c.claim_total)}</td>
                         <td>{fmtMoney(c.advance_amount)}</td>
                         <td>{fmtMoney(c.balance_amount)}</td>

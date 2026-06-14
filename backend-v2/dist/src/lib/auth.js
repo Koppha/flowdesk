@@ -52,3 +52,15 @@ export function requireRole(roles) {
         return next();
     };
 }
+// Finance approval authority now comes from org structure (Department: Finance)
+// rather than a dedicated FINANCE role.
+export function isFinanceDept(department) {
+    return String(department || "").trim().toLowerCase() === "finance";
+}
+export function requireFinance(req, _res, next) {
+    if (!req.user)
+        return next(unauthorized());
+    if (req.user.role !== "ADMIN" && !isFinanceDept(req.user.department))
+        return next(forbidden());
+    return next();
+}

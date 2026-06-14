@@ -8,9 +8,9 @@ import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
-import { getDepartmentLeadership } from "../../lib/departments.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
-import { canApproveStep, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, getPendingGroup, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import {
   type ClaimStatus,
   nextClaimStatus,
@@ -23,6 +23,10 @@ export { nextClaimStatus };
 
 export const claimsRouter = Router();
 claimsRouter.use(requireAuth);
+
+const ActionCommentSchema = z.object({
+  comments: z.string().trim().min(1, "comments are required")
+});
 
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -45,7 +49,7 @@ async function getClaimNotificationContext(claimId: string) {
   )[0] ?? null;
 }
 
-async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string) {
+async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string, excludeClaimId?: string) {
   const adv = (await query<{ id: string; requester_id: string; type: string; status: string; approved_total: string }>(
     `SELECT id, requester_id, type, status, approved_total
        FROM advance_requests
@@ -57,6 +61,14 @@ async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string) {
   if (adv.requester_id !== claimantId) throw forbidden("You can only clear your own advance");
   if (!(await isTravelAdvanceType(adv.type))) throw badRequest("Only travel advances can be cleared here");
   if (adv.status !== "PAID") throw badRequest("Linked advance must be finance-approved before clearance");
+
+  const existing = await query<{ id: string }>(
+    `SELECT id FROM clearance_claims WHERE linked_advance_id=$1 AND status != 'REJECTED'`
+      + (excludeClaimId ? ` AND id != $2` : ``),
+    excludeClaimId ? [linkedAdvanceId, excludeClaimId] : [linkedAdvanceId]
+  );
+  if (existing.length > 0) throw badRequest("A clearance has already been submitted for this advance");
+
   return { approvedTotal: Number(adv.approved_total) };
 }
 
@@ -95,23 +107,18 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
   return { claimTotal };
 }
 
-export function canViewClaim(args: { role: string; claimantId: string; userId: string; status: ClaimStatus; approvalChain?: ChainStep[] | null }) {
+export function canViewClaim(args: { role: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; managerChainIds?: string[] }) {
   if (args.role === "ADMIN") return true;
   if (args.claimantId === args.userId) return true;
 
-  // For workflow-driven claims, anyone in the approval chain can view
+  // Anyone in the workflow's resolved approval chain can view
   if (args.approvalChain?.length) {
     if (args.approvalChain.some(s => s.approver_id === args.userId)) return true;
   }
 
-  const roleAllowedStatuses: Record<string, ClaimStatus[]> = {
-    MANAGER: ["SUBMITTED", "MANAGER_APPROVED", "CHIEF_OFFICER_APPROVED", "HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"],
-    EXCO: ["MANAGER_APPROVED", "CHIEF_OFFICER_APPROVED", "HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"],
-    HR_MANAGER: ["HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"],
-    FINANCE: ["HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED", "SETTLED"]
-  };
+  // Anyone in the claimant's management chain (org structure) can view
+  if (args.managerChainIds?.includes(args.userId)) return true;
 
-  if (roleAllowedStatuses[args.role]?.includes(args.status)) return true;
   return false;
 }
 
@@ -198,7 +205,8 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
-    if (!canViewClaim({ role: req.user!.role, claimantId: claim.claimant_id, userId: req.user!.userId, status: claim.status, approvalChain: claim.approval_chain })) {
+    const managerChainIds = await getManagerChainIds(claim.claimant_id);
+    if (!canViewClaim({ role: req.user!.role, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds })) {
       throw forbidden();
     }
 
@@ -238,7 +246,7 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     let advanceAmount = 0;
     let claimTotal = 0;
     if (parsed.data.linked_advance_id) {
-      const linkedAdvance = await getLinkedAdvance(parsed.data.linked_advance_id, req.user!.userId);
+      const linkedAdvance = await getLinkedAdvance(parsed.data.linked_advance_id, req.user!.userId, req.params.id);
       advanceAmount = linkedAdvance.approvedTotal;
       const synced = await syncClaimTripsFromAdvance(req.params.id, parsed.data.linked_advance_id);
       claimTotal = synced.claimTotal;
@@ -488,7 +496,8 @@ claimsRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res, n
       claim,
       userId,
       role,
-      delegatedManagerId: delegated?.manager_id
+      delegatedManagerId: delegated?.manager_id,
+      userDepartment: req.user!.department
     });
 
     const notificationContext = await getClaimNotificationContext(claim.id);
@@ -521,14 +530,18 @@ claimsRouter.post("/:id/reject", requireAuth, async (req: AuthedRequest, res, ne
 
     const chain = claim.approval_chain as ChainStep[];
     const stepIdx = claim.workflow_step_order ?? 0;
-    const currentStep = chain[stepIdx];
-    if (!currentStep) throw badRequest("No active workflow step to reject");
+    const group = getPendingGroup(chain, stepIdx);
+    if (!group.indices.length) throw badRequest("No active workflow step to reject");
 
     const role = req.user!.role;
     const userId = req.user!.userId;
     const delegated = await getActiveManagerDelegation(userId);
-    if (role !== "ADMIN" && !canApproveStep(currentStep, userId, role, delegated?.manager_id)) {
-      throw forbidden(`You are not the assigned approver for step: ${currentStep.position_name}`);
+    if (role !== "ADMIN") {
+      let currentStep: ChainStep | undefined;
+      for (const idx of group.indices) {
+        if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
+      }
+      if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
     }
 
     await query(`UPDATE clearance_claims SET status='REJECTED', updated_at=now() WHERE id=$1`, [claim.id]);
@@ -549,154 +562,58 @@ claimsRouter.post("/:id/reject", requireAuth, async (req: AuthedRequest, res, ne
   }
 });
 
-claimsRouter.post("/:id/manager-approve", async (req: AuthedRequest, res, next) => {
+claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
+    const parsed = ActionCommentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Comments are required for rollback", parsed.error.flatten());
+
     const claim = await getClaimById(req.params.id);
     if (!claim) throw notFound();
-    if (claim.approval_chain?.length) throw badRequest("This clearance follows the dynamic approval workflow — use approve/reject instead.");
-
-    const delegated = await getActiveManagerDelegation(req.user!.userId);
-    const hasManagerPrivilege = req.user!.role === "MANAGER" || Boolean(delegated);
-    if (!hasManagerPrivilege && req.user!.role !== "ADMIN") {
-      throw forbidden("Only managers or delegated users can approve claims");
+    if (!claim.approval_chain?.length) {
+      throw badRequest("This clearance does not follow a dynamic approval workflow.");
     }
 
-    if (hasManagerPrivilege) {
-      const claimantRows = await query<{ department: string | null }>(
-        `SELECT department FROM users WHERE id=$1`,
-        [claim.claimant_id]
-      );
-      const claimantDepartment = String(claimantRows[0]?.department || "").trim();
-      const managerDepartment = delegated
-        ? String(delegated.department || "").trim()
-        : String(req.user!.department || "").trim();
-      if (!managerDepartment || managerDepartment !== claimantDepartment) {
-        throw forbidden("Only the claimant's department manager or delegated manager can approve this claim");
+    const chain = claim.approval_chain as ChainStep[];
+    const stepIdx = claim.workflow_step_order ?? 0;
+    const group = getPendingGroup(chain, stepIdx);
+    if (!group.indices.length) throw badRequest("No active workflow step to roll back");
+
+    const role = req.user!.role;
+    const userId = req.user!.userId;
+    const delegated = await getActiveManagerDelegation(userId);
+    if (role !== "ADMIN") {
+      let currentStep: ChainStep | undefined;
+      for (const idx of group.indices) {
+        if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
       }
-      const leadership = await getDepartmentLeadership(claimantDepartment);
-      if (!leadership.manager_user_id) throw badRequest("No manager assigned to this department");
-      const effectiveManagerId = delegated ? delegated.manager_id : req.user!.userId;
-      if (leadership.manager_user_id !== effectiveManagerId) {
-        throw forbidden("Only the assigned department manager or delegated manager can approve this claim");
-      }
+      if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
     }
 
-    const status = nextClaimStatus(claim.status, "MANAGER_APPROVE");
-    await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
+    await query(
+      `UPDATE clearance_claims SET
+         status='DRAFT', workflow_id=NULL, workflow_step_order=NULL, approval_chain=NULL, updated_at=now()
+       WHERE id=$1`,
+      [claim.id]
+    );
+
     const notificationContext = await getClaimNotificationContext(claim.id);
     if (notificationContext) {
       await notifyClaimTask({
         claimId: claim.id,
-        status,
+        status: "DRAFT",
         claimantName: notificationContext.full_name,
         claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total)
       });
     }
-    return res.json({ ok: true, status });
+    return res.json({ ok: true, status: "DRAFT" });
   } catch (err) {
     return next(err);
   }
 });
 
-claimsRouter.post("/:id/chief-officer-approve", requireRole(["EXCO", "ADMIN"]), async (req: AuthedRequest, res, next) => {
-  try {
-    const claim = await getClaimById(req.params.id);
-    if (!claim) throw notFound();
-    if (claim.approval_chain?.length) throw badRequest("This clearance follows the dynamic approval workflow — use approve/reject instead.");
-    const status = nextClaimStatus(claim.status, "CHIEF_APPROVE");
-    await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
-    const notificationContext = await getClaimNotificationContext(claim.id);
-    if (notificationContext) {
-      await notifyClaimTask({
-        claimId: claim.id,
-        status,
-        claimantName: notificationContext.full_name,
-        claimantEmail: notificationContext.email,
-        department: notificationContext.department,
-        claimTotal: Number(notificationContext.claim_total)
-      });
-    }
-    return res.json({ ok: true, status });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-claimsRouter.post("/:id/auth-officer-approve", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
-  try {
-    const claim = await getClaimById(req.params.id);
-    if (!claim) throw notFound();
-    if (claim.approval_chain?.length) throw badRequest("This clearance follows the dynamic approval workflow — use approve/reject instead.");
-    const status = nextClaimStatus(claim.status, "AUTH_OFFICER_APPROVE");
-    await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
-    const notificationContext = await getClaimNotificationContext(claim.id);
-    if (notificationContext) {
-      await notifyClaimTask({
-        claimId: claim.id,
-        status,
-        claimantName: notificationContext.full_name,
-        claimantEmail: notificationContext.email,
-        department: notificationContext.department,
-        claimTotal: Number(notificationContext.claim_total)
-      });
-    }
-    return res.json({ ok: true, status });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-claimsRouter.post("/:id/hr-manager-approve", requireRole(["HR_MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
-  try {
-    const claim = await getClaimById(req.params.id);
-    if (!claim) throw notFound();
-    if (claim.approval_chain?.length) throw badRequest("This clearance follows the dynamic approval workflow — use approve/reject instead.");
-    const status = nextClaimStatus(claim.status, "HR_MANAGER_APPROVE");
-    await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
-    const notificationContext = await getClaimNotificationContext(claim.id);
-    if (notificationContext) {
-      await notifyClaimTask({
-        claimId: claim.id,
-        status,
-        claimantName: notificationContext.full_name,
-        claimantEmail: notificationContext.email,
-        department: notificationContext.department,
-        claimTotal: Number(notificationContext.claim_total)
-      });
-    }
-    return res.json({ ok: true, status });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-claimsRouter.post("/:id/finance-verify", requireRole(["FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
-  try {
-    const claim = await getClaimById(req.params.id);
-    if (!claim) throw notFound();
-    if (claim.approval_chain?.length) throw badRequest("This clearance follows the dynamic approval workflow — use approve/reject instead.");
-    const status = nextClaimStatus(claim.status, "FINANCE_VERIFY");
-    await query(`UPDATE clearance_claims SET status=$2, updated_at=now() WHERE id=$1`, [claim.id, status]);
-    const notificationContext = await getClaimNotificationContext(claim.id);
-    if (notificationContext) {
-      await notifyClaimTask({
-        claimId: claim.id,
-        status,
-        claimantName: notificationContext.full_name,
-        claimantEmail: notificationContext.email,
-        department: notificationContext.department,
-        claimTotal: Number(notificationContext.claim_total)
-      });
-    }
-    return res.json({ ok: true, status });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-claimsRouter.post("/:id/settle", requireRole(["FINANCE", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+claimsRouter.post("/:id/settle", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const body = z.object({ settled_method: z.enum(["ECOCASH", "BANK", "CASH", "OTHER"]), settled_reference: z.string().min(1) }).safeParse(req.body);
     if (!body.success) throw badRequest("Invalid payload", body.error.flatten());

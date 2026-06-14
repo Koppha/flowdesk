@@ -448,6 +448,7 @@ async function ensureWorkflowSchema() {
       condition_value text NOT NULL,
       additional_position_type_code text,
       additional_position_name text,
+      additional_assigned_user_id uuid REFERENCES users(id),
       is_active boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
@@ -460,6 +461,7 @@ async function ensureWorkflowSchema() {
     await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS position_type_code text`);
     await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_type_code text`);
     await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_name text`);
+    await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_assigned_user_id uuid REFERENCES users(id)`);
     await query(`
     DO $$
     BEGIN

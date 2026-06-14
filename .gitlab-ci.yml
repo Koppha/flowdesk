@@ -22,6 +22,9 @@ backend_test:
 frontend_build:
   stage: build
   tags: [build]
+  variables:
+    # nginx on each PROD server proxies /api/ -> backend (stripping the prefix)
+    VITE_API: "/api"
   script:
     - cd frontend
     - npm ci

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
 import { LESOTHO_DISTRICTS, TravelType, isTravelTypeCode, travelTypeLabel } from "./constants";
-import { Bell, CheckCircle2, ClipboardList, RefreshCw } from "lucide-react";
+import { Bell, CheckCircle2, ClipboardList, Clock3, RefreshCw, User } from "lucide-react";
 
 type InboxItem =
   | {
@@ -17,6 +17,8 @@ type InboxItem =
       current_step_approver_id?: string | null;
       current_step_position_name?: string | null;
       current_step_requires_accommodation?: boolean;
+      current_step_action_type?: string | null;
+      current_step_actionable_by_me?: boolean;
     }
   | {
       doc_type: "ACCOMMODATION";
@@ -39,6 +41,7 @@ type InboxItem =
       workflow_step_order?: number | null;
       current_step_approver_id?: string | null;
       current_step_position_name?: string | null;
+      current_step_actionable_by_me?: boolean;
     }
   | {
       doc_type: "OVERTIME_REQUEST";
@@ -157,6 +160,19 @@ function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) 
     case "OVERTIME_CLAIM":   return "Overtime Claim";
     default:                 return statusLabel(String(value || "Document"));
   }
+}
+
+const TERMINAL_STATUSES = new Set(["DRAFT", "SETTLED", "PAID", "REJECTED", "CANCELLED"]);
+
+function itemStatusLabel(item: InboxItem) {
+  if (
+    (item.doc_type === "CLAIM" || item.doc_type === "ADVANCE") &&
+    item.current_step_position_name &&
+    !TERMINAL_STATUSES.has(String(item.status || "").toUpperCase())
+  ) {
+    return `Pending ${item.current_step_position_name}`;
+  }
+  return statusLabel(item.status);
 }
 
 function itemOwner(item: InboxItem) {
@@ -344,7 +360,7 @@ export default function Inbox(props: { onBack?: () => void }) {
                                 </div>
                               </td>
                               <td>
-                                <span className={`status-pill ${statusTone(it.status)}`}>{statusLabel(it.status)}</span>
+                                <span className={`status-pill ${statusTone(it.status)}`}>{itemStatusLabel(it)}</span>
                               </td>
                               <td className="inbox-money">{itemAmount(it)}</td>
                               <td className="inbox-context">{itemContext(it)}</td>
@@ -420,6 +436,7 @@ export default function Inbox(props: { onBack?: () => void }) {
 function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void; onDone: () => Promise<void> }) {
   const { item, role } = props;
   const me = getUserFromToken();
+  const isFinanceDept = String(me?.department || "").trim().toLowerCase() === "finance";
   const [detail, setDetail] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [comments, setComments] = useState("");
@@ -505,15 +522,52 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     return ranges;
   }, [isTravelAdvance, detail?.lines]);
 
+  // Builds the approval-chain progress strip: which stages are done, the
+  // currently-pending stage (a "stage" = the current step plus any later
+  // steps flagged parallel_with_previous, which become pending together),
+  // and everything still waiting.
+  const approvalProgressStages = useMemo(() => {
+    const chain: any[] = Array.isArray(detail?.approval_chain) ? detail.approval_chain : [];
+    if (!chain.length) return [];
+    const stepOrder = detail?.workflow_step_order ?? 0;
+    let pendingStart = stepOrder;
+    while (pendingStart > 0 && chain[pendingStart]?.parallel_with_previous) pendingStart--;
+    const pendingStage = new Set<number>();
+    if (pendingStart < chain.length) {
+      pendingStage.add(pendingStart);
+      for (let i = pendingStart + 1; i < chain.length && chain[i]?.parallel_with_previous; i++) pendingStage.add(i);
+    }
+    return chain.map((step: any, idx: number) => {
+      const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
+      const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.approver_title || step.position_name);
+      const isDone = Boolean(step.approved) || stepOrder > idx;
+      const isActive = !isDone && pendingStage.has(idx);
+      return {
+        key: `step-${idx}`,
+        label,
+        state: isDone ? "done" : isActive ? "active" : "waiting",
+        status: isDone ? "Approved" : isActive ? "In Progress" : "Waiting",
+        actor: isTeamGroup ? "" : (step.approver_name || "")
+      };
+    });
+  }, [detail?.approval_chain, detail?.workflow_step_order]);
+
   // For workflow-driven advances, use the current_step_approver_id set by the backend.
   // For legacy advances (no approver_id), fall back to role+status checks.
   const isWorkflowDriven = item.doc_type === "ADVANCE" && item.current_step_approver_id !== undefined;
-  const isMyWorkflowStep = isWorkflowDriven && item.current_step_approver_id === me?.userId;
+  const isMyWorkflowStep = isWorkflowDriven && (item.current_step_approver_id === me?.userId || Boolean(item.current_step_actionable_by_me));
   // The current step is an accommodation-only step (e.g. HR preparing
   // accommodation before forwarding to Finance) — at this step the assignee
   // attaches the accommodation booking instead of approving/rejecting.
   const isAccommodationStep = isWorkflowDriven && Boolean((item as any).current_step_requires_accommodation);
   const inProgressStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER"];
+  // Workflow steps can be configured (in the Workflow Designer) to label
+  // their approval action "Counter Sign" instead of "Approve".
+  const isCounterSignStep =
+    item.doc_type === "ADVANCE" &&
+    (isWorkflowDriven
+      ? (item as any).current_step_action_type === "COUNTER_SIGN"
+      : (role === "MANAGER" && item.status === "SUBMITTED"));
 
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
@@ -535,7 +589,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
           (role === "MANAGER" && item.status === "HR_REVIEW") ||
           (role === "EXCO" && item.status === "COUNTERSIGNED") ||
-          (role === "FINANCE" && ["HR_OFFICER", "APPROVED"].includes(item.status)) ||
+          (isFinanceDept && ["HR_OFFICER", "APPROVED"].includes(item.status)) ||
           (role === "ADMIN" && inProgressStatuses.includes(item.status))));
   const canApproveAdvance =
     item.doc_type === "ADVANCE" &&
@@ -548,7 +602,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           (role === "EXCO" && item.status === "COUNTERSIGNED")));
   const canMarkPaid =
     item.doc_type === "ADVANCE" &&
-    (role === "FINANCE" || role === "ADMIN" || Boolean((item as any).is_final_step_approver)) &&
+    (isFinanceDept || role === "ADMIN" || Boolean((item as any).is_final_step_approver)) &&
     ["HR_OFFICER", "APPROVED"].includes(item.status);
   const canCreateAccommodation =
     item.doc_type === "ADVANCE" &&
@@ -558,22 +612,17 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     (isWorkflowDriven
       ? isMyWorkflowStep && isAccommodationStep
       : (role === "MANAGER" && ["HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status)));
-  const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
-  const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && role === "FINANCE" && item.status === "SUBMITTED";
+  const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
+  const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
 
   // Workflow-driven clearance claims (e.g. "Travel Clearance DT") expose the
   // current step's approver via current_step_approver_id, mirroring advances.
   const isWorkflowDrivenClaim = item.doc_type === "CLAIM" && item.current_step_approver_id !== undefined;
-  const isMyClaimWorkflowStep = isWorkflowDrivenClaim && item.current_step_approver_id === me?.userId;
+  const isMyClaimWorkflowStep = isWorkflowDrivenClaim && (item.current_step_approver_id === me?.userId || Boolean(item.current_step_actionable_by_me));
   const canApproveClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
-
-  const canManagerApprove = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "MANAGER" && item.status === "SUBMITTED";
-  const canChiefApprove = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "EXCO" && item.status === "MANAGER_APPROVED";
-  const canAuthApproveClaim = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "MANAGER" && item.status === "CHIEF_OFFICER_APPROVED";
-  const canHrManagerApproveClaim = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "HR_MANAGER" && item.status === "HR_OFFICER";
-  const canFinanceVerify = item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "FINANCE" && item.status === "HR_MANAGER_REVIEW";
-  const canSettle = item.doc_type === "CLAIM" && role === "FINANCE" && item.status === "FINANCE_VERIFIED";
+  const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep;
+  const canSettle = item.doc_type === "CLAIM" && role === "ADMIN" && item.status === "FINANCE_VERIFIED";
 
   const noActionMessage = (() => {
     if (item.doc_type === "ADVANCE" && role === "MANAGER" && !["SUBMITTED", "HR_MANAGER_REVIEW"].includes(item.status)) {
@@ -638,6 +687,15 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     }
     setRollbackError(null);
     void act(() => api.rollbackAdvance(item.id, comments.trim()));
+  }
+
+  function handleRollbackClaim() {
+    if (!comments.trim()) {
+      setRollbackError("Enter rollback comments before sending this clearance back to the owner as draft.");
+      return;
+    }
+    setRollbackError(null);
+    void act(() => api.rollbackClaim(item.id, comments.trim()));
   }
 
   function handleRejectAdvance() {
@@ -707,7 +765,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           <div>
             <div className="review-modal-eyebrow">Request Review</div>
             <h3>Review {item.doc_type === "ACCOMMODATION" ? "Travel Advance Request" : docTypeLabel(item.doc_type)}</h3>
-            <span className={`status-pill ${statusTone(item.status)}`}>{statusLabel(item.status)}</span>
+            <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
           </div>
           <button className="button small-button button-subtle" onClick={props.onClose}>
             Close
@@ -848,6 +906,25 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               </div>
             )}
 
+            {item.doc_type === "ADVANCE" && approvalProgressStages.length > 0 && (
+              <div className="review-card review-card-wide">
+                <div className="review-card-title">Approval Progress</div>
+                <div className="tracking-progress-strip">
+                  {approvalProgressStages.map((stage: any, index: number) => (
+                    <div key={stage.key} className={`tracking-progress-step is-${stage.state}`}>
+                      {index < approvalProgressStages.length - 1 && <span className="tracking-progress-line" aria-hidden />}
+                      <span className="tracking-step-icon">
+                        {stage.state === "done" ? <CheckCircle2 size={22} aria-hidden /> : stage.state === "active" ? <User size={21} aria-hidden /> : <Clock3 size={20} aria-hidden />}
+                      </span>
+                      <strong>{stage.label}</strong>
+                      <em>{stage.status}</em>
+                      {stage.actor && <small>{stage.actor}</small>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="review-card review-card-wide">
               <div className="review-card-title">Action</div>
 
@@ -940,7 +1017,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               <div className="review-form-grid review-form-grid-2">
                 <label>
                   <span>
-                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
+                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim || canRollbackClaim ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
                   </span>
                   <textarea
                     className="review-control review-textarea"
@@ -950,7 +1027,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       if (rollbackError) setRollbackError(null);
                       if (error === "Enter comments before rejecting this advance.") setError(null);
                     }}
-                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim ? "Enter reason for rollback/reject" : ""}
+                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim || canRollbackClaim ? "Enter reason for rollback/reject" : ""}
                   />
                   {rollbackError && (
                     <div className="review-warning">
@@ -1007,7 +1084,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   <>
                     {canApproveAdvance && (
                       <button className="button small-button button-primary" disabled={busy} onClick={handleApproveAdvance}>
-                        {role === "HR_MANAGER" ? "Send to HR" : role === "EXCO" ? "EXCO Approve" : "Approve Advance"}
+                        {role === "HR_MANAGER" ? "Send to HR" : role === "EXCO" ? "EXCO Approve" : isCounterSignStep ? "Counter Sign" : "Approve Advance"}
                       </button>
                     )}
                     {canRejectAdvance && (
@@ -1039,7 +1116,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     disabled={busy}
                     onClick={handleCreateAccommodation}
                   >
-                    Send to Finance
+                    Book
                   </button>
                 )}
 
@@ -1075,33 +1152,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {canManagerApprove && (
-                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.managerApproveClaim(item.id, comments))}>
-                    Certify Clearance
-                  </button>
-                )}
-
-                {canChiefApprove && (
-                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.chiefApproveClaim(item.id, comments))}>
-                    Chief Officer Approve
-                  </button>
-                )}
-
-                {canAuthApproveClaim && (
-                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.authApproveClaim(item.id, comments))}>
-                    HR Approve
-                  </button>
-                )}
-
-                {canHrManagerApproveClaim && (
-                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.hrManagerApproveClaim(item.id, comments))}>
-                    HR Manager Approve
-                  </button>
-                )}
-
-                {canFinanceVerify && (
-                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.financeVerifyClaim(item.id, comments))}>
-                    Finance Verify
+                {canRollbackClaim && (
+                  <button className="button small-button button-subtle" disabled={busy} onClick={handleRollbackClaim}>
+                    Roll Back to Draft
                   </button>
                 )}
 
@@ -1111,7 +1164,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canApproveClaim || canRejectClaim || canManagerApprove || canAuthApproveClaim || canChiefApprove || canFinanceVerify || canSettle)) && (
+                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canApproveClaim || canRejectClaim || canRollbackClaim || canSettle)) && (
                   <div className="review-empty-note">{noActionMessage}</div>
                 )}
               </div>

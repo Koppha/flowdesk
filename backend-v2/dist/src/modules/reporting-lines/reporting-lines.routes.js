@@ -7,6 +7,23 @@ import { query } from "../../lib/db.js";
 import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departments.js";
 export const reportingLinesRouter = Router();
 reportingLinesRouter.use(requireAuth);
+// Walks reporting_lines upward from employeeId, returning the ordered chain
+// of manager IDs (immediate manager first) up to the root.
+export async function getManagerChainIds(employeeId) {
+    const chain = [];
+    const seen = new Set([employeeId]);
+    let currentId = employeeId;
+    while (true) {
+        const rows = await query(`SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`, [currentId]);
+        const managerId = rows[0]?.manager_id;
+        if (!managerId || seen.has(managerId))
+            break;
+        chain.push(managerId);
+        seen.add(managerId);
+        currentId = managerId;
+    }
+    return chain;
+}
 // GET /reporting-lines/stats
 reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (_req, res, next) => {
     try {

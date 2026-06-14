@@ -9,6 +9,28 @@ import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departm
 export const reportingLinesRouter = Router();
 reportingLinesRouter.use(requireAuth);
 
+// Walks reporting_lines upward from employeeId, returning the ordered chain
+// of manager IDs (immediate manager first) up to the root.
+export async function getManagerChainIds(employeeId: string): Promise<string[]> {
+  const chain: string[] = [];
+  const seen = new Set<string>([employeeId]);
+  let currentId = employeeId;
+
+  while (true) {
+    const rows = await query<{ manager_id: string | null }>(
+      `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
+      [currentId]
+    );
+    const managerId = rows[0]?.manager_id;
+    if (!managerId || seen.has(managerId)) break;
+    chain.push(managerId);
+    seen.add(managerId);
+    currentId = managerId;
+  }
+
+  return chain;
+}
+
 // GET /reporting-lines/stats
 reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (_req: AuthedRequest, res, next) => {
   try {

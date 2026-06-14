@@ -22,7 +22,9 @@ const WorkflowStepSchema = z.object({
   is_final_approval: z.boolean().optional(),
   is_system_step: z.boolean().optional(),
   is_active: z.boolean().optional(),
-  requires_accommodation: z.boolean().optional()
+  requires_accommodation: z.boolean().optional(),
+  parallel_with_previous: z.boolean().optional(),
+  action_type: z.enum(["APPROVE", "COUNTER_SIGN"]).optional()
 });
 
 const WorkflowRuleSchema = z.object({
@@ -32,6 +34,7 @@ const WorkflowRuleSchema = z.object({
   condition_value: z.string().trim().min(1),
   additional_position_type_code: z.string().trim().optional(),
   additional_position_name: z.string().trim().optional(),
+  additional_assigned_user_id: z.string().uuid().optional().nullable(),
   is_active: z.boolean().optional()
 });
 
@@ -76,8 +79,19 @@ async function ensureAssignedUserColumn() {
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS approval_mode text NOT NULL DEFAULT 'SINGLE'`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS approval_group_name text`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS requires_accommodation boolean NOT NULL DEFAULT false`);
+  await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS parallel_with_previous boolean NOT NULL DEFAULT false`);
+  const actionTypeColumn = await query<{ exists: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='workflow_steps' AND column_name='action_type') AS exists`
+  );
+  if (!actionTypeColumn[0]?.exists) {
+    await query(`ALTER TABLE workflow_steps ADD COLUMN action_type text NOT NULL DEFAULT 'APPROVE'`);
+    // Preserve prior behavior: the Manager step's approval previously transitioned
+    // status to COUNTERSIGNED and was always labeled "Counter Sign" in the UI.
+    await query(`UPDATE workflow_steps SET action_type = 'COUNTER_SIGN' WHERE position_type_code = 'MANAGER'`);
+  }
   await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_type_code text`);
   await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_position_name text`);
+  await query(`ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS additional_assigned_user_id uuid REFERENCES users(id)`);
   await query(`UPDATE workflow_steps SET position_type_code = COALESCE(NULLIF(trim(position_type_code), ''), NULLIF(trim(position_name), ''), 'CUSTOM')`);
 }
 
@@ -111,16 +125,18 @@ async function insertWorkflowSteps(workflowId: string, steps: z.infer<typeof Wor
       step.is_final_approval ?? false,
       step.is_system_step ?? false,
       step.is_active ?? true,
-      step.requires_accommodation ?? false
+      step.requires_accommodation ?? false,
+      step.parallel_with_previous ?? false,
+      step.action_type ?? "APPROVE"
     );
     values.push(
-      `($${baseIndex},$${baseIndex+1},$${baseIndex+2},$${baseIndex+3},$${baseIndex+4},$${baseIndex+5},$${baseIndex+6},$${baseIndex+7},$${baseIndex+8},$${baseIndex+9},$${baseIndex+10},$${baseIndex+11},$${baseIndex+12},$${baseIndex+13},$${baseIndex+14},$${baseIndex+15},$${baseIndex+16})`
+      `($${baseIndex},$${baseIndex+1},$${baseIndex+2},$${baseIndex+3},$${baseIndex+4},$${baseIndex+5},$${baseIndex+6},$${baseIndex+7},$${baseIndex+8},$${baseIndex+9},$${baseIndex+10},$${baseIndex+11},$${baseIndex+12},$${baseIndex+13},$${baseIndex+14},$${baseIndex+15},$${baseIndex+16},$${baseIndex+17},$${baseIndex+18})`
     );
   });
 
   await query(
     `INSERT INTO workflow_steps
-      (workflow_id, step_order, position_type_code, assigned_user_id, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active, requires_accommodation)
+      (workflow_id, step_order, position_type_code, assigned_user_id, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active, requires_accommodation, parallel_with_previous, action_type)
      VALUES ${values.join(",")}`,
     params
   );
@@ -140,16 +156,17 @@ async function insertWorkflowRules(workflowId: string, rules: z.infer<typeof Wor
       rule.condition_value,
       normalizeWorkflowRouteCode(rule.additional_position_type_code, rule.additional_position_name),
       rule.additional_position_name || workflowRouteLabel(rule.additional_position_type_code, null),
+      rule.additional_assigned_user_id || null,
       rule.is_active ?? true
     );
     values.push(
-      `($${baseIndex},$${baseIndex + 1},$${baseIndex + 2},$${baseIndex + 3},$${baseIndex + 4},$${baseIndex + 5},$${baseIndex + 6},$${baseIndex + 7})`
+      `($${baseIndex},$${baseIndex + 1},$${baseIndex + 2},$${baseIndex + 3},$${baseIndex + 4},$${baseIndex + 5},$${baseIndex + 6},$${baseIndex + 7},$${baseIndex + 8})`
     );
   });
 
   await query(
     `INSERT INTO workflow_rules
-      (workflow_id, rule_name, condition_field, condition_operator, condition_value, additional_position_type_code, additional_position_name, is_active)
+      (workflow_id, rule_name, condition_field, condition_operator, condition_value, additional_position_type_code, additional_position_name, additional_assigned_user_id, is_active)
      VALUES ${values.join(",")}`,
     params
   );
@@ -202,7 +219,9 @@ workflowsRouter.get("/", async (req: AuthedRequest, res, next) => {
                    'is_final_approval', ws.is_final_approval,
                    'is_system_step', ws.is_system_step,
                    'is_active', ws.is_active,
-                   'requires_accommodation', ws.requires_accommodation
+                   'requires_accommodation', ws.requires_accommodation,
+                   'parallel_with_previous', ws.parallel_with_previous,
+                   'action_type', ws.action_type
                  )
                  ORDER BY ws.step_order
                ) FILTER (WHERE ws.id IS NOT NULL),
@@ -320,8 +339,12 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         [workflow.id]
       ),
       query<any>(
-        `SELECT wr.*
+        `SELECT wr.*,
+                u.full_name AS additional_assigned_user_name,
+                u.title AS additional_assigned_user_title,
+                u.email AS additional_assigned_user_email
            FROM workflow_rules wr
+           LEFT JOIN users u ON u.id = wr.additional_assigned_user_id
           WHERE wr.workflow_id=$1 AND wr.is_active = true
           ORDER BY wr.created_at ASC`,
         [workflow.id]
@@ -368,7 +391,8 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         approver_id: approverId,
         approver_name: approverName || null,
         required: step.is_required,
-        final_approval: step.is_final_approval
+        final_approval: step.is_final_approval,
+        action_type: step.action_type || "APPROVE"
       }];
     });
 
@@ -378,10 +402,32 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         rule.condition_operator === ">" ? amount > value :
         rule.condition_operator === "<" ? amount < value :
         amount === value;
+      const code = normalizeWorkflowRouteCode(rule.additional_position_type_code, rule.additional_position_name);
+      const approverId =
+        rule.additional_assigned_user_id ||
+        (code === "HOD"
+          ? leadership.hod_user_id
+          : code === "MANAGER"
+            ? leadership.manager_user_id
+            : code === "EXCO_OWNER"
+              ? leadership.exco_user_id
+              : null);
+      const approverName =
+        rule.additional_assigned_user_id
+          ? rule.additional_assigned_user_name
+          : code === "HOD"
+            ? leadership.hod_name
+            : code === "MANAGER"
+              ? leadership.manager_name
+              : code === "EXCO_OWNER"
+                ? leadership.exco_name
+                : null;
       return matched ? [{
         rule_name: rule.rule_name,
         position_name: rule.additional_position_name || workflowRouteLabel(rule.additional_position_type_code, "Additional Approval"),
-        position_type_code: normalizeWorkflowRouteCode(rule.additional_position_type_code, rule.additional_position_name),
+        position_type_code: code,
+        approver_id: approverId,
+        approver_name: approverName || null,
         condition: `${rule.condition_field} ${rule.condition_operator} ${rule.condition_value}`
       }] : [];
     });

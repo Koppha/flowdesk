@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api } from "./api";
-import { useStaffDirectory, isActiveStaff } from "./useStaffDirectory";
+import { useStaffDirectory, isActiveStaff, type StaffMember } from "./useStaffDirectory";
 import {
   AlertTriangle,
   Check,
@@ -40,6 +40,8 @@ type PositionType = {
   applies_to: string[];
   is_active: boolean;
   assignedUserId?: string | null;
+  approvalMode?: "SINGLE" | "ANY_ONE";
+  approvalGroupName?: string | null;
 };
 
 type WorkflowStep = {
@@ -62,6 +64,8 @@ type WorkflowStep = {
   isSystemStep: boolean;
   isActive: boolean;
   requiresAccommodation: boolean;
+  parallelWithPrevious: boolean;
+  actionType: "APPROVE" | "COUNTER_SIGN";
 };
 
 type WorkflowRule = {
@@ -72,10 +76,21 @@ type WorkflowRule = {
   conditionOperator: string;
   conditionValue: string;
   additionalPositionTypeId: string;
+  additionalPositionName?: string | null;
+  additionalAssignedUserId?: string | null;
   isActive: boolean;
 };
 
 type WorkflowRuleDraft = Omit<WorkflowRule, "id" | "workflowId">;
+
+type RuleTargetOption = {
+  value: string;
+  group: string;
+  label: string;
+  code: string;
+  positionName: string;
+  assignedUserId: string | null;
+};
 
 type Workflow = {
   id: string;
@@ -210,6 +225,8 @@ const DEFAULT_RULES: WorkflowRule[] = [
     conditionOperator: ">",
     conditionValue: "20000",
     additionalPositionTypeId: "pos-finance",
+    additionalPositionName: "Finance",
+    additionalAssignedUserId: null,
     isActive: true
   },
   {
@@ -219,9 +236,14 @@ const DEFAULT_RULES: WorkflowRule[] = [
     conditionOperator: ">",
     conditionValue: "50000",
     additionalPositionTypeId: "pos-ceo",
+    additionalPositionName: "CEO",
+    additionalAssignedUserId: null,
     isActive: true
   }
 ];
+
+const RULE_TARGET_ROLE_CODES = ["HOD", "MANAGER", "EXCO_OWNER", "FINANCE", "HR_REVIEW", "CEO"];
+const RULE_TARGET_STAFF_ROLES = ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "EXCO", "CEO"];
 
 function generateId() {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -244,6 +266,44 @@ function getDepartmentName(department: any) {
   return typeof department === "string"
     ? department.trim()
     : String(department?.name || department?.department || "").trim();
+}
+
+function assignedRuleTargetValue(userId: string, code: string) {
+  return `assigned:${userId}:${code}`;
+}
+
+function assignedRuleTargetCode(value: string | undefined | null) {
+  const match = String(value || "").match(/^assigned:[^:]+:(.+)$/);
+  return match?.[1] || "";
+}
+
+function staffName(user: StaffMember | undefined | null) {
+  return String(user?.full_name || user?.email || "").trim();
+}
+
+function staffOrgPath(user: StaffMember | undefined | null) {
+  return [user?.department, user?.section_name, user?.team_name].filter(Boolean).join(" / ");
+}
+
+function staffRoleToWorkflowCode(role: string | undefined | null) {
+  switch (String(role || "").toUpperCase()) {
+    case "EXCO":
+      return "EXCO_OWNER";
+    case "HR_MANAGER":
+      return "HR_REVIEW";
+    case "HOD":
+    case "MANAGER":
+    case "FINANCE":
+    case "CEO":
+      return String(role || "").toUpperCase();
+    default:
+      return "";
+  }
+}
+
+function workflowCodeLabel(code: string) {
+  const known = POSITION_TYPE_FALLBACKS.find((position) => position.code === code);
+  return known?.name || code.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function getPositionIcon(code: string) {
@@ -290,7 +350,7 @@ export default function WorkflowBuilder() {
   const [orgStructure, setOrgStructure] = useState<{ divisions: any[]; departments: any[]; sections: any[]; teams: any[] }>({ divisions: [], departments: [], sections: [], teams: [] });
   const [excoMembers, setExcoMembers] = useState<any[]>([]);
   const [extraPositions, setExtraPositions] = useState<PositionType[]>([]);
-  const [addPositionPicker, setAddPositionPicker] = useState<{ department: string; role: "HOD" | "MANAGER" }>({ department: "", role: "HOD" });
+  const [addPositionPicker, setAddPositionPicker] = useState<{ department: string; team: string; role: "HOD" | "MANAGER"; anyTeamMember: boolean }>({ department: "", team: "", role: "HOD", anyTeamMember: false });
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [addPanelMode, setAddPanelMode] = useState<"position" | "member">("position");
   const [addMemberPicker, setAddMemberPicker] = useState<{ department: string; team: string; userId: string }>({ department: "", team: "", userId: "" });
@@ -301,7 +361,7 @@ export default function WorkflowBuilder() {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [selectedStepId, setSelectedStepId] = useState<string>("");
   const [rules, setRules] = useState<WorkflowRule[]>(DEFAULT_RULES);
-  const [ruleDraft, setRuleDraft] = useState<WorkflowRuleDraft>({ ruleName: "", conditionField: "Amount", conditionOperator: ">", conditionValue: "", additionalPositionTypeId: "pos-finance", isActive: true });
+  const [ruleDraft, setRuleDraft] = useState<WorkflowRuleDraft>({ ruleName: "", conditionField: "Amount", conditionOperator: ">", conditionValue: "", additionalPositionTypeId: "pos-finance", additionalPositionName: "Finance", additionalAssignedUserId: null, isActive: true });
   const [showRuleForm, setShowRuleForm] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [dragSource, setDragSource] = useState<{ type: "step" | "position"; id: string; overrides?: { positionName?: string; description?: string; assignedUserId?: string | null; approvalMode?: "SINGLE" | "ANY_ONE"; approvalGroupName?: string | null } } | null>(null);
@@ -440,10 +500,15 @@ export default function WorkflowBuilder() {
         ? [...without, ...excoMemberCards]
         : [...without, ...base.filter((p) => p.code === "EXCO_OWNER")];
     };
+    // Hide HR Review and Finance from the Position picker — these are no
+    // longer assignable as new step positions, but stay selectable if a
+    // pre-existing step already uses one (avoids an invalid select value).
+    const hideRetiredCodes = (list: PositionType[]) =>
+      list.filter((p) => (p.code !== "HR_REVIEW" && p.code !== "FINANCE") || p.code === selectedStep?.positionTypeCode);
     if (!selectedStep || activePositionTypes.some((position) => position.code === selectedStep.positionTypeCode)) {
-      return withGlobalExco(activePositionTypes);
+      return hideRetiredCodes(withGlobalExco(activePositionTypes));
     }
-    return withGlobalExco([
+    return hideRetiredCodes(withGlobalExco([
       {
         id: selectedStep.positionTypeId || selectedStep.id,
         code: selectedStep.positionTypeCode,
@@ -453,8 +518,104 @@ export default function WorkflowBuilder() {
         is_active: true
       },
       ...activePositionTypes
-    ]);
+    ]));
   }, [activePositionTypes, excoMemberCards, metadata.requestType, selectedStep]);
+
+  const ruleTargetOptions = useMemo<RuleTargetOption[]>(() => {
+    const options: RuleTargetOption[] = [];
+    const seen = new Set<string>();
+
+    const addOption = (option: RuleTargetOption) => {
+      if (!option.value || seen.has(option.value)) return;
+      seen.add(option.value);
+      options.push(option);
+    };
+
+    const positionByRuleCode = (code: string) =>
+      activePositionTypes.find((position) => position.code === code) ||
+      POSITION_TYPE_FALLBACKS.find((position) => position.code === code);
+
+    for (const code of RULE_TARGET_ROLE_CODES) {
+      const position = positionByRuleCode(code);
+      if (!position?.is_active && !POSITION_TYPE_FALLBACKS.some((fallback) => fallback.code === code)) continue;
+      addOption({
+        value: position?.id || code,
+        group: "Approval roles",
+        label: position?.name || workflowCodeLabel(code),
+        code,
+        positionName: position?.name || workflowCodeLabel(code),
+        assignedUserId: null
+      });
+    }
+
+    for (const department of departments) {
+      const deptName = getDepartmentName(department);
+      if (!deptName) continue;
+      const leadership = [
+        { code: "HOD", title: "HOD", userId: department.hod_user_id, name: department.hod_name },
+        { code: "MANAGER", title: "Manager", userId: department.manager_user_id, name: department.manager_name },
+        { code: "EXCO_OWNER", title: "EXCO Member", userId: department.exco_user_id || department.section_exco_user_id, name: department.exco_name || department.section_exco_name }
+      ];
+
+      for (const leader of leadership) {
+        if (!leader.userId) continue;
+        addOption({
+          value: assignedRuleTargetValue(leader.userId, leader.code),
+          group: "Department leadership",
+          label: `${deptName} - ${leader.title}${leader.name ? ` (${leader.name})` : ""}`,
+          code: leader.code,
+          positionName: `${deptName} ${leader.title}`,
+          assignedUserId: leader.userId
+        });
+      }
+    }
+
+    const approvers = staff
+      .filter((user) => isActiveStaff(user) && RULE_TARGET_STAFF_ROLES.includes(String(user.role || "").toUpperCase()))
+      .sort((a, b) => {
+        const deptCompare = String(a.department || "").localeCompare(String(b.department || ""));
+        if (deptCompare) return deptCompare;
+        return staffName(a).localeCompare(staffName(b));
+      });
+
+    for (const user of approvers) {
+      const code = staffRoleToWorkflowCode(user.role);
+      if (!code) continue;
+      const name = staffName(user);
+      const roleLabel = workflowCodeLabel(code);
+      const orgPath = staffOrgPath(user);
+      addOption({
+        value: assignedRuleTargetValue(user.id, code),
+        group: `People - ${user.department || "No Department"}`,
+        label: `${name || user.email} - ${roleLabel}${orgPath ? ` - ${orgPath}` : ""}`,
+        code,
+        positionName: roleLabel,
+        assignedUserId: user.id
+      });
+    }
+
+    return options;
+  }, [activePositionTypes, departments, staff]);
+
+  const groupedRuleTargetOptions = useMemo(() => {
+    const groups: Array<{ label: string; options: RuleTargetOption[] }> = [];
+    const groupIndex = new Map<string, RuleTargetOption[]>();
+    for (const option of ruleTargetOptions) {
+      let list = groupIndex.get(option.group);
+      if (!list) {
+        list = [];
+        groupIndex.set(option.group, list);
+        groups.push({ label: option.group, options: list });
+      }
+      list.push(option);
+    }
+    return groups;
+  }, [ruleTargetOptions]);
+
+  const defaultRuleTargetValue = useMemo(
+    () => ruleTargetOptions.find((option) => option.code === "FINANCE")?.value || ruleTargetOptions[0]?.value || "pos-finance",
+    [ruleTargetOptions]
+  );
 
   const departmentOptions = useMemo(() => {
     return Array.from(
@@ -467,26 +628,73 @@ export default function WorkflowBuilder() {
     [departmentOptions, metadata.department]
   );
 
+  // Teams belonging to the selected department (across all of its sections),
+  // used to optionally scope the extra position to a specific team.
+  const teamOptionsForPosition = useMemo(() => {
+    if (!addPositionPicker.department) return [];
+    const orgDept = orgStructure.departments.find((d) => d?.name === addPositionPicker.department);
+    if (!orgDept) return [];
+    const sectionIds = new Set(
+      orgStructure.sections.filter((s) => s?.department_id === orgDept.id).map((s) => s.id)
+    );
+    return orgStructure.teams
+      .filter((t) => t?.section_id && sectionIds.has(t.section_id))
+      .map((t) => t.name as string)
+      .sort((a, b) => a.localeCompare(b));
+  }, [orgStructure, addPositionPicker.department]);
+
   function addExtraPosition() {
     if (!addPositionPicker.department) return;
     const base = activePositionTypes.find((p) => p.code === addPositionPicker.role);
     if (!base) return;
-    const id = `extra-${addPositionPicker.role}-${addPositionPicker.department}`;
+    const { department, team, role, anyTeamMember } = addPositionPicker;
+
+    // "Any one in <team>" — a single position card representing the whole
+    // team; approving as this position requires ANY_ONE/group-based checks.
+    if (anyTeamMember && team) {
+      const id = `extra-TEAM-${department}-${team}`;
+      if (extraPositions.some((p) => p.id === id)) return;
+      setExtraPositions((prev) => [
+        ...prev,
+        {
+          id,
+          code: base.code,
+          name: `Team: ${team}`,
+          description: `Anyone in ${team} — ${department}`,
+          applies_to: base.applies_to,
+          is_active: true,
+          assignedUserId: null,
+          approvalMode: "ANY_ONE",
+          approvalGroupName: `Team: ${team}`
+        }
+      ]);
+      setAddPositionPicker({ department: "", team: "", role: "HOD", anyTeamMember: false });
+      setShowAddPosition(false);
+      return;
+    }
+
+    const id = team ? `extra-${role}-${department}-${team}` : `extra-${role}-${department}`;
     if (extraPositions.some((p) => p.id === id)) return;
-    const dept = departments.find((d) => getDepartmentName(d) === addPositionPicker.department);
-    const personName = addPositionPicker.role === "HOD" ? dept?.hod_name : dept?.manager_name;
+    const dept = departments.find((d) => getDepartmentName(d) === department);
+    const orgTeam = team ? orgStructure.teams.find((t) => t?.name === team) : null;
+    const scopeLabel = team ? `${team}, ${department}` : department;
+    // A team's leader stands in for the Manager position on that team; HOD
+    // remains the department-wide HOD regardless of team selection.
+    const personName = role === "HOD" ? dept?.hod_name : (orgTeam?.leader_name ?? dept?.manager_name);
+    const personId = role === "HOD" ? dept?.hod_user_id : (orgTeam?.leader_user_id ?? dept?.manager_user_id);
     setExtraPositions((prev) => [
       ...prev,
       {
         id,
         code: base.code,
         name: base.name,
-        description: personName ? `${personName} — ${addPositionPicker.department}` : `Unassigned — ${addPositionPicker.department}`,
+        description: personName ? `${personName} — ${scopeLabel}` : `Unassigned — ${scopeLabel}`,
         applies_to: base.applies_to,
-        is_active: true
+        is_active: true,
+        assignedUserId: personId || null
       }
     ]);
-    setAddPositionPicker({ department: "", role: "HOD" });
+    setAddPositionPicker({ department: "", team: "", role: "HOD", anyTeamMember: false });
     setShowAddPosition(false);
   }
 
@@ -702,16 +910,20 @@ export default function WorkflowBuilder() {
       isFinalApproval: raw.is_final_approval ?? raw.isFinalApproval ?? false,
       isSystemStep: raw.is_system_step ?? raw.isSystemStep ?? false,
       isActive: raw.is_active ?? raw.isActive ?? true,
-      requiresAccommodation: raw.requires_accommodation ?? raw.requiresAccommodation ?? false
+      requiresAccommodation: raw.requires_accommodation ?? raw.requiresAccommodation ?? false,
+      parallelWithPrevious: raw.parallel_with_previous ?? raw.parallelWithPrevious ?? false,
+      actionType: (raw.action_type || raw.actionType || "APPROVE") as "APPROVE" | "COUNTER_SIGN"
     };
   }
 
   function normalizeRule(raw: any, workflowId: string | null = null): WorkflowRule {
     const rawCode = raw.additional_position_type_code || raw.additionalPositionTypeCode || raw.additional_position_code || raw.additionalPositionCode || "";
+    const additionalAssignedUserId = raw.additional_assigned_user_id || raw.additionalAssignedUserId || null;
     const positionType =
       positionTypes.find((type) => type.code === rawCode || type.id === rawCode) ||
       positionTypes.find((type) => type.name === raw.additional_position_name) ||
       POSITION_TYPE_FALLBACKS.find((fallback) => fallback.code === rawCode || fallback.name === raw.additional_position_name);
+    const normalizedCode = positionType?.code || rawCode || "";
     return {
       id: raw.id || generateId(),
       workflowId,
@@ -719,7 +931,11 @@ export default function WorkflowBuilder() {
       conditionField: raw.condition_field || raw.conditionField || "Amount",
       conditionOperator: raw.condition_operator || raw.conditionOperator || ">",
       conditionValue: raw.condition_value || raw.conditionValue || "",
-      additionalPositionTypeId: positionType?.id || raw.additionalPositionTypeId || rawCode || "",
+      additionalPositionTypeId: additionalAssignedUserId && normalizedCode
+        ? assignedRuleTargetValue(additionalAssignedUserId, normalizedCode)
+        : positionType?.id || raw.additionalPositionTypeId || rawCode || "",
+      additionalPositionName: raw.additional_position_name || raw.additionalPositionName || positionType?.name || null,
+      additionalAssignedUserId,
       isActive: raw.is_active ?? raw.isActive ?? true
     };
   }
@@ -749,6 +965,8 @@ export default function WorkflowBuilder() {
       isSystemStep: isEmployee,
       isActive: true,
       requiresAccommodation: false,
+      parallelWithPrevious: false,
+      actionType: position.code === "MANAGER" ? "COUNTER_SIGN" : "APPROVE",
       ...overrides,
       approvalMode: overrides.approvalMode ?? "SINGLE",
       approvalGroupName: overrides.approvalGroupName ?? null
@@ -781,7 +999,7 @@ export default function WorkflowBuilder() {
     setSelectedStepId(nextSteps[0]?.id || "");
     setRules(DEFAULT_RULES);
     setSelectedTemplateId("STANDARD");
-    setRuleDraft({ ruleName: "", conditionField: "Amount", conditionOperator: ">", conditionValue: "", additionalPositionTypeId: "pos-finance", isActive: true });
+    setRuleDraft(makeBlankRuleDraft());
     setShowRuleForm(false);
     setEditingRuleId(null);
   }
@@ -899,6 +1117,31 @@ export default function WorkflowBuilder() {
     return fallback?.name || "Unknown";
   }
 
+  function resolveRuleTarget(rule: Pick<WorkflowRule, "additionalPositionTypeId" | "additionalPositionName" | "additionalAssignedUserId">) {
+    const selected = ruleTargetOptions.find((option) => option.value === rule.additionalPositionTypeId);
+    if (selected) return selected;
+
+    const decodedCode = assignedRuleTargetCode(rule.additionalPositionTypeId);
+    const assignedUser = rule.additionalAssignedUserId
+      ? staff.find((user) => user.id === rule.additionalAssignedUserId)
+      : null;
+    const code = decodedCode || resolvePositionCode(rule.additionalPositionTypeId);
+    const positionName = rule.additionalPositionName || workflowCodeLabel(code) || resolvePositionLabel(rule.additionalPositionTypeId);
+    const name = staffName(assignedUser);
+    return {
+      value: rule.additionalPositionTypeId || code,
+      group: "Saved target",
+      label: name ? `${name} - ${positionName}` : positionName,
+      code,
+      positionName,
+      assignedUserId: rule.additionalAssignedUserId || null
+    };
+  }
+
+  function resolveRuleTargetLabel(rule: WorkflowRule) {
+    return resolveRuleTarget(rule).label;
+  }
+
   function usersForStep(step: WorkflowStep) {
     const nameLower = step.positionName.toLowerCase();
     let roles: string[];
@@ -930,6 +1173,8 @@ export default function WorkflowBuilder() {
     const normalizedCode = String(positionTypeCode || "").trim();
     if (normalizedCode) return normalizedCode;
     if (positionTypeId) {
+      const assignedCode = assignedRuleTargetCode(positionTypeId);
+      if (assignedCode) return assignedCode;
       const matchedType =
         positionTypes.find((type) => type.id === positionTypeId || type.code === positionTypeId) ||
         POSITION_TYPE_FALLBACKS.find((type) => type.id === positionTypeId || type.code === positionTypeId);
@@ -965,17 +1210,23 @@ export default function WorkflowBuilder() {
         is_final_approval: step.isFinalApproval,
         is_system_step: step.isSystemStep,
         is_active: step.isActive,
-        requires_accommodation: step.requiresAccommodation
+        requires_accommodation: step.requiresAccommodation,
+        parallel_with_previous: step.parallelWithPrevious,
+        action_type: step.actionType
       })),
-      rules: rules.map((rule) => ({
-        rule_name: rule.ruleName,
-        condition_field: rule.conditionField,
-        condition_operator: rule.conditionOperator,
-        condition_value: rule.conditionValue,
-        additional_position_type_code: resolvePositionCode(rule.additionalPositionTypeId),
-        additional_position_name: resolvePositionLabel(rule.additionalPositionTypeId),
-        is_active: rule.isActive
-      }))
+      rules: rules.map((rule) => {
+        const target = resolveRuleTarget(rule);
+        return {
+          rule_name: rule.ruleName,
+          condition_field: rule.conditionField,
+          condition_operator: rule.conditionOperator,
+          condition_value: rule.conditionValue,
+          additional_position_type_code: target.code || resolvePositionCode(rule.additionalPositionTypeId),
+          additional_position_name: target.positionName || resolvePositionLabel(rule.additionalPositionTypeId),
+          additional_assigned_user_id: target.assignedUserId || null,
+          is_active: rule.isActive
+        };
+      })
     };
   }
 
@@ -1055,6 +1306,33 @@ export default function WorkflowBuilder() {
     }
   }
 
+  function makeBlankRuleDraft(): WorkflowRuleDraft {
+    const target = ruleTargetOptions.find((option) => option.value === defaultRuleTargetValue);
+    return {
+      ruleName: "",
+      conditionField: "Amount",
+      conditionOperator: ">",
+      conditionValue: "",
+      additionalPositionTypeId: target?.value || defaultRuleTargetValue,
+      additionalPositionName: target?.positionName || "Finance",
+      additionalAssignedUserId: target?.assignedUserId || null,
+      isActive: true
+    };
+  }
+
+  function normalizeRuleDraftTarget(draft: WorkflowRuleDraft) {
+    const target = resolveRuleTarget({
+      additionalPositionTypeId: draft.additionalPositionTypeId || defaultRuleTargetValue,
+      additionalPositionName: draft.additionalPositionName || null,
+      additionalAssignedUserId: draft.additionalAssignedUserId || null
+    });
+    return {
+      additionalPositionTypeId: target.value || draft.additionalPositionTypeId || defaultRuleTargetValue,
+      additionalPositionName: target.positionName || draft.additionalPositionName || null,
+      additionalAssignedUserId: target.assignedUserId || null
+    };
+  }
+
   function handleAddRule() {
     if (readOnly) return;
     if (!showRuleForm) {
@@ -1067,18 +1345,25 @@ export default function WorkflowBuilder() {
       return;
     }
 
+    const target = normalizeRuleDraftTarget(ruleDraft);
+    const nextRuleFields = {
+      ruleName: ruleDraft.ruleName,
+      conditionField: ruleDraft.conditionField || "Amount",
+      conditionOperator: ruleDraft.conditionOperator || ">",
+      conditionValue: ruleDraft.conditionValue || "",
+      additionalPositionTypeId: target.additionalPositionTypeId,
+      additionalPositionName: target.additionalPositionName,
+      additionalAssignedUserId: target.additionalAssignedUserId,
+      isActive: ruleDraft.isActive ?? true
+    };
+
     if (editingRuleId) {
       setRules((current) =>
         current.map((rule) =>
           rule.id === editingRuleId
             ? {
                 ...rule,
-                ruleName: ruleDraft.ruleName,
-                conditionField: ruleDraft.conditionField || "Amount",
-                conditionOperator: ruleDraft.conditionOperator || ">",
-                conditionValue: ruleDraft.conditionValue || "",
-                additionalPositionTypeId: ruleDraft.additionalPositionTypeId || availablePositionTypes[0]?.id || "",
-                isActive: ruleDraft.isActive ?? true
+                ...nextRuleFields
               }
             : rule
         )
@@ -1089,17 +1374,12 @@ export default function WorkflowBuilder() {
         {
           id: generateId(),
           workflowId: selectedWorkflowId || null,
-          ruleName: ruleDraft.ruleName,
-          conditionField: ruleDraft.conditionField || "Amount",
-          conditionOperator: ruleDraft.conditionOperator || ">",
-          conditionValue: ruleDraft.conditionValue || "",
-          additionalPositionTypeId: ruleDraft.additionalPositionTypeId || availablePositionTypes[0]?.id || "",
-          isActive: ruleDraft.isActive ?? true
+          ...nextRuleFields
         }
       ]);
     }
 
-    setRuleDraft({ ruleName: "", conditionField: "Amount", conditionOperator: ">", conditionValue: "", additionalPositionTypeId: availablePositionTypes[0]?.id || "", isActive: true });
+    setRuleDraft(makeBlankRuleDraft());
     setEditingRuleId(null);
     setShowRuleForm(false);
   }
@@ -1117,6 +1397,8 @@ export default function WorkflowBuilder() {
       conditionOperator: rule.conditionOperator,
       conditionValue: rule.conditionValue,
       additionalPositionTypeId: rule.additionalPositionTypeId,
+      additionalPositionName: rule.additionalPositionName || null,
+      additionalAssignedUserId: rule.additionalAssignedUserId || null,
       isActive: rule.isActive
     });
     setEditingRuleId(rule.id);
@@ -1124,7 +1406,7 @@ export default function WorkflowBuilder() {
   }
 
   function cancelRuleEdit() {
-    setRuleDraft({ ruleName: "", conditionField: "Amount", conditionOperator: ">", conditionValue: "", additionalPositionTypeId: availablePositionTypes[0]?.id || "", isActive: true });
+    setRuleDraft(makeBlankRuleDraft());
     setEditingRuleId(null);
     setShowRuleForm(false);
   }
@@ -1595,10 +1877,11 @@ export default function WorkflowBuilder() {
                 const statusLabel = step.isSystemStep ? "System Step" : step.isRequired ? "Required" : "Optional";
                 const statusClass = step.isSystemStep ? "status-pill-info" : step.isRequired ? "status-pill-success" : "status-pill-warning";
                 const supportLabel = step.isFinalApproval ? "Final Approval" : step.skipIfUnassigned ? "Skip if unassigned" : step.isRequired ? "Must approve" : "Can be skipped";
+                const isGrouped = step.parallelWithPrevious || steps[index + 1]?.parallelWithPrevious;
                 return (
                   <React.Fragment key={step.id}>
                     <div
-                      className={`workflow-step-card ${toneClass}${selectedStep?.id === step.id ? " selected" : ""}${dragOverIndex === index ? " drag-over" : ""}`}
+                      className={`workflow-step-card ${toneClass}${selectedStep?.id === step.id ? " selected" : ""}${dragOverIndex === index ? " drag-over" : ""}${isGrouped ? " workflow-step-card-grouped" : ""}`}
                       draggable={!readOnly}
                       onClick={() => setSelectedStepId(step.id)}
                       onDragStart={() => setDragSource({ type: "step", id: step.id })}
@@ -1624,7 +1907,16 @@ export default function WorkflowBuilder() {
                       </div>
                       <MoreVertical className="workflow-card-menu" size={18} aria-hidden />
                     </div>
-                    {index < steps.length - 1 ? <div className="workflow-step-connector" aria-hidden>↓</div> : null}
+                    {index < steps.length - 1 ? (
+                      steps[index + 1]?.parallelWithPrevious ? (
+                        <div className="workflow-step-connector workflow-step-connector-parallel" aria-hidden>
+                          <span>+</span>
+                          <small>Both must approve</small>
+                        </div>
+                      ) : (
+                        <div className="workflow-step-connector" aria-hidden>↓</div>
+                      )
+                    ) : null}
                   </React.Fragment>
                 );
               })}
@@ -1755,6 +2047,13 @@ export default function WorkflowBuilder() {
                     <option value="YES">Yes</option>
                   </select>
                 </label>
+                <label>
+                  <span>Action Label</span>
+                  <select value={selectedStep.actionType} onChange={(event) => updateStep(selectedStep.id, { actionType: event.target.value as "APPROVE" | "COUNTER_SIGN" })} disabled={readOnly}>
+                    <option value="APPROVE">Approver</option>
+                    <option value="COUNTER_SIGN">Counter Signer</option>
+                  </select>
+                </label>
                 <div className="workflow-checkbox-list">
                   <label className="workflow-checkbox">
                     <input type="checkbox" checked={selectedStep.allowDelegation} onChange={(event) => updateStep(selectedStep.id, { allowDelegation: event.target.checked })} disabled={readOnly} />
@@ -1771,6 +2070,15 @@ export default function WorkflowBuilder() {
                   <label className="workflow-checkbox">
                     <input type="checkbox" checked={selectedStep.requiresAccommodation} onChange={(event) => updateStep(selectedStep.id, { requiresAccommodation: event.target.checked })} disabled={readOnly} />
                     <span>Only required if accommodation is needed (overnight travel)</span>
+                  </label>
+                  <label className="workflow-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={selectedStep.parallelWithPrevious}
+                      disabled={readOnly || steps.findIndex((s) => s.id === selectedStep.id) === 0}
+                      onChange={(event) => updateStep(selectedStep.id, { parallelWithPrevious: event.target.checked })}
+                    />
+                    <span>Run in parallel with the step above (both must approve)</span>
                   </label>
                 </div>
                 <label>
@@ -1811,7 +2119,7 @@ export default function WorkflowBuilder() {
                     key={position.id}
                     className={`workflow-position-card ${getPositionToneClass(position.code)}`}
                     draggable={!readOnly}
-                    onDragStart={() => setDragSource({ type: "position", id: position.code, overrides: { positionName: position.name, description: position.description, assignedUserId: position.assignedUserId } })}
+                    onDragStart={() => setDragSource({ type: "position", id: position.code, overrides: { positionName: position.name, description: position.description, assignedUserId: position.assignedUserId, approvalMode: position.approvalMode, approvalGroupName: position.approvalGroupName } })}
                   >
                     <div className="workflow-position-card-icon"><Icon size={18} aria-hidden /></div>
                     <div className="workflow-position-card-copy">
@@ -1856,20 +2164,39 @@ export default function WorkflowBuilder() {
                       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                         <select
                           value={addPositionPicker.department}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, department: e.target.value }))}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, department: e.target.value, team: "" }))}
                           style={{ flex: 1, minWidth: 140, fontSize: 13 }}
                         >
                           <option value="">Choose department…</option>
                           {otherDeptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
                         </select>
                         <select
+                          value={addPositionPicker.team}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, team: e.target.value, anyTeamMember: e.target.value ? p.anyTeamMember : false }))}
+                          disabled={!addPositionPicker.department || teamOptionsForPosition.length === 0}
+                          style={{ flex: 1, minWidth: 120, fontSize: 13 }}
+                        >
+                          <option value="">All teams…</option>
+                          {teamOptionsForPosition.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <select
                           value={addPositionPicker.role}
                           onChange={(e) => setAddPositionPicker((p) => ({ ...p, role: e.target.value as "HOD" | "MANAGER" }))}
+                          disabled={addPositionPicker.anyTeamMember}
                           style={{ fontSize: 13 }}
                         >
                           <option value="HOD">HOD</option>
                           <option value="MANAGER">Manager</option>
                         </select>
+                        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, whiteSpace: "nowrap" }}>
+                          <input
+                            type="checkbox"
+                            checked={addPositionPicker.anyTeamMember}
+                            disabled={!addPositionPicker.team}
+                            onChange={(e) => setAddPositionPicker((p) => ({ ...p, anyTeamMember: e.target.checked }))}
+                          />
+                          Any team member
+                        </label>
                         <button type="button" className="button button-subtle small-button" onClick={addExtraPosition} disabled={!addPositionPicker.department}>
                           <Plus size={13} aria-hidden /> Add
                         </button>
@@ -1962,8 +2289,28 @@ export default function WorkflowBuilder() {
                   <input type="number" placeholder="Value" value={ruleDraft.conditionValue || ""} onChange={(event) => setRuleDraft((current) => ({ ...current, conditionValue: event.target.value }))} />
                 </div>
                 <div className="workflow-rule-form-footer">
-                  <select value={ruleDraft.additionalPositionTypeId || availablePositionTypes[0]?.id || ""} onChange={(event) => setRuleDraft((current) => ({ ...current, additionalPositionTypeId: event.target.value }))}>
-                    {availablePositionTypes.map((position) => <option key={position.id} value={position.id}>{position.name}</option>)}
+                  <select
+                    value={ruleDraft.additionalPositionTypeId || defaultRuleTargetValue}
+                    onChange={(event) => {
+                      const selected = ruleTargetOptions.find((option) => option.value === event.target.value);
+                      setRuleDraft((current) => ({
+                        ...current,
+                        additionalPositionTypeId: event.target.value,
+                        additionalPositionName: selected?.positionName || null,
+                        additionalAssignedUserId: selected?.assignedUserId || null
+                      }));
+                    }}
+                  >
+                    {ruleDraft.additionalPositionTypeId && !ruleTargetOptions.some((option) => option.value === ruleDraft.additionalPositionTypeId) ? (
+                      <option value={ruleDraft.additionalPositionTypeId}>{resolveRuleTarget(ruleDraft).label}</option>
+                    ) : null}
+                    {groupedRuleTargetOptions.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.options.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                   <button className="button button-subtle small-button" type="button" onClick={cancelRuleEdit}>Cancel</button>
                 </div>
@@ -1985,7 +2332,7 @@ export default function WorkflowBuilder() {
                     <tr key={rule.id}>
                       <td>{rule.ruleName}</td>
                       <td>{describeRuleCondition(rule)}</td>
-                      <td>{resolvePositionLabel(rule.additionalPositionTypeId)}</td>
+                      <td>{resolveRuleTargetLabel(rule)}</td>
                       <td>
                         {!readOnly ? (
                           <>
