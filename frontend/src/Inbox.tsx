@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
 import { LESOTHO_DISTRICTS, TravelType, isTravelTypeCode, travelTypeLabel } from "./constants";
-import { Bell, CheckCircle2, ClipboardList, Clock3, RefreshCw, User } from "lucide-react";
+import { Bell, Briefcase, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Clock3, CreditCard, Plane, RefreshCw, ShieldCheck, User } from "lucide-react";
 
 type InboxItem =
   | {
@@ -164,6 +164,35 @@ function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) 
 
 const TERMINAL_STATUSES = new Set(["DRAFT", "SETTLED", "PAID", "REJECTED", "CANCELLED"]);
 
+function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
+  switch (value) {
+    case "ADVANCE":          return Plane;
+    case "ACCOMMODATION":    return Briefcase;
+    case "CLAIM":            return ShieldCheck;
+    case "OVERTIME_REQUEST":
+    case "OVERTIME_CLAIM":   return Clock3;
+    default:                 return CreditCard;
+  }
+}
+
+function docTypeTone(value: InboxItem["doc_type"] | string | null | undefined) {
+  switch (value) {
+    case "ADVANCE":          return "doc-tone-blue";
+    case "ACCOMMODATION":    return "doc-tone-purple";
+    case "CLAIM":            return "doc-tone-green";
+    case "OVERTIME_REQUEST":
+    case "OVERTIME_CLAIM":   return "doc-tone-amber";
+    default:                 return "doc-tone-blue";
+  }
+}
+
+function itemStageProgress(item: InboxItem) {
+  const status = String(item.status || "").toUpperCase();
+  if (status === "SUBMITTED") return "Pending";
+  if (TERMINAL_STATUSES.has(status)) return statusLabel(status);
+  return "In Progress";
+}
+
 function itemStatusLabel(item: InboxItem) {
   if (
     (item.doc_type === "CLAIM" || item.doc_type === "ADVANCE") &&
@@ -238,12 +267,17 @@ export default function Inbox(props: { onBack?: () => void }) {
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
     for (const it of items) {
-      const key = `${it.doc_type}:${it.status}`;
-      g[key] = g[key] || [];
-      g[key].push(it);
+      g[it.doc_type] = g[it.doc_type] || [];
+      g[it.doc_type].push(it);
     }
     return g;
   }, [items]);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
 
   const metrics = useMemo(
     () => ({
@@ -262,6 +296,25 @@ export default function Inbox(props: { onBack?: () => void }) {
 
   return (
     <div className="inbox-page">
+      <section className="inbox-metrics">
+        <div className="inbox-metric-card metric-blue">
+          <span className="inbox-metric-icon"><Bell size={22} aria-hidden /></span>
+          <div className="inbox-metric-body"><strong>{metrics.awaiting}</strong><span>Awaiting My Approval</span></div>
+        </div>
+        <div className="inbox-metric-card metric-green">
+          <span className="inbox-metric-icon"><ClipboardList size={22} aria-hidden /></span>
+          <div className="inbox-metric-body"><strong>{metrics.advances}</strong><span>Advance Requests</span><small>{fmt(metrics.advanceValue)} value</small></div>
+        </div>
+        <div className="inbox-metric-card metric-gold">
+          <span className="inbox-metric-icon"><CheckCircle2 size={22} aria-hidden /></span>
+          <div className="inbox-metric-body"><strong>{metrics.clearances}</strong><span>Clearances</span></div>
+        </div>
+        <div className="inbox-metric-card metric-rose">
+          <span className="inbox-metric-icon"><RefreshCw size={22} aria-hidden /></span>
+          <div className="inbox-metric-body"><strong>{metrics.recentActions}</strong><span>Recent Actions</span><small>{latestAction ? actionLabel(latestAction.action) : "No history yet"}</small></div>
+        </div>
+      </section>
+
       <section className="inbox-hero">
         <div>
           <div className="inbox-eyebrow">Approval Workflow</div>
@@ -284,26 +337,6 @@ export default function Inbox(props: { onBack?: () => void }) {
 
       {error && <pre className="inbox-error">{error}</pre>}
 
-      <section className="inbox-metrics">
-        <div className="inbox-metric-card metric-blue">
-          <Bell size={26} className="metric-icon" />
-          <div><strong>{metrics.awaiting}</strong><span>Awaiting My Approval</span></div>
-        </div>
-        <div className="inbox-metric-card metric-green">
-          <ClipboardList size={26} className="metric-icon" />
-          <div><strong>{metrics.advances}</strong><span>Advance Requests</span><small>{fmt(metrics.advanceValue)} value</small></div>
-        </div>
-        <div className="inbox-metric-card metric-gold">
-          <CheckCircle2 size={26} className="metric-icon" />
-          <div><strong>{metrics.clearances}</strong><span>Clearances</span></div>
-        </div>
-        <div className="inbox-metric-card metric-rose">
-          <RefreshCw size={26} className="metric-icon" />
-          <div><strong>{metrics.recentActions}</strong><span>Recent Actions</span><small>{latestAction ? actionLabel(latestAction.action) : "No history yet"}</small></div>
-        </div>
-      </section>
-
-      <div className="inbox-layout">
         <section className="inbox-panel inbox-queue-panel">
           <div className="inbox-panel-header">
             <div>
@@ -324,62 +357,74 @@ export default function Inbox(props: { onBack?: () => void }) {
             </div>
           ) : (
             <div className="inbox-group-stack">
-              {Object.entries(grouped).map(([groupKey, groupItems]) => {
-                const [docTypeRaw, statusRaw] = groupKey.split(":");
+              {Object.entries(grouped).map(([docType, groupItems]) => {
+                const Icon = docTypeIcon(docType);
+                const collapsed = Boolean(collapsedGroups[docType]);
+                const totalAmount = groupItems.reduce((sum, it) => sum + itemAmountValue(it), 0);
                 return (
-                  <article key={groupKey} className="inbox-group-card">
-                    <div className="inbox-group-header">
-                      <div>
-                        <span className="inbox-doc-chip">{docTypeLabel(docTypeRaw)}</span>
-                        <h4>{statusLabel(statusRaw)}</h4>
+                  <article key={docType} className={`inbox-group-card ${docTypeTone(docType)}`}>
+                    <button type="button" className="inbox-group-header inbox-group-toggle" onClick={() => toggleGroup(docType)} aria-expanded={!collapsed}>
+                      <div className="inbox-group-title">
+                        <span className="inbox-group-icon"><Icon size={18} aria-hidden /></span>
+                        <h4>{docTypeLabel(docType)}</h4>
+                        <span className="inbox-count-chip">{groupItems.length}</span>
                       </div>
-                      <span className="inbox-count-chip">{groupItems.length} item(s)</span>
-                    </div>
+                      <div className="inbox-group-badges">
+                        <span className="inbox-badge inbox-badge-info">Awaiting: {groupItems.length}</span>
+                        <span className="inbox-badge inbox-badge-total">Total Amount: {fmt(totalAmount)}</span>
+                        {collapsed ? <ChevronDown size={18} aria-hidden /> : <ChevronUp size={18} aria-hidden />}
+                      </div>
+                    </button>
 
-                    <div className="inbox-table-wrap">
-                      <table className="inbox-table">
-                        <thead>
-                          <tr>
-                            <th>Owner</th>
-                            <th>Status</th>
-                            <th>Amount</th>
-                            <th>Context</th>
-                            <th className="inbox-actions-header">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {groupItems.map((it) => (
-                            <tr key={it.id}>
-                              <td>
-                                <div className="inbox-person-cell">
-                                  <span className="inbox-avatar-mini">{initials(itemOwner(it))}</span>
-                                  <span>
-                                    <strong>{itemOwner(it)}</strong>
-                                    <small>{docTypeLabel(it.doc_type)}</small>
-                                  </span>
-                                </div>
-                              </td>
-                              <td>
-                                <span className={`status-pill ${statusTone(it.status)}`}>{itemStatusLabel(it)}</span>
-                              </td>
-                              <td className="inbox-money">{itemAmount(it)}</td>
-                              <td className="inbox-context">{itemContext(it)}</td>
-                              <td className="inbox-actions-cell">
-                                <button
-                                  type="button"
-                                  className="inbox-review-button"
-                                  onClick={() => setSelected(it)}
-                                  aria-label={`Review ${docTypeLabel(it.doc_type)} for ${itemOwner(it)}`}
-                                  title="Review"
-                                >
-                                  <RefreshCw size={15} aria-hidden="true" />
-                                </button>
-                              </td>
+                    {!collapsed && (
+                      <div className="inbox-table-wrap">
+                        <table className="inbox-table">
+                          <thead>
+                            <tr>
+                              <th>Owner</th>
+                              <th>Status / Stage</th>
+                              <th>Amount</th>
+                              <th>Context</th>
+                              <th className="inbox-actions-header">Actions</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          </thead>
+                          <tbody>
+                            {groupItems.map((it) => (
+                              <tr key={it.id}>
+                                <td>
+                                  <div className="inbox-person-cell">
+                                    <span className="inbox-avatar-mini">{initials(itemOwner(it))}</span>
+                                    <span>
+                                      <strong>{itemOwner(it)}</strong>
+                                      <small>{docTypeLabel(it.doc_type)}</small>
+                                    </span>
+                                  </div>
+                                </td>
+                                <td>
+                                  <div className="inbox-stage-cell">
+                                    <span className={`status-pill ${statusTone(it.status)}`}>{itemStatusLabel(it)}</span>
+                                    <small>{itemStageProgress(it)}</small>
+                                  </div>
+                                </td>
+                                <td className="inbox-money">{itemAmount(it)}</td>
+                                <td className="inbox-context">{itemContext(it)}</td>
+                                <td className="inbox-actions-cell">
+                                  <button
+                                    type="button"
+                                    className="inbox-review-button"
+                                    onClick={() => setSelected(it)}
+                                    aria-label={`Review ${docTypeLabel(it.doc_type)} for ${itemOwner(it)}`}
+                                    title="Review"
+                                  >
+                                    <RefreshCw size={15} aria-hidden="true" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </article>
                 );
               })}
@@ -387,36 +432,35 @@ export default function Inbox(props: { onBack?: () => void }) {
           )}
         </section>
 
-        <aside className="inbox-panel inbox-history-panel">
-          <div className="inbox-panel-header">
-            <div>
-              <h3>My Recent Actions</h3>
-              <p>Latest decisions and handoffs.</p>
-            </div>
-            <span className="inbox-count-chip">{myActions.length}</span>
+      <section className="inbox-panel inbox-history-panel">
+        <div className="inbox-panel-header">
+          <div>
+            <h3>My Recent Actions</h3>
+            <p>Latest decisions and handoffs.</p>
           </div>
+          <span className="inbox-count-chip">{myActions.length}</span>
+        </div>
 
-          {myActions.length === 0 ? (
-            <div className="inbox-history-empty">No action history yet.</div>
-          ) : (
-            <div className="inbox-action-list">
-              {myActions.slice(0, 10).map((a) => (
-                <div className="inbox-action-item" key={a.id}>
-                  <div className="inbox-action-topline">
-                    <strong>{actionLabel(a.action)}</strong>
-                    <span className={`status-pill ${statusTone(a.current_status)}`}>{statusLabel(a.current_status)}</span>
-                  </div>
-                  <div className="inbox-action-meta">
-                    {docTypeLabel(a.doc_type)} for {a.requester_name || "Unknown"}
-                  </div>
-                  <time>{fmtWhen(a.created_at)}</time>
+        {myActions.length === 0 ? (
+          <div className="inbox-history-empty">No action history yet.</div>
+        ) : (
+          <div className="inbox-action-list">
+            {myActions.slice(0, 10).map((a) => (
+              <div className="inbox-action-item" key={a.id}>
+                <div className="inbox-action-topline">
+                  <strong>{actionLabel(a.action)}</strong>
+                  <span className={`status-pill ${statusTone(a.current_status)}`}>{statusLabel(a.current_status)}</span>
                 </div>
-              ))}
-              {myActions.length > 10 && <div className="inbox-history-note">Showing latest 10 of {myActions.length} records.</div>}
-            </div>
-          )}
-        </aside>
-      </div>
+                <div className="inbox-action-meta">
+                  {docTypeLabel(a.doc_type)} for {a.requester_name || "Unknown"}
+                </div>
+                <time>{fmtWhen(a.created_at)}</time>
+              </div>
+            ))}
+            {myActions.length > 10 && <div className="inbox-history-note">Showing latest 10 of {myActions.length} records.</div>}
+          </div>
+        )}
+      </section>
 
       {selected && (
         <ReviewModal
@@ -555,7 +599,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // For workflow-driven advances, use the current_step_approver_id set by the backend.
   // For legacy advances (no approver_id), fall back to role+status checks.
   const isWorkflowDriven = item.doc_type === "ADVANCE" && item.current_step_approver_id !== undefined;
-  const isMyWorkflowStep = isWorkflowDriven && (item.current_step_approver_id === me?.userId || Boolean(item.current_step_actionable_by_me));
+  const isMyWorkflowStep = isWorkflowDriven && (
+    item.current_step_actionable_by_me !== undefined
+      ? Boolean(item.current_step_actionable_by_me)
+      : item.current_step_approver_id === me?.userId
+  );
   // The current step is an accommodation-only step (e.g. HR preparing
   // accommodation before forwarding to Finance) — at this step the assignee
   // attaches the accommodation booking instead of approving/rejecting.
@@ -618,7 +666,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // Workflow-driven clearance claims (e.g. "Travel Clearance DT") expose the
   // current step's approver via current_step_approver_id, mirroring advances.
   const isWorkflowDrivenClaim = item.doc_type === "CLAIM" && item.current_step_approver_id !== undefined;
-  const isMyClaimWorkflowStep = isWorkflowDrivenClaim && (item.current_step_approver_id === me?.userId || Boolean(item.current_step_actionable_by_me));
+  const isMyClaimWorkflowStep = isWorkflowDrivenClaim && (
+    item.current_step_actionable_by_me !== undefined
+      ? Boolean(item.current_step_actionable_by_me)
+      : item.current_step_approver_id === me?.userId
+  );
   const canApproveClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep;
@@ -673,10 +725,25 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     try {
       await fn();
       await props.onDone();
+      return true;
     } catch (e: any) {
       setError(String(e.message));
+      return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleMarkAdvancePaid() {
+    const ok = await act(() => api.markAdvancePaid(item.id, paidRef.trim()));
+    if (!ok) return;
+    try {
+      const blob = await api.advancePdf(item.id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e: any) {
+      setError(e?.message || "Advance marked as paid, but failed to generate the PDF.");
     }
   }
 
@@ -1105,7 +1172,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 )}
 
                 {canMarkPaid && (
-                  <button className="button small-button button-primary" disabled={busy || !paidRef.trim()} onClick={() => act(() => api.markAdvancePaid(item.id, paidRef.trim()))}>
+                  <button className="button small-button button-primary" disabled={busy || !paidRef.trim()} onClick={handleMarkAdvancePaid}>
                     Mark Advance Paid
                   </button>
                 )}

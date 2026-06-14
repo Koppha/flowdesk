@@ -1,0 +1,274 @@
+import React, { useMemo, useState } from "react";
+import { formatMoney, travelTypeLabel, isTravelTypeCode, TravelType } from "./constants";
+import { Wallet, Clock3, CheckCircle2, Banknote, XCircle, Edit3, RefreshCw, Plus } from "lucide-react";
+
+interface Props {
+  advances: any[];
+  travelTypes: TravelType[];
+  onNew: () => void;
+  onEdit: (advance: any) => void;
+  onTrack: (advanceId: string) => void;
+  onClear: (advanceId: string) => void;
+}
+
+const PENDING_STATUSES = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER"];
+const CANCELLED_STATUSES = ["CANCELLED", "REJECTED"];
+
+const TABS: { key: string; label: string }[] = [
+  { key: "ALL", label: "All" },
+  { key: "PENDING", label: "Pending" },
+  { key: "APPROVED", label: "Approved" },
+  { key: "PAID", label: "Paid" },
+  { key: "CANCELLED", label: "Cancelled" },
+];
+
+function tabStatuses(tab: string) {
+  switch (tab) {
+    case "PENDING": return PENDING_STATUSES;
+    case "APPROVED": return ["APPROVED"];
+    case "PAID": return ["PAID"];
+    case "CANCELLED": return CANCELLED_STATUSES;
+    default: return null;
+  }
+}
+
+function statusLabel(value: string | null | undefined) {
+  if (!value) return "Unknown";
+  return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function statusTone(value: string | null | undefined) {
+  const status = String(value || "").toUpperCase();
+  if (status.includes("REJECT") || status.includes("CANCEL")) return "status-pill-danger";
+  if (status.includes("PAID") || status.includes("APPROVED")) return "status-pill-success";
+  if (status.includes("SUBMITTED") || status.includes("REVIEW") || status.includes("OFFICER") || status.includes("COUNTERSIGNED")) return "status-pill-warning";
+  if (status.includes("DRAFT")) return "status-pill-neutral";
+  return "status-pill-info";
+}
+
+function fmtDate(value: any) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) +
+    " " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+function requestNumber(advance: any) {
+  const created = new Date(advance?.created_at || Date.now());
+  const year = Number.isNaN(created.getTime()) ? new Date().getFullYear() : created.getFullYear();
+  const digits = String(advance?.id || "").replace(/\D/g, "").slice(-5);
+  const fallback = String(advance?.id || "00000").replace(/-/g, "").slice(0, 5).toUpperCase();
+  return `ADV-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
+}
+
+function advanceStageLabel(status: string) {
+  switch (status) {
+    case "DRAFT": return "Draft (not submitted)";
+    case "SUBMITTED": return "Pending Approval";
+    case "COUNTERSIGNED": return "Pending HOD / EXCO Approval";
+    case "HR_MANAGER_REVIEW": return "Pending HR Manager Approval";
+    case "HR_REVIEW": return "Pending HR Review";
+    case "HR_OFFICER": return "Pending Finance Payment";
+    case "APPROVED": return "Approved — Awaiting Payment";
+    case "PAID": return "Completed";
+    case "CANCELLED": return "Cancelled";
+    case "REJECTED": return "Rejected";
+    default: return statusLabel(status);
+  }
+}
+
+const PAGE_SIZE = 10;
+
+export default function MyAdvances({ advances, travelTypes, onNew, onEdit, onTrack, onClear }: Props) {
+  const [search, setSearch] = useState("");
+  const [filterType, setFilterType] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [tab, setTab] = useState("ALL");
+  const [page, setPage] = useState(1);
+
+  const stats = useMemo(() => ({
+    total: advances.length,
+    pending: advances.filter((a) => PENDING_STATUSES.includes(a.status)).length,
+    approved: advances.filter((a) => a.status === "APPROVED").length,
+    paid: advances.filter((a) => a.status === "PAID").length,
+    cancelled: advances.filter((a) => CANCELLED_STATUSES.includes(a.status)).length,
+  }), [advances]);
+
+  const tabCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of TABS) {
+      const statuses = tabStatuses(t.key);
+      counts[t.key] = statuses ? advances.filter((a) => statuses.includes(a.status)).length : advances.length;
+    }
+    return counts;
+  }, [advances]);
+
+  const uniqueTypes = useMemo(() => [...new Set(advances.map((a) => a.type).filter(Boolean))], [advances]);
+  const uniqueStatuses = useMemo(() => [...new Set(advances.map((a) => a.status).filter(Boolean))], [advances]);
+
+  const filtered = useMemo(() => {
+    const statuses = tabStatuses(tab);
+    return advances.filter((a) => {
+      if (statuses && !statuses.includes(a.status)) return false;
+      if (filterType && a.type !== filterType) return false;
+      if (filterStatus && a.status !== filterStatus) return false;
+      if (dateFrom && a.created_at && a.created_at < dateFrom) return false;
+      if (dateTo && a.created_at && a.created_at > dateTo + "T23:59:59") return false;
+      if (search) {
+        const q = search.toLowerCase();
+        return travelTypeLabel(a.type, travelTypes).toLowerCase().includes(q) ||
+          requestNumber(a).toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [advances, tab, filterType, filterStatus, dateFrom, dateTo, search, travelTypes]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  const hasFilters = Boolean(search || filterType || filterStatus || dateFrom || dateTo);
+
+  return (
+    <div className="ep-page">
+      <div className="ep-header">
+        <div className="ep-header-text">
+          <h1 className="ep-title">My Advances</h1>
+          <p className="ep-subtitle">View and manage all your advance requests.</p>
+        </div>
+        <div className="ep-actions">
+          <button className="button button-primary small-button" onClick={onNew}>
+            <Plus size={14} aria-hidden /> New Advance Request
+          </button>
+        </div>
+      </div>
+
+      <div className="flow-stat-row">
+        <div className="flow-stat-card flow-stat-blue">
+          <span className="flow-stat-icon"><Wallet size={22} aria-hidden /></span>
+          <div className="flow-stat-body"><strong>{stats.total}</strong><span>Total Advances</span><small>All time</small></div>
+        </div>
+        <div className="flow-stat-card flow-stat-amber">
+          <span className="flow-stat-icon"><Clock3 size={22} aria-hidden /></span>
+          <div className="flow-stat-body"><strong>{stats.pending}</strong><span>Pending</span><small>Awaiting approval</small></div>
+        </div>
+        <div className="flow-stat-card flow-stat-purple">
+          <span className="flow-stat-icon"><CheckCircle2 size={22} aria-hidden /></span>
+          <div className="flow-stat-body"><strong>{stats.approved}</strong><span>Approved</span><small>Approved requests</small></div>
+        </div>
+        <div className="flow-stat-card flow-stat-green">
+          <span className="flow-stat-icon"><Banknote size={22} aria-hidden /></span>
+          <div className="flow-stat-body"><strong>{stats.paid}</strong><span>Paid</span><small>Paid and settled</small></div>
+        </div>
+        <div className="flow-stat-card flow-stat-rose">
+          <span className="flow-stat-icon"><XCircle size={22} aria-hidden /></span>
+          <div className="flow-stat-body"><strong>{stats.cancelled}</strong><span>Cancelled</span><small>Cancelled requests</small></div>
+        </div>
+      </div>
+
+      <div className="ep-panel">
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 18px", alignItems: "center" }}>
+          <div className="ep-search" style={{ flex: "1 1 220px" }}>
+            <input
+              placeholder="Search by type or reference…"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            />
+          </div>
+          <select className="ep-form-select" value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1); }}>
+            <option value="">All Types</option>
+            {uniqueTypes.map((t) => <option key={t} value={t}>{travelTypeLabel(t, travelTypes)}</option>)}
+          </select>
+          <select className="ep-form-select" value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}>
+            <option value="">All Statuses</option>
+            {uniqueStatuses.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+          </select>
+          <input type="date" className="ep-form-select" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} title="From date" />
+          <input type="date" className="ep-form-select" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} title="To date" />
+          {hasFilters && (
+            <button className="ep-btn-outline" onClick={() => { setSearch(""); setFilterType(""); setFilterStatus(""); setDateFrom(""); setDateTo(""); setPage(1); }}>
+              Clear
+            </button>
+          )}
+        </div>
+
+        <div className="flow-tabs">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              className={`flow-tab ${tab === t.key ? "active" : ""}`}
+              onClick={() => { setTab(t.key); setPage(1); }}
+            >
+              {t.label} ({tabCounts[t.key]})
+            </button>
+          ))}
+        </div>
+
+        <div className="ep-table-wrap">
+          {filtered.length === 0 ? (
+            <div className="ep-empty"><p>No advance requests match your filters.</p></div>
+          ) : (
+            <table className="ep-table">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Reference</th>
+                  <th>Status / Stage</th>
+                  <th>Current Stage</th>
+                  <th>Requested</th>
+                  <th>Approved</th>
+                  <th>Requested On</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paged.map((a) => (
+                  <tr key={a.id}>
+                    <td style={{ fontWeight: 600 }}>{travelTypeLabel(a.type, travelTypes)}</td>
+                    <td><strong>{requestNumber(a)}</strong></td>
+                    <td><span className={`status-pill ${statusTone(a.status)}`}>{statusLabel(a.status)}</span></td>
+                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{advanceStageLabel(a.status)}</td>
+                    <td>{formatMoney(a.requested_total, "LSL")}</td>
+                    <td>{formatMoney(a.approved_total, "LSL")}</td>
+                    <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.created_at)}</td>
+                    <td>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {(a.status === "DRAFT" || a.status === "SUBMITTED") && (
+                          <button className="ep-icon-btn" title="Edit" onClick={() => onEdit(a)}>
+                            <Edit3 size={15} aria-hidden />
+                          </button>
+                        )}
+                        <button className="ep-icon-btn" title="Track" onClick={() => onTrack(a.id)}>
+                          <RefreshCw size={14} aria-hidden />
+                        </button>
+                        {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
+                          <button className="button small-button" onClick={() => onClear(a.id)}>Clear</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {totalPages > 1 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 18px", borderTop: "1px solid var(--border)" }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>
+              Showing {(currentPage - 1) * PAGE_SIZE + 1} to {Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length} entries
+            </span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}>← Prev</button>
+              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>Next →</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

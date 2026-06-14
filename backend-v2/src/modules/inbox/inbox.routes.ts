@@ -205,11 +205,14 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           continue;
         }
         // Not this user's turn — but if they're a member of this workflow's
-        // approval chain at any step (past or future), surface it as a
-        // read-only tracking item so they can follow its progress.
+        // approval chain at a step that has already been reached (past or
+        // current, not a future step the request hasn't progressed to yet),
+        // surface it as a read-only tracking item so they can follow its
+        // progress.
         let isChainParticipant = false;
-        for (const step of chain) {
-          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { isChainParticipant = true; break; }
+        const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
+        for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { isChainParticipant = true; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -306,11 +309,14 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           continue;
         }
         // Not this user's turn — but if they're a member of this workflow's
-        // approval chain at any step (past or future), surface it as a
-        // read-only tracking item so they can follow its progress.
+        // approval chain at a step that has already been reached (past or
+        // current, not a future step the request hasn't progressed to yet),
+        // surface it as a read-only tracking item so they can follow its
+        // progress.
         let isChainParticipant = false;
-        for (const step of chain) {
-          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { isChainParticipant = true; break; }
+        const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
+        for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { isChainParticipant = true; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -510,65 +516,6 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     };
 
     if (rule === "ALL") {
-      // Workflow-driven advances (ADMIN sees everyone's pending steps)
-      const allWorkflowRows = await query<any>(
-        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                ar.workflow_step_order, ar.approval_chain,
-                u.full_name AS requester_name
-           FROM advance_requests ar
-           JOIN users u ON u.id = ar.requester_id
-          WHERE ar.approval_chain IS NOT NULL
-            AND ar.status NOT IN ('DRAFT','PAID','REJECTED','CANCELLED','APPROVED')
-          ORDER BY ar.created_at DESC`
-      );
-      for (const a of allWorkflowRows) {
-        const chain = a.approval_chain as ChainStep[];
-        const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
-        const pending = group.steps.filter((s) => !s.approved);
-        items.push({
-          doc_type: "ADVANCE",
-          id: a.id,
-          status: a.status,
-          advance_type: a.type,
-          requested_total: Number(a.requested_total),
-          approved_total: Number(a.approved_total),
-          purpose: a.purpose,
-          requester_name: a.requester_name,
-          workflow_step_order: a.workflow_step_order,
-          current_step_approver_id: group.steps[0]?.approver_id ?? null,
-          current_step_position_name: pending.map((s) => s.position_name).join(" + "),
-          current_step_requires_accommodation: group.steps[0]?.requires_accommodation ?? false
-        });
-      }
-      // Workflow-driven clearance claims (ADMIN sees everyone's pending steps)
-      const allWorkflowClaimRows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount,
-                c.workflow_step_order, c.approval_chain,
-                u.full_name AS claimant_name
-           FROM clearance_claims c
-           JOIN users u ON u.id = c.claimant_id
-          WHERE c.approval_chain IS NOT NULL
-            AND c.status NOT IN ('DRAFT','SETTLED','REJECTED','FINANCE_VERIFIED')
-          ORDER BY c.created_at DESC`
-      );
-      for (const c of allWorkflowClaimRows) {
-        const chain = c.approval_chain as ChainStep[];
-        const group = getPendingGroup(chain, c.workflow_step_order ?? 0);
-        const pending = group.steps.filter((s) => !s.approved);
-        items.push({
-          doc_type: "CLAIM",
-          id: c.id,
-          status: c.status,
-          claim_total: Number(c.claim_total),
-          advance_amount: Number(c.advance_amount),
-          balance_amount: Number(c.balance_amount),
-          claimant_name: c.claimant_name,
-          workflow_step_order: c.workflow_step_order,
-          current_step_approver_id: group.steps[0]?.approver_id ?? null,
-          current_step_position_name: pending.map((s) => s.position_name).join(" + ")
-        });
-      }
-
       // Legacy (non-workflow) advances by status
       await loadAdvanceByStatus("SUBMITTED");
       await loadAdvanceByStatus("COUNTERSIGNED");

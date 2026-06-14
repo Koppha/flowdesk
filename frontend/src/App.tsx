@@ -19,6 +19,8 @@ import TeamRoster from "./TeamRoster";
 import UserManagement from "./UserManagement";
 import SlaReports from "./SlaReports";
 import ReportAdvances from "./ReportAdvances";
+import MyAdvances from "./MyAdvances";
+import MyClearances from "./MyClearances";
 import ReportApprovalPerformance from "./ReportApprovalPerformance";
 import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
 import ReportAuditTrail from "./ReportAuditTrail";
@@ -178,7 +180,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_REQUESTS" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER";
+type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER";
 
 export default function App() {
   const empTypes = useEmploymentTypes();
@@ -762,7 +764,7 @@ export default function App() {
 
   // resolve approval chain from the workflow that matches the user's section + advance type
   useEffect(() => {
-    if (page !== "MY_REQUESTS" && page !== "ADVANCE") return;
+    if (page !== "MY_ADVANCES" && page !== "ADVANCE") return;
     const dept = profile?.department || "";
     const section = profile?.section_name || "";
 
@@ -2077,7 +2079,7 @@ export default function App() {
         if (!silent) alert("Clearance submitted successfully.");
         resetClearanceForm();
         if (refreshAfterSave) await refresh();
-        setPage("MY_REQUESTS");
+        setPage("MY_CLEARANCES");
         return claimId;
       }
 
@@ -2676,8 +2678,8 @@ export default function App() {
           </div>
           <div className="sidebar-section-label">Advance Clearance</div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
-          <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_REQUESTS")} onClick={(e) => { e.preventDefault(); setPage("MY_REQUESTS"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
-          <a href="#" className={navItemClass(page === "CLEARANCE")} onClick={(e) => { e.preventDefault(); setPage("MY_REQUESTS"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
+          <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
+          <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
           {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
           <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
           <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
@@ -4237,7 +4239,7 @@ export default function App() {
                 <button className="button" onClick={() => {
                   setEditingAdvanceId(null);
                   setEditingAdvanceStatus(null);
-                  setPage(editingAdvanceId ? "MY_REQUESTS" : "HOME");
+                  setPage(editingAdvanceId ? "MY_ADVANCES" : "HOME");
                 }}>Cancel</button>
                 {editingAdvanceId && ["DRAFT","SUBMITTED"].includes(editingAdvanceStatus || "") && (
                   <button className="button" style={{ color: "#dc3545", borderColor: "#dc3545" }}
@@ -4248,7 +4250,7 @@ export default function App() {
                         await api.revokeAdvance(editingAdvanceId);
                         setEditingAdvanceId(null);
                         setEditingAdvanceStatus(null);
-                        setPage("MY_REQUESTS");
+                        setPage("MY_ADVANCES");
                         await refresh();
                       } catch (e: any) { alert("Error: " + e.message); }
                     }}>Revoke</button>
@@ -4738,7 +4740,7 @@ export default function App() {
               <div className="footer-buttons">
                 <button className="button" onClick={() => {
                   resetClearanceForm();
-                  setPage("MY_REQUESTS");
+                  setPage("MY_CLEARANCES");
                 }}>
                   Cancel
                 </button>
@@ -4750,119 +4752,25 @@ export default function App() {
                 </button>
               </div>
             </div>
-          ) : page === "MY_REQUESTS" ? (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-                <h2>My Requests</h2>
-                <button className="button small-button" onClick={startNewAdvanceRequest}>New Request</button>
-              </div>
-              
-              <h3>Advance Requests ({advances.length})</h3>
-              <div style={{ overflowX: "auto", marginBottom: 24 }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Type</th>
-                      <th>Amount</th>
-                      <th>Status</th>
-                      <th>Current Stage</th>
-                      <th>Date</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {advances.length === 0 ? (
-                      <tr><td colSpan={6} style={{ textAlign: 'center' }}>No advance requests yet</td></tr>
-                    ) : (
-                      advances.map(a => (
-                        <tr key={a.id}>
-                          <td>{travelTypeLabel(a.type, travelTypes)}</td>
-                          <td>{fmtMoney(a.approved_total || a.requested_total || 0)}</td>
-                          <td>{a.status}</td>
-                          <td>{advanceStageLabel(a.status, a.type)}</td>
-                          <td>{new Date(a.created_at).toLocaleDateString()}</td>
-                          <td>
-                            {(a.status === "DRAFT" || a.status === "SUBMITTED") && (
-                              <button
-                                className="ep-icon-btn"
-                                title="Edit"
-                                onClick={async () => {
-                                  try {
-                                    const detail: any = await api.advanceDetail(a.id);
-                                    populateAdvanceForm(detail, a);
-                                    setPage("ADVANCE");
-                                  } catch (e: any) {
-                                    alert("Error loading advance: " + e.message);
-                                  }
-                                }}
-                              >
-                                <Edit3 size={15} aria-hidden />
-                              </button>
-                            )}
-                            <button
-                              className="ep-icon-btn"
-                              title="Track"
-                              onClick={() => showAdvanceHistory(a.id)}
-                            >
-                              <RefreshCw size={14} aria-hidden />
-                            </button>
-                            {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
-                              <button
-                                className="button small-button"
-                                onClick={() => startClearanceForAdvance(a.id)}
-                                style={{ marginLeft: 4 }}
-                              >
-                                Clear
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <h3>Clearances ({claims.length})</h3>
-              <div style={{ overflowX: "auto" }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Month</th>
-                      <th>Amount</th>
-                      <th>Status</th>
-                      <th>Stage</th>
-                      <th>Date</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {claims.length === 0 ? (
-                      <tr><td colSpan={6} style={{ textAlign: 'center' }}>No clearances yet</td></tr>
-                    ) : (
-                      claims.map(c => (
-                        <tr key={c.id}>
-                          <td>{c.month || "—"}</td>
-                          <td>{fmtMoney(c.claim_total || 0)}</td>
-                          <td>{c.status}</td>
-                          <td>{clearanceStageLabel(c)}</td>
-                          <td>{new Date(c.created_at).toLocaleDateString()}</td>
-                          <td>
-                            {c.status === "DRAFT" ? (
-                              <button className="button small-button" onClick={() => editClearance(c.id)}>
-                                Edit
-                              </button>
-                            ) : (
-                              <span style={{ opacity: 0.7 }}>Submitted</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+          ) : page === "MY_ADVANCES" ? (
+            <MyAdvances
+              advances={advances}
+              travelTypes={travelTypes}
+              onNew={startNewAdvanceRequest}
+              onEdit={async (a) => {
+                try {
+                  const detail: any = await api.advanceDetail(a.id);
+                  populateAdvanceForm(detail, a);
+                  setPage("ADVANCE");
+                } catch (e: any) {
+                  alert("Error loading advance: " + e.message);
+                }
+              }}
+              onTrack={showAdvanceHistory}
+              onClear={startClearanceForAdvance}
+            />
+          ) : page === "MY_CLEARANCES" ? (
+            <MyClearances claims={claims} onEdit={editClearance} />
           ) : page === "SETTINGS" ? (
             <div className="ep-page">
               <div className="ep-breadcrumb"><span className="ep-breadcrumb-active">Settings</span></div>
@@ -5025,7 +4933,7 @@ export default function App() {
               </div>
 
               <div className="card-container">
-                <div className="card dashboard-card" style={{ cursor: "pointer" }} onClick={() => setPage("MY_REQUESTS")}>
+                <div className="card dashboard-card" style={{ cursor: "pointer" }} onClick={() => setPage("MY_ADVANCES")}>
                   <div className="title">My Total Requests</div>
                   <div className="value">{advances.length + claims.length}</div>
                 </div>

@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { canViewClaim } from "../src/modules/claims/claims.routes.js";
 
 describe("claim view access", () => {
-  it("allows the claimant to view their own claim", () => {
+  it("allows the claimant to view their own claim", async () => {
     expect(
-      canViewClaim({
+      await canViewClaim({
         role: "EMPLOYEE",
         claimantId: "claimant-1",
         userId: "claimant-1"
@@ -12,9 +12,9 @@ describe("claim view access", () => {
     ).toBe(true);
   });
 
-  it("allows ADMIN to view any claim", () => {
+  it("allows ADMIN to view any claim", async () => {
     expect(
-      canViewClaim({
+      await canViewClaim({
         role: "ADMIN",
         claimantId: "claimant-1",
         userId: "admin-1"
@@ -22,9 +22,9 @@ describe("claim view access", () => {
     ).toBe(true);
   });
 
-  it("allows an approver in the resolved workflow chain to view the claim", () => {
+  it("allows an approver in the resolved workflow chain to view the claim", async () => {
     expect(
-      canViewClaim({
+      await canViewClaim({
         role: "EXCO",
         claimantId: "claimant-1",
         userId: "exco-1",
@@ -35,9 +35,9 @@ describe("claim view access", () => {
     ).toBe(true);
   });
 
-  it("allows anyone in the claimant's management chain (org structure) to view the claim", () => {
+  it("allows anyone in the claimant's management chain (org structure) to view the claim", async () => {
     expect(
-      canViewClaim({
+      await canViewClaim({
         role: "MANAGER",
         claimantId: "claimant-1",
         userId: "manager-1",
@@ -46,9 +46,9 @@ describe("claim view access", () => {
     ).toBe(true);
   });
 
-  it("denies a user with no relation to the claim", () => {
+  it("denies a user with no relation to the claim", async () => {
     expect(
-      canViewClaim({
+      await canViewClaim({
         role: "FINANCE",
         claimantId: "claimant-1",
         userId: "stranger-1",

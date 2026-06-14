@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import fs from "fs";
 import multer from "multer";
-import { AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
+import { AuthedRequest, isFinanceDept, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
@@ -11,6 +11,7 @@ import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { canApproveStep, getPendingGroup, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
+import { getUserGroups } from "../../lib/permissionGroups.js";
 import {
   type ClaimStatus,
   nextClaimStatus,
@@ -107,13 +108,27 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
   return { claimTotal };
 }
 
-export function canViewClaim(args: { role: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; managerChainIds?: string[] }) {
+export async function canViewClaim(args: { role: string; department?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; managerChainIds?: string[] }) {
   if (args.role === "ADMIN") return true;
   if (args.claimantId === args.userId) return true;
 
   // Anyone in the workflow's resolved approval chain can view
   if (args.approvalChain?.length) {
     if (args.approvalChain.some(s => s.approver_id === args.userId)) return true;
+    // "Team: X" (ANY_ONE) steps list the department HOD as approver_id for
+    // routing purposes, but any member of that permission group is a real
+    // participant in the chain and should be able to track the request.
+    if (args.approvalChain.some(s => s.approval_group_name)) {
+      const groups = await getUserGroups(args.userId);
+      if (args.approvalChain.some(s => s.approval_group_name && groups.includes(s.approval_group_name))) return true;
+    }
+  }
+
+  // FINANCE_VERIFIED claims have left the active workflow chain and now sit
+  // with Finance/HR/EXCO/Managers awaiting settlement — those are the same
+  // roles allowedInboxForRole lists this status for, so let them view it.
+  if (args.status === "FINANCE_VERIFIED" && (isFinanceDept(args.department) || ["MANAGER", "HR_MANAGER", "EXCO"].includes(args.role))) {
+    return true;
   }
 
   // Anyone in the claimant's management chain (org structure) can view
@@ -206,7 +221,7 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!canViewClaim({ role: req.user!.role, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds })) {
+    if (!(await canViewClaim({ role: req.user!.role, department: req.user!.department, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
       throw forbidden();
     }
 
