@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale } from "./api";
 import AttendanceModule from "./AttendanceModule";
@@ -12,6 +12,8 @@ import ManagersOnboarding from "./ManagersOnboarding";
 import WorkflowBuilder from "./WorkflowBuilder";
 import ReportingLines from "./ReportingLines";
 import RequestTypes from "./RequestTypes";
+import CustomRequestsHub from "./CustomRequestsHub";
+import EmailActionConfirm from "./EmailActionConfirm";
 import CeoManagement from "./CeoManagement";
 import OrgStructure from "./OrgStructure";
 import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
@@ -24,10 +26,13 @@ import MyClearances from "./MyClearances";
 import ReportApprovalPerformance from "./ReportApprovalPerformance";
 import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
 import ReportAuditTrail from "./ReportAuditTrail";
+import ReportReconciliation from "./ReportReconciliation";
 import { useEmploymentTypes } from "./useEmploymentTypes";
+import Swal from "sweetalert2";
 import { confirmAction } from "./alerts";
 import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
+import { HolidayCalendarButton } from "./HolidayCalendar";
 import {
   BarChart3,
   Bell,
@@ -121,6 +126,50 @@ function emptyClearanceTripRow(date?: string): ClearanceTripRow {
   };
 }
 
+function dashboardDocTypeLabel(value: string | null | undefined) {
+  switch (value) {
+    case "ADVANCE": return "Advances";
+    case "ACCOMMODATION": return "Travel Accommodation";
+    case "CLAIM": return "Clearances";
+    case "OVERTIME_REQUEST": return "Overtime Requests";
+    case "OVERTIME_CLAIM": return "Overtime Claims";
+    default: return value || "Requests";
+  }
+}
+
+function dashboardDocTypeIcon(value: string | null | undefined) {
+  switch (value) {
+    case "ADVANCE": return Plane;
+    case "ACCOMMODATION": return Hotel;
+    case "CLAIM": return ShieldCheck;
+    case "OVERTIME_REQUEST":
+    case "OVERTIME_CLAIM": return Clock3;
+    default: return FileText;
+  }
+}
+
+function dashboardDocTypeAmount(item: any): number {
+  return Number(item.requested_total ?? item.amount ?? item.total_amount ?? item.claim_total ?? 0);
+}
+
+function dashboardStatusLabel(value: string | null | undefined) {
+  if (!value) return "Unknown";
+  return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function dashboardStatusTone(value: string | null | undefined) {
+  const status = String(value || "").toUpperCase();
+  if (status.includes("REJECT") || status.includes("CANCEL")) return "status-pill-danger";
+  if (status.includes("PAID") || status.includes("APPROVED") || status.includes("SETTLED")) return "status-pill-success";
+  if (status.includes("DRAFT")) return "status-pill-neutral";
+  return "status-pill-warning";
+}
+
+function dashboardInitials(value: string | null | undefined) {
+  const parts = String(value || "User").trim().split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] || "U") + (parts[1]?.[0] || "");
+}
+
 const STARTUP_REQUEST_TIMEOUT_MS = 10000;
 
 function withStartupTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -180,11 +229,24 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER";
+type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER";
+
+// Native <input type="month"> has no calendar UI in Firefox (just a plain text
+// box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
+// dropdowns instead, composing the same "YYYY-MM" string the backend expects.
+const CLEARANCE_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function clearanceMonthYearRange(): number[] {
+  const current = new Date().getFullYear();
+  const years: number[] = [];
+  for (let y = current - 2; y <= current + 1; y++) years.push(y);
+  return years;
+}
 
 export default function App() {
   const empTypes = useEmploymentTypes();
   const [token, setTok] = useState(getToken());
+  const justLoggedIn = useRef(false);
+  const knownInboxCount = useRef(0);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -212,6 +274,7 @@ export default function App() {
   const [newHotelCity, setNewHotelCity] = useState("");
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelContact, setNewHotelContact] = useState("");
+  const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
   const [travelTypes, setTravelTypes] = useState<TravelType[]>([]);
   const [travelTypesLoading, setTravelTypesLoading] = useState(false);
   const [newTravelTypeName, setNewTravelTypeName] = useState("");
@@ -222,6 +285,7 @@ export default function App() {
   const [newTravelTypeCeoRate, setNewTravelTypeCeoRate] = useState("0");
   const [newTravelTypeCurrency, setNewTravelTypeCurrency] = useState("LSL");
   const [newTravelTypeRequiresAccommodation, setNewTravelTypeRequiresAccommodation] = useState(false);
+  const [newTravelTypeAllowedPaymentMethods, setNewTravelTypeAllowedPaymentMethods] = useState<("ECOCASH" | "BANK")[]>(["ECOCASH", "BANK"]);
   const [editingTravelType, setEditingTravelType] = useState<TravelType | null>(null);
   const [showAddTravelTypeModal, setShowAddTravelTypeModal] = useState(false);
   const [showAddHotelModal, setShowAddHotelModal] = useState(false);
@@ -256,8 +320,9 @@ export default function App() {
   const [featurePermissions, setFeaturePermissions] = useState<Record<string, string[]>>({});
   const [featurePermOpen, setFeaturePermOpen] = useState(false);
   const [featurePermDraft, setFeaturePermDraft] = useState<Record<string, string[]>>({});
-  const [permissionGroups, setPermissionGroups] = useState<{ name: string; member_count: string; dynamic?: boolean }[]>([]);
+  const [permissionGroups, setPermissionGroups] = useState<{ name: string; member_count: string; dynamic?: boolean; hidden?: boolean }[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
+  const [manageColumnsOpen, setManageColumnsOpen] = useState(false);
   const [groupSaving, setGroupSaving] = useState(false);
   const [featurePermSaving, setFeaturePermSaving] = useState(false);
   const [delegations, setDelegations] = useState<any[]>([]);
@@ -272,7 +337,9 @@ export default function App() {
   const [delegationToDate, setDelegationToDate] = useState("");
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
+  const [dashboardSearch, setDashboardSearch] = useState("");
   const [inboxCount, setInboxCount] = useState(0);
+  const [inboxItems, setInboxItems] = useState<any[]>([]);
   const [page, setRawPage] = useState<AppPage>("HOME");
 
   // The app is a single-page client that switches "pages" via state only, with
@@ -317,9 +384,14 @@ export default function App() {
   }>(null);
   const [editingSectionObj, setEditingSectionObj] = useState<null | { id: string; name: string; exco_user_id?: string | null }>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [remindingAdvanceId, setRemindingAdvanceId] = useState<string | null>(null);
   const [historyAdvanceId, setHistoryAdvanceId] = useState<string | null>(null);
   const [historyAdvanceDetail, setHistoryAdvanceDetail] = useState<any | null>(null);
   const [historyEvents, setHistoryEvents] = useState<any[]>([]);
+  const [clearanceTrackOpen, setClearanceTrackOpen] = useState(false);
+  const [clearanceTrackLoading, setClearanceTrackLoading] = useState(false);
+  const [clearanceTrackId, setClearanceTrackId] = useState<string | null>(null);
+  const [clearanceTrackDetail, setClearanceTrackDetail] = useState<any | null>(null);
   const [aiAnomalies, setAiAnomalies] = useState<any | null>(null);
   const [nlPrompt, setNlPrompt] = useState("show rejected salary advances this month by department");
   const [nlReport, setNlReport] = useState<any | null>(null);
@@ -569,6 +641,9 @@ export default function App() {
   const isSelectedCountrySouthAfrica = rows.some((row) => row.country.trim().toLowerCase() === "south africa");
   const travelTypeOptions = travelTypes.filter((type) => type.active !== false);
   const isTravelAdvanceSelected = Boolean(selectedTravelType);
+  const allowedPaymentMethods: ("ECOCASH" | "BANK")[] = selectedTravelType?.allowed_payment_methods?.length
+    ? selectedTravelType.allowed_payment_methods
+    : ["ECOCASH", "BANK"];
   const rowTotals = rows.reduce(
     (acc, r) => {
       const meals = Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0;
@@ -686,6 +761,12 @@ export default function App() {
     }
   }, [rows, advanceType, selectedTravelRate, isTravelAdvanceSelected]);
 
+  useEffect(() => {
+    if (!allowedPaymentMethods.includes(paymentMethod)) {
+      setPaymentMethod(allowedPaymentMethods[0]);
+    }
+  }, [allowedPaymentMethods, paymentMethod]);
+
   const me = getUserFromToken();
 
   useEffect(() => {
@@ -716,6 +797,7 @@ export default function App() {
     request_types:          ["ADMIN"],
     reporting_lines:        ["ADMIN", "MANAGER", "EXCO"],
     advance_pdf:            ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
+    report_reconciliation:  ["ADMIN", "FINANCE"],
   };
 
   function canAccessFeature(key: string): boolean {
@@ -822,7 +904,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -831,17 +913,38 @@ export default function App() {
       optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value"),
       optionalStartupData<TravelType[]>(api.travelTypes(), [], "Travel types"),
       optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions"),
-      optionalStartupData<{ name: string; member_count: string; dynamic?: boolean }[]>(api.permissionGroups(), [], "Permission groups")
+      optionalStartupData<{ name: string; member_count: string; dynamic?: boolean }[]>(api.permissionGroups(), [], "Permission groups"),
+      optionalStartupData<any[]>(api.requestTypes(), [], "Request types"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
     setAdvances(Array.isArray(a) ? a : []);
     setClaims(Array.isArray(c) ? c : []);
-    setInboxCount(i.items?.length || 0);
+    const inboxItemCount = i.items?.length || 0;
+    setInboxCount(inboxItemCount);
+    setInboxItems(Array.isArray(i.items) ? i.items : []);
+    knownInboxCount.current = inboxItemCount;
+    if (justLoggedIn.current && inboxItemCount > 0) {
+      justLoggedIn.current = false;
+      void Swal.fire({
+        icon: "info",
+        title: "Approval Inbox",
+        text: `You have ${inboxItemCount} item${inboxItemCount === 1 ? "" : "s"} awaiting your approval.`,
+        confirmButtonText: "Go to Inbox",
+        showCancelButton: true,
+        cancelButtonText: "Dismiss",
+        reverseButtons: true
+      }).then((result) => {
+        if (result.isConfirmed) setPage("INBOX");
+      });
+    } else {
+      justLoggedIn.current = false;
+    }
     const configuredMealValue = Number(mealResp.meal_value || 0);
     setMealValue(configuredMealValue);
     setMealValueDraft(String(configuredMealValue));
     setTravelTypes(Array.isArray(travelResp) ? travelResp : []);
+    setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
     if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
       setFeaturePermissions(featPermResp.features as Record<string, string[]>);
     }
@@ -868,6 +971,46 @@ export default function App() {
         }
       })
       .finally(() => setProfileLoading(false));
+  }, [token]);
+
+  // Poll inbox every 30 s while logged in; alert when new items arrive
+  useEffect(() => {
+    if (!token) return;
+    const id = setInterval(async () => {
+      try {
+        const resp: { items?: any[] } = await api.inbox();
+        const fresh = resp.items?.length || 0;
+        const prev = knownInboxCount.current;
+        if (fresh > prev) {
+          const added = fresh - prev;
+          knownInboxCount.current = fresh;
+          setInboxCount(fresh);
+          setInboxItems(Array.isArray(resp.items) ? resp.items : []);
+          void Swal.fire({
+            icon: "info",
+            title: "New Approval Request",
+            text: `${added} new item${added === 1 ? "" : "s"} ${added === 1 ? "has" : "have"} arrived in your Approval Inbox.`,
+            confirmButtonText: "Go to Inbox",
+            showCancelButton: true,
+            cancelButtonText: "Dismiss",
+            reverseButtons: true
+          }).then((result) => {
+            if (result.isConfirmed) setPage("INBOX");
+          });
+        } else {
+          knownInboxCount.current = fresh;
+          setInboxCount(fresh);
+        }
+      } catch (e) {
+        if (isAuthOrTimeoutError(e)) {
+          clearInterval(id);
+          void doLogout();
+        }
+        // non-auth errors (network blip, server restart) are ignored —
+        // the next tick will retry without alarming the user
+      }
+    }, 30_000);
+    return () => clearInterval(id);
   }, [token]);
 
   useEffect(() => {
@@ -992,6 +1135,7 @@ export default function App() {
 
   async function createTravelType() {
     if (!newTravelTypeName.trim()) return alert("Enter a travel type name");
+    if (newTravelTypeAllowedPaymentMethods.length === 0) return alert("Select at least one payment method");
     try {
       await api.createTravelType({
         name: newTravelTypeName.trim(),
@@ -1002,7 +1146,8 @@ export default function App() {
         rate_ceo: Number(newTravelTypeCeoRate) || 0,
         currency: newTravelTypeCurrency,
         active: true,
-        requires_accommodation: newTravelTypeRequiresAccommodation
+        requires_accommodation: newTravelTypeRequiresAccommodation,
+        allowed_payment_methods: newTravelTypeAllowedPaymentMethods
       });
       setNewTravelTypeName("");
       setNewTravelTypeGeneralRate("0");
@@ -1010,6 +1155,7 @@ export default function App() {
       setNewTravelTypeCeoRate("0");
       setNewTravelTypeCurrency("LSL");
       setNewTravelTypeRequiresAccommodation(false);
+      setNewTravelTypeAllowedPaymentMethods(["ECOCASH", "BANK"]);
       await loadTravelTypes();
       alert("Travel type saved.");
     } catch (e: any) {
@@ -1024,6 +1170,7 @@ export default function App() {
   }
 
   async function updateTravelTypeRate(type: TravelType) {
+    if (!(type.allowed_payment_methods?.length)) return alert("Select at least one payment method");
     try {
       await api.updateTravelType(type.id, {
         name: type.name,
@@ -1034,7 +1181,8 @@ export default function App() {
         rate_ceo: Number(type.rate_ceo) || 0,
         currency: type.currency ?? "LSL",
         active: type.active !== false,
-        requires_accommodation: type.requires_accommodation ?? false
+        requires_accommodation: type.requires_accommodation ?? false,
+        allowed_payment_methods: type.allowed_payment_methods
       });
       await loadTravelTypes();
       alert("Travel type updated.");
@@ -1163,6 +1311,7 @@ export default function App() {
       console.log("Attempting login with:", email);
       const r = await api.login(email, password);
       console.log("Login successful, received token:", r.token ? "✓" : "✗");
+      justLoggedIn.current = true;
       setToken(r.token);
       setTok(r.token);
       setProfile(r.user || null);
@@ -1184,6 +1333,7 @@ export default function App() {
     setAdvances([]);
     setClaims([]);
     setInboxCount(0);
+    setInboxItems([]);
     setAdminUsers([]);
     setPage("HOME");
   }
@@ -1572,6 +1722,21 @@ export default function App() {
     }
   }
 
+  async function showClearanceTracking(claimId: string) {
+    setClearanceTrackOpen(true);
+    setClearanceTrackLoading(true);
+    setClearanceTrackId(claimId);
+    setClearanceTrackDetail(claims.find((claim: any) => claim.id === claimId) || null);
+    try {
+      const detail = await api.claimDetail(claimId);
+      setClearanceTrackDetail(detail);
+    } catch (e: any) {
+      // fall back to the list-row data already set above
+    } finally {
+      setClearanceTrackLoading(false);
+    }
+  }
+
   async function editClearance(claimId: string) {
     try {
       const detail: any = await api.claimDetail(claimId);
@@ -1706,6 +1871,14 @@ export default function App() {
     const digits = String(advance?.id || "").replace(/\D/g, "").slice(-5);
     const fallback = String(advance?.id || "00000").replace(/-/g, "").slice(0, 5).toUpperCase();
     return `ADV-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
+  }
+
+  function claimNumber(claim: any) {
+    const created = new Date(claim?.created_at || Date.now());
+    const year = Number.isNaN(created.getTime()) ? new Date().getFullYear() : created.getFullYear();
+    const digits = String(claim?.id || "").replace(/\D/g, "").slice(-5);
+    const fallback = String(claim?.id || "00000").replace(/-/g, "").slice(0, 5).toUpperCase();
+    return `CL-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
   }
 
   function statusToneClass(value: any) {
@@ -1900,6 +2073,76 @@ export default function App() {
         date: failedEvent?.created_at || advance?.updated_at,
         actor: failedEvent?.actor_name || "",
         status: humanizeToken(currentStatus)
+      });
+    }
+
+    return stages;
+  }
+
+  function buildClearanceTrackingStages(claim: any) {
+    const currentStatus = String(claim?.status || "DRAFT").toUpperCase();
+    const terminalFailed = currentStatus === "REJECTED";
+    const terminalDone = currentStatus === "SETTLED";
+    const chain: any[] = Array.isArray(claim?.approval_chain) ? claim.approval_chain : [];
+
+    const stages: any[] = [
+      {
+        key: "draft",
+        label: "Draft",
+        state: "done",
+        actor: "",
+        status: "Created"
+      },
+      {
+        key: "submitted",
+        label: "Submitted",
+        state: currentStatus === "DRAFT" ? "waiting" : "done",
+        actor: claim?.requester_name || claim?.claimant_name || "",
+        status: currentStatus === "DRAFT" ? "Waiting" : "Submitted"
+      }
+    ];
+
+    if (chain.length > 0) {
+      const currentStepIdx = typeof claim.workflow_step_order === "number" ? claim.workflow_step_order : 0;
+      let pendingStageStart = currentStepIdx;
+      while (pendingStageStart > 0 && chain[pendingStageStart]?.parallel_with_previous) pendingStageStart--;
+      const pendingStage = new Set<number>();
+      if (pendingStageStart < chain.length) {
+        pendingStage.add(pendingStageStart);
+        for (let i = pendingStageStart + 1; i < chain.length && chain[i]?.parallel_with_previous; i++) pendingStage.add(i);
+      }
+      chain.forEach((step: any, idx: number) => {
+        const stepApproved = Boolean(step.approved);
+        const isDone = terminalDone || stepApproved || currentStepIdx > idx;
+        const isActive = !terminalFailed && !isDone && pendingStage.has(idx);
+        const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
+        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.approver_title || step.position_name);
+        const actorName = isTeamGroup ? "" : (step.approver_name || "");
+        stages.push({
+          key: `step-${idx}`,
+          label,
+          state: terminalFailed && isActive ? "danger" : isActive ? "active" : isDone ? "done" : "waiting",
+          actor: actorName,
+          status: isActive ? "In Progress" : isDone ? "Approved" : "Waiting"
+        });
+      });
+    }
+
+    stages.push({
+      key: "settled",
+      label: "Settled",
+      state: currentStatus === "SETTLED" ? "done" : "waiting",
+      actor: "",
+      status: currentStatus === "SETTLED" ? "Completed" : "Waiting"
+    });
+
+    if (terminalFailed) {
+      stages.push({
+        key: "closed",
+        label: "Rejected",
+        state: "danger",
+        actor: "",
+        status: "Rejected"
       });
     }
 
@@ -2108,6 +2351,82 @@ export default function App() {
     }
   }
 
+  // dashboard quick search across advances and clearances
+  const dashboardSearchResults = useMemo(() => {
+    const term = dashboardSearch.trim().toLowerCase();
+    if (!term) return [];
+    const advanceResults = advances
+      .filter((a) => {
+        const requester = (a.requester_name || profile?.full_name || me?.fullName || "").toLowerCase();
+        const type = travelTypeLabel(a.type, travelTypes).toLowerCase();
+        const status = advanceStageLabel(a.status, a.type).toLowerCase();
+        return requester.includes(term) || type.includes(term) || status.includes(term) || String(a.type || "").toLowerCase().includes(term);
+      })
+      .map((a) => ({
+        kind: "advance" as const,
+        id: a.id,
+        title: `${a.requester_name || profile?.full_name || me?.fullName || "—"} · ${travelTypeLabel(a.type, travelTypes)}`,
+        subtitle: advanceStageLabel(a.status, a.type),
+      }));
+    const claimResults = claims
+      .filter((c) => {
+        const requester = (c.requester_name || profile?.full_name || me?.fullName || "").toLowerCase();
+        const type = travelTypeLabel(c.type, travelTypes).toLowerCase();
+        const status = String(c.status || "").toLowerCase();
+        return requester.includes(term) || type.includes(term) || status.includes(term);
+      })
+      .map((c) => ({
+        kind: "clearance" as const,
+        id: c.id,
+        title: `${c.requester_name || profile?.full_name || me?.fullName || "—"} · ${travelTypeLabel(c.type, travelTypes)}`,
+        subtitle: String(c.status || "").replace(/_/g, " "),
+      }));
+    return [...advanceResults, ...claimResults].slice(0, 8);
+  }, [dashboardSearch, advances, claims, travelTypes, profile, me]);
+
+  // recent activity feed for the dashboard, built from my own advances & clearances
+  const dashboardRecentActivity = useMemo(() => {
+    const name = profile?.full_name || me?.fullName || "—";
+    type Entry = { id: string; title: string; subtitle: string; status: string; date: string };
+    const entries: Entry[] = [];
+    for (const a of advances) {
+      const type = travelTypeLabel(a.type, travelTypes);
+      const title = `Advance for ${a.requester_name || name}`;
+      if (a.paid_at) entries.push({ id: `${a.id}-paid`, title, subtitle: `${type} · Paid`, status: "PAID", date: a.paid_at });
+      else if (a.approved_at) entries.push({ id: `${a.id}-appr`, title, subtitle: `${type} · Approved`, status: "APPROVED", date: a.approved_at });
+      else if (a.status === "REJECTED" && (a.updated_at || a.approved_at)) entries.push({ id: `${a.id}-rej`, title, subtitle: `${type} · Rejected`, status: "REJECTED", date: a.updated_at || a.approved_at });
+      else if (a.submitted_at || a.created_at) entries.push({ id: `${a.id}-sub`, title, subtitle: `${type} · ${advanceStageLabel(a.status, a.type)}`, status: a.status, date: a.submitted_at || a.created_at });
+    }
+    for (const c of claims) {
+      const title = `Clearance for ${c.requester_name || name}`;
+      if (c.paid_at) entries.push({ id: `${c.id}-paid`, title, subtitle: "Clearance · Paid", status: "PAID", date: c.paid_at });
+      else if (c.approved_at) entries.push({ id: `${c.id}-appr`, title, subtitle: "Clearance · Approved", status: "APPROVED", date: c.approved_at });
+      else if (c.status === "REJECTED" && (c.updated_at || c.approved_at)) entries.push({ id: `${c.id}-rej`, title, subtitle: "Clearance · Rejected", status: "REJECTED", date: c.updated_at || c.approved_at });
+      else if (c.created_at) entries.push({ id: `${c.id}-sub`, title, subtitle: `Clearance · ${String(c.status || "").replace(/_/g, " ")}`, status: c.status, date: c.created_at });
+    }
+    return entries.sort((x, y) => new Date(y.date).getTime() - new Date(x.date).getTime()).slice(0, 5);
+  }, [advances, claims, travelTypes, profile, me]);
+
+  // approval queue summary for the dashboard, grouped by document type
+  const dashboardQueueGroups = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    for (const item of inboxItems) {
+      (groups[item.doc_type] ||= []).push(item);
+    }
+    return Object.entries(groups).map(([docType, items]) => {
+      const total = items.reduce((sum, it) => sum + dashboardDocTypeAmount(it), 0);
+      const byStage: Record<string, { count: number; amount: number }> = {};
+      for (const it of items) {
+        const stage = it.current_step_position_name;
+        if (!stage) continue;
+        byStage[stage] ||= { count: 0, amount: 0 };
+        byStage[stage].count += 1;
+        byStage[stage].amount += dashboardDocTypeAmount(it);
+      }
+      return { docType, count: items.length, total, byStage };
+    });
+  }, [inboxItems]);
+
   // helper summaries
   const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
   const pendingClaimCount = claims.filter((c) => !["SETTLED", "REJECTED"].includes(c.status)).length;
@@ -2315,7 +2634,26 @@ export default function App() {
                     <div className="tracking-owner">
                       <strong>{activeStage?.label || "Requester"}</strong>
                       <span>{advanceStageLabel(currentStatus, advance.type)}</span>
-                      <button type="button"><Mail size={15} aria-hidden /> Send Reminder</button>
+                      {["SUBMITTED","COUNTERSIGNED","HR_MANAGER_REVIEW","HR_REVIEW","HR_OFFICER","APPROVED"].includes(currentStatus) && (
+                        <button
+                          type="button"
+                          disabled={remindingAdvanceId === advance.id}
+                          style={remindingAdvanceId === advance.id ? { opacity: 0.7, cursor: "not-allowed" } : undefined}
+                          onClick={async () => {
+                            setRemindingAdvanceId(advance.id);
+                            try {
+                              const result: any = await api.remindAdvance(advance.id);
+                              alert(`Reminder sent to ${result.approverName || "the approver"}. You will also receive a confirmation email.`);
+                            } catch (err: any) {
+                              alert(err?.message || "Failed to send reminder.");
+                            } finally {
+                              setRemindingAdvanceId(null);
+                            }
+                          }}
+                        >
+                          <Mail size={15} aria-hidden /> {remindingAdvanceId === advance.id ? "Sending…" : "Send Reminder"}
+                        </button>
+                      )}
                     </div>
                   </section>
 
@@ -2337,6 +2675,119 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  function renderClearanceTrackingModal() {
+    const claim = clearanceTrackDetail || claims.find((item: any) => item.id === clearanceTrackId) || {};
+    const currentStatus = String(claim.status || "DRAFT").toUpperCase();
+    const stages = buildClearanceTrackingStages(claim);
+    const activeStage = stages.find((stage: any) => stage.state === "active" || stage.state === "danger")
+      || stages.find((stage: any) => stage.state === "waiting")
+      || stages[stages.length - 1];
+    const requester = claim.requester_name || claim.claimant_name || profile?.full_name || me?.fullName || me?.username || "Unknown";
+
+    return (
+      <div className="tracking-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="clearance-tracking-modal-title">
+        <div className="tracking-modal-shell">
+          <div className="tracking-modal-header">
+            <div className="tracking-title-group">
+              <span className="tracking-title-icon"><GitBranch size={28} aria-hidden /></span>
+              <div>
+                <h2 id="clearance-tracking-modal-title">Clearance Tracking</h2>
+                <p>Track the progress and status of your clearance</p>
+              </div>
+            </div>
+            <button className="tracking-close-icon" type="button" onClick={() => setClearanceTrackOpen(false)} aria-label="Close tracking">
+              <X size={22} aria-hidden />
+            </button>
+          </div>
+
+          {clearanceTrackLoading ? (
+            <div className="tracking-loading"><RefreshCw className="rl-spin" size={22} /> Loading tracking details...</div>
+          ) : (
+            <>
+              <section className="tracking-summary-band">
+                <div className="tracking-summary-lead">
+                  <span className="tracking-doc-icon"><FileText size={25} aria-hidden /></span>
+                  <div>
+                    <span>Reference</span>
+                    <strong>{claimNumber(claim)}</strong>
+                    <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>{humanizeToken(currentStatus)}</em>
+                  </div>
+                </div>
+                <div>
+                  <span>Current Stage</span>
+                  <strong>{clearanceStageLabel(claim)}</strong>
+                  <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>
+                    {["SETTLED", "REJECTED"].includes(currentStatus) ? humanizeToken(currentStatus) : "In Progress"}
+                  </em>
+                </div>
+                <div>
+                  <span>Submitted On</span>
+                  <strong>{formatTrackingDate(claim.created_at)}</strong>
+                </div>
+                <div>
+                  <span>Requested By</span>
+                  <strong>{requester}</strong>
+                  <small>{displayRoleLabel(profile?.role || me?.role || "EMPLOYEE")}</small>
+                </div>
+              </section>
+
+              <section className="tracking-card tracking-progress-card">
+                <h3>Clearance Progress</h3>
+                <div className="tracking-progress-strip">
+                  {stages.map((stage: any, index: number) => (
+                    <div key={stage.key} className={`tracking-progress-step is-${stage.state}`}>
+                      {index < stages.length - 1 && <span className="tracking-progress-line" aria-hidden />}
+                      <span className="tracking-step-icon">
+                        {stage.state === "done" ? <CheckCircle2 size={22} aria-hidden /> : stage.state === "danger" ? <X size={21} aria-hidden /> : stage.state === "active" ? <User size={21} aria-hidden /> : <Clock3 size={20} aria-hidden />}
+                      </span>
+                      <strong>{stage.label}</strong>
+                      <em>{stage.status}</em>
+                      {stage.actor && <small>{stage.actor}</small>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <div className="tracking-content-grid">
+                <div className="tracking-main-stack">
+                  <section className="tracking-card">
+                    <h3>Clearance Summary</h3>
+                    <dl className="tracking-detail-list">
+                      <div><dt>Reference</dt><dd>{claimNumber(claim)}</dd></div>
+                      <div><dt>Month</dt><dd>{claim.month || "—"}</dd></div>
+                      <div><dt>Total Claimed</dt><dd>{formatMoney(claim.claim_total, "LSL")}</dd></div>
+                      <div><dt>Advance</dt><dd>{formatMoney(claim.advance_amount, "LSL")}</dd></div>
+                      <div><dt>Balance</dt><dd>{formatMoney(claim.balance_amount, "LSL")}</dd></div>
+                    </dl>
+                  </section>
+                </div>
+
+                <aside className="tracking-side-stack">
+                  <section className="tracking-card">
+                    <h3><User size={17} aria-hidden /> Current Owner</h3>
+                    <div className="tracking-owner">
+                      <strong>{activeStage?.label || "Requester"}</strong>
+                      <span>{clearanceStageLabel(claim)}</span>
+                    </div>
+                  </section>
+                </aside>
+              </div>
+            </>
+          )}
+
+          <div className="tracking-modal-footer">
+            <button className="button small-button" type="button" onClick={() => setClearanceTrackOpen(false)}>Close</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const emailActionToken = new URLSearchParams(window.location.search).get("email_action");
+  if (emailActionToken) {
+    return <EmailActionConfirm token={emailActionToken} />;
   }
 
   if (!token) {
@@ -2676,22 +3127,25 @@ export default function App() {
           <div className="sidebar-brand">
             <h2>FlowDesk</h2>
           </div>
-          <div className="sidebar-section-label">Advance Clearance</div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
           <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
           <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
           {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
           <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
           <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
+          {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Requests</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
               <a href="#" className={navItemClass(page === "REPORT_APPROVAL")} onClick={(e) => { e.preventDefault(); setPage("REPORT_APPROVAL"); }}><Users size={14} aria-hidden />Approval Performance</a>
               <a href="#" className={navItemClass(page === "SLA_REPORTS")} onClick={(e) => { e.preventDefault(); setPage("SLA_REPORTS"); }}><BarChart3 size={14} aria-hidden />SLA Reports</a>
               <a href="#" className={navItemClass(page === "REPORT_WORKFLOW")} onClick={(e) => { e.preventDefault(); setPage("REPORT_WORKFLOW"); }}><GitBranch size={14} aria-hidden />Workflow Analytics</a>
               <a href="#" className={navItemClass(page === "REPORT_AUDIT")} onClick={(e) => { e.preventDefault(); setPage("REPORT_AUDIT"); }}><ShieldCheck size={14} aria-hidden />Audit Trail</a>
+              {canAccessFeature("report_reconciliation") && (
+                <a href="#" className={navItemClass(page === "REPORT_RECONCILIATION")} onClick={(e) => { e.preventDefault(); setPage("REPORT_RECONCILIATION"); }}><BarChart3 size={14} aria-hidden />Reconciliation</a>
+              )}
             </div>
           </div>
           <div className="sidebar-section-label">Administration</div>
@@ -2750,6 +3204,8 @@ export default function App() {
             <OvertimeModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME_CLAIM" ? (
             <OvertimeClaimModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
+          ) : page === "CHANGE_REQUEST" ? (
+            <CustomRequestsHub profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "CEO_MANAGEMENT" ? (
             <CeoManagement />
           ) : page === "EMPLOYEES" ? (
@@ -2910,7 +3366,7 @@ export default function App() {
                   }}
                 >
                   {(() => {
-                    const GROUPS_LIST = permissionGroups.map((g) => ({ key: g.name, label: g.name, dynamic: !!g.dynamic }));
+                    const GROUPS_LIST = permissionGroups.filter((g) => !g.hidden).map((g) => ({ key: g.name, label: g.name, dynamic: !!g.dynamic }));
                     const FEATURES_LIST = [
                       { key: "user_management",        label: "Users",                    group: "User Management" },
                       { key: "roles_permissions",      label: "Roles & Permissions",      group: "User Management" },
@@ -2926,6 +3382,7 @@ export default function App() {
                       { key: "request_types",          label: "Request Types",            group: "Org Structure" },
                       { key: "reporting_lines",        label: "Reporting Lines",          group: "Org Structure" },
                       { key: "advance_pdf",            label: "Download Advance PDF",     group: "Advances" },
+                      { key: "report_reconciliation",  label: "Reconciliation Report",    group: "Reports" },
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
@@ -2944,6 +3401,7 @@ export default function App() {
                       request_types:          ["ADMIN"],
                       reporting_lines:        ["ADMIN","MANAGER","EXCO"],
                       advance_pdf:            ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
+                      report_reconciliation:  ["ADMIN","FINANCE"],
                     };
                     function toggleRole(featureKey: string, roleKey: string) {
                       if (roleKey === "ADMIN") return;
@@ -2976,6 +3434,18 @@ export default function App() {
                         setPermissionGroups(Array.isArray(updated) ? updated : []);
                       } catch (err: any) {
                         alert(err?.message || "Failed to remove group.");
+                      } finally {
+                        setGroupSaving(false);
+                      }
+                    }
+                    async function handleToggleGroupVisibility(name: string, hidden: boolean) {
+                      if (name === "ADMIN") return;
+                      setGroupSaving(true);
+                      try {
+                        const updated = await api.setGroupVisibility(name, hidden);
+                        setPermissionGroups(Array.isArray(updated) ? updated : []);
+                      } catch (err: any) {
+                        alert(err?.message || "Failed to update column visibility.");
                       } finally {
                         setGroupSaving(false);
                       }
@@ -3058,7 +3528,38 @@ export default function App() {
                           <button className="ep-btn-outline" type="button" onClick={() => void handleAddGroup()} disabled={groupSaving || !newGroupName.trim()}>
                             {groupSaving ? "Saving…" : "+ Add Group"}
                           </button>
+                          <button className="ep-btn-outline" type="button" onClick={() => setManageColumnsOpen((v) => !v)}>
+                            {manageColumnsOpen ? "Hide Manage Columns" : `Manage Columns (${permissionGroups.filter((g) => g.hidden).length} hidden)`}
+                          </button>
                         </div>
+                        {manageColumnsOpen && (
+                          <div style={{ marginTop: 10, border: "1px solid var(--border,#e5e7eb)", borderRadius: 8, padding: "10px 14px", maxHeight: 260, overflowY: "auto" }}>
+                            <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--text-muted,#6b7280)" }}>
+                              Choose which roles/departments/divisions appear as columns in the table above. Hiding a column doesn't remove the group or anyone's access — it just declutters the view.
+                            </p>
+                            {[...permissionGroups].sort((a, b) => a.name.localeCompare(b.name)).map((g) => (
+                              <div key={g.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+                                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: g.name === "ADMIN" ? "not-allowed" : "pointer" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!g.hidden}
+                                    disabled={g.name === "ADMIN" || groupSaving}
+                                    onChange={(e) => void handleToggleGroupVisibility(g.name, !e.target.checked)}
+                                    style={{ accentColor: "var(--primary,#2563eb)" }}
+                                  />
+                                  <span>{g.name}</span>
+                                  <span style={{ color: "var(--text-muted,#6b7280)" }}>({g.member_count})</span>
+                                </label>
+                                {!g.dynamic && g.name !== "ADMIN" && (
+                                  <button type="button" onClick={() => void handleRemoveGroup(g.name)} disabled={groupSaving}
+                                    style={{ border: "none", background: "none", cursor: groupSaving ? "not-allowed" : "pointer", color: "var(--text-muted,#6b7280)", fontSize: 12 }}>
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
                           <button className="ep-btn-outline" onClick={() => setFeaturePermDraft({ ...featurePermissions })}>Reset</button>
                           <button className="ep-btn" onClick={() => void saveFeaturePermissions()} disabled={featurePermSaving}>{featurePermSaving ? "Saving…" : "Save Changes"}</button>
@@ -3221,6 +3722,31 @@ export default function App() {
                           <input type="number" min="0" step="0.01" className="ep-form-input" placeholder="0.00" value={newTravelTypeCeoRate} onChange={(e) => setNewTravelTypeCeoRate(e.target.value)} />
                         </div>
                       </div>
+                      <div className="ep-form-group">
+                        <label>Payment Methods <span className="ep-required">*</span></label>
+                        <div style={{ display: "flex", gap: 18 }}>
+                          <label className="ep-checkbox-label">
+                            <input
+                              type="checkbox"
+                              checked={newTravelTypeAllowedPaymentMethods.includes("ECOCASH")}
+                              onChange={(e) => setNewTravelTypeAllowedPaymentMethods((prev) =>
+                                e.target.checked ? [...prev, "ECOCASH"] : prev.filter((m) => m !== "ECOCASH")
+                              )}
+                            />
+                            <span>EcoCash</span>
+                          </label>
+                          <label className="ep-checkbox-label">
+                            <input
+                              type="checkbox"
+                              checked={newTravelTypeAllowedPaymentMethods.includes("BANK")}
+                              onChange={(e) => setNewTravelTypeAllowedPaymentMethods((prev) =>
+                                e.target.checked ? [...prev, "BANK"] : prev.filter((m) => m !== "BANK")
+                              )}
+                            />
+                            <span>Bank Transfer</span>
+                          </label>
+                        </div>
+                      </div>
                       <label className="ep-checkbox-label">
                         <input type="checkbox" checked={newTravelTypeRequiresAccommodation} onChange={(e) => setNewTravelTypeRequiresAccommodation(e.target.checked)} />
                         <span>Requires accommodation booking</span>
@@ -3276,6 +3802,39 @@ export default function App() {
                         <div className="ep-form-group">
                           <label>CEO Rate ({getCurrencySymbol(editingTravelType.currency)})</label>
                           <input type="number" min="0" step="0.01" className="ep-form-input" value={editingTravelType.rate_ceo} onChange={(e) => setEditingTravelType({ ...editingTravelType, rate_ceo: Number(e.target.value) })} />
+                        </div>
+                      </div>
+                      <div className="ep-form-group">
+                        <label>Payment Methods <span className="ep-required">*</span></label>
+                        <div style={{ display: "flex", gap: 18 }}>
+                          <label className="ep-checkbox-label">
+                            <input
+                              type="checkbox"
+                              checked={(editingTravelType.allowed_payment_methods ?? ["ECOCASH", "BANK"]).includes("ECOCASH")}
+                              onChange={(e) => {
+                                const current = editingTravelType.allowed_payment_methods ?? ["ECOCASH", "BANK"];
+                                setEditingTravelType({
+                                  ...editingTravelType,
+                                  allowed_payment_methods: e.target.checked ? [...current, "ECOCASH"] : current.filter((m) => m !== "ECOCASH")
+                                });
+                              }}
+                            />
+                            <span>EcoCash</span>
+                          </label>
+                          <label className="ep-checkbox-label">
+                            <input
+                              type="checkbox"
+                              checked={(editingTravelType.allowed_payment_methods ?? ["ECOCASH", "BANK"]).includes("BANK")}
+                              onChange={(e) => {
+                                const current = editingTravelType.allowed_payment_methods ?? ["ECOCASH", "BANK"];
+                                setEditingTravelType({
+                                  ...editingTravelType,
+                                  allowed_payment_methods: e.target.checked ? [...current, "BANK"] : current.filter((m) => m !== "BANK")
+                                });
+                              }}
+                            />
+                            <span>Bank Transfer</span>
+                          </label>
                         </div>
                       </div>
                       <label className="ep-checkbox-label">
@@ -3452,6 +4011,9 @@ export default function App() {
                   { icon: <BarChart3 size={26} />, color: "#8b5cf6", bg: "#ede9fe", title: "SLA Reports", desc: "Track processing times, breach rates, and SLA compliance by department.", action: () => setPage("SLA_REPORTS"), live: true },
                   { icon: <GitBranch size={26} />, color: "#f59e0b", bg: "#fef3c7", title: "Workflow Analytics", desc: "Workflow coverage, step complexity, and usage by request type.", action: () => setPage("REPORT_WORKFLOW"), live: true },
                   { icon: <ShieldCheck size={26} />, color: "#dc2626", bg: "#fee2e2", title: "Audit Trail", desc: "Chronological log of all advance and clearance activity.", action: () => setPage("REPORT_AUDIT"), live: true },
+                  ...(canAccessFeature("report_reconciliation") ? [
+                    { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Reconciliation", desc: "Opening/closing balances, requested, paid, and settled per requester for a period.", action: () => setPage("REPORT_RECONCILIATION"), live: true },
+                  ] : []),
                 ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}
                     onClick={() => action?.()}
@@ -3731,6 +4293,8 @@ export default function App() {
             <ReportWorkflowAnalytics advances={advances} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_AUDIT" ? (
             <ReportAuditTrail advances={advances} claims={claims} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_RECONCILIATION" ? (
+            <ReportReconciliation onBack={() => setPage("REPORTS")} meUserId={profile?.id || me?.userId} />
           ) : page === "ADVANCE" ? (
             !canOpenAdvanceForm ? (
               <div className="card" style={{ padding: 24 }}>
@@ -3813,9 +4377,14 @@ export default function App() {
                 <div className="form-field">
                   <label>Receive Via</label>
                   <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as "ECOCASH" | "BANK")}>
-                    <option value="ECOCASH">ECOCASH</option>
-                    <option value="BANK">BANK</option>
+                    {allowedPaymentMethods.includes("ECOCASH") && <option value="ECOCASH">ECOCASH</option>}
+                    {allowedPaymentMethods.includes("BANK") && <option value="BANK">BANK</option>}
                   </select>
+                  {allowedPaymentMethods.length === 1 && (
+                    <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                      {selectedTravelType?.name || "This advance type"} can only be paid via {allowedPaymentMethods[0] === "ECOCASH" ? "EcoCash" : "Bank Transfer"}.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -4454,7 +5023,7 @@ export default function App() {
                           await api.updateAdvanceLines(editingAdvanceId, { lines: mappedRows });
                         }
                         const submitResult: any = await api.submitAdvance(editingAdvanceId);
-                        alert(submitResult?.warning || "Advance request submitted successfully and moved to next level.");
+                        alert(submitResult?.warning || "Advance request submitted successfully.");
                         setEditingAdvanceId(null);
                       } else {
                         // create new request, then send any additional details
@@ -4475,7 +5044,7 @@ export default function App() {
                           await api.updateAdvanceLines(newId, { lines: mappedRows });
                         }
                         const submitResult: any = await api.submitAdvance(newId);
-                        alert(submitResult?.warning || "Advance request submitted successfully and moved to next level.");
+                        alert(submitResult?.warning || "Advance request submitted successfully.");
                       }
                       await refresh();
                       setPage("HOME");
@@ -4586,7 +5155,36 @@ export default function App() {
                 </div>
                 <div className="form-field">
                   <label>Month</label>
-                  <input type="month" value={clearanceMonth} onChange={(e) => setClearanceMonth(e.target.value)} />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <select
+                      value={clearanceMonth ? clearanceMonth.split("-")[1] || "" : ""}
+                      onChange={(e) => {
+                        const mm = e.target.value;
+                        const yyyy = clearanceMonth ? clearanceMonth.split("-")[0] : String(new Date().getFullYear());
+                        setClearanceMonth(mm ? `${yyyy}-${mm}` : "");
+                      }}
+                      style={{ flex: 1 }}
+                    >
+                      <option value="">Month</option>
+                      {CLEARANCE_MONTH_NAMES.map((name, idx) => (
+                        <option key={name} value={String(idx + 1).padStart(2, "0")}>{name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={clearanceMonth ? clearanceMonth.split("-")[0] || "" : ""}
+                      onChange={(e) => {
+                        const yyyy = e.target.value;
+                        const mm = clearanceMonth ? clearanceMonth.split("-")[1] : String(new Date().getMonth() + 1).padStart(2, "0");
+                        setClearanceMonth(yyyy ? `${yyyy}-${mm}` : "");
+                      }}
+                      style={{ flex: 1 }}
+                    >
+                      <option value="">Year</option>
+                      {clearanceMonthYearRange().map((y) => (
+                        <option key={y} value={String(y)}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -4770,7 +5368,7 @@ export default function App() {
               onClear={startClearanceForAdvance}
             />
           ) : page === "MY_CLEARANCES" ? (
-            <MyClearances claims={claims} onEdit={editClearance} />
+            <MyClearances claims={claims} onNew={startNewClearance} onEdit={editClearance} onTrack={showClearanceTracking} />
           ) : page === "SETTINGS" ? (
             <div className="ep-page">
               <div className="ep-breadcrumb"><span className="ep-breadcrumb-active">Settings</span></div>
@@ -4892,20 +5490,44 @@ export default function App() {
               <div className="dashboard-hero">
                 <div className="dashboard-hero-copy">
                   <div className="dashboard-eyebrow">Operations Portal</div>
-                  <h2 className="dashboard-title">Advance Management Dashboard</h2>
+                  <h2 className="dashboard-title">FlowDesk Dashboard</h2>
                   <p className="dashboard-subtitle">
                     Track upcoming approvals, active requests, and clearance work without leaving the register.
                   </p>
+                  <div style={{ marginTop: 12 }}>
+                    <HolidayCalendarButton />
+                  </div>
                 </div>
-                <div className="dashboard-search-card">
+                <div className="dashboard-search-card" style={{ position: "relative" }}>
                   <div className="dashboard-search-title">Quick Search</div>
                   <input
                     className="dashboard-search-input"
                     type="text"
-                    value=""
-                    readOnly
+                    value={dashboardSearch}
+                    onChange={(e) => setDashboardSearch(e.target.value)}
                     placeholder="Search by employee, type, or status"
                   />
+                  {dashboardSearch.trim() && (
+                    <div className="dashboard-search-results">
+                      {dashboardSearchResults.length === 0 ? (
+                        <div className="dashboard-search-result-empty">No matches found.</div>
+                      ) : (
+                        dashboardSearchResults.map((r) => (
+                          <div
+                            key={`${r.kind}-${r.id}`}
+                            className="dashboard-search-result"
+                            onClick={() => {
+                              setDashboardSearch("");
+                              setPage(r.kind === "advance" ? "MY_ADVANCES" : "MY_CLEARANCES");
+                            }}
+                          >
+                            <span className="dashboard-search-result-title">{r.title}</span>
+                            <span className="dashboard-search-result-subtitle">{r.subtitle}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                   <div className="dashboard-sync-chip">
                     <span>Last sync</span>
                     <strong>{new Date().toLocaleString()}</strong>
@@ -4933,17 +5555,126 @@ export default function App() {
               </div>
 
               <div className="card-container">
-                <div className="card dashboard-card" style={{ cursor: "pointer" }} onClick={() => setPage("MY_ADVANCES")}>
-                  <div className="title">My Total Requests</div>
-                  <div className="value">{advances.length + claims.length}</div>
-                </div>
-                <div className="card dashboard-card">
-                  <div className="title">Profile Snapshot</div>
-                  <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-                    <div><strong>Name:</strong> {profile?.full_name || me?.fullName || "—"}</div>
-                    <div><strong>Employee No:</strong> {profile?.employee_no || me?.employeeNo || "—"}</div>
-                    <div><strong>Department:</strong> {profile?.department || me?.department || "—"}</div>
+                <div className="card dashboard-card dashboard-total-card">
+                  <div className="dashboard-card-head" style={{ cursor: "pointer" }} onClick={() => setPage("MY_ADVANCES")}>
+                    <div className="title">My Total Requests</div>
+                    <FileText size={32} className="dashboard-total-icon" aria-hidden />
                   </div>
+                  <div className="value" style={{ cursor: "pointer" }} onClick={() => setPage("MY_ADVANCES")}>{advances.length + claims.length}</div>
+                  <div className="dashboard-card-sub">Total requests across all categories</div>
+                  <div className="dashboard-actions">
+                    <button className="button button-primary" disabled={!canOpenAdvanceForm} onClick={startNewAdvanceRequest}>
+                      <Plus size={14} aria-hidden /> New Advance Request
+                    </button>
+                    <button className="button" disabled={!canRequestForSelf} onClick={startNewClearance}>
+                      <Plus size={14} aria-hidden /> New Clearance
+                    </button>
+                  </div>
+                </div>
+                <div className="card dashboard-card dashboard-profile-card">
+                  <div className="dashboard-card-head">
+                    <div className="title">Profile Snapshot</div>
+                    <button className="ep-icon-btn" title="Edit profile" onClick={() => setPage("SETTINGS")}>
+                      <Edit3 size={14} aria-hidden />
+                    </button>
+                  </div>
+                  <div className="dashboard-profile-body">
+                    <div className="dashboard-profile-fields">
+                      <div><strong>Name:</strong> {profile?.full_name || me?.fullName || "—"}</div>
+                      <div><strong>Employee No:</strong> {profile?.employee_no || me?.employeeNo || "—"}</div>
+                      <div><strong>Department:</strong> {profile?.department || me?.department || "—"}</div>
+                    </div>
+                    <div className="dashboard-avatar">{dashboardInitials(profile?.full_name || me?.fullName)}</div>
+                  </div>
+                </div>
+              </div>
+
+              {hasActiveCustomRequestTypes && (
+                <div className="card" style={{ marginTop: 20, padding: "16px 20px", display: "flex", alignItems: "center", gap: 16 }}>
+                  <span style={{ width: 44, height: 44, borderRadius: 10, background: "#eff6ff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <GitBranch size={22} color="#2563eb" aria-hidden />
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>Custom Requests</div>
+                    <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Submit a change request, attendance register, or other configured request type</div>
+                  </div>
+                  <button className="button button-primary" onClick={() => setPage("CHANGE_REQUEST")}>Open</button>
+                </div>
+              )}
+
+              <div className="dashboard-panel-row">
+                <div className="card dashboard-panel">
+                  <div className="dashboard-panel-head">
+                    <h3>Recent Activity</h3>
+                    <span className="dashboard-panel-link" onClick={() => setPage("REPORT_AUDIT")}>View all</span>
+                  </div>
+                  {dashboardRecentActivity.length === 0 ? (
+                    <div className="dashboard-panel-empty">No recent activity yet.</div>
+                  ) : (
+                    <div className="dashboard-activity-list">
+                      {dashboardRecentActivity.map((entry) => {
+                        const Icon = entry.status === "PAID" || entry.status === "APPROVED" ? CheckCircle2 : entry.status === "REJECTED" ? X : Clock3;
+                        return (
+                          <div className="dashboard-activity-item" key={entry.id}>
+                            <span className={`dashboard-activity-icon ${dashboardStatusTone(entry.status)}`}>
+                              <Icon size={16} aria-hidden />
+                            </span>
+                            <div className="dashboard-activity-body">
+                              <div className="dashboard-activity-title">
+                                <strong>{entry.title}</strong>
+                                <span className={`status-pill ${dashboardStatusTone(entry.status)}`}>{dashboardStatusLabel(entry.status)}</span>
+                              </div>
+                              <div className="dashboard-activity-sub">{entry.subtitle}</div>
+                            </div>
+                            <time>{new Date(entry.date).toLocaleString()}</time>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="dashboard-panel-footer" onClick={() => setPage("REPORT_AUDIT")}>View all activity →</div>
+                </div>
+
+                <div className="card dashboard-panel">
+                  <div className="dashboard-panel-head">
+                    <h3>Approval Queue</h3>
+                    <span className="inbox-count-chip">{inboxCount} total</span>
+                  </div>
+                  {dashboardQueueGroups.length === 0 ? (
+                    <div className="dashboard-panel-empty">No items awaiting your approval.</div>
+                  ) : (
+                    <div className="dashboard-queue-list">
+                      {dashboardQueueGroups.map((g) => {
+                        const Icon = dashboardDocTypeIcon(g.docType);
+                        return (
+                          <div className="dashboard-queue-group" key={g.docType}>
+                            <div className="dashboard-queue-row">
+                              <div className="dashboard-queue-label">
+                                <span className="inbox-group-icon"><Icon size={16} aria-hidden /></span>
+                                <strong>{dashboardDocTypeLabel(g.docType)}</strong>
+                                <span className="inbox-count-chip">{g.count}</span>
+                              </div>
+                              <div className="dashboard-queue-meta">
+                                <span className="inbox-badge inbox-badge-info">Awaiting: {g.count}</span>
+                                <span className="inbox-badge inbox-badge-total">Total Amount: {fmtMoney(g.total)}</span>
+                              </div>
+                            </div>
+                            {Object.keys(g.byStage).length > 0 && (
+                              <div className="dashboard-queue-stages">
+                                {Object.entries(g.byStage).map(([stage, s]) => (
+                                  <div className="dashboard-queue-stage" key={stage}>
+                                    <span>Pending {stage} <b>{s.count}</b></span>
+                                    <span>{fmtMoney(s.amount)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="dashboard-panel-footer" onClick={() => setPage("INBOX")}>View all queues →</div>
                 </div>
               </div>
 
@@ -4966,119 +5697,10 @@ export default function App() {
                 </div>
               )}
 
-              <div className="dashboard-actions">
-                <button className="button" disabled={!canOpenAdvanceForm} onClick={startNewAdvanceRequest}>
-                  New Advance Request
-                </button>
-                <button className="button" disabled={!canRequestForSelf} onClick={startNewClearance}>
-                  New Clearance
-                </button>
-              </div>
-
-              {/* My advances table */}
-              <h3 style={{ marginTop: 24 }}>My Advances</h3>
-              <div style={{ overflowX: "auto" }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Type</th>
-                      <th>Status</th>
-                      <th>Current Stage</th>
-                      <th>Requested</th>
-                      <th>Approved</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {advances.map((a) => (
-                      <tr key={a.id}>
-                        <td>{travelTypeLabel(a.type, travelTypes)}</td>
-                        <td>{a.status}</td>
-                        <td>{advanceStageLabel(a.status, a.type)}</td>
-                        <td>{fmtMoney(a.requested_total)}</td>
-                        <td>{fmtMoney(a.approved_total)}</td>
-                        <td style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                          {(a.status === "DRAFT" || a.status === "SUBMITTED") && (
-                            <button
-                              className="ep-icon-btn"
-                              title="Edit"
-                              onClick={async () => {
-                                try {
-                                  const detail: any = await api.advanceDetail(a.id);
-                                  populateAdvanceForm(detail, a);
-                                  setPage("ADVANCE");
-                                } catch (e: any) {
-                                  alert("Error loading advance: " + e.message);
-                                }
-                              }}
-                            >
-                              <Edit3 size={15} aria-hidden />
-                            </button>
-                          )}
-                          <button
-                            className="ep-icon-btn"
-                            title="Track"
-                            onClick={() => showAdvanceHistory(a.id)}
-                          >
-                            <RefreshCw size={14} aria-hidden />
-                          </button>
-                          {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
-                            <button
-                              className="button small-button"
-                              onClick={() => startClearanceForAdvance(a.id)}
-                              style={{ marginLeft: 4 }}
-                            >
-                              Clear
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* My claims table */}
-              <h3 style={{ marginTop: 24 }}>My Clearances</h3>
-              <div style={{ overflowX: "auto" }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Month</th>
-                      <th>Status</th>
-                      <th>Stage</th>
-                      <th>Total</th>
-                      <th>Advance</th>
-                      <th>Balance</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {claims.map((c) => (
-                      <tr key={c.id}>
-                        <td>{c.month}</td>
-                        <td>{c.status}</td>
-                        <td>{clearanceStageLabel(c)}</td>
-                        <td>{fmtMoney(c.claim_total)}</td>
-                        <td>{fmtMoney(c.advance_amount)}</td>
-                        <td>{fmtMoney(c.balance_amount)}</td>
-                        <td>
-                          {c.status === "DRAFT" ? (
-                            <button className="button small-button" onClick={() => editClearance(c.id)}>
-                              Edit
-                            </button>
-                          ) : (
-                            <span style={{ opacity: 0.7 }}>Submitted</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             </>
           )}
           {historyOpen && renderAdvanceTrackingModal()}
+          {clearanceTrackOpen && renderClearanceTrackingModal()}
           </div>
         </div>
       </div>

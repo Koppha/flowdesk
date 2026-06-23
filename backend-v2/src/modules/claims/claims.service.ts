@@ -10,7 +10,9 @@ export type ClaimStatus =
   | "HR_OFFICER"
   | "HR_MANAGER_REVIEW"
   | "FINANCE_VERIFIED"
+  | "PAYMENT_PROCESSING"
   | "SETTLED"
+  | "CLOSED"
   | "REJECTED";
 
 export type ClaimAction =
@@ -19,7 +21,17 @@ export type ClaimAction =
   | "AUTH_OFFICER_APPROVE"
   | "HR_MANAGER_APPROVE"
   | "FINANCE_VERIFY"
-  | "SETTLE";
+  | "SETTLE"
+  | "MARK_SETTLED";
+
+// Finance's decision at FINANCE_VERIFIED, made via POST /:id/settle.
+// "RETURN_FOR_CORRECTION" isn't handled here — it reuses the rollback-to-DRAFT
+// flow instead, since it isn't a forward status transition.
+export type FinanceDecision = "ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE";
+
+export function nextStatusForFinanceDecision(decision: FinanceDecision): ClaimStatus {
+  return decision === "ACCEPTED" ? "CLOSED" : "PAYMENT_PROCESSING";
+}
 
 export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
   const map: Record<ClaimStatus, Partial<Record<ClaimAction, ClaimStatus>>> = {
@@ -30,7 +42,9 @@ export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
     HR_OFFICER: { HR_MANAGER_APPROVE: "HR_MANAGER_REVIEW" },
     HR_MANAGER_REVIEW: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
     FINANCE_VERIFIED: { SETTLE: "SETTLED" },
+    PAYMENT_PROCESSING: { MARK_SETTLED: "CLOSED" },
     SETTLED: {},
+    CLOSED: {},
     REJECTED: {}
   };
   const next = map[current]?.[action];
@@ -96,8 +110,8 @@ export async function advanceClaimWorkflowStep(args: {
   hasMore: boolean;
   currentStep: ChainStep;
   stillPending: boolean;
-  nextApprover: { name: string | null; email: string | null; title: string | null } | null;
-  nextApprovers: Array<{ name: string | null; email: string | null; title: string | null }>;
+  nextApprover: { id: string | null; name: string | null; email: string | null; title: string | null } | null;
+  nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }>;
 }> {
   const { claim, userId, role, delegatedManagerId, userDepartment } = args;
   if (!claim.approval_chain?.length) throw badRequest("This clearance does not have an active approval workflow.");
@@ -129,7 +143,7 @@ export async function advanceClaimWorkflowStep(args: {
   let nextStatus: ClaimStatus;
   let newStepOrder: number;
   let hasMore: boolean;
-  let nextApprovers: Array<{ name: string | null; email: string | null; title: string | null }> = [];
+  let nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }> = [];
 
   if (stillPending) {
     nextStatus = claim.status;
@@ -142,7 +156,7 @@ export async function advanceClaimWorkflowStep(args: {
     newStepOrder = hasMore ? nextIdx : newChain.length;
     if (hasMore) {
       nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
-        name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
+        id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
       }));
     }
   }

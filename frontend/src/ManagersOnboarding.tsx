@@ -28,6 +28,9 @@ type UserRow = {
   section_name?: string | null;
   team_id?: string | null;
   team_name?: string | null;
+  manager_type_id?: string | null;
+  manager_type_name?: string | null;
+  manager_type_role?: string | null;
   role?: string | null;
   is_active?: boolean;
 };
@@ -135,6 +138,7 @@ export default function ManagersOnboarding() {
   const [editingOrg, setEditingOrg] = useState<OrgSelection>(EMPTY_ORG);
   const [editingTypeId, setEditingTypeId] = useState("");
   const [editingRole, setEditingRole] = useState<"HOD" | "MANAGER">("MANAGER");
+  const [savingManager, setSavingManager] = useState(false);
 
   // Per-row "add another department" selection in the management table
   const [addDeptSelection, setAddDeptSelection] = useState<Record<string, string>>({});
@@ -209,8 +213,7 @@ export default function ManagersOnboarding() {
     );
     const role = (editingUser.role === "HOD" ? "HOD" : "MANAGER") as "HOD" | "MANAGER";
     setEditingRole(role);
-    const matchingType = managerTypes.find((t) => t.name === editingUser.title && t.role === role);
-    setEditingTypeId(matchingType?.id ?? "");
+    setEditingTypeId(editingUser.manager_type_id ?? "");
     // Only re-initialize when switching to a different user — re-running on every
     // keystroke (editingUser mutates on each field change) would wipe out the
     // org placement the admin just picked in OrgPicker.
@@ -417,6 +420,7 @@ export default function ManagersOnboarding() {
         role: effectiveRole,
         title: newTitle.trim() || selectedTypeName || "Department Manager",
         is_active: newIsActive,
+        manager_type_id: selectedNewTypeId || null,
       });
       if (assignAsDepartmentManager) {
         await autoAssignOrgPlacement(created.id, effectiveRole, { ...newOrg, department: effectiveDept }, { setPrimary: true });
@@ -438,6 +442,7 @@ export default function ManagersOnboarding() {
       alert("Please fill all required fields.");
       return;
     }
+    setSavingManager(true);
     try {
       const fullName = `${editingFirstName.trim()} ${editingSurname.trim()}`;
       const effectiveDept = editingOrg.department || editingUser.department;
@@ -451,6 +456,7 @@ export default function ManagersOnboarding() {
         team_id: editingOrg.teamId ?? null,
         email: editingUser.email,
         is_active: editingUser.is_active !== false,
+        manager_type_id: editingTypeId || null,
       });
       if (editingRole !== editingUser.role) {
         await api.updateUserRole(editingUser.id, { role: editingRole });
@@ -463,6 +469,8 @@ export default function ManagersOnboarding() {
       alert("Saved.");
     } catch (e: any) {
       alert("Error: " + e.message);
+    } finally {
+      setSavingManager(false);
     }
   }
 
@@ -783,12 +791,9 @@ export default function ManagersOnboarding() {
                       </div>
                     </td>
                     <td>
-                      {(() => {
-                        const matchingType = managerTypes.find((t) => t.name === mgr.title);
-                        return matchingType
-                          ? <RoleBadge role={matchingType.role} label={matchingType.name} />
-                          : <RoleBadge role={mgr.role} />;
-                      })()}
+                      {mgr.manager_type_name
+                        ? <RoleBadge role={mgr.manager_type_role} label={mgr.manager_type_name} />
+                        : <RoleBadge role={mgr.role} />}
                     </td>
                     <td>
                       <span style={{ fontSize: 12, color: "var(--muted)" }}>
@@ -876,7 +881,7 @@ export default function ManagersOnboarding() {
           <div className="leadership-modal onboarding-modal">
             <div className="leadership-modal-head">
               <h3>Edit — {editingUser.full_name || editingUser.email}</h3>
-              <button className="icon-button leadership-icon-button" type="button" onClick={() => setEditingUser(null)} aria-label="Close"><X size={17} aria-hidden /></button>
+              <button className="icon-button leadership-icon-button" type="button" onClick={() => setEditingUser(null)} disabled={savingManager} aria-label="Close"><X size={17} aria-hidden /></button>
             </div>
             <div className="onboarding-form-grid onboarding-form-grid-2">
               <label><span>First Name *</span><input value={editingFirstName} onChange={(e) => setEditingFirstName(e.target.value)} /></label>
@@ -890,7 +895,7 @@ export default function ManagersOnboarding() {
                     const t = managerTypes.find((x) => x.id === e.target.value);
                     if (t) { setEditingRole(t.role as "HOD" | "MANAGER"); setEditingUser({ ...editingUser, title: t.name }); }
                   }}>
-                    <option value="">— Keep current ({editingUser.role === "HOD" ? "HOD" : "MANAGER"}) —</option>
+                    <option value="">— None (show role only: {editingUser.role === "HOD" ? "HOD" : "MANAGER"}) —</option>
                     {managerTypes.filter((t) => t.active).map((t) => (
                       <option key={t.id} value={t.id}>{t.name} ({t.role})</option>
                     ))}
@@ -912,8 +917,8 @@ export default function ManagersOnboarding() {
               </div>
             </div>
             <div className="leadership-modal-actions">
-              <button className="button small-button button-subtle" type="button" onClick={() => setEditingUser(null)}>Cancel</button>
-              <button className="button button-primary" type="button" onClick={() => void saveManager()}>Save</button>
+              <button className="button small-button button-subtle" type="button" onClick={() => setEditingUser(null)} disabled={savingManager}>Cancel</button>
+              <button className="button button-primary" type="button" onClick={() => void saveManager()} disabled={savingManager}>{savingManager ? "Saving…" : "Save"}</button>
             </div>
           </div>
         </div>

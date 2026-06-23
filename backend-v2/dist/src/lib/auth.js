@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { forbidden, unauthorized } from "./errors.js";
 import { query } from "./db.js";
+import { getUserGroups } from "./permissionGroups.js";
 export function signToken(payload) {
     return jwt.sign(payload, env.JWT_SECRET, { expiresIn: "12h" });
 }
@@ -63,4 +64,28 @@ export function requireFinance(req, _res, next) {
     if (req.user.role !== "ADMIN" && !isFinanceDept(req.user.department))
         return next(forbidden());
     return next();
+}
+// Generic admin-configurable feature-permission gate: ADMIN always passes; otherwise
+// checks the admin_feature_permissions table (role or permission-group match), falling
+// back to fallbackRoles if no row exists yet for this feature.
+export function requireFeatureAccess(featureKey, fallbackRoles) {
+    return async (req, _res, next) => {
+        if (!req.user)
+            return next(unauthorized());
+        if (req.user.role === "ADMIN")
+            return next();
+        try {
+            const rows = await query(`SELECT allowed_roles FROM admin_feature_permissions WHERE feature_key = $1 LIMIT 1`, [featureKey]);
+            const allowed = rows[0]?.allowed_roles ?? fallbackRoles;
+            if (allowed.includes(req.user.role))
+                return next();
+            const groups = await getUserGroups(req.user.userId);
+            if (allowed.some((g) => groups.includes(g)))
+                return next();
+            return next(forbidden());
+        }
+        catch {
+            return next(forbidden());
+        }
+    };
 }

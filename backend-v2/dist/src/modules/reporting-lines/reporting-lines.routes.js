@@ -24,6 +24,21 @@ export async function getManagerChainIds(employeeId) {
     }
     return chain;
 }
+// GET /reporting-lines/my-manager — the current user's direct manager (any
+// authenticated user), used to auto-resolve "Requester's Manager" steps in
+// fixed approval chains (e.g. Computer Request) without exposing the org chart.
+reportingLinesRouter.get("/my-manager", async (req, res, next) => {
+    try {
+        const managerId = (await getManagerChainIds(req.user.userId))[0];
+        if (!managerId)
+            return res.json(null);
+        const manager = (await query(`SELECT id, full_name, email, title FROM users WHERE id = $1 AND is_active = true`, [managerId]))[0];
+        return res.json(manager ?? null);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
 // GET /reporting-lines/stats
 reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (_req, res, next) => {
     try {

@@ -14,7 +14,8 @@ const TravelTypeSchema = z.object({
     rate_ceo: z.coerce.number().nonnegative().default(0),
     currency: z.string().trim().min(2).max(5).default("LSL"),
     active: z.boolean().optional(),
-    requires_accommodation: z.boolean().optional()
+    requires_accommodation: z.boolean().optional(),
+    allowed_payment_methods: z.array(z.enum(["ECOCASH", "BANK"])).min(1, "Select at least one payment method").default(["ECOCASH", "BANK"])
 });
 const TravelTypeUpdateSchema = TravelTypeSchema.partial();
 const TravelLocationSchema = z.object({
@@ -48,8 +49,8 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), asy
         if (isReservedAdvanceType(code))
             throw badRequest("Salary and loan are reserved advance types");
         const row = (await query(`INSERT INTO travel_types
-          (code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, created_by_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          (code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods, created_by_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT (code) DO UPDATE
            SET name = EXCLUDED.name,
                location_mode = EXCLUDED.location_mode,
@@ -60,6 +61,7 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), asy
                currency = EXCLUDED.currency,
                active = EXCLUDED.active,
                requires_accommodation = EXCLUDED.requires_accommodation,
+               allowed_payment_methods = EXCLUDED.allowed_payment_methods,
                updated_at = now()
          RETURNING id`, [
             code,
@@ -72,6 +74,7 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), asy
             parsed.data.currency,
             parsed.data.active ?? true,
             parsed.data.requires_accommodation ?? false,
+            parsed.data.allowed_payment_methods,
             req.user.userId
         ]))[0];
         return res.status(201).json({ id: row.id, code });

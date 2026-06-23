@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import fs from "fs";
 import multer from "multer";
-import { requireAuth, requireRole } from "../../lib/auth.js";
+import { isFinanceDept, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
@@ -11,6 +11,7 @@ import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { canApproveStep, getPendingGroup, resolveWorkflowChain } from "../../lib/workflowEngine.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
+import { getUserGroups } from "../../lib/permissionGroups.js";
 import { nextClaimStatus, chainStepToClaimStatus, getClaimById, advanceClaimWorkflowStep } from "./claims.service.js";
 export { nextClaimStatus };
 export const claimsRouter = Router();
@@ -26,10 +27,11 @@ const storage = multer.diskStorage({
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replaceAll(" ", "_")}`)
 });
 const upload = multer({ storage });
-async function getClaimNotificationContext(claimId) {
-    return (await query(`SELECT u.full_name, u.email, u.department, c.claim_total, c.status
+export async function getClaimNotificationContext(claimId) {
+    return (await query(`SELECT u.full_name, u.email, u.department, c.claim_total, c.status, ar.type AS claim_type
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
+         LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
         WHERE c.id = $1`, [claimId]))[0] ?? null;
 }
 async function getLinkedAdvance(linkedAdvanceId, claimantId, excludeClaimId) {
@@ -73,7 +75,7 @@ async function syncClaimTripsFromAdvance(claimId, linkedAdvanceId) {
     const claimTotal = Number(advanceLines.reduce((sum, line) => sum + Number(line.lunch || 0) + Number(line.dinner || 0), 0).toFixed(2));
     return { claimTotal };
 }
-export function canViewClaim(args) {
+export async function canViewClaim(args) {
     if (args.role === "ADMIN")
         return true;
     if (args.claimantId === args.userId)
@@ -82,6 +84,20 @@ export function canViewClaim(args) {
     if (args.approvalChain?.length) {
         if (args.approvalChain.some(s => s.approver_id === args.userId))
             return true;
+        // "Team: X" (ANY_ONE) steps list the department HOD as approver_id for
+        // routing purposes, but any member of that permission group is a real
+        // participant in the chain and should be able to track the request.
+        if (args.approvalChain.some(s => s.approval_group_name)) {
+            const groups = await getUserGroups(args.userId);
+            if (args.approvalChain.some(s => s.approval_group_name && groups.includes(s.approval_group_name)))
+                return true;
+        }
+    }
+    // FINANCE_VERIFIED claims have left the active workflow chain and now sit
+    // with Finance/HR/EXCO/Managers awaiting settlement — those are the same
+    // roles allowedInboxForRole lists this status for, so let them view it.
+    if (args.status === "FINANCE_VERIFIED" && (isFinanceDept(args.department) || ["MANAGER", "HR_MANAGER", "EXCO"].includes(args.role))) {
+        return true;
     }
     // Anyone in the claimant's management chain (org structure) can view
     if (args.managerChainIds?.includes(args.userId))
@@ -92,12 +108,19 @@ claimsRouter.get("/", async (req, res, next) => {
     try {
         const mine = req.query.mine === "true";
         if (mine) {
-            const rows = await query(`SELECT * FROM clearance_claims WHERE claimant_id=$1 ORDER BY created_at DESC`, [req.user.userId]);
+            const rows = await query(`SELECT cc.*, u.full_name AS requester_name, u.full_name AS claimant_name, u.department AS department
+           FROM clearance_claims cc
+           JOIN users u ON u.id = cc.claimant_id
+          WHERE cc.claimant_id=$1
+          ORDER BY cc.created_at DESC`, [req.user.userId]);
             return res.json(rows);
         }
         if (req.user.role !== "ADMIN")
             throw forbidden("Only admin can list all claims");
-        const rows = await query(`SELECT * FROM clearance_claims ORDER BY created_at DESC`);
+        const rows = await query(`SELECT cc.*, u.full_name AS requester_name, u.full_name AS claimant_name, u.department AS department
+         FROM clearance_claims cc
+         JOIN users u ON u.id = cc.claimant_id
+        ORDER BY cc.created_at DESC`);
         return res.json(rows);
     }
     catch (err) {
@@ -165,7 +188,7 @@ claimsRouter.get("/:id", async (req, res, next) => {
         if (!claim)
             throw notFound();
         const managerChainIds = await getManagerChainIds(claim.claimant_id);
-        if (!canViewClaim({ role: req.user.role, claimantId: claim.claimant_id, userId: req.user.userId, approvalChain: claim.approval_chain, managerChainIds })) {
+        if (!(await canViewClaim({ role: req.user.role, department: req.user.department, status: claim.status, claimantId: claim.claimant_id, userId: req.user.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
             throw forbidden();
         }
         const trips = await query(`SELECT * FROM claim_trips WHERE clearance_claim_id=$1 ORDER BY trip_date`, [req.params.id]);
@@ -395,7 +418,8 @@ claimsRouter.post("/:id/submit", async (req, res, next) => {
                 claimantName: notificationContext.full_name,
                 claimantEmail: notificationContext.email,
                 department: notificationContext.department,
-                claimTotal: Number(notificationContext.claim_total)
+                claimTotal: Number(notificationContext.claim_total),
+                claimType: notificationContext.claim_type
             });
         }
         return res.json({ ok: true, status });
@@ -407,84 +431,98 @@ claimsRouter.post("/:id/submit", async (req, res, next) => {
 // Generic workflow-driven approve/reject — used by clearances that follow a
 // dynamic workflow (e.g. "Travel Clearance DT") configured in the Workflow
 // Builder. Mirrors POST /advances/:id/approve and /:id/reject.
+// Shared by POST /:id/approve and the email-approval flow (email-actions.routes.ts).
+export async function performClaimApprove(claimId, actor) {
+    const claim = await getClaimById(claimId);
+    if (!claim)
+        throw notFound();
+    if (!claim.approval_chain?.length) {
+        throw badRequest("This clearance does not follow a dynamic approval workflow.");
+    }
+    const { role, userId, department } = actor;
+    const delegated = await getActiveManagerDelegation(userId);
+    const result = await advanceClaimWorkflowStep({
+        claim,
+        userId,
+        role,
+        delegatedManagerId: delegated?.manager_id,
+        userDepartment: department
+    });
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+        await notifyClaimTask({
+            claimId: claim.id,
+            status: result.nextStatus,
+            claimantName: notificationContext.full_name,
+            claimantEmail: notificationContext.email,
+            department: notificationContext.department,
+            claimTotal: Number(notificationContext.claim_total),
+            claimType: notificationContext.claim_type,
+            nextApprover: result.nextApprover,
+            stepOrder: result.newStepOrder
+        });
+    }
+    return { status: result.nextStatus };
+}
 claimsRouter.post("/:id/approve", requireAuth, async (req, res, next) => {
     try {
-        const claim = await getClaimById(req.params.id);
-        if (!claim)
-            throw notFound();
-        if (!claim.approval_chain?.length) {
-            throw badRequest("This clearance does not follow a dynamic approval workflow.");
-        }
-        const role = req.user.role;
-        const userId = req.user.userId;
-        const delegated = await getActiveManagerDelegation(userId);
-        const result = await advanceClaimWorkflowStep({
-            claim,
-            userId,
-            role,
-            delegatedManagerId: delegated?.manager_id,
-            userDepartment: req.user.department
+        const result = await performClaimApprove(req.params.id, {
+            userId: req.user.userId, role: req.user.role, department: req.user.department ?? null
         });
-        const notificationContext = await getClaimNotificationContext(claim.id);
-        if (notificationContext) {
-            await notifyClaimTask({
-                claimId: claim.id,
-                status: result.nextStatus,
-                claimantName: notificationContext.full_name,
-                claimantEmail: notificationContext.email,
-                department: notificationContext.department,
-                claimTotal: Number(notificationContext.claim_total)
-            });
-        }
-        return res.json({ ok: true, status: result.nextStatus });
+        return res.json({ ok: true, status: result.status });
     }
     catch (err) {
         return next(err);
     }
 });
+// Shared by POST /:id/reject and the email-approval flow (email-actions.routes.ts).
+export async function performClaimReject(claimId, actor, comments) {
+    const claim = await getClaimById(claimId);
+    if (!claim)
+        throw notFound();
+    if (!claim.approval_chain?.length) {
+        throw badRequest("This clearance does not follow a dynamic approval workflow.");
+    }
+    const chain = claim.approval_chain;
+    const stepIdx = claim.workflow_step_order ?? 0;
+    const group = getPendingGroup(chain, stepIdx);
+    if (!group.indices.length)
+        throw badRequest("No active workflow step to reject");
+    const { role, userId, department } = actor;
+    const delegated = await getActiveManagerDelegation(userId);
+    if (role !== "ADMIN") {
+        let currentStep;
+        for (const idx of group.indices) {
+            if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, department)) {
+                currentStep = chain[idx];
+                break;
+            }
+        }
+        if (!currentStep)
+            throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+    }
+    await query(`UPDATE clearance_claims SET status='REJECTED', updated_at=now() WHERE id=$1`, [claim.id]);
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+        await notifyClaimTask({
+            claimId: claim.id,
+            status: "REJECTED",
+            claimantName: notificationContext.full_name,
+            claimantEmail: notificationContext.email,
+            department: notificationContext.department,
+            claimTotal: Number(notificationContext.claim_total),
+            claimType: notificationContext.claim_type
+        });
+    }
+    return { status: "REJECTED" };
+}
 claimsRouter.post("/:id/reject", requireAuth, async (req, res, next) => {
     try {
         const parsed = z.object({ comments: z.string().min(1, "Comments are required") }).safeParse(req.body);
         if (!parsed.success)
             throw badRequest("Comments are required for reject", parsed.error.flatten());
-        const claim = await getClaimById(req.params.id);
-        if (!claim)
-            throw notFound();
-        if (!claim.approval_chain?.length) {
-            throw badRequest("This clearance does not follow a dynamic approval workflow.");
-        }
-        const chain = claim.approval_chain;
-        const stepIdx = claim.workflow_step_order ?? 0;
-        const group = getPendingGroup(chain, stepIdx);
-        if (!group.indices.length)
-            throw badRequest("No active workflow step to reject");
-        const role = req.user.role;
-        const userId = req.user.userId;
-        const delegated = await getActiveManagerDelegation(userId);
-        if (role !== "ADMIN") {
-            let currentStep;
-            for (const idx of group.indices) {
-                if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user.department)) {
-                    currentStep = chain[idx];
-                    break;
-                }
-            }
-            if (!currentStep)
-                throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
-        }
-        await query(`UPDATE clearance_claims SET status='REJECTED', updated_at=now() WHERE id=$1`, [claim.id]);
-        const notificationContext = await getClaimNotificationContext(claim.id);
-        if (notificationContext) {
-            await notifyClaimTask({
-                claimId: claim.id,
-                status: "REJECTED",
-                claimantName: notificationContext.full_name,
-                claimantEmail: notificationContext.email,
-                department: notificationContext.department,
-                claimTotal: Number(notificationContext.claim_total)
-            });
-        }
-        return res.json({ ok: true, status: "REJECTED" });
+        const result = await performClaimReject(req.params.id, { userId: req.user.userId, role: req.user.role, department: req.user.department ?? null }, parsed.data.comments);
+        return res.json({ ok: true, status: result.status });
     }
     catch (err) {
         return next(err);
@@ -531,7 +569,8 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req, res, next) => {
                 claimantName: notificationContext.full_name,
                 claimantEmail: notificationContext.email,
                 department: notificationContext.department,
-                claimTotal: Number(notificationContext.claim_total)
+                claimTotal: Number(notificationContext.claim_total),
+                claimType: notificationContext.claim_type
             });
         }
         return res.json({ ok: true, status: "DRAFT" });
@@ -560,7 +599,8 @@ claimsRouter.post("/:id/settle", requireRole(["ADMIN"]), async (req, res, next) 
                 claimantName: notificationContext.full_name,
                 claimantEmail: notificationContext.email,
                 department: notificationContext.department,
-                claimTotal: Number(notificationContext.claim_total)
+                claimTotal: Number(notificationContext.claim_total),
+                claimType: notificationContext.claim_type
             });
         }
         return res.json({ ok: true, status });

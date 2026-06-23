@@ -1,3 +1,4 @@
+import compression from "compression";
 import cors from "cors";
 import express from "express";
 import { env } from "./config/env.js";
@@ -16,10 +17,13 @@ import { travelRouter } from "./modules/travel/travel.routes.js";
 import { workflowsRouter } from "./modules/workflows/workflows.routes.js";
 import { reportingLinesRouter } from "./modules/reporting-lines/reporting-lines.routes.js";
 import { requestTypesRouter } from "./modules/request-types/request-types.routes.js";
+import { customRequestsRouter } from "./modules/custom-requests/custom-requests.routes.js";
+import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
 
 export function createApp() {
   const app = express();
 
+  app.use(compression());
   app.use(
     cors({
       origin: env.CORS_ORIGIN || true,
@@ -28,6 +32,18 @@ export function createApp() {
   );
   app.use(express.json({ limit: "2mb" }));
   app.use(requestLogger);
+
+  // Short cache for stable reference data — reduces repeat round-trips from
+  // the same client without risking stale data on transactional endpoints.
+  app.use((req, res, next) => {
+    const stale = ["/travel", "/workflows", "/request-types", "/auth/departments", "/auth/directory"];
+    if (req.method === "GET" && stale.some((p) => req.path.startsWith(p))) {
+      res.setHeader("Cache-Control", "private, max-age=60, stale-while-revalidate=30");
+    } else {
+      res.setHeader("Cache-Control", "no-store");
+    }
+    next();
+  });
 
   app.use("/health", healthRouter);
   app.use("/auth", authRouter);
@@ -42,6 +58,8 @@ export function createApp() {
   app.use("/workflows", workflowsRouter);
   app.use("/reporting-lines", reportingLinesRouter);
   app.use("/request-types", requestTypesRouter);
+  app.use("/custom-requests", customRequestsRouter);
+  app.use("/email-actions", emailActionsRouter);
   app.use("/ai", aiRouter);
 
   app.use(errorHandler);

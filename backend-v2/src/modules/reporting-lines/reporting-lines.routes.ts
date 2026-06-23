@@ -6,6 +6,32 @@ import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departments.js";
 
+// Falls back to department leadership when no reporting_lines row exists yet,
+// mirroring the chain used by /reporting-lines/auto-generate: EXCO -> CEO,
+// HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else -> MANAGER/HOD/EXCO.
+async function getFallbackManagerId(userId: string): Promise<string | null> {
+  const userRows = await query<{ role: string; department: string | null }>(
+    `SELECT role::text AS role, department FROM users WHERE id = $1`,
+    [userId]
+  );
+  const user = userRows[0];
+  if (!user) return null;
+
+  if (user.role === "EXCO") {
+    const ceoRows = await query<{ id: string }>(
+      `SELECT id FROM users WHERE role::text = 'CEO' AND is_active = true ORDER BY full_name LIMIT 1`
+    );
+    return ceoRows[0]?.id ?? null;
+  }
+
+  if (!user.department) return null;
+  const leadership = await getDepartmentLeadership(user.department);
+
+  if (user.role === "HOD") return leadership.exco_user_id ?? null;
+  if (user.role === "MANAGER") return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+  return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+}
+
 export const reportingLinesRouter = Router();
 reportingLinesRouter.use(requireAuth);
 
@@ -30,6 +56,27 @@ export async function getManagerChainIds(employeeId: string): Promise<string[]> 
 
   return chain;
 }
+
+// GET /reporting-lines/my-manager — the current user's direct manager (any
+// authenticated user), used to auto-resolve "Requester's Manager" steps in
+// fixed approval chains (e.g. Computer Request) without exposing the org chart.
+reportingLinesRouter.get("/my-manager", async (req: AuthedRequest, res, next) => {
+  try {
+    const userId = req.user!.userId;
+    let managerId: string | null = (await getManagerChainIds(userId))[0] ?? null;
+    if (!managerId || managerId === userId) {
+      managerId = await getFallbackManagerId(userId);
+    }
+    if (!managerId || managerId === userId) return res.json(null);
+    const manager = (await query<{ id: string; full_name: string | null; email: string; title: string | null }>(
+      `SELECT id, full_name, email, title FROM users WHERE id = $1 AND is_active = true`,
+      [managerId]
+    ))[0];
+    return res.json(manager ?? null);
+  } catch (err) {
+    return next(err);
+  }
+});
 
 // GET /reporting-lines/stats
 reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (_req: AuthedRequest, res, next) => {

@@ -108,9 +108,11 @@ async function fetchBlob(path: string) {
 export const api = {
   login: (email: string, password: string) => req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => req("/auth/me"),
+  verifyPassword: (password: string) => req("/auth/verify-password", { method: "POST", body: JSON.stringify({ password }) }),
   departments: () => req("/auth/departments"),
   groups: () => req("/auth/groups"),
   requestDirectory: () => req("/auth/request-directory"),
+  companyDirectory: () => req("/auth/request-directory?scope=company"),
   createDepartment: (name: string, sectionId?: string | null, managerUserId?: string | null, excoUserId?: string | null, active = true, hodUserId?: string | null) =>
     req("/auth/departments", { method: "POST", body: JSON.stringify({ name, section_id: sectionId, hod_user_id: hodUserId, manager_user_id: managerUserId, exco_user_id: excoUserId, active }) }),
   updateDepartment: (department: string, data: { name: string; section_id?: string | null; division_id?: string | null; hod_user_id?: string | null; manager_user_id?: string | null; exco_user_id?: string | null; active?: boolean; is_business_partner?: boolean; division_ids?: string[] }) =>
@@ -170,7 +172,13 @@ export const api = {
     return req(`/workflows/resolve?${params.join("&")}`);
   },
   chainApprovers: () => req("/workflows/chain-approvers"),
-  workflowExcoMembers: () => req("/workflows/exco-members"),
+  workflowActionTypes: () => req("/workflows/action-types"),
+  createWorkflowActionType: (data: { code: string; label: string; sort_order?: number }) =>
+    req("/workflows/action-types", { method: "POST", body: JSON.stringify(data) }),
+  updateWorkflowActionType: (id: number, data: { label?: string; is_active?: boolean; sort_order?: number }) =>
+    req(`/workflows/action-types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteWorkflowActionType: (id: number) =>
+    req(`/workflows/action-types/${id}`, { method: "DELETE" }),
   createDelegation: (data: any) => req("/auth/delegations", { method: "POST", body: JSON.stringify(data) }),
   endDelegation: (id: string) => req(`/auth/delegations/${id}/end`, { method: "POST", body: JSON.stringify({}) }),
   adminFeaturePermissions: () => req("/auth/admin-feature-permissions"),
@@ -179,8 +187,12 @@ export const api = {
   permissionGroups: () => req("/auth/permission-groups"),
   createPermissionGroup: (name: string) => req("/auth/permission-groups", { method: "POST", body: JSON.stringify({ name }) }),
   deletePermissionGroup: (name: string) => req(`/auth/permission-groups/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  setGroupVisibility: (name: string, hidden: boolean) =>
+    req(`/auth/permission-groups/${encodeURIComponent(name)}/visibility`, { method: "PUT", body: JSON.stringify({ hidden }) }),
 
   advances: () => req("/advances?mine=true"),
+  reconciliationReport: (from: string, to: string) =>
+    req(`/advances/reconciliation-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   createAdvance: (data: any) => req("/advances", { method: "POST", body: JSON.stringify(data) }),
   // generic update endpoint; backend should allow editing fields such as type/requested_total/salary_month/etc
   updateAdvance: (id: string, data: any) => req(`/advances/${id}`, { method: "PUT", body: JSON.stringify(data) }),
@@ -188,6 +200,7 @@ export const api = {
   updateAdvanceLines: (id: string, data: any) => req(`/advances/${id}/lines`, { method: "PUT", body: JSON.stringify(data) }),
   submitAdvance: (id: string) => req(`/advances/${id}/submit`, { method: "POST", body: JSON.stringify({}) }),
   revokeAdvance: (id: string) => req(`/advances/${id}/revoke`, { method: "POST", body: JSON.stringify({}) }),
+  remindAdvance: (id: string) => req(`/advances/${id}/remind`, { method: "POST", body: JSON.stringify({}) }),
   claims: () => req("/claims?mine=true"),
   createClaim: (data: any) => req("/claims", { method: "POST", body: JSON.stringify(data) }),
   updateClaim: (id: string, data: any) => req(`/claims/${id}`, { method: "PUT", body: JSON.stringify(data) }),
@@ -245,9 +258,18 @@ export const api = {
   approveClaim: (id: string, comments?: string) => req(`/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
   rejectClaim: (id: string, comments: string) => req(`/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   rollbackClaim: (id: string, comments?: string) => req(`/claims/${id}/rollback`, { method: "POST", body: JSON.stringify({ comments }) }),
-  settleClaim: (id: string, settled_method: "ECOCASH" | "BANK" | "CASH" | "OTHER", settled_reference: string) =>
-    req(`/claims/${id}/settle`, { method: "POST", body: JSON.stringify({ settled_method, settled_reference }) })
-  ,
+  financeDecideClaim: (id: string, payload: {
+    finance_decision: "ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE";
+    finance_comments: string;
+    settlement_amount?: number;
+    settled_method?: "ECOCASH" | "BANK" | "CASH" | "OTHER";
+    settled_reference?: string;
+    assignee_user_id?: string;
+    assignee_group_name?: string;
+    expected_payment_date?: string;
+  }) => req(`/claims/${id}/settle`, { method: "POST", body: JSON.stringify(payload) }),
+  markClaimSettled: (id: string, settled_method?: "ECOCASH" | "BANK" | "CASH" | "OTHER", settled_reference?: string) =>
+    req(`/claims/${id}/mark-settled`, { method: "POST", body: JSON.stringify({ settled_method, settled_reference }) }),
   // Hotels (accommodation)
   hotels: () => req("/accommodation/hotels"),
   createHotel: (data: any) => req("/accommodation/hotels", { method: "POST", body: JSON.stringify(data) }),
@@ -265,6 +287,27 @@ export const api = {
   requestTypePermissions: (id: string) => req(`/request-types/${id}/permissions`),
   addRequestTypePermission: (id: string, data: any) => req(`/request-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
+
+  myManager: () => req("/reporting-lines/my-manager"),
+  submitCustomRequest: (data: any) => req("/custom-requests", { method: "POST", body: JSON.stringify(data) }),
+  myCustomRequests: () => req("/custom-requests/mine"),
+  customRequestDetail: (id: string) => req(`/custom-requests/${id}`),
+  customRequestConsolidated: (id: string) => req(`/custom-requests/${id}/consolidated`),
+  actionCustomRequest: (id: string, data: { action: "APPROVE" | "REJECT"; comment?: string }) =>
+    req(`/custom-requests/${id}/action`, { method: "POST", body: JSON.stringify(data) }),
+  closeCustomRequest: (id: string, data: { implementation_date: string; closure_notes?: string }) =>
+    req(`/custom-requests/${id}/close`, { method: "POST", body: JSON.stringify(data) }),
+  assignedToMeCustomRequests: () => req("/custom-requests/assigned-to-me"),
+  addCustomRequestAssignee: (id: string, data: { field_key: string; id?: string; email?: string; name?: string; team_id?: string }) =>
+    req(`/custom-requests/${id}/assignees`, { method: "POST", body: JSON.stringify(data) }),
+  confirmCustomRequestAssignee: (id: string, field_key: string) =>
+    req(`/custom-requests/${id}/assignees/confirm`, { method: "POST", body: JSON.stringify({ field_key }) }),
+  updateCustomRequestData: (id: string, data: Record<string, any>) =>
+    req(`/custom-requests/${id}/data`, { method: "PATCH", body: JSON.stringify({ data }) }),
+
+  emailActionDetail: (token: string) => req(`/email-actions/${encodeURIComponent(token)}`),
+  emailActionConfirm: (token: string, data: { action: "APPROVE" | "REJECT"; comment?: string }) =>
+    req(`/email-actions/${encodeURIComponent(token)}/confirm`, { method: "POST", body: JSON.stringify(data) }),
 
   ceoUsers: () => req("/auth/ceo"),
   managerTypes: () => req("/auth/manager-types"),

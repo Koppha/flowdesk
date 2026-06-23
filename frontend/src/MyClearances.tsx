@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from "react";
 import { formatMoney } from "./constants";
-import { ShieldCheck, CheckCircle2, Clock3, AlertTriangle, Edit3 } from "lucide-react";
+import { ShieldCheck, CheckCircle2, Clock3, AlertTriangle, Edit3, RefreshCw, Plus } from "lucide-react";
 
 interface Props {
   claims: any[];
+  onNew: () => void;
   onEdit: (claimId: string) => void;
+  onTrack: (claimId: string) => void;
 }
 
 const PENDING_STATUSES = ["SUBMITTED", "MANAGER_APPROVED", "CHIEF_OFFICER_APPROVED", "HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED"];
@@ -71,7 +73,7 @@ function clearanceStageLabel(claim: any) {
 
 const PAGE_SIZE = 10;
 
-export default function MyClearances({ claims, onEdit }: Props) {
+export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -124,6 +126,11 @@ export default function MyClearances({ claims, onEdit }: Props) {
         <div className="ep-header-text">
           <h1 className="ep-title">My Clearances</h1>
           <p className="ep-subtitle">View and manage all your clearance records.</p>
+        </div>
+        <div className="ep-actions">
+          <button className="button button-primary small-button" onClick={onNew}>
+            <Plus size={14} aria-hidden /> New Clearance
+          </button>
         </div>
       </div>
 
@@ -211,13 +218,17 @@ export default function MyClearances({ claims, onEdit }: Props) {
                     <td>{formatMoney(c.balance_amount, "LSL")}</td>
                     <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(c.settled_at)}</td>
                     <td>
-                      {c.status === "DRAFT" ? (
-                        <button className="ep-icon-btn" title="Edit" onClick={() => onEdit(c.id)}>
-                          <Edit3 size={15} aria-hidden />
-                        </button>
-                      ) : (
-                        <span style={{ opacity: 0.7, fontSize: 12 }}>Submitted</span>
-                      )}
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {c.status === "DRAFT" ? (
+                          <button className="ep-icon-btn" title="Edit" onClick={() => onEdit(c.id)}>
+                            <Edit3 size={15} aria-hidden />
+                          </button>
+                        ) : (
+                          <button className="ep-icon-btn" title="Track" onClick={() => onTrack(c.id)}>
+                            <RefreshCw size={14} aria-hidden />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

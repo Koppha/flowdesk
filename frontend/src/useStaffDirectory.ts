@@ -20,6 +20,9 @@ export type StaffMember = {
   section_name?: string | null;
   team_id?: string | null;
   team_name?: string | null;
+  manager_type_id?: string | null;
+  manager_type_name?: string | null;
+  manager_type_role?: string | null;
   employment_type?: string | null;
   role: string;
   is_active?: boolean;

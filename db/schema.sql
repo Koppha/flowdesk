@@ -40,7 +40,7 @@ DO $$ BEGIN
   CREATE TYPE claim_status AS ENUM (
     'DRAFT','SUBMITTED',
     'MANAGER_APPROVED','CHIEF_OFFICER_APPROVED','HR_OFFICER','HR_MANAGER_REVIEW',
-    'FINANCE_VERIFIED','SETTLED','CLOSED','REJECTED'
+    'FINANCE_VERIFIED','PAYMENT_PROCESSING','SETTLED','CLOSED','REJECTED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -286,6 +286,13 @@ CREATE TABLE IF NOT EXISTS clearance_claims (
   settled_method payment_method,
   settled_reference text,
   settled_at timestamptz,
+
+  finance_decision text,
+  finance_comments text,
+  settlement_amount numeric(12,2),
+  assignee_user_id uuid REFERENCES users(id),
+  assignee_group_name text,
+  expected_payment_date date,
 
   submitted_at timestamptz,
   closed_at timestamptz,

@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, isFinanceDept, requireAuth } from "../../lib/auth.js";
+import { AuthedRequest, isFinanceDept, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { advanceWorkflowStep, createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } from "./advances.service.js";
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
 import type { AdvanceStatus } from "./advances.types.js";
-import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceTask } from "../../lib/notifications.js";
+import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
@@ -269,7 +269,9 @@ advancesRouter.get("/sla-report", requireAuth, async (req: AuthedRequest, res, n
       const submissionHrs = hoursBetween(r.created_at, r.submitted_at);
       const approvalHrs   = hoursBetween(r.submitted_at, r.approved_at);
       const paymentHrs    = hoursBetween(r.approved_at, r.paid_at);
-      const totalHrs      = hoursBetween(r.created_at, r.paid_at ?? (["DRAFT","SUBMITTED","APPROVED"].includes(r.status) ? null : undefined));
+      const totalHrs      = r.status === "CANCELLED"
+        ? null
+        : hoursBetween(r.created_at, r.paid_at ?? new Date().toISOString());
 
       // At-risk = still pending and approaching SLA limit (> 75%)
       const nowMs = Date.now();
@@ -357,21 +359,80 @@ advancesRouter.get("/sla-report", requireAuth, async (req: AuthedRequest, res, n
   }
 });
 
+// ── Finance Reconciliation Report ───────────────────────────────────────────
+advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("report_reconciliation", ["ADMIN", "FINANCE"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const now = new Date();
+    const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const defaultTo = now.toISOString().slice(0, 10);
+    const from = typeof req.query.from === "string" && req.query.from ? req.query.from : defaultFrom;
+    const to = typeof req.query.to === "string" && req.query.to ? req.query.to : defaultTo;
+    if (Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to))) {
+      throw badRequest("from/to must be valid dates (YYYY-MM-DD)");
+    }
+
+    const rows = await query<any>(
+      `WITH adv AS (
+         SELECT requester_id AS user_id,
+                SUM(CASE WHEN status = 'PAID' AND paid_at < $1 THEN approved_total ELSE 0 END) AS paid_before,
+                SUM(CASE WHEN status = 'PAID' AND paid_at >= $1 AND paid_at <= $2 THEN approved_total ELSE 0 END) AS paid_in_period,
+                SUM(CASE WHEN created_at >= $1 AND created_at <= $2 THEN requested_total ELSE 0 END) AS requested_in_period
+           FROM advance_requests
+          GROUP BY requester_id
+       ),
+       clm AS (
+         SELECT claimant_id AS user_id,
+                SUM(CASE WHEN status = 'SETTLED' AND settled_at < $1 THEN claim_total ELSE 0 END) AS settled_before,
+                SUM(CASE WHEN status = 'SETTLED' AND settled_at >= $1 AND settled_at <= $2 THEN claim_total ELSE 0 END) AS settled_in_period
+           FROM clearance_claims
+          GROUP BY claimant_id
+       )
+       SELECT u.id AS requester_id, u.full_name AS requester_name, u.department,
+              COALESCE(adv.paid_before, 0) - COALESCE(clm.settled_before, 0) AS opening_balance,
+              COALESCE(adv.requested_in_period, 0) AS total_requested,
+              COALESCE(adv.paid_in_period, 0) AS total_paid,
+              COALESCE(clm.settled_in_period, 0) AS total_settled,
+              (COALESCE(adv.paid_before, 0) - COALESCE(clm.settled_before, 0))
+                + COALESCE(adv.paid_in_period, 0) - COALESCE(clm.settled_in_period, 0) AS closing_balance
+         FROM users u
+         LEFT JOIN adv ON adv.user_id = u.id
+         LEFT JOIN clm ON clm.user_id = u.id
+        WHERE (adv.user_id IS NOT NULL OR clm.user_id IS NOT NULL)
+          AND (COALESCE(adv.paid_before, 0) <> 0 OR COALESCE(clm.settled_before, 0) <> 0
+           OR COALESCE(adv.requested_in_period, 0) <> 0 OR COALESCE(adv.paid_in_period, 0) <> 0
+           OR COALESCE(clm.settled_in_period, 0) <> 0)
+        ORDER BY u.full_name`,
+      [from + "T00:00:00", to + "T23:59:59"]
+    );
+
+    return res.json({ from, to, rows });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const mine = req.query.mine === "true";
     if (mine) {
       const rows = await query(
-        `SELECT * FROM advance_requests
-         WHERE requester_id=$1 OR created_by_id=$1
-         ORDER BY created_at DESC`,
+        `SELECT ar.*, u.full_name AS requester_name, u.department AS department
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+          WHERE ar.requester_id=$1 OR ar.created_by_id=$1
+          ORDER BY ar.created_at DESC`,
         [req.user!.userId]
       );
       return res.json(rows);
     }
 
     if (req.user?.role !== "ADMIN") throw forbidden("Only admin can list all advances");
-    const rows = await query(`SELECT * FROM advance_requests ORDER BY created_at DESC`);
+    const rows = await query(
+      `SELECT ar.*, u.full_name AS requester_name, u.department AS department
+         FROM advance_requests ar
+         JOIN users u ON u.id = ar.requester_id
+        ORDER BY ar.created_at DESC`
+    );
     return res.json(rows);
   } catch (err) {
     return next(err);
@@ -389,6 +450,7 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
                 tt.name AS travel_type_name,
                 tt.location_mode AS travel_location_mode,
                 tt.rate_kind AS travel_rate_kind,
+                tt.currency AS travel_currency,
                 tt.rate_general_staff AS travel_rate_general_staff,
                 tt.rate_exco AS travel_rate_exco,
                 tt.rate_ceo AS travel_rate_ceo,
@@ -401,9 +463,17 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       )
     )[0];
     if (!adv) throw notFound();
-    const managerChainIds = await getManagerChainIds(adv.requester_id);
-    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, managerChainIds }))) {
-      throw forbidden();
+    // Finance dept users need to view APPROVED advances to mark them paid.
+    // HOD/EXCO/MANAGER users see APPROVED advances in their inbox too — they're
+    // typically in the manager chain, but fall through to canViewAdvance which covers that.
+    const canViewDueToRole =
+      (isFinanceDept(req.user!.department) && adv.status === "APPROVED") ||
+      (["MANAGER", "HOD", "EXCO", "HR_MANAGER"].includes(req.user!.role));
+    if (!canViewDueToRole) {
+      const managerChainIds = await getManagerChainIds(adv.requester_id);
+      if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, managerChainIds }))) {
+        throw forbidden();
+      }
     }
 
     const lines = await query<any>(`SELECT * FROM advance_lines WHERE advance_request_id=$1 ORDER BY line_date`, [req.params.id]);
@@ -694,8 +764,9 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         department: notificationContext.department,
         requestedTotal: Number(notificationContext.requested_total),
         nextApprover: chain[0]
-          ? { name: chain[0].approver_name, email: chain[0].approver_email, title: chain[0].approver_title || chain[0].position_name }
-          : null
+          ? { id: chain[0].approver_id, name: chain[0].approver_name, email: chain[0].approver_email, title: chain[0].approver_title || chain[0].position_name }
+          : null,
+        stepOrder: 0
       });
     }
     return res.json({ ok: true, status: firstStatus });
@@ -729,6 +800,7 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
           if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
         }
         if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+        if (currentStep.can_rollback === false) throw forbidden("This step does not allow rolling back to draft");
       }
       // Reset to DRAFT — requester can edit and re-submit, chain re-resolved on next submit
       await query(
@@ -778,64 +850,79 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
   }
 });
 
+// Shared by POST /:id/reject and the email-approval flow (email-actions.routes.ts)
+// so rejecting via an email link runs through the exact same eligibility checks
+// and notification side-effects as rejecting from the Inbox.
+export async function performAdvanceReject(
+  advanceId: string,
+  actor: { userId: string; role: string; department: string | null },
+  comments: string
+): Promise<{ status: AdvanceStatus }> {
+  const adv = await getAdvanceById(advanceId);
+  if (!adv) throw notFound();
+
+  const { role, userId, department } = actor;
+
+  if (adv.approval_chain?.length) {
+    // Workflow-driven: only the current step's approver (or ADMIN) can reject
+    const chain = adv.approval_chain as ChainStep[];
+    const stepIdx = adv.workflow_step_order ?? 0;
+    const group = getPendingGroup(chain, stepIdx);
+    if (!group.indices.length) throw badRequest("No active workflow step to reject");
+    const delegated = await getActiveManagerDelegation(userId);
+    let currentStep: ChainStep | undefined = chain[group.indices[0]];
+    if (role !== "ADMIN") {
+      currentStep = undefined;
+      for (const idx of group.indices) {
+        if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, department)) { currentStep = chain[idx]; break; }
+      }
+      if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+      if (currentStep.can_reject === false) throw forbidden("This step does not allow rejection");
+    }
+  } else {
+    // Legacy guards
+    if (role === "HR_MANAGER" && adv.status !== "HR_MANAGER_REVIEW") throw forbidden("HR Manager can only reject advances pending HR Manager review");
+    if (role === "HOD" && adv.status !== "COUNTERSIGNED") throw forbidden("HOD can only reject advances pending HOD review");
+    if (role === "EXCO" && adv.status !== "COUNTERSIGNED") throw forbidden("EXCO can only reject advances pending HOD / EXCO review");
+    if (isFinanceDept(department) && !["HR_OFFICER", "APPROVED"].includes(adv.status)) throw forbidden("Finance can only reject HR-approved advances pending payment");
+  }
+
+  const status: AdvanceStatus = "REJECTED";
+  await query(
+    `UPDATE advance_requests SET status=$2, updated_at=now() WHERE id=$1`,
+    [adv.id, status]
+  );
+  await writeAdvanceAudit({
+    actorId: userId,
+    advanceId: adv.id,
+    action: "ADVANCE_REJECT",
+    before: { status: adv.status, workflow_step: adv.workflow_step_order },
+    after: { status, comments }
+  });
+  const notificationContext = await getAdvanceNotificationContext(adv.id);
+  if (notificationContext) {
+    await notifyAdvanceTask({
+      advanceId: adv.id,
+      status,
+      advanceType: notificationContext.type,
+      requesterName: notificationContext.full_name,
+      department: notificationContext.department,
+      requestedTotal: Number(notificationContext.requested_total)
+    });
+  }
+  return { status };
+}
+
 advancesRouter.post("/:id/reject", requireAdvanceActionAccess, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ActionCommentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for reject", parsed.error.flatten());
-
-    const adv = await getAdvanceById(req.params.id);
-    if (!adv) throw notFound();
-
-    const role = req.user!.role;
-    const userId = req.user!.userId;
-
-    if (adv.approval_chain?.length) {
-      // Workflow-driven: only the current step's approver (or ADMIN) can reject
-      const chain = adv.approval_chain as ChainStep[];
-      const stepIdx = adv.workflow_step_order ?? 0;
-      const group = getPendingGroup(chain, stepIdx);
-      if (!group.indices.length) throw badRequest("No active workflow step to reject");
-      const delegated = await getActiveManagerDelegation(userId);
-      let currentStep: ChainStep | undefined = chain[group.indices[0]];
-      if (role !== "ADMIN") {
-        currentStep = undefined;
-        for (const idx of group.indices) {
-          if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
-        }
-        if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
-      }
-    } else {
-      // Legacy guards
-      if (role === "HR_MANAGER" && adv.status !== "HR_MANAGER_REVIEW") throw forbidden("HR Manager can only reject advances pending HR Manager review");
-      if (role === "HOD" && adv.status !== "COUNTERSIGNED") throw forbidden("HOD can only reject advances pending HOD review");
-      if (role === "EXCO" && adv.status !== "COUNTERSIGNED") throw forbidden("EXCO can only reject advances pending HOD / EXCO review");
-      if (isFinanceDept(req.user!.department) && !["HR_OFFICER", "APPROVED"].includes(adv.status)) throw forbidden("Finance can only reject HR-approved advances pending payment");
-    }
-
-    const status: AdvanceStatus = "REJECTED";
-    await query(
-      `UPDATE advance_requests SET status=$2, updated_at=now() WHERE id=$1`,
-      [adv.id, status]
+    const result = await performAdvanceReject(
+      req.params.id,
+      { userId: req.user!.userId, role: req.user!.role, department: req.user!.department ?? null },
+      parsed.data.comments
     );
-    await writeAdvanceAudit({
-      actorId: userId,
-      advanceId: adv.id,
-      action: "ADVANCE_REJECT",
-      before: { status: adv.status, workflow_step: adv.workflow_step_order },
-      after: { status, comments: parsed.data.comments }
-    });
-    const notificationContext = await getAdvanceNotificationContext(adv.id);
-    if (notificationContext) {
-      await notifyAdvanceTask({
-        advanceId: adv.id,
-        status,
-        advanceType: notificationContext.type,
-        requesterName: notificationContext.full_name,
-        department: notificationContext.department,
-        requestedTotal: Number(notificationContext.requested_total)
-      });
-    }
-    return res.json({ ok: true, status });
+    return res.json({ ok: true, status: result.status });
   } catch (err) {
     return next(err);
   }
@@ -846,154 +933,228 @@ advancesRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res,
     const parsed = ApproveSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
 
-    const adv = await getAdvanceById(req.params.id);
-    if (!adv) throw notFound();
-
-    if (["APPROVED", "PAID", "REJECTED", "CANCELLED"].includes(adv.status)) {
-      throw badRequest("This advance cannot be approved in its current state");
-    }
-
-    const role = req.user!.role;
-    const userId = req.user!.userId;
-    const delegated = await getActiveManagerDelegation(userId);
-
-    let nextStatus: AdvanceStatus;
-    let auditAfter: Record<string, unknown>;
-    let nextApprover: { name: string | null; email: string | null; title: string | null } | null = null;
-    let extraApprovers: Array<{ name: string | null; email: string | null; title: string | null }> = [];
-
-    if (adv.approval_chain?.length) {
-      // ── Workflow-driven path ──────────────────────────────────────────────
-      const result = await advanceWorkflowStep({
-        adv,
-        userId,
-        role,
-        delegatedManagerId: delegated?.manager_id,
-        userDepartment: req.user!.department,
-        approvedTotal: parsed.data.approved_total
-      });
-      nextStatus = result.nextStatus;
-      nextApprover = result.nextApprover;
-      extraApprovers = result.nextApprovers.slice(1);
-      auditAfter = {
-        status: nextStatus,
-        approved_total: parsed.data.approved_total,
-        workflow_step: result.newStepOrder,
-        step_name: result.stillPending
-          ? result.currentStep.position_name
-          : result.hasMore ? (adv.approval_chain as ChainStep[])[result.newStepOrder].position_name : "Complete"
-      };
-    } else if (role === "ADMIN") {
-      // ── Legacy admin override (no workflow chain) ─────────────────────────
-      const leadership = await getDepartmentLeadership(adv.requester_department || "");
-      const adminNext: Record<string, AdvanceStatus> = {
-        SUBMITTED:          leadership.hod_user_id ? "COUNTERSIGNED" : "HR_MANAGER_REVIEW",
-        COUNTERSIGNED:      "HR_MANAGER_REVIEW",
-        HR_MANAGER_REVIEW:  "HR_REVIEW",
-        HR_REVIEW:          "HR_OFFICER",
-        HR_OFFICER:         "APPROVED"
-      };
-      nextStatus = adminNext[adv.status] ?? nextStatusOrThrow(adv.status, "APPROVE");
-      await setAdvanceStatus(adv.id, nextStatus, { approvedTotal: parsed.data.approved_total });
-      if (nextStatus === "COUNTERSIGNED" || (adv.status === "SUBMITTED" && nextStatus === "HR_MANAGER_REVIEW")) {
-        await query(`UPDATE advance_requests SET countersigned_at=now() WHERE id=$1 AND countersigned_at IS NULL`, [adv.id]);
-      }
-      auditAfter = { status: nextStatus, approved_total: parsed.data.approved_total };
-    } else {
-      throw forbidden("This advance does not have an active approval workflow. Please contact the administrator.");
-    }
-
-    await writeAdvanceAudit({
-      actorId: userId,
-      advanceId: adv.id,
-      action: "ADVANCE_APPROVE",
-      before: { status: adv.status, approved_total: Number(adv.approved_total || 0) },
-      after: auditAfter
-    });
-    const notificationContext = await getAdvanceNotificationContext(adv.id);
-    if (notificationContext) {
-      await notifyAdvanceTask({
-        advanceId: adv.id,
-        status: nextStatus,
-        advanceType: notificationContext.type,
-        requesterName: notificationContext.full_name,
-        requesterEmail: notificationContext.email,
-        department: notificationContext.department,
-        requestedTotal: Number(notificationContext.requested_total),
-        nextApprover
-      });
-      for (const extra of extraApprovers) {
-        if (extra.email) {
-          await notifyAdvanceTask({
-            advanceId: adv.id,
-            status: nextStatus,
-            advanceType: notificationContext.type,
-            requesterName: notificationContext.full_name,
-            requesterEmail: notificationContext.email,
-            department: notificationContext.department,
-            requestedTotal: Number(notificationContext.requested_total),
-            nextApprover: extra
-          });
-        }
-      }
-      // Finance completing the final approval also marks the advance as paid
-      // in the same action — send the "paid" notification too.
-      if (nextStatus === "PAID") {
-        await notifyAdvancePaid({
-          advanceId: adv.id,
-          requesterName: notificationContext.full_name,
-          requesterEmail: notificationContext.email,
-          department: notificationContext.department,
-          advanceType: notificationContext.type,
-          approvedTotal: parsed.data.approved_total,
-          paidReference: notificationContext.paid_reference
-        });
-      }
-    }
-    return res.json({ ok: true, status: nextStatus });
+    const result = await performAdvanceApprove(
+      req.params.id,
+      { userId: req.user!.userId, role: req.user!.role, department: req.user!.department ?? null },
+      parsed.data.approved_total
+    );
+    return res.json({ ok: true, status: result.status });
   } catch (err) {
     return next(err);
   }
 });
 
+// Shared by POST /:id/approve and the email-approval flow (email-actions.routes.ts).
+export async function performAdvanceApprove(
+  advanceId: string,
+  actor: { userId: string; role: string; department: string | null },
+  approvedTotal: number
+): Promise<{ status: AdvanceStatus }> {
+  const adv = await getAdvanceById(advanceId);
+  if (!adv) throw notFound();
+
+  if (["APPROVED", "PAID", "REJECTED", "CANCELLED"].includes(adv.status)) {
+    throw badRequest("This advance cannot be approved in its current state");
+  }
+
+  const { role, userId, department } = actor;
+  const delegated = await getActiveManagerDelegation(userId);
+
+  let nextStatus: AdvanceStatus;
+  let auditAfter: Record<string, unknown>;
+  let nextApprover: { id?: string | null; name: string | null; email: string | null; title: string | null } | null = null;
+  let extraApprovers: Array<{ id?: string | null; name: string | null; email: string | null; title: string | null }> = [];
+  let newStepOrder: number | undefined;
+
+  if (adv.approval_chain?.length) {
+    // ── Workflow-driven path ──────────────────────────────────────────────
+    const result = await advanceWorkflowStep({
+      adv,
+      userId,
+      role,
+      delegatedManagerId: delegated?.manager_id,
+      userDepartment: department,
+      approvedTotal
+    });
+    nextStatus = result.nextStatus;
+    nextApprover = result.nextApprover;
+    extraApprovers = result.nextApprovers.slice(1);
+    newStepOrder = result.newStepOrder;
+    auditAfter = {
+      status: nextStatus,
+      approved_total: approvedTotal,
+      workflow_step: result.newStepOrder,
+      step_name: result.stillPending
+        ? result.currentStep.position_name
+        : result.hasMore ? (adv.approval_chain as ChainStep[])[result.newStepOrder].position_name : "Complete"
+    };
+  } else if (role === "ADMIN") {
+    // ── Legacy admin override (no workflow chain) ─────────────────────────
+    const leadership = await getDepartmentLeadership(adv.requester_department || "");
+    const adminNext: Record<string, AdvanceStatus> = {
+      SUBMITTED:          leadership.hod_user_id ? "COUNTERSIGNED" : "HR_MANAGER_REVIEW",
+      COUNTERSIGNED:      "HR_MANAGER_REVIEW",
+      HR_MANAGER_REVIEW:  "HR_REVIEW",
+      HR_REVIEW:          "HR_OFFICER",
+      HR_OFFICER:         "APPROVED"
+    };
+    nextStatus = adminNext[adv.status] ?? nextStatusOrThrow(adv.status, "APPROVE");
+    await setAdvanceStatus(adv.id, nextStatus, { approvedTotal });
+    if (nextStatus === "COUNTERSIGNED" || (adv.status === "SUBMITTED" && nextStatus === "HR_MANAGER_REVIEW")) {
+      await query(`UPDATE advance_requests SET countersigned_at=now() WHERE id=$1 AND countersigned_at IS NULL`, [adv.id]);
+    }
+    auditAfter = { status: nextStatus, approved_total: approvedTotal };
+  } else {
+    throw forbidden("This advance does not have an active approval workflow. Please contact the administrator.");
+  }
+
+  await writeAdvanceAudit({
+    actorId: userId,
+    advanceId: adv.id,
+    action: "ADVANCE_APPROVE",
+    before: { status: adv.status, approved_total: Number(adv.approved_total || 0) },
+    after: auditAfter
+  });
+  const notificationContext = await getAdvanceNotificationContext(adv.id);
+  if (notificationContext) {
+    await notifyAdvanceTask({
+      advanceId: adv.id,
+      status: nextStatus,
+      advanceType: notificationContext.type,
+      requesterName: notificationContext.full_name,
+      requesterEmail: notificationContext.email,
+      department: notificationContext.department,
+      requestedTotal: Number(notificationContext.requested_total),
+      nextApprover,
+      stepOrder: newStepOrder
+    });
+    for (const extra of extraApprovers) {
+      if (extra.email) {
+        await notifyAdvanceTask({
+          advanceId: adv.id,
+          status: nextStatus,
+          advanceType: notificationContext.type,
+          requesterName: notificationContext.full_name,
+          requesterEmail: notificationContext.email,
+          department: notificationContext.department,
+          stepOrder: newStepOrder,
+          requestedTotal: Number(notificationContext.requested_total),
+          nextApprover: extra
+        });
+      }
+    }
+    // Finance completing the final approval also marks the advance as paid
+    // in the same action — send the "paid" notification too.
+    if (nextStatus === "PAID") {
+      await notifyAdvancePaid({
+        advanceId: adv.id,
+        requesterName: notificationContext.full_name,
+        requesterEmail: notificationContext.email,
+        department: notificationContext.department,
+        advanceType: notificationContext.type,
+        approvedTotal,
+        paidReference: notificationContext.paid_reference
+      });
+    }
+  }
+  return { status: nextStatus };
+}
+
+const MarkPaidSchema = z.object({ paid_reference: z.string().trim().optional() });
+
 advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
   try {
+    const parsed = MarkPaidSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    const paidReference = parsed.data.paid_reference || null;
+
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
 
     // Normally only the Finance department/ADMIN can mark an advance as paid.
-    // Workflow-driven advances may instead name a specific person as the final
-    // ("Finance Officer") approval step — that person also needs to be able to
-    // mark the advance paid once their step has completed, even if they're not
-    // in the Finance department.
+    // Workflow-driven advances may instead name a specific person/team as the
+    // MARK_PAID step — that person also needs to be able to mark the advance
+    // paid once their step has completed, even if they're not in Finance.
     const role = req.user!.role;
-    const chain = (adv.approval_chain as { approver_id?: string }[] | null) || [];
-    const finalStepApproverId = chain.length ? chain[chain.length - 1].approver_id : undefined;
-    const isFinalStepApprover = Boolean(finalStepApproverId) && finalStepApproverId === req.user!.userId;
-    if (role !== "ADMIN" && !isFinanceDept(req.user!.department) && !isFinalStepApprover) {
-      throw forbidden("Only Finance can mark an advance as paid");
+    const chain = (adv.approval_chain as ChainStep[] | null) || [];
+    // The MARK_PAID step isn't necessarily exactly at workflow_step_order — it
+    // may be one member of a "both must approve" parallel stage alongside
+    // other (non-payment) steps, so look for it within the current pending
+    // group rather than indexing workflow_step_order directly.
+    const group = chain.length ? getPendingGroup(chain, adv.workflow_step_order ?? 0) : { indices: [], steps: [] };
+    const markPaidIdx = group.indices.find((idx) => chain[idx]?.action_type === "MARK_PAID" && !chain[idx]?.approved);
+    const markPaidStep = markPaidIdx != null ? chain[markPaidIdx] : null;
+
+    let status: AdvanceStatus;
+    let newChain: ChainStep[] | undefined;
+    let newWorkflowStepOrder: number | undefined;
+
+    if (markPaidStep) {
+      const isAuthorized = role === "ADMIN" || (await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.department));
+      if (!isAuthorized) throw forbidden("You are not the assigned payer for this step");
+
+      newChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: true } : s));
+      const stillPending = group.indices.some((idx) => !newChain![idx].approved);
+      if (stillPending) {
+        // Other (non-payment) members of this parallel stage haven't finished yet —
+        // record this step's completion but the advance isn't fully PAID until they do.
+        status = adv.status;
+        newWorkflowStepOrder = adv.workflow_step_order ?? 0;
+      } else {
+        const nextIdx = group.indices[group.indices.length - 1] + 1;
+        const hasMore = nextIdx < newChain.length;
+        status = hasMore ? chainStepToStatus(newChain, nextIdx) : "PAID";
+        newWorkflowStepOrder = hasMore ? nextIdx : newChain.length;
+      }
+    } else {
+      // No pending MARK_PAID step right now — either this is a legacy/no-workflow
+      // advance, or the chain never had an explicit MARK_PAID step and instead
+      // relies on the named final-step approver once status reaches APPROVED.
+      let isFinalStepAuthorized = false;
+      if (chain.length && !chain.some((s) => s.action_type === "MARK_PAID")) {
+        const finalStep = chain[chain.length - 1];
+        if (finalStep?.approver_id === req.user!.userId) isFinalStepAuthorized = true;
+      }
+      if (role !== "ADMIN" && !isFinanceDept(req.user!.department) && !isFinalStepAuthorized) {
+        throw forbidden("Only Finance can mark an advance as paid");
+      }
+      status = nextStatusOrThrow(adv.status, "MARK_PAID");
     }
 
-    const status = nextStatusOrThrow(adv.status, "MARK_PAID");
-    await setAdvanceStatus(adv.id, status);
+    const isNowPaid = status === "PAID";
+    if (newChain) {
+      await query(
+        `UPDATE advance_requests SET status=$2, workflow_step_order=$3, approval_chain=$4, paid_reference=$5,
+                paid_at = CASE WHEN $6 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
+        [adv.id, status, newWorkflowStepOrder, JSON.stringify(newChain), paidReference, isNowPaid]
+      );
+    } else {
+      await query(
+        `UPDATE advance_requests SET status=$2, paid_reference=$3,
+                paid_at = CASE WHEN $4 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
+        [adv.id, status, paidReference, isNowPaid]
+      );
+    }
     await writeAdvanceAudit({
       actorId: req.user!.userId,
       advanceId: adv.id,
       action: "ADVANCE_MARK_PAID",
       before: { status: adv.status },
-      after: { status }
+      after: { status, paid_reference: paidReference }
     });
-    const paidCtx = await getAdvanceNotificationContext(adv.id);
-    if (paidCtx) {
-      await notifyAdvancePaid({
-        advanceId: adv.id,
-        requesterName: paidCtx.full_name,
-        requesterEmail: paidCtx.email,
-        department: paidCtx.department,
-        advanceType: paidCtx.type,
-        approvedTotal: Number(paidCtx.approved_total || paidCtx.requested_total),
-        paidReference: paidCtx.paid_reference
-      });
+    if (status === "PAID") {
+      const paidCtx = await getAdvanceNotificationContext(adv.id);
+      if (paidCtx) {
+        await notifyAdvancePaid({
+          advanceId: adv.id,
+          requesterName: paidCtx.full_name,
+          requesterEmail: paidCtx.email,
+          department: paidCtx.department,
+          advanceType: paidCtx.type,
+          approvedTotal: Number(paidCtx.approved_total || paidCtx.requested_total),
+          paidReference: paidCtx.paid_reference
+        });
+      }
     }
     return res.json({ ok: true, status });
   } catch (err) {
@@ -1028,6 +1189,97 @@ advancesRouter.post("/:id/revoke", async (req: AuthedRequest, res, next) => {
       });
     }
     return res.json({ ok: true, status });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /advances/:id/remind — requester nudges the current pending approver
+advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const adv = await getAdvanceById(req.params.id);
+    if (!adv) throw notFound();
+
+    // Only the requester, creator, or ADMIN can send a reminder
+    const userId = req.user!.userId;
+    if (req.user!.role !== "ADMIN" && adv.requester_id !== userId && adv.created_by_id !== userId) {
+      throw forbidden("Only the requester can send a reminder");
+    }
+
+    // Advance must be in a pending-approval state
+    const pendingStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"];
+    if (!pendingStatuses.includes(adv.status)) {
+      throw badRequest("No pending approver to remind for this request");
+    }
+
+    // Determine the current approver from the workflow chain or legacy role
+    let approverName: string | null = null;
+    let approverEmail: string | null = null;
+    let approverTitle: string | null = null;
+
+    if (adv.approval_chain?.length) {
+      const chain = adv.approval_chain as ChainStep[];
+      const stepIdx = adv.workflow_step_order ?? 0;
+      const group = getPendingGroup(chain, stepIdx);
+      const step = chain[group.indices[0]];
+      if (step) {
+        approverName  = step.approver_name ?? null;
+        approverEmail = step.approver_email ?? null;
+        approverTitle = (step as any).approver_title ?? step.position_name ?? null;
+      }
+    } else {
+      // Legacy: look up by role
+      let role: string | null = null;
+      if (adv.status === "SUBMITTED")         role = "MANAGER";
+      if (adv.status === "COUNTERSIGNED")     role = "HOD";
+      if (adv.status === "HR_MANAGER_REVIEW") role = "HR_MANAGER";
+      if (adv.status === "HR_REVIEW")         role = "HR_MANAGER";
+      if (adv.status === "HR_OFFICER")        role = "FINANCE";
+      if (adv.status === "APPROVED")          role = "FINANCE";
+      if (role) {
+        const approverRows = await query<{ full_name: string | null; email: string }>(
+          `SELECT full_name, email FROM users WHERE role=$1 AND is_active=true AND lower(trim(department))=lower(trim($2)) LIMIT 1`,
+          [role, adv.requester_department ?? ""]
+        );
+        if (approverRows[0]) {
+          approverName  = approverRows[0].full_name;
+          approverEmail = approverRows[0].email;
+          approverTitle = role.replace(/_/g, " ");
+        }
+      }
+    }
+
+    if (!approverEmail) throw badRequest("Could not determine the current approver's email");
+
+    // Fetch requester + sender details
+    const [requesterRows, senderRows] = await Promise.all([
+      query<{ full_name: string | null; email: string }>(
+        `SELECT full_name, email FROM users WHERE id=$1`,
+        [adv.requester_id]
+      ),
+      query<{ full_name: string | null; email: string }>(
+        `SELECT full_name, email FROM users WHERE id=$1`,
+        [userId]
+      )
+    ]);
+    const requester = requesterRows[0];
+    const sender    = senderRows[0];
+
+    void notifyAdvanceReminder({
+      advanceId:      adv.id,
+      advanceType:    adv.type,
+      requesterName:  requester?.full_name ?? null,
+      department:     adv.requester_department ?? null,
+      requestedTotal: Number(adv.requested_total),
+      status:         adv.status,
+      approverName,
+      approverEmail,
+      approverTitle,
+      senderName:     sender?.full_name ?? null,
+      senderEmail:    sender?.email ?? null
+    });
+
+    return res.json({ ok: true, approverName });
   } catch (err) {
     return next(err);
   }

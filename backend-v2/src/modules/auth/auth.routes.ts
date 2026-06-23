@@ -9,8 +9,8 @@ import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
 import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
-import { notifyProfileCompleted, notifyUserOnboarded } from "../../lib/notifications.js";
-import { createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, listPermissionGroups, setUserGroups } from "../../lib/permissionGroups.js";
+import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded } from "../../lib/notifications.js";
+import { createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, listPermissionGroups, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
 
 const LoginSchema = z
   .object({
@@ -73,6 +73,7 @@ const CreateUserSchema = z.object({
   division_id: z.string().uuid().nullable().optional(),
   section_id: z.string().uuid().nullable().optional(),
   team_id: z.string().uuid().nullable().optional(),
+  manager_type_id: z.string().uuid().nullable().optional(),
   employment_type: z.string().trim().optional(),
   role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
   is_active: z.boolean().optional(),
@@ -88,6 +89,7 @@ const UpdateUserSchema = z.object({
   division_id: z.string().uuid().nullable().optional(),
   section_id: z.string().uuid().nullable().optional(),
   team_id: z.string().uuid().nullable().optional(),
+  manager_type_id: z.string().uuid().nullable().optional(),
   employment_type: z.string().trim().optional(),
   is_active: z.boolean().optional(),
   groups: z.array(z.string().trim().min(1)).optional()
@@ -403,6 +405,7 @@ authRouter.get("/me", async (req: AuthedRequest, res, next) => {
         full_name: string | null;
         employee_no: string | null;
         department: string | null;
+        title: string | null;
         division_id: string | null;
         division_name: string | null;
         section_id: string | null;
@@ -413,7 +416,7 @@ authRouter.get("/me", async (req: AuthedRequest, res, next) => {
         profile_completed: boolean | null;
         is_active: boolean;
       }>(
-        `SELECT u.id, u.email, u.role, u.full_name, u.employee_no, u.department,
+        `SELECT u.id, u.email, u.role, u.full_name, u.employee_no, u.department, u.title,
                 u.division_id, dv.name AS division_name,
                 u.section_id, s.name AS section_name,
                 u.team_id, t.name AS team_name,
@@ -429,6 +432,23 @@ authRouter.get("/me", async (req: AuthedRequest, res, next) => {
     if (!user) throw notFound();
     const groups = await getUserGroups(user.id);
     return res.json({ ...user, groups, profile_completed: isProfileComplete(user) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const VerifyPasswordSchema = z.object({ password: z.string().min(1) });
+
+authRouter.post("/verify-password", async (req: AuthedRequest, res, next) => {
+  try {
+    const { password } = VerifyPasswordSchema.parse(req.body);
+    const user = (
+      await query<{ password_hash: string }>(`SELECT password_hash FROM users WHERE id=$1`, [req.user!.userId])
+    )[0];
+    if (!user) throw notFound();
+    const ok = await comparePassword(password, user.password_hash);
+    if (!ok) throw unauthorized("Invalid password");
+    return res.json({ verified: true });
   } catch (err) {
     return next(err);
   }
@@ -838,12 +858,14 @@ async function requireUserManagementAccess(req: AuthedRequest, res: any, next: a
 authRouter.get("/users", requireAuth, requireUserManagementAccess, async (req: AuthedRequest, res, next) => {
   try {
     await ensurePermissionGroupTables();
+    await ensureUserOrgColumns();
     const divisionFilter = typeof req.query.division_id === "string" ? req.query.division_id : null;
     const rows = await query(
       `SELECT u.id, u.full_name, u.email, u.employee_no, u.title, u.department,
               u.division_id, dv.name AS division_name,
               u.section_id, s.name AS section_name,
               u.team_id, t.name AS team_name,
+              u.manager_type_id, mt.name AS manager_type_name, mt.role AS manager_type_role,
               u.employment_type, u.role, u.profile_completed, u.is_active, u.created_at, u.updated_at,
               COALESCE(
                 (SELECT array_agg(upg.group_name ORDER BY upg.group_name) FROM user_permission_groups upg WHERE upg.user_id = u.id),
@@ -853,6 +875,7 @@ authRouter.get("/users", requireAuth, requireUserManagementAccess, async (req: A
          LEFT JOIN divisions dv ON dv.id = u.division_id
          LEFT JOIN teams t ON t.id = u.team_id
          LEFT JOIN sections s ON s.id = COALESCE(u.section_id, t.section_id)
+         LEFT JOIN manager_types mt ON mt.id = u.manager_type_id
         WHERE ($1::uuid IS NULL OR u.division_id = $1::uuid)
         ORDER BY u.full_name NULLS LAST, u.email`,
       [divisionFilter]
@@ -865,6 +888,20 @@ authRouter.get("/users", requireAuth, requireUserManagementAccess, async (req: A
 
 authRouter.get("/request-directory", async (req: AuthedRequest, res, next) => {
   try {
+    // scope=company returns everyone, company-wide — used by approval-chain
+    // pickers (e.g. Change Request, Attendance Register) where the signer
+    // can come from any division. Default (no scope) stays department-only,
+    // used by "submit on behalf of my team" flows (Attendance/Overtime).
+    if (req.query.scope === "company") {
+      const rows = await query(
+        `SELECT id, full_name, email, employee_no, title, department, employment_type, role, profile_completed
+           FROM users
+          WHERE is_active = true
+          ORDER BY full_name NULLS LAST, email`
+      );
+      return res.json(rows);
+    }
+
     const department = String(req.user!.department || "").trim();
     if (!department) return res.json([]);
     const rows = await query(
@@ -960,8 +997,8 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req: A
     const managerId = req.user!.role === "MANAGER" ? req.user!.userId : parsed.data.manager_id;
     if (!managerId) throw badRequest("Manager is required for delegation");
 
-    const users = await query<{ id: string; role: string; department: string | null }>(
-      `SELECT id, role, department FROM users WHERE id IN ($1, $2)`,
+    const users = await query<{ id: string; role: string; department: string | null; full_name: string | null; email: string }>(
+      `SELECT id, role, department, full_name, email FROM users WHERE id IN ($1, $2)`,
       [managerId, parsed.data.delegate_id]
     );
     const manager = users.find((user) => user.id === managerId);
@@ -982,7 +1019,18 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req: A
        RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at`,
       [randomUUID(), manager.id, delegate.id, managerDept, parsed.data.from_date ?? null, parsed.data.to_date ?? null]
     );
-    return res.status(201).json(rows[0]);
+    const delegation = rows[0] as any;
+    void notifyDelegationAssigned({
+      delegationId: delegation.id,
+      managerName:  manager.full_name,
+      managerEmail: manager.email,
+      delegateName: delegate.full_name,
+      delegateEmail: delegate.email,
+      department:   managerDept,
+      fromDate:     delegation.from_date ?? null,
+      toDate:       delegation.to_date ?? null
+    });
+    return res.status(201).json(delegation);
   } catch (err) {
     return next(err);
   }
@@ -990,20 +1038,44 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req: A
 
 authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER"]), async (req: AuthedRequest, res, next) => {
   try {
-    const delegation = (await query<{ id: string; manager_id: string }>(`SELECT id, manager_id FROM manager_delegations WHERE id=$1`, [req.params.id]))[0];
+    const delegation = (await query<{ id: string; manager_id: string; delegate_id: string; department: string }>(
+      `SELECT id, manager_id, delegate_id, department FROM manager_delegations WHERE id=$1`,
+      [req.params.id]
+    ))[0];
     if (!delegation) throw notFound();
     if (req.user!.role === "MANAGER" && delegation.manager_id !== req.user!.userId) {
       throw forbidden("Managers can only end their own delegations");
     }
 
-    const rows = await query(
-      `UPDATE manager_delegations
-          SET active=false,
-              updated_at=now()
-        WHERE id=$1
-        RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at`,
-      [req.params.id]
-    );
+    const [rows, users] = await Promise.all([
+      query(
+        `UPDATE manager_delegations
+            SET active=false,
+                updated_at=now()
+          WHERE id=$1
+          RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at`,
+        [req.params.id]
+      ),
+      query<{ id: string; full_name: string | null; email: string }>(
+        `SELECT id, full_name, email FROM users WHERE id IN ($1, $2)`,
+        [delegation.manager_id, delegation.delegate_id]
+      )
+    ]);
+
+    const mgr = users.find((u) => u.id === delegation.manager_id);
+    const dlg = users.find((u) => u.id === delegation.delegate_id);
+    if (mgr && dlg) {
+      void notifyDelegationEnded({
+        delegationId: delegation.id,
+        managerName:  mgr.full_name,
+        managerEmail: mgr.email,
+        delegateName: dlg.full_name,
+        delegateEmail: dlg.email,
+        department:   delegation.department,
+        endedBy:      req.user!.fullName ?? null
+      });
+    }
+
     return res.json(rows[0]);
   } catch (err) {
     return next(err);
@@ -1024,7 +1096,13 @@ authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "EXCO"]), as
     if (!existing[0]) throw notFound();
     assertRoleAssignmentAllowed(req, existing[0], parsed.data.role);
 
-    const rows = await query(
+    const rows = await query<{
+      id: string;
+      full_name: string | null;
+      email: string;
+      department: string | null;
+      role: string;
+    }>(
       `UPDATE users
           SET role=$2,
               is_active=COALESCE($3, is_active),
@@ -1034,6 +1112,17 @@ authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "EXCO"]), as
       [req.params.id, parsed.data.role, parsed.data.is_active ?? null]
     );
     if (!rows[0]) throw notFound();
+
+    if (parsed.data.role !== existing[0].role) {
+      void notifyUserRoleChanged({
+        userId: rows[0].id,
+        email: rows[0].email,
+        fullName: rows[0].full_name,
+        role: rows[0].role,
+        sectionOrDepartment: rows[0].department
+      });
+    }
+
     return res.json(rows[0]);
   } catch (err) {
     return next(err);
@@ -1061,12 +1150,14 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
     const title = parsed.data.title || null;
     const employmentType = parsed.data.employment_type ?? "PERMANENT";
     const isActive = parsed.data.is_active ?? true;
+    const managerTypeId = parsed.data.manager_type_id ?? null;
     const profileCompleted = Boolean(
       parsed.data.full_name &&
       department &&
       (role === "EXCO" || employmentType !== "PERMANENT" || employeeNo)
     );
 
+    await ensureUserOrgColumns();
     const rows = await query<{
       id: string;
       full_name: string | null;
@@ -1078,13 +1169,14 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
       role: string;
       profile_completed: boolean;
       is_active: boolean;
+      manager_type_id: string | null;
       created_at: string;
       updated_at: string;
     }>(
-      `INSERT INTO users (id, employee_no, full_name, title, department, email, role, password_hash, is_active, employment_type, profile_completed, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
-       RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, created_at, updated_at`,
-      [randomUUID(), employeeNo, parsed.data.full_name ?? null, title, department, email, role, hash, isActive, employmentType, profileCompleted]
+      `INSERT INTO users (id, employee_no, full_name, title, department, email, role, password_hash, is_active, employment_type, profile_completed, manager_type_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), now())
+       RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, manager_type_id, created_at, updated_at`,
+      [randomUUID(), employeeNo, parsed.data.full_name ?? null, title, department, email, role, hash, isActive, employmentType, profileCompleted, managerTypeId]
     );
 
     const created = rows[0];
@@ -1109,6 +1201,12 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     const parsed = UpdateUserSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid user payload", parsed.error.flatten());
 
+    const existingUser = await query<{ is_active: boolean }>(
+      `SELECT is_active FROM users WHERE id=$1`, [req.params.id]
+    );
+    if (!existingUser[0]) throw notFound();
+    const wasReactivated = existingUser[0].is_active === false && parsed.data.is_active === true;
+
     const fields: string[] = [];
     const values: any[] = [];
     let idx = 1;
@@ -1131,21 +1229,39 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     if (Object.prototype.hasOwnProperty.call(parsed.data, "division_id")) { fields.push(`division_id=$${idx++}`); values.push(parsed.data.division_id ?? null); }
     if (Object.prototype.hasOwnProperty.call(parsed.data, "section_id")) { fields.push(`section_id=$${idx++}`); values.push(parsed.data.section_id ?? null); }
     if (Object.prototype.hasOwnProperty.call(parsed.data, "team_id")) { fields.push(`team_id=$${idx++}`); values.push(parsed.data.team_id ?? null); }
+    if (Object.prototype.hasOwnProperty.call(parsed.data, "manager_type_id")) { fields.push(`manager_type_id=$${idx++}`); values.push(parsed.data.manager_type_id ?? null); }
 
     if (parsed.data.groups !== undefined) {
       await setUserGroups(req.params.id, parsed.data.groups);
     }
 
     if (fields.length === 0) {
-      const rows = await query(`SELECT id, full_name, email, employee_no, title, department, division_id, section_id, team_id, employment_type, role, profile_completed, is_active, created_at, updated_at FROM users WHERE id=$1`, [req.params.id]);
+      const rows = await query(`SELECT id, full_name, email, employee_no, title, department, division_id, section_id, team_id, manager_type_id, employment_type, role, profile_completed, is_active, created_at, updated_at FROM users WHERE id=$1`, [req.params.id]);
       if (!rows[0]) throw notFound();
       return res.json({ ...rows[0], groups: await getUserGroups(req.params.id) });
     }
 
-    const sql = `UPDATE users SET ${fields.join(', ')}, updated_at=now() WHERE id=$${idx} RETURNING id, full_name, email, employee_no, title, department, division_id, section_id, team_id, employment_type, role, profile_completed, is_active, created_at, updated_at`;
+    const sql = `UPDATE users SET ${fields.join(', ')}, updated_at=now() WHERE id=$${idx} RETURNING id, full_name, email, employee_no, title, department, division_id, section_id, team_id, manager_type_id, employment_type, role, profile_completed, is_active, created_at, updated_at`;
     values.push(req.params.id);
-    const rows = await query(sql, values);
+    const rows = await query<{
+      id: string;
+      full_name: string | null;
+      email: string;
+      role: string;
+      department: string | null;
+    }>(sql, values);
     if (!rows[0]) throw notFound();
+
+    if (wasReactivated) {
+      await notifyUserReactivated({
+        userId: rows[0].id,
+        email: rows[0].email,
+        fullName: rows[0].full_name,
+        role: rows[0].role,
+        sectionOrDepartment: rows[0].department
+      });
+    }
+
     return res.json({ ...rows[0], groups: await getUserGroups(req.params.id) });
   } catch (err) {
     return next(err);
@@ -1323,7 +1439,7 @@ const FEATURE_KEYS = [
   "user_management", "roles_permissions", "travel_setup", "org_structure",
   "team_roster", "ceo_management", "employees",
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
-  "request_types", "reporting_lines", "advance_pdf"
+  "request_types", "reporting_lines", "advance_pdf", "report_reconciliation"
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
@@ -1340,7 +1456,8 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   workflow_builder:      ["ADMIN", "MANAGER", "EXCO"],
   request_types:         ["ADMIN"],
   reporting_lines:       ["ADMIN", "MANAGER", "EXCO"],
-  advance_pdf:           ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]
+  advance_pdf:           ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
+  report_reconciliation: ["ADMIN", "FINANCE"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {
@@ -1431,6 +1548,20 @@ authRouter.delete("/permission-groups/:name", requireRole(["ADMIN"]), async (req
   try {
     if (req.params.name.toUpperCase() === "ADMIN") throw badRequest("The Admin group cannot be removed");
     await deletePermissionGroup(req.params.name);
+    return res.json(await listPermissionGroups());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const SetGroupVisibilitySchema = z.object({ hidden: z.boolean() });
+
+authRouter.put("/permission-groups/:name/visibility", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    if (req.params.name.toUpperCase() === "ADMIN") throw badRequest("The Admin group is always visible");
+    const parsed = SetGroupVisibilitySchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid visibility payload", parsed.error.flatten());
+    await setGroupVisibility(req.params.name, parsed.data.hidden);
     return res.json(await listPermissionGroups());
   } catch (err) {
     return next(err);

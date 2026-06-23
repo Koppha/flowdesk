@@ -25,6 +25,10 @@ export async function ensurePermissionGroupTables() {
        SELECT id, role::text FROM users
        ON CONFLICT DO NOTHING`, []);
     }
+    await query(`CREATE TABLE IF NOT EXISTS hidden_permission_groups (
+       group_name text PRIMARY KEY,
+       hidden_at  timestamptz NOT NULL DEFAULT now()
+     )`, []);
     ensured = true;
 }
 const ROLE_NAMES = ["EMPLOYEE", "HOD", "MANAGER", "EXCO", "CEO", "ADMIN"];
@@ -67,21 +71,34 @@ export async function listOrgStructureGroups() {
 }
 export async function listPermissionGroups() {
     await ensurePermissionGroupTables();
-    const [custom, org] = await Promise.all([
+    const [custom, org, hidden] = await Promise.all([
         query(`SELECT pg.name, count(upg.user_id)::text AS member_count
          FROM permission_groups pg
          LEFT JOIN user_permission_groups upg ON upg.group_name = pg.name
         GROUP BY pg.name
         ORDER BY pg.name`, []),
-        listOrgStructureGroups()
+        listOrgStructureGroups(),
+        query(`SELECT group_name FROM hidden_permission_groups`, [])
     ]);
     const orgNames = new Set(org.map((g) => g.name));
+    const hiddenNames = new Set(hidden.map((h) => h.group_name));
     const merged = [
-        ...org.map((g) => ({ ...g, dynamic: true })),
-        ...custom.filter((g) => !orgNames.has(g.name)).map((g) => ({ ...g, dynamic: false }))
+        ...org.map((g) => ({ ...g, dynamic: true, hidden: g.name !== "ADMIN" && hiddenNames.has(g.name) })),
+        ...custom.filter((g) => !orgNames.has(g.name)).map((g) => ({ ...g, dynamic: false, hidden: hiddenNames.has(g.name) }))
     ];
     merged.sort((a, b) => a.name.localeCompare(b.name));
     return merged;
+}
+export async function setGroupVisibility(name, hidden) {
+    await ensurePermissionGroupTables();
+    if (name === "ADMIN")
+        return;
+    if (hidden) {
+        await query(`INSERT INTO hidden_permission_groups (group_name) VALUES ($1) ON CONFLICT DO NOTHING`, [name]);
+    }
+    else {
+        await query(`DELETE FROM hidden_permission_groups WHERE group_name=$1`, [name]);
+    }
 }
 export async function createPermissionGroup(name) {
     await ensurePermissionGroupTables();
@@ -90,6 +107,7 @@ export async function createPermissionGroup(name) {
 export async function deletePermissionGroup(name) {
     await ensurePermissionGroupTables();
     await query(`DELETE FROM permission_groups WHERE name=$1`, [name]);
+    await query(`DELETE FROM hidden_permission_groups WHERE group_name=$1`, [name]);
     // Strip the deleted group from any feature-permission allow-lists
     await query(`UPDATE admin_feature_permissions SET allowed_roles = array_remove(allowed_roles, $1), updated_at = now()
       WHERE $1 = ANY(allowed_roles)`, [name]);

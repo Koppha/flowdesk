@@ -157,9 +157,11 @@ export async function ensureUserOrgColumns() {
     await ensureDepartmentsTable();
     await ensureSectionSchemaWithDeptId();
     await ensureTeamsTable();
+    await ensureManagerTypesTable();
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS division_id uuid REFERENCES divisions(id)`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS section_id uuid REFERENCES sections(id)`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id uuid REFERENCES teams(id)`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_type_id uuid REFERENCES manager_types(id)`);
 }
 // Returns division/section/team names for a user's org IDs
 export async function getUserOrgPath(userId) {
@@ -664,15 +666,18 @@ export async function getDepartmentLeadership(departmentInput) {
     }
     await ensureDepartmentsTable();
     const rows = await query(`SELECT d.name AS department,
-            d.hod_user_id,     hod.full_name     AS hod_name,     hod.title     AS hod_title,     hod.email     AS hod_email,
-            d.manager_user_id, manager.full_name AS manager_name, manager.title AS manager_title, manager.email AS manager_email,
-            d.exco_user_id,    exco.full_name    AS exco_name,
-                               exco.title        AS exco_title,
-                               exco.email        AS exco_email
+            CASE WHEN hod.id     IS NOT NULL THEN d.hod_user_id     ELSE NULL END AS hod_user_id,
+            hod.full_name     AS hod_name,     hod.title     AS hod_title,     hod.email     AS hod_email,
+            CASE WHEN manager.id IS NOT NULL THEN d.manager_user_id ELSE NULL END AS manager_user_id,
+            manager.full_name AS manager_name, manager.title AS manager_title, manager.email AS manager_email,
+            CASE WHEN exco.id    IS NOT NULL THEN d.exco_user_id    ELSE NULL END AS exco_user_id,
+            exco.full_name    AS exco_name,
+            exco.title        AS exco_title,
+            exco.email        AS exco_email
        FROM departments d
-       LEFT JOIN users hod     ON hod.id     = d.hod_user_id
-       LEFT JOIN users manager ON manager.id = d.manager_user_id
-       LEFT JOIN users exco    ON exco.id    = d.exco_user_id
+       LEFT JOIN users hod     ON hod.id     = d.hod_user_id     AND hod.is_active     = true
+       LEFT JOIN users manager ON manager.id = d.manager_user_id AND manager.is_active = true
+       LEFT JOIN users exco    ON exco.id    = d.exco_user_id    AND exco.is_active    = true
       WHERE lower(trim(d.name)) = lower($1)
       LIMIT 1`, [department]);
     return rows[0] ?? {

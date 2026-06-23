@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
-import { LESOTHO_DISTRICTS, TravelType, isTravelTypeCode, travelTypeLabel } from "./constants";
-import { Bell, Briefcase, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Clock3, CreditCard, Plane, RefreshCw, ShieldCheck, User } from "lucide-react";
+import { LESOTHO_DISTRICTS, TravelType, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { useStaffDirectory } from "./useStaffDirectory";
+import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Clock3, CreditCard, FileText, Flag, Hash, Plane, RefreshCw, ShieldCheck, User, Users } from "lucide-react";
 
 type InboxItem =
   | {
@@ -18,6 +19,8 @@ type InboxItem =
       current_step_position_name?: string | null;
       current_step_requires_accommodation?: boolean;
       current_step_action_type?: string | null;
+      current_step_can_reject?: boolean;
+      current_step_can_rollback?: boolean;
       current_step_actionable_by_me?: boolean;
     }
   | {
@@ -61,6 +64,20 @@ type InboxItem =
       year: number;
       month: number;
       total_amount: number;
+    }
+  | {
+      doc_type: "CUSTOM_REQUEST";
+      id: string;
+      status: string;
+      request_type_name: string;
+      request_type_code: string;
+      requester_name: string | null;
+      current_step_position_name: string | null;
+      current_step_actionable_by_me?: boolean;
+      // True if the viewer is an unconfirmed assignee (e.g. Change Assignee)
+      // on this request — distinct from being the current-step approver.
+      is_assignee_task?: boolean;
+      created_at: string;
     };
 
 type MyInboxAction = {
@@ -76,6 +93,33 @@ type MyInboxAction = {
 function fmt(n: any) {
   const x = Number(n || 0);
   return `M${x.toFixed(2)}`;
+}
+
+// Formats a "user" (single object) or "user_multi" (array of assignee
+// objects, each either a person or a whole team) field value for display —
+// otherwise these render as a bare "[object Object]" via String(value).
+function fmtAssigneeValue(value: any): string {
+  const label = (a: any) => (a?.teamId ? `Team: ${a.teamName}` : a?.name || a?.email || "—");
+  if (Array.isArray(value)) return value.map(label).join(", ") || "—";
+  if (value && typeof value === "object") return label(value);
+  return String(value ?? "—");
+}
+
+// Picks a representative icon for a custom-request field in the review
+// modal's Request Details grid — keyed on field_type first, falling back
+// to a few common field_key name patterns for better-than-generic results.
+function fieldIcon(f: { field_key: string; field_type: string }) {
+  if (f.field_type === "user" || f.field_type === "user_multi") return Users;
+  if (f.field_type === "section") return Building2;
+  if (f.field_type === "date") return Calendar;
+  if (f.field_type === "checkbox") return CheckCircle2;
+  if (f.field_type === "textarea") return AlignLeft;
+  if (f.field_type === "number") return Hash;
+  const key = f.field_key.toLowerCase();
+  if (key.includes("priority")) return Flag;
+  if (key.includes("risk") || key.includes("impact") || key.includes("urgent")) return AlertTriangle;
+  if (key.includes("department")) return Briefcase;
+  return FileText;
 }
 
 function fmtWhen(value: string) {
@@ -158,6 +202,7 @@ function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) 
     case "CLAIM":            return "Clearance";
     case "OVERTIME_REQUEST": return "Overtime Request";
     case "OVERTIME_CLAIM":   return "Overtime Claim";
+    case "CUSTOM_REQUEST":   return "Change Request";
     default:                 return statusLabel(String(value || "Document"));
   }
 }
@@ -171,6 +216,7 @@ function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
     case "CLAIM":            return ShieldCheck;
     case "OVERTIME_REQUEST":
     case "OVERTIME_CLAIM":   return Clock3;
+    case "CUSTOM_REQUEST":   return ClipboardList;
     default:                 return CreditCard;
   }
 }
@@ -182,12 +228,14 @@ function docTypeTone(value: InboxItem["doc_type"] | string | null | undefined) {
     case "CLAIM":            return "doc-tone-green";
     case "OVERTIME_REQUEST":
     case "OVERTIME_CLAIM":   return "doc-tone-amber";
+    case "CUSTOM_REQUEST":   return "doc-tone-blue";
     default:                 return "doc-tone-blue";
   }
 }
 
 function itemStageProgress(item: InboxItem) {
   const status = String(item.status || "").toUpperCase();
+  if (item.doc_type === "CUSTOM_REQUEST") return item.current_step_position_name || statusLabel(status);
   if (status === "SUBMITTED") return "Pending";
   if (TERMINAL_STATUSES.has(status)) return statusLabel(status);
   return "In Progress";
@@ -199,7 +247,17 @@ function itemStatusLabel(item: InboxItem) {
     item.current_step_position_name &&
     !TERMINAL_STATUSES.has(String(item.status || "").toUpperCase())
   ) {
-    return `Pending ${item.current_step_position_name}`;
+    // The first ("Manager"/Supervisor) step in the chain is a countersign
+    // step; every later step is a regular approval step.
+    if ((item as any).current_step_action_type === "COUNTER_SIGN" || item.current_step_position_name === "Manager") {
+      return "Pending Countersign";
+    }
+    return "Pending Approval";
+  }
+  if (item.doc_type === "CUSTOM_REQUEST" && item.status === "IN_PROGRESS") {
+    if (item.current_step_actionable_by_me) return "Pending Approval";
+    if (item.is_assignee_task) return "Awaiting Your Confirmation";
+    return "In Progress";
   }
   return statusLabel(item.status);
 }
@@ -207,6 +265,7 @@ function itemStatusLabel(item: InboxItem) {
 function itemOwner(item: InboxItem) {
   if (item.doc_type === "CLAIM") return item.claimant_name || "Unknown";
   if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM") return item.employee_name || "Unknown";
+  if (item.doc_type === "CUSTOM_REQUEST") return item.requester_name || "Unknown";
   return item.requester_name || "Unknown";
 }
 
@@ -214,12 +273,12 @@ function itemAmountValue(item: InboxItem) {
   if (item.doc_type === "ADVANCE") return Number(item.requested_total || 0);
   if (item.doc_type === "ACCOMMODATION") return Number(item.amount || 0);
   if (item.doc_type === "OVERTIME_CLAIM") return Number(item.total_amount || 0);
-  if (item.doc_type === "OVERTIME_REQUEST") return 0;
+  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "CUSTOM_REQUEST") return 0;
   return Number(item.claim_total || 0);
 }
 
 function itemAmount(item: InboxItem) {
-  if (item.doc_type === "OVERTIME_REQUEST") return "—";
+  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "CUSTOM_REQUEST") return "—";
   return fmt(itemAmountValue(item));
 }
 
@@ -228,6 +287,7 @@ function itemContext(item: InboxItem) {
   if (item.doc_type === "ACCOMMODATION") return `${item.location || "Location pending"}${item.provider ? ` - ${item.provider}` : ""}`;
   if (item.doc_type === "OVERTIME_REQUEST") return `${MONTHS[(item.month ?? 1) - 1]} ${item.year} · ${item.section_name || ""}`;
   if (item.doc_type === "OVERTIME_CLAIM") return `${MONTHS[(item.month ?? 1) - 1]} ${item.year} · ${item.division || ""}`;
+  if (item.doc_type === "CUSTOM_REQUEST") return item.request_type_name;
   return `Advance ${fmt(item.advance_amount)} / Balance ${fmt(item.balance_amount)}`;
 }
 
@@ -293,6 +353,29 @@ export default function Inbox(props: { onBack?: () => void }) {
   );
 
   const latestAction = myActions[0] || null;
+
+  if (selected) {
+    return selected.doc_type === "CUSTOM_REQUEST" ? (
+      <CustomRequestReviewModal
+        item={selected}
+        onClose={() => setSelected(null)}
+        onDone={async () => {
+          setSelected(null);
+          await refresh();
+        }}
+      />
+    ) : (
+      <ReviewModal
+        item={selected}
+        role={role}
+        onClose={() => setSelected(null)}
+        onDone={async () => {
+          setSelected(null);
+          await refresh();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="inbox-page">
@@ -461,18 +544,6 @@ export default function Inbox(props: { onBack?: () => void }) {
           </div>
         )}
       </section>
-
-      {selected && (
-        <ReviewModal
-          item={selected}
-          role={role}
-          onClose={() => setSelected(null)}
-          onDone={async () => {
-            setSelected(null);
-            await refresh();
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -487,6 +558,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const [paidRef, setPaidRef] = useState("");
   const [settleRef, setSettleRef] = useState("");
   const [settleMethod, setSettleMethod] = useState<"ECOCASH" | "BANK">("ECOCASH");
+  const [financeDecision, setFinanceDecision] = useState<"ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE" | "">("");
+  const [settlementAmount, setSettlementAmount] = useState("");
+  const [assigneeType, setAssigneeType] = useState<"INDIVIDUAL" | "TEAM">("INDIVIDUAL");
+  const [assigneeUserId, setAssigneeUserId] = useState("");
+  const [assigneeGroupName, setAssigneeGroupName] = useState("");
+  const [expectedPaymentDate, setExpectedPaymentDate] = useState("");
+  const { staff: financeStaff } = useStaffDirectory();
   const [accommodationEntries, setAccommodationEntries] = useState<AccommodationEntry[]>([]);
   const [accommodationHotels, setAccommodationHotels] = useState<any[]>([]);
   const [travelTypes, setTravelTypes] = useState<TravelType[]>([]);
@@ -581,7 +659,14 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       pendingStage.add(pendingStart);
       for (let i = pendingStart + 1; i < chain.length && chain[i]?.parallel_with_previous; i++) pendingStage.add(i);
     }
-    return chain.map((step: any, idx: number) => {
+    const initiatorStage = {
+      key: "step-initiator",
+      label: "Employee",
+      state: "done" as const,
+      status: "Submitted",
+      actor: detail?.requester_name || ""
+    };
+    const chainStages = chain.map((step: any, idx: number) => {
       const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
       const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.approver_title || step.position_name);
       const isDone = Boolean(step.approved) || stepOrder > idx;
@@ -594,7 +679,44 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
         actor: isTeamGroup ? "" : (step.approver_name || "")
       };
     });
-  }, [detail?.approval_chain, detail?.workflow_step_order]);
+
+    // Once the dynamic chain finishes, a CLAIM moves through fixed
+    // Finance/Payment/Closed stages that aren't part of approval_chain.
+    if (item.doc_type === "CLAIM") {
+      const claimStatus = detail?.status;
+      const financeDone = ["PAYMENT_PROCESSING", "SETTLED", "CLOSED"].includes(claimStatus);
+      const financeActive = claimStatus === "FINANCE_VERIFIED";
+      const paymentDone = claimStatus === "CLOSED";
+      const paymentActive = claimStatus === "PAYMENT_PROCESSING";
+      return [
+        initiatorStage,
+        ...chainStages,
+        {
+          key: "step-finance",
+          label: "Finance Verification",
+          state: financeDone ? "done" : financeActive ? "active" : "waiting",
+          status: financeDone ? "Verified" : financeActive ? "In Progress" : "Waiting",
+          actor: ""
+        },
+        {
+          key: "step-payment",
+          label: "Payment Processing",
+          state: paymentDone ? "done" : paymentActive ? "active" : "waiting",
+          status: paymentDone ? "Paid" : paymentActive ? "In Progress" : "Waiting",
+          actor: ""
+        },
+        {
+          key: "step-closed",
+          label: "Closed",
+          state: claimStatus === "CLOSED" ? "done" : "waiting",
+          status: claimStatus === "CLOSED" ? "Closed" : "Pending",
+          actor: ""
+        }
+      ];
+    }
+
+    return [initiatorStage, ...chainStages];
+  }, [detail?.approval_chain, detail?.workflow_step_order, detail?.requester_name, detail?.status, item.doc_type]);
 
   // For workflow-driven advances, use the current_step_approver_id set by the backend.
   // For legacy advances (no approver_id), fall back to role+status checks.
@@ -616,11 +738,14 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     (isWorkflowDriven
       ? (item as any).current_step_action_type === "COUNTER_SIGN"
       : (role === "MANAGER" && item.status === "SUBMITTED"));
+  // A workflow step can be configured with action type "MARK_PAID" — at that
+  // step the assignee records payment instead of approving/rejecting.
+  const isMarkPaidStep = isWorkflowDriven && (item as any).current_step_action_type === "MARK_PAID";
 
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
     (isWorkflowDriven
-      ? isMyWorkflowStep && !isAccommodationStep
+      ? isMyWorkflowStep && !isAccommodationStep && (item as any).current_step_can_rollback !== false
       : ((role === "MANAGER" && item.status === "SUBMITTED") ||
           (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
@@ -630,7 +755,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canRejectAdvance =
     item.doc_type === "ADVANCE" &&
     (isWorkflowDriven
-      ? isMyWorkflowStep && !isAccommodationStep
+      ? isMyWorkflowStep && !isAccommodationStep && (item as any).current_step_can_reject !== false
       : ((role === "MANAGER" && item.status === "SUBMITTED") ||
           (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
@@ -642,7 +767,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canApproveAdvance =
     item.doc_type === "ADVANCE" &&
     (isWorkflowDriven
-      ? isMyWorkflowStep && !isAccommodationStep
+      ? isMyWorkflowStep && !isAccommodationStep && !isMarkPaidStep
       : ((role === "MANAGER" && item.status === "SUBMITTED") ||
           (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
@@ -650,8 +775,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           (role === "EXCO" && item.status === "COUNTERSIGNED")));
   const canMarkPaid =
     item.doc_type === "ADVANCE" &&
-    (isFinanceDept || role === "ADMIN" || Boolean((item as any).is_final_step_approver)) &&
-    ["HR_OFFICER", "APPROVED"].includes(item.status);
+    (isWorkflowDriven
+      ? isMyWorkflowStep && isMarkPaidStep
+      : ((isFinanceDept || role === "ADMIN" || Boolean((item as any).is_final_step_approver)) &&
+          ["HR_OFFICER", "APPROVED"].includes(item.status)));
   const canCreateAccommodation =
     item.doc_type === "ADVANCE" &&
     isTravelAdvance &&
@@ -674,7 +801,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canApproveClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep;
-  const canSettle = item.doc_type === "CLAIM" && role === "ADMIN" && item.status === "FINANCE_VERIFIED";
+  const canSettle = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && item.status === "FINANCE_VERIFIED";
+  const canRequestCorrection = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && item.status === "FINANCE_VERIFIED";
+  const canMarkSettled = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && item.status === "PAYMENT_PROCESSING";
 
   const noActionMessage = (() => {
     if (item.doc_type === "ADVANCE" && role === "MANAGER" && !["SUBMITTED", "HR_MANAGER_REVIEW"].includes(item.status)) {
@@ -825,90 +954,88 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     });
   }
 
+  const referenceCode = `${item.doc_type === "CLAIM" ? "CLR" : item.doc_type === "ACCOMMODATION" ? "ACC" : "ADV"}-${item.id.slice(0, 8).toUpperCase()}`;
+  const pageTitle = item.doc_type === "CLAIM" ? "Travel Advance Clearance Review" : item.doc_type === "ACCOMMODATION" ? "Travel Advance Request Review" : "Advance Request Review";
+
   return (
-    <div className="review-modal-backdrop">
-      <div className="review-modal-shell">
-        <div className="review-modal-header">
-          <div>
-            <div className="review-modal-eyebrow">Request Review</div>
-            <h3>Review {item.doc_type === "ACCOMMODATION" ? "Travel Advance Request" : docTypeLabel(item.doc_type)}</h3>
-            <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
-          </div>
-          <button className="button small-button button-subtle" onClick={props.onClose}>
-            Close
-          </button>
+    <div className="review-page">
+      <div className="review-page-header">
+        <div>
+          <div className="review-page-eyebrow">Request Review</div>
+          <h2>{pageTitle}</h2>
+          <span className="review-page-ref">{referenceCode}</span>
+          <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
         </div>
+        <button className="button small-button button-subtle" onClick={props.onClose}>
+          Back to Inbox
+        </button>
+      </div>
 
-        {error && <pre className="inbox-error">{error}</pre>}
+      {error && <pre className="inbox-error">{error}</pre>}
 
-        {!detail ? (
-          <div className="review-loading">Loading request details...</div>
-        ) : (
-          <div
-            className={`review-modal-grid ${item.doc_type === "CLAIM" || isTravelAdvance ? "review-modal-grid-two" : ""}`}
-          >
-            <div className="review-card">
-              <div className="review-card-title">Summary</div>
-              {item.doc_type === "ADVANCE" ? (
-                <div className="review-detail-list">
-                  <div>Type: {travelTypeLabel(detail.type, travelTypes)}</div>
-                  <div>Purpose: {detail.purpose || "—"}</div>
-                  <div>Requested Total: {fmt(detail.requested_total)}</div>
-                  <div>Approved Total: {fmt(detail.approved_total)}</div>
-                  <div>Payment: {detail.payment_method} {detail.payment_account || ""}</div>
-                </div>
-              ) : item.doc_type === "ACCOMMODATION" ? (
-                <div className="review-detail-list">
-                  <div>Employee: {detail.requester_name || "—"}</div>
-                  <div>Created By: {detail.created_by_name || "—"}</div>
-                  <div>Location: {detail.location || "—"}</div>
-                  <div>Provider: {detail.provider || "—"}</div>
-                  <div>Dates: {detail.check_in ? fmtDate(detail.check_in) : "—"} to {detail.check_out ? fmtDate(detail.check_out) : "—"}</div>
-                  <div>Amount: {fmt(detail.amount)}</div>
-                  <div>
-                    Quotations: {detail.quotations?.length ? detail.quotations.map((q: any) => q.file_name || q.path?.split("/").pop() || "Uploaded").join(", ") : "None uploaded"}
-                  </div>
-                  <div>Advance: {detail.advance_purpose || "—"} ({detail.advance_status || "—"})</div>
-                </div>
-              ) : (
-                <div className="review-detail-list">
-                  <div>Project: {detail.project_number || "—"}</div>
-                  <div>Month: {detail.month || "—"}</div>
-                  <div>Clearance Total: {fmt(detail.claim_total)}</div>
-                  <div>Advance Amount: {fmt(detail.advance_amount)}</div>
-                  <div>Balance Amount: {fmt(detail.balance_amount)} (positive = employee refunds company; negative = company pays employee)</div>
-                </div>
-              )}
+      {!detail ? (
+        <div className="review-loading">Loading request details...</div>
+      ) : (
+        <>
+          <div className="review-info-row">
+            <div className="review-info-card">
+              <span className="review-info-icon"><User size={16} aria-hidden /></span>
+              <div><small>Employee</small><strong>{itemOwner(item)}</strong></div>
             </div>
+            <div className="review-info-card">
+              <span className="review-info-icon"><Building2 size={16} aria-hidden /></span>
+              <div><small>Department</small><strong>{detail.department || detail.requester_department || "—"}</strong></div>
+            </div>
+            <div className="review-info-card">
+              <span className="review-info-icon"><Hash size={16} aria-hidden /></span>
+              <div><small>Reference</small><strong>{referenceCode}</strong></div>
+            </div>
+            <div className="review-info-card">
+              <span className="review-info-icon"><Calendar size={16} aria-hidden /></span>
+              <div><small>Submitted On</small><strong>{detail.submitted_at || detail.created_at ? fmtWhen(detail.submitted_at || detail.created_at) : "—"}</strong></div>
+            </div>
+          </div>
 
-            {(item.doc_type === "CLAIM" || isTravelAdvance) && (
-              <div className="review-card">
-                <div className="review-card-title">Lines</div>
-
-                {item.doc_type === "ADVANCE" ? (
-                  <div className="review-table-wrap">
-                    <table className="review-table">
-                      <thead>
-                        <tr>
-                          <th>Date</th>
-                          <th>Location</th>
-                          <th>Meals</th>
-                          <th>Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(detail.lines || []).map((l: any) => (
-                          <tr key={l.id}>
-                            <td>{fmtDate(l.line_date)}</td>
-                            <td>{l.location || "—"}</td>
-                            <td>{lineMealCount(l)}</td>
-                            <td>{fmt(lineAmount(l))}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+          {item.doc_type === "CLAIM" ? (
+            <div className="review-page-grid">
+              <div className="review-page-main">
+                <div className="review-card">
+                  <div className="review-card-title">Reconciliation Summary</div>
+                  <div className="recon-summary">
+                    <div className="recon-stat">
+                      <small>Advance Paid</small>
+                      <strong>{fmt(detail.advance_amount)}</strong>
+                    </div>
+                    <div className="recon-stat">
+                      <small>Actual Expenditure</small>
+                      <strong>{fmt(detail.claim_total)}</strong>
+                    </div>
+                    <div className="recon-stat">
+                      <small>Variance (Over / Under)</small>
+                      <strong className={Number(detail.balance_amount) < 0 ? "recon-negative" : ""}>{fmt(detail.balance_amount)}</strong>
+                    </div>
                   </div>
-                ) : (
+                  <div className="recon-settlement-banner">
+                    <span className="review-info-icon"><User size={16} aria-hidden /></span>
+                    <div>
+                      <small>Settlement Type</small>
+                      <strong>
+                        {Number(detail.balance_amount) > 0
+                          ? "Employee Owes Company"
+                          : Number(detail.balance_amount) < 0
+                            ? "Company Owes Employee"
+                            : "Settled in Full"}
+                      </strong>
+                    </div>
+                    <div className="recon-settlement-amount">
+                      <small>Settlement Amount</small>
+                      <strong>{fmt(Math.abs(Number(detail.balance_amount || 0)))}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="review-card">
+                  <div className="review-card-title">Expense Breakdown</div>
                   <div className="review-table-wrap">
                     <table className="review-table">
                       <thead>
@@ -935,7 +1062,275 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       </tbody>
                     </table>
                   </div>
+                </div>
+
+                {approvalProgressStages.length > 0 && (
+                  <div className="review-card">
+                    <div className="review-card-title">Approval Workflow</div>
+                    <div className="tracking-progress-strip">
+                      {approvalProgressStages.map((stage: any, index: number) => (
+                        <div key={stage.key} className={`tracking-progress-step is-${stage.state}`}>
+                          {index < approvalProgressStages.length - 1 && <span className="tracking-progress-line" aria-hidden />}
+                          <span className="tracking-step-icon">
+                            {stage.state === "done" ? <CheckCircle2 size={22} aria-hidden /> : stage.state === "active" ? <User size={21} aria-hidden /> : <Clock3 size={20} aria-hidden />}
+                          </span>
+                          <strong>{stage.label}</strong>
+                          <em>{stage.status}</em>
+                          {stage.actor && <small>{stage.actor}</small>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
+
+                <div className="review-card">
+                  <div className="review-card-title">
+                    {canSettle ? "Finance Comments (required)" :
+                      canRejectClaim || canRollbackClaim || canRequestCorrection ? "Comments (required for Roll Back / Reject / Request Correction)" : "Comments (optional)"}
+                  </div>
+                  <div style={{ padding: 14 }}>
+                    <textarea
+                      className="review-control review-textarea"
+                      value={comments}
+                      onChange={(e) => {
+                        setComments(e.target.value);
+                        if (rollbackError) setRollbackError(null);
+                      }}
+                      placeholder="Notes on the reconciliation / settlement decision"
+                    />
+                    {rollbackError && <div className="review-warning">{rollbackError}</div>}
+                  </div>
+                </div>
+
+                <div className="review-action-row review-action-row-page">
+                  {canApproveClaim && (
+                    <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.approveClaim(item.id, comments))}>
+                      Approve Clearance
+                    </button>
+                  )}
+                  {canRejectClaim && (
+                    <button className="button small-button button-danger" disabled={busy || !comments.trim()} onClick={() => act(() => api.rejectClaim(item.id, comments.trim()))}>
+                      Reject Clearance
+                    </button>
+                  )}
+                  {canRollbackClaim && (
+                    <button className="button small-button button-subtle" disabled={busy} onClick={handleRollbackClaim}>
+                      Roll Back to Draft
+                    </button>
+                  )}
+                  {canRequestCorrection && (
+                    <button className="button small-button button-subtle" disabled={busy} onClick={handleRollbackClaim}>
+                      Request Correction
+                    </button>
+                  )}
+                  {canSettle && financeDecision === "ACCEPTED" && (
+                    <button
+                      className="button small-button button-success"
+                      disabled={busy || !comments.trim()}
+                      onClick={() => act(() => api.financeDecideClaim(item.id, { finance_decision: "ACCEPTED", finance_comments: comments.trim() }))}
+                    >
+                      Approve Clearance
+                    </button>
+                  )}
+                  {canSettle && (financeDecision === "REFUND_FROM_EMPLOYEE" || financeDecision === "REIMBURSE_EMPLOYEE") && (
+                    <button
+                      className="button small-button button-primary"
+                      disabled={busy || !comments.trim() || !settleRef.trim()}
+                      onClick={() => act(() => api.financeDecideClaim(item.id, {
+                        finance_decision: financeDecision,
+                        finance_comments: comments.trim(),
+                        settlement_amount: settlementAmount ? Number(settlementAmount) : undefined,
+                        settled_method: settleMethod,
+                        settled_reference: settleRef.trim(),
+                        assignee_user_id: assigneeType === "INDIVIDUAL" ? (assigneeUserId || undefined) : undefined,
+                        assignee_group_name: assigneeType === "TEAM" ? (assigneeGroupName.trim() || undefined) : undefined,
+                        expected_payment_date: expectedPaymentDate || undefined
+                      }))}
+                    >
+                      Approve &amp; Send To Payment
+                    </button>
+                  )}
+                  {canMarkSettled && (
+                    <button className="button small-button button-success" disabled={busy} onClick={() => act(() => api.markClaimSettled(item.id, settleRef.trim() ? settleMethod : undefined, settleRef.trim() || undefined))}>
+                      Mark Settled
+                    </button>
+                  )}
+                  {!(canApproveClaim || canRejectClaim || canRollbackClaim || canRequestCorrection || canSettle || canMarkSettled) && (
+                    <div className="review-empty-note">{noActionMessage}</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="review-page-sidebar">
+                <div className="review-card">
+                  <div className="review-card-title">Receipts Submitted</div>
+                  <div className="review-empty-note" style={{ padding: 14 }}>No receipts attached to this clearance.</div>
+                </div>
+
+                {canSettle && (
+                  <div className="review-card">
+                    <div className="review-card-title">Finance Decision</div>
+                    <div className="review-settlement-fields" style={{ padding: 14 }}>
+                      <label>
+                        <span>Settlement Decision</span>
+                        <div className="review-radio-group">
+                          {([
+                            ["ACCEPTED", "Clearance Accepted"],
+                            ["REFUND_FROM_EMPLOYEE", "Employee Must Refund Company"],
+                            ["REIMBURSE_EMPLOYEE", "Company Must Reimburse Employee"]
+                          ] as const).map(([value, label]) => (
+                            <label key={value} className="review-radio-option">
+                              <input
+                                type="radio"
+                                name="finance-decision"
+                                checked={financeDecision === value}
+                                onChange={() => setFinanceDecision(value)}
+                              />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      </label>
+
+                      {(financeDecision === "REFUND_FROM_EMPLOYEE" || financeDecision === "REIMBURSE_EMPLOYEE") && (
+                        <>
+                          <div className="review-card-title review-card-subtitle">Settlement Details</div>
+                          <label>
+                            <span>Settlement Method</span>
+                            <select className="review-control" value={settleMethod} onChange={(e) => setSettleMethod(e.target.value as any)}>
+                              <option value="ECOCASH">ECOCASH</option>
+                              <option value="BANK">BANK</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>Settlement Reference</span>
+                            <input className="review-control" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} />
+                          </label>
+                          <label>
+                            <span>Amount {financeDecision === "REIMBURSE_EMPLOYEE" ? "To Reimburse" : "To Recover"}</span>
+                            <input
+                              type="number"
+                              className="review-control"
+                              value={settlementAmount}
+                              onChange={(e) => setSettlementAmount(e.target.value)}
+                              placeholder={Math.abs(Number(item.balance_amount || 0)).toFixed(2)}
+                            />
+                          </label>
+                          <label>
+                            <span>Assign To</span>
+                            <div className="review-radio-group">
+                              <label className="review-radio-option">
+                                <input type="radio" name="assignee-type" checked={assigneeType === "INDIVIDUAL"} onChange={() => setAssigneeType("INDIVIDUAL")} />
+                                Individual
+                              </label>
+                              <label className="review-radio-option">
+                                <input type="radio" name="assignee-type" checked={assigneeType === "TEAM"} onChange={() => setAssigneeType("TEAM")} />
+                                Team
+                              </label>
+                            </div>
+                          </label>
+                          {assigneeType === "INDIVIDUAL" ? (
+                            <label>
+                              <span>Individual</span>
+                              <select className="review-control" value={assigneeUserId} onChange={(e) => setAssigneeUserId(e.target.value)}>
+                                <option value="">Select a person…</option>
+                                {financeStaff.filter((u) => u.is_active !== false).map((u) => (
+                                  <option key={u.id} value={u.id}>{u.full_name || u.email}{u.title ? ` — ${u.title}` : ""}</option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : (
+                            <label>
+                              <span>Team</span>
+                              <input className="review-control" value={assigneeGroupName} onChange={(e) => setAssigneeGroupName(e.target.value)} placeholder="e.g. Payroll Officers" />
+                            </label>
+                          )}
+                          <label>
+                            <span>Expected Payment Date</span>
+                            <input type="date" className="review-control" value={expectedPaymentDate} onChange={(e) => setExpectedPaymentDate(e.target.value)} />
+                          </label>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {canMarkSettled && (
+                  <div className="review-card">
+                    <div className="review-card-title">Settlement Details</div>
+                    <div className="review-settlement-fields" style={{ padding: 14 }}>
+                      <label>
+                        <span>Settlement Method</span>
+                        <select className="review-control" value={settleMethod} onChange={(e) => setSettleMethod(e.target.value as any)}>
+                          <option value="ECOCASH">ECOCASH</option>
+                          <option value="BANK">BANK</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Settlement Reference</span>
+                        <input className="review-control" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} />
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+          <div
+            className={`review-modal-grid ${isTravelAdvance ? "review-modal-grid-two" : ""}`}
+          >
+            <div className="review-card">
+              <div className="review-card-title">Summary</div>
+              {item.doc_type === "ADVANCE" ? (
+                <div className="review-detail-list">
+                  <div>Type: {travelTypeLabel(detail.type, travelTypes)}</div>
+                  <div>Purpose: {detail.purpose || "—"}</div>
+                  <div>Requested Total: {formatMoney(detail.requested_total, detail.travel_currency)}</div>
+                  <div>Approved Total: {formatMoney(detail.approved_total, detail.travel_currency)}</div>
+                  <div>Payment: {detail.payment_method} {detail.payment_account || ""}</div>
+                </div>
+              ) : (
+                <div className="review-detail-list">
+                  <div>Employee: {detail.requester_name || "—"}</div>
+                  <div>Created By: {detail.created_by_name || "—"}</div>
+                  <div>Location: {detail.location || "—"}</div>
+                  <div>Provider: {detail.provider || "—"}</div>
+                  <div>Dates: {detail.check_in ? fmtDate(detail.check_in) : "—"} to {detail.check_out ? fmtDate(detail.check_out) : "—"}</div>
+                  <div>Amount: {fmt(detail.amount)}</div>
+                  <div>
+                    Quotations: {detail.quotations?.length ? detail.quotations.map((q: any) => q.file_name || q.path?.split("/").pop() || "Uploaded").join(", ") : "None uploaded"}
+                  </div>
+                  <div>Advance: {detail.advance_purpose || "—"} ({detail.advance_status || "—"})</div>
+                </div>
+              )}
+            </div>
+
+            {isTravelAdvance && (
+              <div className="review-card">
+                <div className="review-card-title">Lines</div>
+
+                <div className="review-table-wrap">
+                  <table className="review-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Location</th>
+                        <th>{detail.travel_rate_kind === "DAILY" ? "Days" : "Meals"}</th>
+                        <th>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(detail.lines || []).map((l: any) => (
+                        <tr key={l.id}>
+                          <td>{fmtDate(l.line_date)}</td>
+                          <td>{l.location || "—"}</td>
+                          <td>{lineMealCount(l)}</td>
+                          <td>{formatMoney(lineAmount(l), detail.travel_currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -1084,7 +1479,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               <div className="review-form-grid review-form-grid-2">
                 <label>
                   <span>
-                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim || canRollbackClaim ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
+                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
                   </span>
                   <textarea
                     className="review-control review-textarea"
@@ -1094,7 +1489,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       if (rollbackError) setRollbackError(null);
                       if (error === "Enter comments before rejecting this advance.") setError(null);
                     }}
-                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canRejectClaim || canRollbackClaim ? "Enter reason for rollback/reject" : ""}
+                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Enter reason for rollback/reject" : ""}
                   />
                   {rollbackError && (
                     <div className="review-warning">
@@ -1126,22 +1521,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                         placeholder="Budget code"
                       />
                     </label>
-                  )}
-
-                  {item.doc_type === "CLAIM" && canSettle && (
-                    <div className="review-settlement-fields">
-                      <label>
-                        <span>Settlement Method</span>
-                        <select className="review-control" value={settleMethod} onChange={(e) => setSettleMethod(e.target.value as any)}>
-                          <option value="ECOCASH">ECOCASH</option>
-                          <option value="BANK">BANK</option>
-                        </select>
-                      </label>
-                      <label>
-                        <span>Settlement Reference</span>
-                        <input className="review-control" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} />
-                      </label>
-                    </div>
                   )}
                 </div>
               </div>
@@ -1182,8 +1561,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     className="button small-button button-primary"
                     disabled={busy}
                     onClick={handleCreateAccommodation}
+                    style={busy ? { opacity: 0.75, cursor: "not-allowed" } : undefined}
                   >
-                    Book
+                    {busy ? "Booking…" : "Book Accommodation"}
                   </button>
                 )}
 
@@ -1203,38 +1583,255 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {canApproveClaim && (
-                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.approveClaim(item.id, comments))}>
-                    Approve Clearance
-                  </button>
-                )}
-
-                {canRejectClaim && (
-                  <button
-                    className="button small-button button-danger"
-                    disabled={busy || !comments.trim()}
-                    onClick={() => act(() => api.rejectClaim(item.id, comments.trim()))}
-                  >
-                    Reject Clearance
-                  </button>
-                )}
-
-                {canRollbackClaim && (
-                  <button className="button small-button button-subtle" disabled={busy} onClick={handleRollbackClaim}>
-                    Roll Back to Draft
-                  </button>
-                )}
-
-                {canSettle && (
-                  <button className="button small-button button-primary" disabled={busy || !settleRef.trim()} onClick={() => act(() => api.settleClaim(item.id, settleMethod, settleRef.trim()))}>
-                    Settle Clearance
-                  </button>
-                )}
-
-                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canApproveClaim || canRejectClaim || canRollbackClaim || canSettle)) && (
+                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation)) && (
                   <div className="review-empty-note">{noActionMessage}</div>
                 )}
               </div>
+            </div>
+          </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void; onDone: () => Promise<void> }) {
+  const { item } = props;
+  const [detail, setDetail] = useState<any>(null);
+  const [consolidated, setConsolidated] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      setError(null);
+      try {
+        setDetail(await api.customRequestDetail(item.id));
+      } catch (e: any) {
+        setError(String(e.message));
+      }
+      try {
+        setConsolidated(await api.customRequestConsolidated(item.id));
+      } catch {
+        setConsolidated([]);
+      }
+    })();
+  }, [item.id]);
+
+  async function act(action: "APPROVE" | "REJECT") {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.actionCustomRequest(item.id, { action, comment: comment.trim() || undefined });
+      await props.onDone();
+    } catch (e: any) {
+      setError(String(e.message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canAct = item.doc_type === "CUSTOM_REQUEST" && item.current_step_actionable_by_me && item.status === "IN_PROGRESS";
+  const isAssigneeTask = item.doc_type === "CUSTOM_REQUEST" && !!item.is_assignee_task;
+
+  return (
+    <div className="review-modal-backdrop">
+      <div className="review-modal-shell">
+        <div className="review-modal-header">
+          <div>
+            <div className="review-modal-eyebrow">Request Review</div>
+            <h3>Review {detail?.request_type_name || "Change Request"}</h3>
+            <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
+          </div>
+          <button className="button small-button button-subtle" onClick={props.onClose}>
+            Close
+          </button>
+        </div>
+
+        {error && <pre className="inbox-error">{error}</pre>}
+
+        {!detail ? (
+          <div className="review-loading">Loading request details...</div>
+        ) : (
+          <div className="review-modal-grid review-modal-grid-two">
+            <div className="review-card review-card-wide">
+              <div className="review-card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <FileText size={16} /> Request Details
+              </div>
+              <div className="review-field-grid">
+                <div className="review-field-item">
+                  <div className="review-field-icon"><User size={16} /></div>
+                  <div>
+                    <div className="review-field-label">Requested By</div>
+                    <div className="review-field-value">{detail.requester_name || "—"}</div>
+                  </div>
+                </div>
+                {(detail.fields || []).map((f: any) => {
+                  const value = detail.data?.[f.field_key];
+                  if (value === undefined || value === null || value === "") return null;
+                  if (f.field_type === "table") {
+                    const cfg = f.options || {};
+                    const columns: { key: string; label: string }[] =
+                      cfg.columnMode === "FIXED"
+                        ? (cfg.columns || [])
+                        : Array.from({ length: (value.rows || []).length ? Math.max(...((value.rows || []).flatMap((r: any) => Object.keys(r.cells || {}).map(Number)).concat([0]))) : 0 }, (_, i) => ({ key: String(i + 1), label: String(i + 1) }));
+                    const summaryColumns: { key: string; label: string }[] = cfg.summaryColumns || [];
+                    const dayCellStyle = { textAlign: "center" as const, padding: "5px 4px", minWidth: 26, fontSize: "0.8rem" };
+                    const dayHeadStyle = { ...dayCellStyle, padding: "8px 4px" };
+                    const summaryCellStyle = { textAlign: "center" as const, padding: "5px 8px", minWidth: 48, fontSize: "0.8rem" };
+                    return (
+                      <div key={f.field_key} style={{ gridColumn: "1 / -1" }}>
+                        <div style={{ marginBottom: 6 }}>{f.field_label}</div>
+                        <div className="review-table-wrap" style={{ overflowX: "auto", maxWidth: "100%" }}>
+                          <table className="review-table" style={{ width: "auto" }}>
+                            <thead>
+                              <tr>
+                                <th style={{ position: "sticky", left: 0, background: "var(--surface-soft)" }}>Employee</th>
+                                {columns.map((c) => <th key={c.key} style={dayHeadStyle}>{c.label}</th>)}
+                                {summaryColumns.map((c) => <th key={c.key} style={{ ...summaryCellStyle, padding: "8px 8px" }}>{c.label}</th>)}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(value.rows || []).map((row: any, ri: number) => (
+                                <tr key={ri}>
+                                  <td style={{ position: "sticky", left: 0, background: "var(--surface)", whiteSpace: "nowrap" }}>{row.employee || "—"}</td>
+                                  {columns.map((c) => <td key={c.key} style={dayCellStyle}>{row.cells?.[c.key] || "—"}</td>)}
+                                  {summaryColumns.map((c) => <td key={c.key} style={summaryCellStyle}>{value.summary?.perRow?.[ri]?.[c.key] ?? 0}</td>)}
+                                </tr>
+                              ))}
+                              {!!(value.rows || []).length && (
+                                <tr>
+                                  <td style={{ fontWeight: 700, position: "sticky", left: 0, background: "var(--surface)" }}>Total</td>
+                                  {columns.map((c) => <td key={c.key} />)}
+                                  {summaryColumns.map((c) => <td key={c.key} style={{ ...summaryCellStyle, fontWeight: 700 }}>{value.summary?.totals?.[c.key] ?? 0}</td>)}
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  }
+                  const display = f.field_type === "checkbox"
+                    ? (value ? "Yes" : "No")
+                    : (f.field_type === "user" || f.field_type === "user_multi")
+                      ? fmtAssigneeValue(value)
+                      : String(value);
+                  const Icon = fieldIcon(f);
+                  return (
+                    <div className="review-field-item" key={f.field_key}>
+                      <div className="review-field-icon"><Icon size={16} /></div>
+                      <div>
+                        <div className="review-field-label">{f.field_label}</div>
+                        <div className={`review-field-value ${f.field_type === "textarea" ? "review-field-value-multiline" : ""}`}>{display}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {(() => {
+              const tableField = (detail.fields || []).find((f: any) => f.field_type === "table");
+              if (!tableField || consolidated.length < 2) return null;
+              const cfg = tableField.options || {};
+              const allRows = consolidated.flatMap((sub: any) => {
+                const tv = sub.data?.[tableField.field_key];
+                return (tv?.rows || []).map((row: any, ri: number) => ({
+                  employee: row.employee || sub.requester_name,
+                  status: sub.status,
+                  cells: row.cells || {},
+                  summary: tv?.summary?.perRow?.[ri] || {}
+                }));
+              });
+              const maxDay = Math.max(0, ...allRows.flatMap((r: any) => Object.keys(r.cells).map(Number)));
+              const columns: { key: string; label: string }[] =
+                cfg.columnMode === "FIXED" ? (cfg.columns || []) : Array.from({ length: maxDay }, (_, i) => ({ key: String(i + 1), label: String(i + 1) }));
+              const summaryColumns: { key: string; label: string }[] = cfg.summaryColumns || [];
+              const dayCellStyle = { textAlign: "center" as const, padding: "5px 4px", minWidth: 26, fontSize: "0.8rem" };
+              const dayHeadStyle = { ...dayCellStyle, padding: "8px 4px" };
+              const summaryCellStyle = { textAlign: "center" as const, padding: "5px 8px", minWidth: 48, fontSize: "0.8rem" };
+              return (
+                <div className="review-card review-card-wide">
+                  <div className="review-card-title">Team Register — Consolidated</div>
+                  <div className="review-table-wrap" style={{ overflowX: "auto", maxWidth: "100%" }}>
+                    <table className="review-table" style={{ width: "auto" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ position: "sticky", left: 0, background: "var(--surface-soft)" }}>Employee</th>
+                          <th>Status</th>
+                          {columns.map((c) => <th key={c.key} style={dayHeadStyle}>{c.label}</th>)}
+                          {summaryColumns.map((c) => <th key={c.key} style={{ ...summaryCellStyle, padding: "8px 8px" }}>{c.label}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allRows.map((row: any, ri: number) => (
+                          <tr key={ri}>
+                            <td style={{ position: "sticky", left: 0, background: "var(--surface)", whiteSpace: "nowrap" }}>{row.employee || "—"}</td>
+                            <td><span className={`status-pill ${statusTone(row.status)}`}>{statusLabel(row.status)}</span></td>
+                            {columns.map((c) => <td key={c.key} style={dayCellStyle}>{row.cells[c.key] || "—"}</td>)}
+                            {summaryColumns.map((c) => <td key={c.key} style={summaryCellStyle}>{row.summary[c.key] ?? 0}</td>)}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="review-card review-card-wide">
+              <div className="review-card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Users size={16} /> Approval Chain
+              </div>
+              <div>
+                {(detail.approval_chain || []).map((step: any, idx: number) => {
+                  const isCurrent = idx === detail.current_step_order && detail.status === "IN_PROGRESS";
+                  return (
+                    <div className="review-chain-step" key={idx}>
+                      <div className="review-chain-step-number">{idx + 1}</div>
+                      <div className="review-chain-step-info">
+                        <strong>{step.position_name}</strong> — {step.approver_name || "—"}
+                        {step.comment && <div style={{ fontSize: 12, color: "var(--muted)" }}>"{step.comment}"</div>}
+                      </div>
+                      <span className={`status-pill ${statusTone(isCurrent ? "PENDING" : step.status)}`}>
+                        {isCurrent ? "Pending" : statusLabel(step.status)}
+                      </span>
+                      {isCurrent && <span className="review-chain-current-flag">Current Step</span>}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {canAct && (
+                <div style={{ padding: "0 14px 16px" }}>
+                  <textarea
+                    className="ep-form-textarea"
+                    rows={2}
+                    placeholder="Add a comment (optional)"
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    style={{ width: "100%", marginBottom: 10, marginTop: 14 }}
+                  />
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button className="button small-button button-primary" disabled={busy} onClick={() => act("APPROVE")}>
+                      Approve
+                    </button>
+                    <button className="button small-button button-danger" disabled={busy} onClick={() => act("REJECT")}>
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!canAct && isAssigneeTask && (
+                <div className="review-empty-note" style={{ padding: "0 14px 16px" }}>
+                  You've been named as an assignee on this request — go to Custom Requests &rsaquo; Assigned to Me to fill in implementation details and confirm.
+                </div>
+              )}
+              {!canAct && !isAssigneeTask && <div className="review-empty-note" style={{ padding: "0 14px 16px" }}>This request is not awaiting your action.</div>}
             </div>
           </div>
         )}

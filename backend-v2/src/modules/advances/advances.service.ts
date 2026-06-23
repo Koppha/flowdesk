@@ -1,6 +1,5 @@
 import { badRequest, forbidden } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { isFinanceDept } from "../../lib/auth.js";
 import { AdvanceAction, AdvanceStatus, AdvanceTransitions } from "./advances.types.js";
 import { canApproveStep, chainStepToStatus, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
 
@@ -89,8 +88,8 @@ export async function advanceWorkflowStep(args: {
   hasMore: boolean;
   currentStep: ChainStep;
   stillPending: boolean;
-  nextApprover: { name: string | null; email: string | null; title: string | null } | null;
-  nextApprovers: Array<{ name: string | null; email: string | null; title: string | null }>;
+  nextApprover: { id: string | null; name: string | null; email: string | null; title: string | null } | null;
+  nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }>;
 }> {
   const { adv, userId, role, delegatedManagerId, userDepartment, approvedTotal } = args;
   if (!adv.approval_chain?.length) throw badRequest("This advance does not have an active approval workflow.");
@@ -124,7 +123,7 @@ export async function advanceWorkflowStep(args: {
   let nextStatus: AdvanceStatus;
   let newStepOrder: number;
   let hasMore: boolean;
-  let nextApprovers: Array<{ name: string | null; email: string | null; title: string | null }> = [];
+  let nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }> = [];
 
   if (stillPending) {
     nextStatus = adv.status;
@@ -132,18 +131,27 @@ export async function advanceWorkflowStep(args: {
     hasMore = true;
   } else {
     const nextIdx = group.indices[group.indices.length - 1] + 1;
-    hasMore = nextIdx < newChain.length;
-    nextStatus = hasMore ? chainStepToStatus(newChain, nextIdx) : "APPROVED";
-    newStepOrder = hasMore ? nextIdx : newChain.length;
-    // If Finance is the one completing the final approval, that same action
-    // also marks the advance as paid — no separate "Mark Advance Paid" step.
-    if (!hasMore && isFinanceDept(userDepartment)) {
-      nextStatus = "PAID";
-    }
-    if (hasMore) {
-      nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
-        name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
-      }));
+    const nextStep = nextIdx < newChain.length ? newChain[nextIdx] : null;
+    if (nextStep?.action_type === "MARK_PAID") {
+      // A dedicated MARK_PAID step follows — stop chain here at APPROVED.
+      // The payment step's team will use the "Mark Advance Paid" button.
+      hasMore = false;
+      nextStatus = "APPROVED";
+      newStepOrder = nextIdx;
+    } else {
+      hasMore = nextIdx < newChain.length;
+      nextStatus = hasMore ? chainStepToStatus(newChain, nextIdx) : "APPROVED";
+      newStepOrder = hasMore ? nextIdx : newChain.length;
+      // No explicit MARK_PAID step — completing the final approval step also
+      // marks the advance as paid in the same action.
+      if (!hasMore) {
+        nextStatus = "PAID";
+      }
+      if (hasMore) {
+        nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
+          id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
+        }));
+      }
     }
   }
 

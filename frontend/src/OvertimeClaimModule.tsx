@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { lesothoHolidayName } from "./lesothoHolidays";
+import { HolidayCalendarModal } from "./HolidayCalendar";
 
 type OvertimeClaimModuleProps = {
   profile: any;
@@ -19,14 +21,11 @@ type ClaimLine = {
   converted_hours: number;
   account_or_project: string;
   activity_name: string;
+  observed_holiday: boolean;
 };
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-
-const RATES: Record<string, 125 | 150 | 200> = {
-  Saturday: 150, Sunday: 200
-};
 
 function dayFromDate(d: string) {
   if (!d) return "";
@@ -34,42 +33,62 @@ function dayFromDate(d: string) {
   return isNaN(dt.getTime()) ? "" : DAY_NAMES[dt.getDay()];
 }
 
-function defaultRate(day: string): 125 | 150 | 200 {
-  return RATES[day] ?? 125;
+// 125% weekday, 150% Saturday, 200% Sunday, Lesotho public holiday,
+// or a Monday that the approver has marked as the observed holiday
+// (when a holiday falls on a weekend it's sometimes observed the following Monday)
+function rateForDate(date: string, day: string, observedHoliday?: boolean): 125 | 150 | 200 {
+  if (day === "Sunday" || lesothoHolidayName(date) || observedHoliday) return 200;
+  if (day === "Saturday") return 150;
+  return 125;
+}
+
+// Hours worked between from/to (handles overtime that crosses midnight)
+function hoursBetween(from: string, to: string): number {
+  if (!from || !to) return 0;
+  const [sh, sm] = from.split(":").map(Number);
+  const [eh, em] = to.split(":").map(Number);
+  if ([sh, sm, eh, em].some((n) => Number.isNaN(n))) return 0;
+  let mins = (eh * 60 + em) - (sh * 60 + sm);
+  if (mins <= 0) mins += 24 * 60;
+  return Math.round((mins / 60) * 100) / 100;
+}
+
+function applyRate(line: ClaimLine): ClaimLine {
+  const day = line.day || dayFromDate(line.date);
+  const rate = rateForDate(line.date, day, day === "Monday" && line.observed_holiday);
+  const hrs = hoursBetween(line.from_time, line.to_time);
+  return {
+    ...line,
+    day,
+    hours_125: rate === 125 ? hrs : 0,
+    hours_150: rate === 150 ? hrs : 0,
+    hours_200: rate === 200 ? hrs : 0,
+    converted_hours: parseFloat((hrs * (rate / 100)).toFixed(2))
+  };
 }
 
 function buildLinesFromRequest(req: any): ClaimLine[] {
   const lines: any[] = Array.isArray(req.lines) ? req.lines : [];
-  return lines.map((l: any) => {
-    const day = l.day || dayFromDate(l.date || "");
-    const rate = defaultRate(day);
-    // Compute hours from start/end if available
-    let hrs = 0;
-    if (l.actual_start && l.actual_end) {
-      const [sh, sm] = l.actual_start.split(":").map(Number);
-      const [eh, em] = l.actual_end.split(":").map(Number);
-      hrs = Math.max(0, (eh * 60 + em - (sh * 60 + sm)) / 60);
-    }
-    return {
-      date: l.date || "",
-      day,
-      from_time: l.actual_start || l.estimated_start || "",
-      to_time: l.actual_end || l.estimated_end || "",
-      ordered_by: "",
-      hours_125: rate === 125 ? hrs : 0,
-      hours_150: rate === 150 ? hrs : 0,
-      hours_200: rate === 200 ? hrs : 0,
-      converted_hours: hrs * (rate / 100),
-      account_or_project: "",
-      activity_name: l.reason || ""
-    };
-  });
+  return lines.map((l: any) => applyRate({
+    date: l.date || "",
+    day: l.day || dayFromDate(l.date || ""),
+    from_time: l.actual_start || l.estimated_start || "",
+    to_time: l.actual_end || l.estimated_end || "",
+    ordered_by: "",
+    hours_125: 0,
+    hours_150: 0,
+    hours_200: 0,
+    converted_hours: 0,
+    account_or_project: "",
+    activity_name: l.reason || "",
+    observed_holiday: false
+  }));
 }
 
 const EMPTY_LINE: ClaimLine = {
   date: "", day: "", from_time: "", to_time: "", ordered_by: "",
   hours_125: 0, hours_150: 0, hours_200: 0, converted_hours: 0,
-  account_or_project: "", activity_name: ""
+  account_or_project: "", activity_name: "", observed_holiday: false
 };
 
 const th: React.CSSProperties = { background: "#f1f5f9", padding: "7px 8px", textAlign: "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", border: "1px solid #e2e8f0" };
@@ -102,6 +121,11 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
 
   // Footer
   const [compensationType, setCompensationType] = useState<"PAY" | "DAYS">("PAY");
+
+  // Holiday calendar modal
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calYear, setCalYear] = useState(new Date().getFullYear());
+  const [calMonth, setCalMonth] = useState(new Date().getMonth() + 1);
 
   const selectedEmployee = useMemo(
     () => requestDirectory.find((u) => u.id === employeeId),
@@ -138,18 +162,17 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
     setLines(built.length ? built : [{ ...EMPTY_LINE }]);
   }
 
-  function updateLine(idx: number, field: keyof ClaimLine, value: string | number) {
+  function updateLine(idx: number, field: keyof ClaimLine, value: string | number | boolean) {
     setLines((prev) => prev.map((l, i) => {
       if (i !== idx) return l;
       const updated = { ...l, [field]: value };
-      // Auto-recalc converted_hours when rate hours change
-      const rate = defaultRate(updated.day);
-      if (["hours_125","hours_150","hours_200"].includes(field as string)) {
-        const hrs = Number(updated.hours_125) + Number(updated.hours_150) + Number(updated.hours_200);
-        updated.converted_hours = parseFloat((hrs * (rate / 100)).toFixed(2));
-      }
       if (field === "date") {
         updated.day = dayFromDate(String(value));
+      }
+      // Auto-classify hours into 125/150/200 based on day type once date, times, or the
+      // approver's "observed holiday" override are known
+      if (["date", "from_time", "to_time", "observed_holiday"].includes(field as string)) {
+        return applyRate(updated);
       }
       return updated;
     }));
@@ -222,6 +245,10 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
           <p style={{ margin: "4px 0 0", color: "var(--muted)", fontSize: 13 }}>Claim overtime payment or compensation days for approved overtime worked.</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => { setCalYear(year); setCalMonth(month); setShowCalendar(true); }}
+            style={{ padding: "7px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>
+            View Calendar
+          </button>
           <button onClick={() => setTab(tab === "CLAIM" ? "RECORDS" : "CLAIM")}
             style={{ padding: "7px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>
             {tab === "CLAIM" ? "View Records" : "New Claim"}
@@ -229,6 +256,16 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
           <button onClick={onBack} style={{ padding: "7px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>Back</button>
         </div>
       </div>
+
+      {showCalendar && (
+        <HolidayCalendarModal
+          year={calYear}
+          month={calMonth}
+          onYearChange={setCalYear}
+          onMonthChange={setCalMonth}
+          onClose={() => setShowCalendar(false)}
+        />
+      )}
 
       {tab === "RECORDS" ? (
         <div className="card" style={{ overflow: "hidden" }}>
@@ -345,13 +382,27 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                 </tr>
               </thead>
               <tbody>
-                {lines.map((line, idx) => (
+                {lines.map((line, idx) => {
+                  const day = line.day || dayFromDate(line.date);
+                  const holiday = lesothoHolidayName(line.date);
+                  const rate = rateForDate(line.date, day, day === "Monday" && line.observed_holiday);
+                  return (
                   <tr key={idx} style={{ background: idx % 2 === 0 ? "#fff" : "#f8fafc" }}>
                     <td style={{ ...td, minWidth: 120 }}>
                       <input type="date" value={line.date} onChange={(e) => updateLine(idx, "date", e.target.value)} style={inp} />
                     </td>
                     <td style={{ ...td, minWidth: 80, color: "#64748b", fontSize: 11 }}>
-                      {line.day || <span style={{ opacity: 0.35 }}>auto</span>}
+                      {day || <span style={{ opacity: 0.35 }}>auto</span>}
+                      {holiday && <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 700 }}>{holiday}</div>}
+                      {!holiday && day === "Monday" && (
+                        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "#a16207", fontWeight: 600, marginTop: 2, cursor: "pointer" }}
+                          title="Tick if a weekend public holiday is being observed on this Monday (pays at 200%)">
+                          <input type="checkbox" checked={line.observed_holiday}
+                            onChange={(e) => updateLine(idx, "observed_holiday", e.target.checked)}
+                            style={{ width: 11, height: 11, margin: 0 }} />
+                          Observed holiday
+                        </label>
+                      )}
                     </td>
                     <td style={{ ...td, minWidth: 65 }}>
                       <input type="time" value={line.from_time} onChange={(e) => updateLine(idx, "from_time", e.target.value)} style={{ ...inp, width: 65 }} />
@@ -362,13 +413,13 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                     <td style={{ ...td, minWidth: 110 }}>
                       <input value={line.ordered_by} onChange={(e) => updateLine(idx, "ordered_by", e.target.value)} style={inp} placeholder="Ordered by…" />
                     </td>
-                    <td style={{ ...td, background: line.day === "Saturday" || line.day === "Sunday" ? "#fafaf9" : "#f0fdf4" }}>
+                    <td style={{ ...td, background: rate === 125 ? "#f0fdf4" : "#fafaf9" }}>
                       <input type="number" min={0} step={0.5} value={line.hours_125 || ""} onChange={(e) => updateLine(idx, "hours_125", Number(e.target.value))} style={numInp} />
                     </td>
-                    <td style={{ ...td, background: line.day === "Saturday" ? "#fefce8" : "#fafaf9" }}>
+                    <td style={{ ...td, background: rate === 150 ? "#fefce8" : "#fafaf9" }}>
                       <input type="number" min={0} step={0.5} value={line.hours_150 || ""} onChange={(e) => updateLine(idx, "hours_150", Number(e.target.value))} style={numInp} />
                     </td>
-                    <td style={{ ...td, background: line.day === "Sunday" ? "#fef2f2" : "#fafaf9" }}>
+                    <td style={{ ...td, background: rate === 200 ? "#fef2f2" : "#fafaf9" }}>
                       <input type="number" min={0} step={0.5} value={line.hours_200 || ""} onChange={(e) => updateLine(idx, "hours_200", Number(e.target.value))} style={numInp} />
                     </td>
                     <td style={{ ...td, textAlign: "right", fontWeight: 600, fontSize: 12, color: "#1d4ed8" }}>
@@ -385,7 +436,8 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                         style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 15, padding: "1px 3px" }}>×</button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               <tfoot>
                 <tr style={{ background: "#f1f5f9" }}>
@@ -410,7 +462,8 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                 {(["PAY", "DAYS"] as const).map((opt) => (
                   <label key={opt} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", fontWeight: compensationType === opt ? 700 : 400 }}>
                     <input type="radio" name="compType" value={opt} checked={compensationType === opt}
-                      onChange={() => setCompensationType(opt)} />
+                      onChange={() => setCompensationType(opt)}
+                      style={{ width: 14, height: 14, flexShrink: 0, margin: 0 }} />
                     {opt === "PAY" ? "Pay" : "Days off"}
                   </label>
                 ))}
@@ -442,3 +495,4 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
     </div>
   );
 }
+

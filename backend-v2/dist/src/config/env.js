@@ -21,6 +21,12 @@ const EnvSchema = z.object({
     CORS_ORIGIN: z.string().optional(),
     // Public URL of the frontend — included as the sign-in link in onboarding emails
     APP_URL: z.string().default("http://10.3.10.59:5174"),
+    // Public-internet hostname for one-click email approve/reject links (e.g. a
+    // Cloudflare Access / Tailscale Funnel front door that exposes ONLY the
+    // /email-actions routes, while the rest of the app stays internal-only).
+    // Falls back to APP_URL when unset, so existing internal-only deployments
+    // are unaffected.
+    EMAIL_ACTION_PUBLIC_URL: z.string().optional(),
     AD_AUTH_ENABLED: booleanFromEnv(false),
     AD_AUTH_URL: z.string().optional(),
     AD_API_BASE_URL: z.string().default("http://dt-internalproxy-1.etl.co.ls/ldap/api"),

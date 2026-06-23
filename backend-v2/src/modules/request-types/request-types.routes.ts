@@ -13,10 +13,15 @@ requestTypesRouter.use(requireAuth);
 const FieldSchema = z.object({
   field_key: z.string().trim().min(1),
   field_label: z.string().trim().min(1),
-  field_type: z.enum(["text", "number", "date", "select", "textarea", "checkbox", "file"]),
+  // "user" stores the id of a system user picked from the company directory (e.g. Change Assignee).
+  // "user_multi" stores an array of { id, name, email, confirmed, confirmed_at } — multiple assignees,
+  // each of whom must individually confirm before any approval step can proceed (see custom-requests.routes.ts).
+  // "section" is a dropdown sourced live from the org structure's Sections list (not static options).
+  field_type: z.enum(["text", "number", "date", "select", "textarea", "checkbox", "file", "table", "user", "user_multi", "section"]),
   is_required: z.boolean().optional().default(false),
   placeholder: z.string().nullish(),
-  options: z.array(z.object({ label: z.string(), value: z.string() })).optional(),
+  // "select" stores {label,value}[]; "table" stores a structured grid config object.
+  options: z.union([z.array(z.object({ label: z.string(), value: z.string() })), z.record(z.string(), z.any())]).optional(),
   sort_order: z.number().int().nonnegative().optional().default(0)
 });
 
@@ -37,13 +42,15 @@ const UpdateSchema = z.object({
   icon: z.string().trim().nullish(),
   color: z.string().trim().nullish(),
   category: z.string().trim().nullish(),
-  status: z.enum(["DRAFT", "ACTIVE", "INACTIVE"]).optional()
+  status: z.enum(["DRAFT", "ACTIVE", "INACTIVE"]).optional(),
+  approver_title_options: z.array(z.string().trim().min(1)).nullish()
 });
 
 const PermissionSchema = z.object({
-  permission_type: z.enum(["ALL", "DEPARTMENT", "USER"]),
+  permission_type: z.enum(["ALL", "DEPARTMENT", "USER", "EMPLOYMENT_TYPE"]),
   department: z.string().trim().nullish(),
   user_id: z.string().uuid().nullish(),
+  employment_type: z.string().trim().nullish(),
   can_submit: z.boolean().optional().default(true),
   can_design: z.boolean().optional().default(false)
 });
@@ -59,9 +66,10 @@ async function assertCanManage(req: AuthedRequest, requestTypeId: string) {
          permission_type = 'ALL'
          OR (permission_type = 'USER' AND user_id = $2)
          OR (permission_type = 'DEPARTMENT' AND lower(trim(department)) = lower(trim($3)))
+         OR (permission_type = 'EMPLOYMENT_TYPE' AND upper(trim(employment_type)) = upper(trim($4)))
        )
      LIMIT 1`,
-    [requestTypeId, req.user!.userId, req.user!.department ?? ""]
+    [requestTypeId, req.user!.userId, req.user!.department ?? "", req.user!.employmentType ?? ""]
   );
   if (!perm[0]) throw forbidden("You do not have design access to this request type");
 }
@@ -74,6 +82,7 @@ requestTypesRouter.get("/", async (req: AuthedRequest, res, next) => {
     const isAdmin = req.user!.role === "ADMIN";
     const userId = req.user!.userId;
     const dept = String(req.user!.department ?? "").trim();
+    const employmentType = String(req.user!.employmentType ?? "").trim();
 
     // Admin sees all; others see types they have submit or design permission for
     const rows = await query(
@@ -92,11 +101,12 @@ requestTypesRouter.get("/", async (req: AuthedRequest, res, next) => {
                       p.permission_type = 'ALL'
                       OR (p.permission_type = 'USER' AND p.user_id = $2)
                       OR (p.permission_type = 'DEPARTMENT' AND lower(trim(p.department)) = lower(trim($3)))
+                      OR (p.permission_type = 'EMPLOYMENT_TYPE' AND upper(trim(p.employment_type)) = upper(trim($4)))
                     )
                 ))
          GROUP BY rt.id
          ORDER BY rt.name`,
-      [isAdmin, userId, dept]
+      [isAdmin, userId, dept, employmentType]
     );
     return res.json(rows);
   } catch (err) {
@@ -170,6 +180,10 @@ requestTypesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     if (parsed.data.color !== undefined) { fields.push(`color=$${idx++}`); values.push(parsed.data.color ?? null); }
     if (parsed.data.category !== undefined) { fields.push(`category=$${idx++}`); values.push(parsed.data.category ?? null); }
     if (parsed.data.status !== undefined) { fields.push(`status=$${idx++}`); values.push(parsed.data.status); }
+    if (parsed.data.approver_title_options !== undefined) {
+      fields.push(`approver_title_options=$${idx++}`);
+      values.push(parsed.data.approver_title_options ? JSON.stringify(parsed.data.approver_title_options) : null);
+    }
     if (!fields.length) return res.json({ ok: true });
 
     values.push(req.params.id);
@@ -237,11 +251,11 @@ requestTypesRouter.post("/:id/permissions", requireRole(["ADMIN"]), async (req: 
     const parsed = PermissionSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid permission payload", parsed.error.flatten());
     const rows = await query(
-      `INSERT INTO request_type_permissions (id, request_type_id, permission_type, department, user_id, can_submit, can_design, created_by_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO request_type_permissions (id, request_type_id, permission_type, department, user_id, employment_type, can_submit, can_design, created_by_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [randomUUID(), req.params.id, parsed.data.permission_type,
-       parsed.data.department ?? null, parsed.data.user_id ?? null,
+       parsed.data.department ?? null, parsed.data.user_id ?? null, parsed.data.employment_type ?? null,
        parsed.data.can_submit ?? true, parsed.data.can_design ?? false, req.user!.userId]
     );
     return res.status(201).json(rows[0]);

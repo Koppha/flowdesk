@@ -44,24 +44,39 @@ type RequestType = {
   updated_at: string;
 };
 
+type TableFieldConfig = {
+  columnMode: "DAY_OF_MONTH" | "FIXED";
+  monthFieldKey?: string;
+  columns?: { key: string; label: string }[];
+  rowSource: "FREE_TEXT" | "SELF";
+  cellOptions: { value: string; label: string }[];
+  summaryColumns: { key: string; label: string; countsValue: string }[];
+};
+
+function emptyTableConfig(): TableFieldConfig {
+  return { columnMode: "DAY_OF_MONTH", monthFieldKey: "", rowSource: "FREE_TEXT", cellOptions: [], summaryColumns: [] };
+}
+
 type FormField = {
   id?: string;
   field_key: string;
   field_label: string;
-  field_type: "text" | "number" | "date" | "select" | "textarea" | "checkbox" | "file";
+  field_type: "text" | "number" | "date" | "select" | "textarea" | "checkbox" | "file" | "table";
   is_required: boolean;
   placeholder: string;
   options: { label: string; value: string }[];
+  table_config?: TableFieldConfig;
   sort_order: number;
 };
 
 type Permission = {
   id: string;
-  permission_type: "ALL" | "DEPARTMENT" | "USER";
+  permission_type: "ALL" | "DEPARTMENT" | "USER" | "EMPLOYMENT_TYPE";
   department: string | null;
   user_id: string | null;
   user_name: string | null;
   user_email: string | null;
+  employment_type: string | null;
   can_submit: boolean;
   can_design: boolean;
 };
@@ -70,10 +85,11 @@ type Tab = "details" | "fields" | "permissions" | "preview";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const FIELD_TYPES = ["text", "number", "date", "select", "textarea", "checkbox", "file"] as const;
+const FIELD_TYPES = ["text", "number", "date", "select", "textarea", "checkbox", "file", "table"] as const;
 const FIELD_TYPE_LABELS: Record<string, string> = {
   text: "Text Input", number: "Number", date: "Date Picker",
-  select: "Dropdown Select", textarea: "Long Text", checkbox: "Checkbox", file: "File Upload"
+  select: "Dropdown Select", textarea: "Long Text", checkbox: "Checkbox", file: "File Upload",
+  table: "Table / Grid"
 };
 type DeptRow = { id: string; name: string; section_id: string | null; section_name: string | null };
 const COLORS = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#dc2626", "#0891b2", "#be185d"];
@@ -94,10 +110,11 @@ function slugify(s: string) {
 
 // ─── Form Field Designer Row ─────────────────────────────────────────────────
 
-function FieldRow({ field, index, total, onChange, onRemove, onMove }: {
+function FieldRow({ field, index, total, allFields, onChange, onRemove, onMove }: {
   field: FormField;
   index: number;
   total: number;
+  allFields: FormField[];
   onChange: (f: FormField) => void;
   onRemove: () => void;
   onMove: (dir: "up" | "down") => void;
@@ -105,6 +122,16 @@ function FieldRow({ field, index, total, onChange, onRemove, onMove }: {
   const [showOptions, setShowOptions] = useState(false);
   const [newOptLabel, setNewOptLabel] = useState("");
   const [newOptValue, setNewOptValue] = useState("");
+  const [newCellLabel, setNewCellLabel] = useState("");
+  const [newCellValue, setNewCellValue] = useState("");
+  const [newSummaryLabel, setNewSummaryLabel] = useState("");
+  const [newSummaryCounts, setNewSummaryCounts] = useState("");
+
+  const table = field.table_config ?? emptyTableConfig();
+  function updateTable(patch: Partial<TableFieldConfig>) {
+    onChange({ ...field, table_config: { ...table, ...patch } });
+  }
+  const siblingDateFields = allFields.filter((f) => f.field_type === "date" && f.field_key && f !== field);
 
   return (
     <div className="rt-field-row">
@@ -137,7 +164,14 @@ function FieldRow({ field, index, total, onChange, onRemove, onMove }: {
           <div className="ep-form-row">
             <div className="ep-form-group" style={{ marginBottom: 0 }}>
               <label>Type</label>
-              <select className="ep-form-select" value={field.field_type} onChange={(e) => onChange({ ...field, field_type: e.target.value as FormField["field_type"] })}>
+              <select
+                className="ep-form-select"
+                value={field.field_type}
+                onChange={(e) => {
+                  const nextType = e.target.value as FormField["field_type"];
+                  onChange({ ...field, field_type: nextType, table_config: nextType === "table" ? (field.table_config ?? emptyTableConfig()) : field.table_config });
+                }}
+              >
                 {FIELD_TYPES.map((t) => <option key={t} value={t}>{FIELD_TYPE_LABELS[t]}</option>)}
               </select>
             </div>
@@ -176,6 +210,76 @@ function FieldRow({ field, index, total, onChange, onRemove, onMove }: {
               </div>
             </div>
           )}
+          {field.field_type === "table" && (
+            <div className="rt-options-box" style={{ display: "grid", gap: 12 }}>
+              <div className="ep-form-row">
+                <div className="ep-form-group" style={{ marginBottom: 0 }}>
+                  <label>Columns</label>
+                  <select className="ep-form-select" value={table.columnMode} onChange={(e) => updateTable({ columnMode: e.target.value as TableFieldConfig["columnMode"] })}>
+                    <option value="DAY_OF_MONTH">One column per day of month</option>
+                    <option value="FIXED">Fixed column list</option>
+                  </select>
+                </div>
+                {table.columnMode === "DAY_OF_MONTH" && (
+                  <div className="ep-form-group" style={{ marginBottom: 0 }}>
+                    <label>Month comes from field</label>
+                    <select className="ep-form-select" value={table.monthFieldKey || ""} onChange={(e) => updateTable({ monthFieldKey: e.target.value })}>
+                      <option value="">Select a date field…</option>
+                      {siblingDateFields.map((f) => <option key={f.field_key} value={f.field_key}>{f.field_label || f.field_key}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div className="ep-form-group" style={{ marginBottom: 0 }}>
+                  <label>Row source</label>
+                  <select className="ep-form-select" value={table.rowSource} onChange={(e) => updateTable({ rowSource: e.target.value as TableFieldConfig["rowSource"] })}>
+                    <option value="SELF">Each employee fills only their own row</option>
+                    <option value="FREE_TEXT">Free-text rows (requester adds anyone)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontWeight: 700, fontSize: "0.83rem", marginBottom: 6 }}>Cell codes ({table.cellOptions.length})</div>
+                {table.cellOptions.map((opt, oi) => (
+                  <div key={oi} className="rt-option-row">
+                    <span>{opt.value}</span><span className="rt-option-value">{opt.label}</span>
+                    <button type="button" onClick={() => updateTable({ cellOptions: table.cellOptions.filter((_, i) => i !== oi) })}><X size={12} /></button>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <input className="ep-form-input" style={{ flex: "0 0 70px" }} placeholder="Code" value={newCellValue} onChange={(e) => setNewCellValue(e.target.value)} />
+                  <input className="ep-form-input" style={{ flex: 1 }} placeholder="Meaning" value={newCellLabel} onChange={(e) => setNewCellLabel(e.target.value)} />
+                  <button type="button" className="ep-btn" style={{ padding: "6px 12px" }} onClick={() => {
+                    if (!newCellValue.trim() || !newCellLabel.trim()) return;
+                    updateTable({ cellOptions: [...table.cellOptions, { value: newCellValue.trim().toUpperCase(), label: newCellLabel.trim() }] });
+                    setNewCellValue(""); setNewCellLabel("");
+                  }}>Add</button>
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontWeight: 700, fontSize: "0.83rem", marginBottom: 6 }}>Auto-summed columns ({table.summaryColumns.length})</div>
+                {table.summaryColumns.map((opt, oi) => (
+                  <div key={oi} className="rt-option-row">
+                    <span>{opt.label}</span><span className="rt-option-value">counts "{opt.countsValue}"</span>
+                    <button type="button" onClick={() => updateTable({ summaryColumns: table.summaryColumns.filter((_, i) => i !== oi) })}><X size={12} /></button>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <input className="ep-form-input" style={{ flex: 1 }} placeholder="Column label (e.g. Sick Leave)" value={newSummaryLabel} onChange={(e) => setNewSummaryLabel(e.target.value)} />
+                  <select className="ep-form-select" style={{ flex: "0 0 140px" }} value={newSummaryCounts} onChange={(e) => setNewSummaryCounts(e.target.value)}>
+                    <option value="">Counts code…</option>
+                    {table.cellOptions.map((o) => <option key={o.value} value={o.value}>{o.value} — {o.label}</option>)}
+                  </select>
+                  <button type="button" className="ep-btn" style={{ padding: "6px 12px" }} onClick={() => {
+                    if (!newSummaryLabel.trim() || !newSummaryCounts) return;
+                    updateTable({ summaryColumns: [...table.summaryColumns, { key: slugify(newSummaryLabel.trim()).toLowerCase(), label: newSummaryLabel.trim(), countsValue: newSummaryCounts }] });
+                    setNewSummaryLabel(""); setNewSummaryCounts("");
+                  }}>Add</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         <div className="rt-field-row-actions">
           <button type="button" className="ep-icon-btn" onClick={() => onMove("up")} disabled={index === 0} title="Move up"><ArrowUp size={13} /></button>
@@ -209,6 +313,26 @@ function FormPreview({ fields }: { fields: FormField[] }) {
               <option>{f.placeholder || "Select…"}</option>
               {f.options.map((o) => <option key={o.value}>{o.label}</option>)}
             </select>
+          )}
+          {f.field_type === "table" && (
+            <div className="ep-table-wrap">
+              <table className="ep-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    {(f.table_config?.columnMode === "DAY_OF_MONTH" ? [1, 2, 3, "…"] : (f.table_config?.columns || []).map((c) => c.label)).map((c, i) => <th key={i}>{c}</th>)}
+                    {(f.table_config?.summaryColumns || []).map((c) => <th key={c.key}>{c.label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Sample Employee</td>
+                    {(f.table_config?.columnMode === "DAY_OF_MONTH" ? [1, 2, 3, "…"] : (f.table_config?.columns || [])).map((_, i) => <td key={i} style={{ color: "var(--muted)" }}>—</td>)}
+                    {(f.table_config?.summaryColumns || []).map((c) => <td key={c.key}>0</td>)}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       ))}
@@ -246,14 +370,17 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
   const [savingFields, setSavingFields] = useState(false);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allDepts, setAllDepts] = useState<string[]>([]);
-  const [newPermType, setNewPermType] = useState<"ALL" | "DEPARTMENT" | "USER">("ALL");
+  const [allEmploymentTypes, setAllEmploymentTypes] = useState<{ code: string; name: string }[]>([]);
+  const [newPermType, setNewPermType] = useState<"ALL" | "DEPARTMENT" | "USER" | "EMPLOYMENT_TYPE">("ALL");
   const [newPermDept, setNewPermDept] = useState("");
+  const [newPermEmploymentType, setNewPermEmploymentType] = useState("");
   const [newPermUserId, setNewPermUserId] = useState("");
   const [newPermSubmit, setNewPermSubmit] = useState(true);
   const [newPermDesign, setNewPermDesign] = useState(false);
   const [addingPerm, setAddingPerm] = useState(false);
   const [editMeta, setEditMeta] = useState(false);
   const [editMetaData, setEditMetaData] = useState<any>({});
+  const [newApproverTitle, setNewApproverTitle] = useState("");
   const [savingMeta, setSavingMeta] = useState(false);
   const [rowMenuId, setRowMenuId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -284,22 +411,25 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
     setDetailTab("details");
     setDetailLoading(true);
     try {
-      const [detail, users, depts] = await Promise.all([
+      const [detail, users, depts, empTypes] = await Promise.all([
         api.requestTypeDetail(id),
         api.adminUsers(),
         api.departments(),
+        api.employmentTypes(),
       ]);
+      setAllEmploymentTypes(Array.isArray(empTypes) ? empTypes : []);
       setDetailData(detail);
       setFields(detail.fields?.map((f: any, i: number) => ({
         ...f,
-        options: f.options || [],
+        options: f.field_type === "table" ? [] : (f.options || []),
+        table_config: f.field_type === "table" ? (f.options || emptyTableConfig()) : undefined,
         sort_order: f.sort_order ?? i,
         placeholder: f.placeholder || "",
       })) || []);
       setPermissions(detail.permissions || []);
       setAllUsers(Array.isArray(users) ? users : []);
       setAllDepts(Array.isArray(depts) ? depts.map((d: any) => d.name).filter(Boolean) : []);
-      setEditMetaData({ name: detail.name, description: detail.description || "", icon: detail.icon || ICONS[0], color: detail.color || COLORS[0], category: detail.category || "", status: detail.status });
+      setEditMetaData({ name: detail.name, description: detail.description || "", icon: detail.icon || ICONS[0], color: detail.color || COLORS[0], category: detail.category || "", status: detail.status, approver_title_options: detail.approver_title_options || [] });
     } catch { /* ignore */ }
     finally { setDetailLoading(false); }
   }
@@ -322,7 +452,11 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
     if (!detailId) return;
     setSavingFields(true);
     try {
-      await api.updateRequestTypeFields(detailId, fields);
+      const payload = fields.map((f) => ({
+        ...f,
+        options: f.field_type === "table" ? f.table_config : f.options
+      }));
+      await api.updateRequestTypeFields(detailId, payload);
       alert("Fields saved.");
       await openDetail(detailId);
     } catch (e: any) { alert("Error: " + e.message); }
@@ -349,11 +483,12 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
         permission_type: newPermType,
         department: newPermType === "DEPARTMENT" ? newPermDept : null,
         user_id: newPermType === "USER" ? newPermUserId : null,
+        employment_type: newPermType === "EMPLOYMENT_TYPE" ? newPermEmploymentType : null,
         can_submit: newPermSubmit,
         can_design: newPermDesign,
       });
       await openDetail(detailId);
-      setNewPermType("ALL"); setNewPermDept(""); setNewPermUserId("");
+      setNewPermType("ALL"); setNewPermDept(""); setNewPermUserId(""); setNewPermEmploymentType("");
     } catch (e: any) { alert("Error: " + e.message); }
     finally { setAddingPerm(false); }
   }
@@ -793,6 +928,28 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
                               <div className="ep-form-group"><label>Status</label><select className="ep-form-select" value={editMetaData.status || "DRAFT"} onChange={(e) => setEditMetaData((d: any) => ({ ...d, status: e.target.value }))}><option value="DRAFT">Draft</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></div>
                               <div className="ep-form-group"><label>Icon</label><div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{ICONS.map((ic) => <button key={ic} type="button" className="ep-icon-btn" style={{ fontSize: 16, width: 34, height: 34, background: editMetaData.icon === ic ? "var(--surface-soft)" : "var(--surface)", borderColor: editMetaData.icon === ic ? "#2563eb" : "var(--border)" }} onClick={() => setEditMetaData((d: any) => ({ ...d, icon: ic }))}>{ic}</button>)}</div></div>
                             </div>
+                            <div className="ep-form-group">
+                              <label>Approver Titles</label>
+                              <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 6 }}>
+                                If set, the approval-chain step title becomes a dropdown of these options instead of free text. Leave empty to keep free text.
+                              </div>
+                              <div className="rt-options-box">
+                                {(editMetaData.approver_title_options || []).map((title: string, ti: number) => (
+                                  <div key={ti} className="rt-option-row">
+                                    <span>{title}</span>
+                                    <button type="button" onClick={() => setEditMetaData((d: any) => ({ ...d, approver_title_options: d.approver_title_options.filter((_: string, i: number) => i !== ti) }))}><X size={12} /></button>
+                                  </div>
+                                ))}
+                                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                  <input className="ep-form-input" style={{ flex: 1 }} placeholder="e.g. Compiled by" value={newApproverTitle} onChange={(e) => setNewApproverTitle(e.target.value)} />
+                                  <button type="button" className="ep-btn" style={{ padding: "6px 12px" }} onClick={() => {
+                                    if (!newApproverTitle.trim()) return;
+                                    setEditMetaData((d: any) => ({ ...d, approver_title_options: [...(d.approver_title_options || []), newApproverTitle.trim()] }));
+                                    setNewApproverTitle("");
+                                  }}>Add</button>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           <div className="ep-modal-footer" style={{ padding: "12px 18px" }}>
                             <button className="ep-btn-outline" onClick={() => setEditMeta(false)}>Cancel</button>
@@ -824,7 +981,7 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           {fields.map((f, i) => (
-                            <FieldRow key={i} field={f} index={i} total={fields.length} onChange={(nf) => updateField(i, nf)} onRemove={() => removeField(i)} onMove={(dir) => moveField(i, dir)} />
+                            <FieldRow key={i} field={f} index={i} total={fields.length} allFields={fields} onChange={(nf) => updateField(i, nf)} onRemove={() => removeField(i)} onMove={(dir) => moveField(i, dir)} />
                           ))}
                         </div>
                       )}
@@ -840,9 +997,10 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
                           <div className="ep-form-row" style={{ marginBottom: 10 }}>
                             <div className="ep-form-group" style={{ marginBottom: 0 }}>
                               <label>Grant To</label>
-                              <select className="ep-form-select" value={newPermType} onChange={(e) => setNewPermType(e.target.value as "ALL" | "DEPARTMENT" | "USER")}>
+                              <select className="ep-form-select" value={newPermType} onChange={(e) => setNewPermType(e.target.value as "ALL" | "DEPARTMENT" | "USER" | "EMPLOYMENT_TYPE")}>
                                 <option value="ALL">All Users</option>
                                 <option value="DEPARTMENT">Department</option>
+                                <option value="EMPLOYMENT_TYPE">Employment Type</option>
                                 <option value="USER">Specific User</option>
                               </select>
                             </div>
@@ -852,6 +1010,15 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
                                 <select className="ep-form-select" value={newPermDept} onChange={(e) => setNewPermDept(e.target.value)}>
                                   <option value="">Select department</option>
                                   {allDepts.map((d) => <option key={d}>{d}</option>)}
+                                </select>
+                              </div>
+                            )}
+                            {newPermType === "EMPLOYMENT_TYPE" && (
+                              <div className="ep-form-group" style={{ marginBottom: 0 }}>
+                                <label>Employment Type</label>
+                                <select className="ep-form-select" value={newPermEmploymentType} onChange={(e) => setNewPermEmploymentType(e.target.value)}>
+                                  <option value="">Select employment type</option>
+                                  {allEmploymentTypes.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
                                 </select>
                               </div>
                             )}
@@ -890,6 +1057,7 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
                                   <td>
                                     {p.permission_type === "ALL" && <span style={{ display: "flex", gap: 6, alignItems: "center" }}><Users size={14} />All Users</span>}
                                     {p.permission_type === "DEPARTMENT" && <span style={{ display: "flex", gap: 6, alignItems: "center" }}><Shield size={14} />{p.department}</span>}
+                                    {p.permission_type === "EMPLOYMENT_TYPE" && <span style={{ display: "flex", gap: 6, alignItems: "center" }}><Shield size={14} />{allEmploymentTypes.find((t) => t.code === p.employment_type)?.name || p.employment_type}</span>}
                                     {p.permission_type === "USER" && <span style={{ display: "flex", gap: 6, alignItems: "center" }}><UserCheck size={14} />{p.user_name || p.user_email}</span>}
                                   </td>
                                   <td><span className={p.can_submit ? "status-pill status-pill-success" : "status-pill status-pill-danger"}>{p.can_submit ? "Yes" : "No"}</span></td>

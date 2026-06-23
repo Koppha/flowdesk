@@ -24,7 +24,9 @@ const WorkflowStepSchema = z.object({
   is_active: z.boolean().optional(),
   requires_accommodation: z.boolean().optional(),
   parallel_with_previous: z.boolean().optional(),
-  action_type: z.enum(["APPROVE", "COUNTER_SIGN"]).optional()
+  action_type: z.string().trim().optional(),
+  can_reject: z.boolean().optional(),
+  can_rollback: z.boolean().optional()
 });
 
 const WorkflowRuleSchema = z.object({
@@ -73,6 +75,27 @@ const UpdateWorkflowSchema = z.object({
 export const workflowsRouter = Router();
 workflowsRouter.use(requireAuth);
 
+async function ensureActionTypesTable() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS workflow_action_types (
+      id        serial      PRIMARY KEY,
+      code      text        NOT NULL UNIQUE,
+      label     text        NOT NULL,
+      is_system boolean     NOT NULL DEFAULT false,
+      is_active boolean     NOT NULL DEFAULT true,
+      sort_order int        NOT NULL DEFAULT 0
+    )
+  `);
+  // Seed built-in types (idempotent)
+  await query(`
+    INSERT INTO workflow_action_types (code, label, is_system, sort_order) VALUES
+      ('APPROVE',       'Approver',         true, 1),
+      ('COUNTER_SIGN',  'Counter Signer',   true, 2),
+      ('MARK_PAID',     'Payment Officer',  true, 3)
+    ON CONFLICT (code) DO NOTHING
+  `);
+}
+
 async function ensureAssignedUserColumn() {
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS position_type_code text`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS assigned_user_id uuid REFERENCES users(id)`);
@@ -80,6 +103,8 @@ async function ensureAssignedUserColumn() {
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS approval_group_name text`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS requires_accommodation boolean NOT NULL DEFAULT false`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS parallel_with_previous boolean NOT NULL DEFAULT false`);
+  await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS can_reject boolean NOT NULL DEFAULT true`);
+  await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS can_rollback boolean NOT NULL DEFAULT true`);
   const actionTypeColumn = await query<{ exists: boolean }>(
     `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='workflow_steps' AND column_name='action_type') AS exists`
   );
@@ -127,16 +152,18 @@ async function insertWorkflowSteps(workflowId: string, steps: z.infer<typeof Wor
       step.is_active ?? true,
       step.requires_accommodation ?? false,
       step.parallel_with_previous ?? false,
-      step.action_type ?? "APPROVE"
+      step.action_type ?? "APPROVE",
+      step.can_reject ?? true,
+      step.can_rollback ?? true
     );
     values.push(
-      `($${baseIndex},$${baseIndex+1},$${baseIndex+2},$${baseIndex+3},$${baseIndex+4},$${baseIndex+5},$${baseIndex+6},$${baseIndex+7},$${baseIndex+8},$${baseIndex+9},$${baseIndex+10},$${baseIndex+11},$${baseIndex+12},$${baseIndex+13},$${baseIndex+14},$${baseIndex+15},$${baseIndex+16},$${baseIndex+17},$${baseIndex+18})`
+      `($${baseIndex},$${baseIndex+1},$${baseIndex+2},$${baseIndex+3},$${baseIndex+4},$${baseIndex+5},$${baseIndex+6},$${baseIndex+7},$${baseIndex+8},$${baseIndex+9},$${baseIndex+10},$${baseIndex+11},$${baseIndex+12},$${baseIndex+13},$${baseIndex+14},$${baseIndex+15},$${baseIndex+16},$${baseIndex+17},$${baseIndex+18},$${baseIndex+19},$${baseIndex+20})`
     );
   });
 
   await query(
     `INSERT INTO workflow_steps
-      (workflow_id, step_order, position_type_code, assigned_user_id, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active, requires_accommodation, parallel_with_previous, action_type)
+      (workflow_id, step_order, position_type_code, assigned_user_id, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active, requires_accommodation, parallel_with_previous, action_type, can_reject, can_rollback)
      VALUES ${values.join(",")}`,
     params
   );
@@ -221,7 +248,9 @@ workflowsRouter.get("/", async (req: AuthedRequest, res, next) => {
                    'is_active', ws.is_active,
                    'requires_accommodation', ws.requires_accommodation,
                    'parallel_with_previous', ws.parallel_with_previous,
-                   'action_type', ws.action_type
+                   'action_type', ws.action_type,
+                   'can_reject', ws.can_reject,
+                   'can_rollback', ws.can_rollback
                  )
                  ORDER BY ws.step_order
                ) FILTER (WHERE ws.id IS NOT NULL),
@@ -249,21 +278,6 @@ workflowsRouter.get("/active", async (req: AuthedRequest, res, next) => {
     const rows = await query(
       `SELECT * FROM workflows WHERE request_type=$1 AND status='ACTIVE' ORDER BY created_at DESC`,
       [requestType]
-    );
-    return res.json(rows);
-  } catch (err) {
-    return next(err);
-  }
-});
-
-workflowsRouter.get("/exco-members", async (_req: AuthedRequest, res, next) => {
-  try {
-    await ensureAssignedUserColumn();
-    const rows = await query(
-      `SELECT id, full_name, email, title, department, employee_no
-         FROM users
-        WHERE role = 'EXCO' AND is_active = true
-        ORDER BY full_name ASC`
     );
     return res.json(rows);
   } catch (err) {
@@ -351,40 +365,41 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
       ),
       getDepartmentLeadership(department)
     ]);
+    const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
+    const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
 
     const warnings: string[] = [];
     const chain = steps.flatMap((step) => {
       const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
+      const isHrCode = code.startsWith("HR_");
       const approverId =
         code === "HOD"
           ? leadership.hod_user_id
           : code === "MANAGER"
             ? leadership.manager_user_id
-            : code === "EXCO_OWNER"
-              ? leadership.exco_user_id
+            : isHrCode
+              ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null)
               : step.assigned_user_id || null;
       const approverName =
         code === "HOD"
           ? leadership.hod_name
           : code === "MANAGER"
             ? leadership.manager_name
-            : code === "EXCO_OWNER"
-              ? leadership.exco_name
+            : isHrCode
+              ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null)
               : step.assigned_user_name || null;
 
-      if (!approverId && step.is_required && !step.skip_if_unassigned && ["HOD", "MANAGER", "EXCO_OWNER"].includes(code)) {
+      if (!approverId && step.is_required && !step.skip_if_unassigned && ["HOD", "MANAGER"].includes(code)) {
         warnings.push(`${step.position_name} is required but missing for ${department || "the selected department"}.`);
+      }
+      if (!approverId && step.is_required && !step.skip_if_unassigned && isHrCode) {
+        warnings.push(`${step.position_name} is required but the Human Resource department has no Manager/HOD assigned.`);
       }
       if (!approverId && step.skip_if_unassigned) return [];
 
-      const positionLabel =
-        code === "EXCO_OWNER" && leadership.exco_title
-          ? leadership.exco_title
-          : step.position_name;
-
       return [{
         step_order: step.step_order,
-        position_name: positionLabel,
+        position_name: step.position_name,
         position_type_code: code,
         approval_mode: step.approval_mode || "SINGLE",
         approval_group_name: step.approval_group_name || null,
@@ -409,9 +424,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
           ? leadership.hod_user_id
           : code === "MANAGER"
             ? leadership.manager_user_id
-            : code === "EXCO_OWNER"
-              ? leadership.exco_user_id
-              : null);
+            : null);
       const approverName =
         rule.additional_assigned_user_id
           ? rule.additional_assigned_user_name
@@ -419,9 +432,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
             ? leadership.hod_name
             : code === "MANAGER"
               ? leadership.manager_name
-              : code === "EXCO_OWNER"
-                ? leadership.exco_name
-                : null;
+              : null;
       return matched ? [{
         rule_name: rule.rule_name,
         position_name: rule.additional_position_name || workflowRouteLabel(rule.additional_position_type_code, "Additional Approval"),
@@ -437,6 +448,129 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
     return next(err);
   }
 });
+
+// ── Fixed-path routes — must all be registered BEFORE /:id ───────────────────
+
+workflowsRouter.get("/chain-approvers", async (req: AuthedRequest, res, next) => {
+  try {
+    const department = String(req.user!.department || "").trim();
+    const rows = await query<{
+      id: string; full_name: string | null; email: string;
+      employee_no: string | null; department: string | null;
+      title: string | null; role: string;
+    }>(
+      `SELECT DISTINCT u.id, u.full_name, u.email, u.employee_no, u.department, u.title, u.role
+         FROM users u
+        WHERE u.is_active = true
+          AND u.role NOT IN ('EMPLOYEE','INTERN','TEMP')
+          AND (
+            ($1 <> '' AND lower(trim(u.department)) = lower(trim($1)))
+            OR EXISTS (
+              SELECT 1 FROM departments d
+               WHERE d.is_business_partner = true
+                 AND lower(trim(d.name)) = lower(trim(u.department))
+            )
+            OR EXISTS (
+              SELECT 1 FROM sections s
+               WHERE s.is_business_partner = true
+                 AND s.department_id IN (
+                   SELECT id FROM departments WHERE lower(trim(name)) = lower(trim(u.department))
+                 )
+            )
+          )
+        ORDER BY u.full_name NULLS LAST, u.email`,
+      [department]
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Workflow Action Types ─────────────────────────────────────────────────────
+
+workflowsRouter.get("/action-types", async (_req: AuthedRequest, res, next) => {
+  try {
+    await ensureActionTypesTable();
+    const rows = await query<{ id: number; code: string; label: string; is_system: boolean; is_active: boolean; sort_order: number }>(
+      `SELECT id, code, label, is_system, is_active, sort_order
+         FROM workflow_action_types
+        ORDER BY sort_order, id`
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const ActionTypeSchema = z.object({
+  code:       z.string().trim().min(1).toUpperCase().regex(/^[A-Z0-9_]+$/, "Code must be uppercase letters, digits and underscores only"),
+  label:      z.string().trim().min(1),
+  is_active:  z.boolean().optional(),
+  sort_order: z.coerce.number().int().optional()
+});
+
+workflowsRouter.post("/action-types", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    await ensureActionTypesTable();
+    const parsed = ActionTypeSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    const { code, label, is_active = true, sort_order = 99 } = parsed.data;
+    const rows = await query<{ id: number }>(
+      `INSERT INTO workflow_action_types (code, label, is_system, is_active, sort_order)
+       VALUES ($1, $2, false, $3, $4)
+       ON CONFLICT (code) DO UPDATE SET label=$2, is_active=$3, sort_order=$4
+       RETURNING id`,
+      [code, label, is_active, sort_order]
+    );
+    return res.status(201).json({ id: rows[0].id, code, label });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+workflowsRouter.put("/action-types/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    await ensureActionTypesTable();
+    const UpdateSchema = z.object({
+      label:      z.string().trim().min(1).optional(),
+      is_active:  z.boolean().optional(),
+      sort_order: z.coerce.number().int().optional()
+    });
+    const parsed = UpdateSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    if (parsed.data.label      !== undefined) { params.push(parsed.data.label);      updates.push(`label=$${params.length}`); }
+    if (parsed.data.is_active  !== undefined) { params.push(parsed.data.is_active);  updates.push(`is_active=$${params.length}`); }
+    if (parsed.data.sort_order !== undefined) { params.push(parsed.data.sort_order); updates.push(`sort_order=$${params.length}`); }
+    if (!updates.length) return res.json({ ok: true });
+    params.push(req.params.id);
+    const rows = await query(`UPDATE workflow_action_types SET ${updates.join(",")} WHERE id=$${params.length} RETURNING id`, params);
+    if (!rows[0]) throw notFound();
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+workflowsRouter.delete("/action-types/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    await ensureActionTypesTable();
+    const rows = await query<{ is_system: boolean }>(
+      `SELECT is_system FROM workflow_action_types WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!rows[0]) throw notFound();
+    if (rows[0].is_system) throw badRequest("Built-in action types cannot be deleted");
+    await query(`DELETE FROM workflow_action_types WHERE id=$1`, [req.params.id]);
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 workflowsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
@@ -573,42 +707,6 @@ workflowsRouter.put("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (re
 // - users from the requester's own department
 // - users from any department/section marked is_business_partner = true
 // Excludes pure-employee roles so only potential approvers are shown.
-workflowsRouter.get("/chain-approvers", async (req: AuthedRequest, res, next) => {
-  try {
-    const department = String(req.user!.department || "").trim();
-    const rows = await query<{
-      id: string; full_name: string | null; email: string;
-      employee_no: string | null; department: string | null;
-      title: string | null; role: string;
-    }>(
-      `SELECT DISTINCT u.id, u.full_name, u.email, u.employee_no, u.department, u.title, u.role
-         FROM users u
-        WHERE u.is_active = true
-          AND u.role NOT IN ('EMPLOYEE','INTERN','TEMP')
-          AND (
-            ($1 <> '' AND lower(trim(u.department)) = lower(trim($1)))
-            OR EXISTS (
-              SELECT 1 FROM departments d
-               WHERE d.is_business_partner = true
-                 AND lower(trim(d.name)) = lower(trim(u.department))
-            )
-            OR EXISTS (
-              SELECT 1 FROM sections s
-               WHERE s.is_business_partner = true
-                 AND s.department_id IN (
-                   SELECT id FROM departments WHERE lower(trim(name)) = lower(trim(u.department))
-                 )
-            )
-          )
-        ORDER BY u.full_name NULLS LAST, u.email`,
-      [department]
-    );
-    return res.json(rows);
-  } catch (err) {
-    return next(err);
-  }
-});
-
 workflowsRouter.delete("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query(
@@ -621,3 +719,4 @@ workflowsRouter.delete("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async 
     return next(err);
   }
 });
+

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { formatMoney, travelTypeLabel } from "./constants";
 import { Activity, CheckCircle, Clock, Download, FileText, XCircle } from "lucide-react";
 
@@ -48,7 +48,8 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
   const [filterAction, setFilterAction] = useState("");
   const [filterDept, setFilterDept] = useState("");
   const [search, setSearch] = useState("");
-  const [showCount, setShowCount] = useState(50);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
   // Build audit entries from advance + claim timestamps
   const entries = useMemo((): AuditEntry[] => {
@@ -112,6 +113,21 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
     }
     return true;
   }), [entries, filterAction, filterDept, search]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterAction, filterDept, search]);
+
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+
+  const paged = useMemo(
+    () => filtered.slice((page - 1) * pageSize, page * pageSize),
+    [filtered, page]
+  );
 
   const counts = useMemo(() => ({
     total:    entries.length,
@@ -194,16 +210,16 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
             <div className="ep-empty"><p>No audit events match your filters.</p></div>
           ) : (
             <>
-              {filtered.slice(0, showCount).map((e, i) => {
+              {paged.map((e, i) => {
                 const cfg = ACTION_CONFIG[e.action] || { label: e.action, icon: <Activity size={14}/>, bg: "#f1f5f9", color: "#64748b" };
                 return (
-                  <div key={e.id} style={{ display: "flex", gap: 14, padding: "12px 20px", borderBottom: i < Math.min(showCount, filtered.length) - 1 ? "1px solid #f8fafc" : "none", alignItems: "flex-start" }}>
+                  <div key={e.id} style={{ display: "flex", gap: 14, padding: "12px 20px", borderBottom: i < paged.length - 1 ? "1px solid #f8fafc" : "none", alignItems: "flex-start" }}>
                     {/* Timeline dot */}
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 2 }}>
                       <span style={{ width: 30, height: 30, borderRadius: "50%", background: cfg.bg, color: cfg.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                         {cfg.icon}
                       </span>
-                      {i < Math.min(showCount, filtered.length) - 1 && (
+                      {i < paged.length - 1 && (
                         <div style={{ width: 2, flex: 1, background: "#f1f5f9", marginTop: 4, minHeight: 12 }} />
                       )}
                     </div>
@@ -229,10 +245,14 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
                 );
               })}
 
-              {filtered.length > showCount && (
-                <div style={{ textAlign: "center", padding: 16 }}>
-                  <button className="ep-btn-outline" onClick={() => setShowCount(n => n + 50)}>
-                    Load more ({filtered.length - showCount} remaining)
+              {pageCount > 1 && (
+                <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, padding: 16 }}>
+                  <button className="ep-btn-outline" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>
+                    Previous
+                  </button>
+                  <span style={{ fontSize: 13, color: "var(--muted)" }}>Page {page} of {pageCount}</span>
+                  <button className="ep-btn-outline" onClick={() => setPage(p => Math.min(pageCount, p + 1))} disabled={page >= pageCount}>
+                    Next
                   </button>
                 </div>
               )}

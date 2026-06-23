@@ -18,7 +18,27 @@ export async function bootstrapSystem() {
   await ensureReportingLinesSchema();
   await ensureRequestTypesSchema();
   await ensureEmploymentTypesSchema();
+  await ensureEmailActionTokensSchema();
   await ensureAdminAccount();
+}
+
+// One-click approve/reject-by-email tokens. The JWT carries only a jti;
+// every other binding fact (who, which document, which step) lives here so
+// the server can re-validate against live state when the link is clicked.
+async function ensureEmailActionTokensSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS email_action_tokens (
+      id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      jti         uuid        NOT NULL UNIQUE,
+      user_id     uuid        NOT NULL REFERENCES users(id),
+      doc_type    text        NOT NULL,
+      doc_id      uuid        NOT NULL,
+      step_order  integer     NOT NULL,
+      used_at     timestamptz,
+      created_at  timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_eat_doc ON email_action_tokens(doc_type, doc_id)`);
 }
 
 async function ensureUserSchema() {
@@ -33,6 +53,13 @@ async function ensureUserSchema() {
   await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
   await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");
   await ensureEnumColumnValue("clearance_claims", "status", "HR_MANAGER_REVIEW");
+  await ensureEnumColumnValue("clearance_claims", "status", "PAYMENT_PROCESSING");
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS finance_decision text`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS finance_comments text`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_amount numeric(12,2)`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS assignee_user_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS assignee_group_name text`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS expected_payment_date date`);
   await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
@@ -133,6 +160,28 @@ async function ensureUserSchema() {
             ELSE true
           END`
   );
+
+  // ── Performance indexes ─────────────────────────────────────────────────────
+  // advance_requests — hot columns in inbox, advance list, and workflow queries
+  await query(`CREATE INDEX IF NOT EXISTS idx_ar_requester   ON advance_requests(requester_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ar_status      ON advance_requests(status)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ar_created     ON advance_requests(created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ar_created_by  ON advance_requests(created_by_id)`);
+
+  // clearance_claims — same access patterns
+  await query(`CREATE INDEX IF NOT EXISTS idx_cc_claimant    ON clearance_claims(claimant_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_cc_status      ON clearance_claims(status)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_cc_created     ON clearance_claims(created_at DESC)`);
+
+  // users — looked up by email (login), role (approver resolution), department
+  await query(`CREATE INDEX IF NOT EXISTS idx_users_email      ON users(lower(email))`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_users_role       ON users(role) WHERE is_active = true`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_users_active     ON users(is_active)`);
+  // Functional index covering all 28+ lower(trim(department)) comparisons
+  await query(`CREATE INDEX IF NOT EXISTS idx_users_dept_lower ON users(lower(trim(department))) WHERE is_active = true`);
+
+  // departments — joined via lower(trim(name)) in many queries
+  await query(`CREATE INDEX IF NOT EXISTS idx_dept_name_lower  ON departments(lower(trim(name)))`);
 }
 
 async function ensureEnumColumnValue(tableName: string, columnName: string, value: string) {
@@ -177,7 +226,10 @@ async function ensureEnumTypeValue(typeName: string, value: string) {
 }
 
 async function ensureAdminAccount() {
-  const existing = await query<{ id: string }>(`SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1`, [DEFAULT_ADMIN_EMAIL]);
+  const existing = await query<{ id: string }>(
+    `SELECT id FROM users WHERE lower(email)=lower($1) OR employee_no='ADMIN' LIMIT 1`,
+    [DEFAULT_ADMIN_EMAIL]
+  );
   if (existing[0]) {
     await query(
       `UPDATE users
@@ -404,6 +456,337 @@ async function ensureRequestTypesSchema() {
   await query(`CREATE INDEX IF NOT EXISTS idx_rtf_type   ON request_type_fields(request_type_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_rtp_type   ON request_type_permissions(request_type_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_rtp_user   ON request_type_permissions(user_id)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS custom_request_submissions (
+      id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_type_id  uuid        NOT NULL REFERENCES custom_request_types(id) ON DELETE CASCADE,
+      requester_id     uuid        NOT NULL REFERENCES users(id),
+      data             jsonb       NOT NULL DEFAULT '{}',
+      approval_chain   jsonb       NOT NULL DEFAULT '[]',
+      current_step_order integer   NOT NULL DEFAULT 0,
+      status           text        NOT NULL DEFAULT 'SUBMITTED',
+      created_at       timestamptz NOT NULL DEFAULT now(),
+      updated_at       timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_crs_type      ON custom_request_submissions(request_type_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_crs_requester ON custom_request_submissions(requester_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_crs_status    ON custom_request_submissions(status)`);
+
+  await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS implementation_date date`);
+  await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS closure_notes text`);
+  await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS closed_at timestamptz`);
+  await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS follow_up_sent boolean NOT NULL DEFAULT false`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_crs_followup ON custom_request_submissions(implementation_date) WHERE status = 'CLOSED' AND follow_up_sent = false`);
+
+  // Whether this request type supports the post-approval "Close Request" /
+  // implementation-date capture flow (only Change Request needs this).
+  await query(`ALTER TABLE custom_request_types ADD COLUMN IF NOT EXISTS requires_closure boolean NOT NULL DEFAULT false`);
+  // Whether the approval-chain approver picker for this request type should
+  // be limited to management roles (HOD/MANAGER/EXCO/ADMIN) rather than any staff member.
+  await query(`ALTER TABLE custom_request_types ADD COLUMN IF NOT EXISTS restrict_approvers_to_management boolean NOT NULL DEFAULT false`);
+  // Admin-configurable list of approval-chain step titles (e.g. "Checked by", "Approved by").
+  // When set, the submission form shows a dropdown instead of a free-text title input.
+  await query(`ALTER TABLE custom_request_types ADD COLUMN IF NOT EXISTS approver_title_options jsonb`);
+  // Lets a permission grant target a specific employment type (e.g. Permanent/Intern/Temporary) instead of/alongside department or named user.
+  await query(`ALTER TABLE request_type_permissions ADD COLUMN IF NOT EXISTS employment_type text`);
+  // Fixed approval-chain structure: an ordered array of { title, source: "AUTO_MANAGER" | "ROLE_PICKER", role? }.
+  // When set, submitters can't add/remove/reorder steps — the server resolves AUTO_MANAGER steps from
+  // reporting_lines and validates ROLE_PICKER steps against the chosen approver's role.
+  await query(`ALTER TABLE custom_request_types ADD COLUMN IF NOT EXISTS fixed_approval_chain jsonb`);
+
+  await seedChangeRequestType();
+  await seedAttendanceRegisterType();
+  await seedComputerRequestType();
+}
+
+// Seeds the "Change Request" custom request type (ECONET Change Control
+// Procedure form), available to all users, with a requester-defined
+// approval workflow (no fixed chain — every change request can route
+// through a different set of approvers).
+async function seedChangeRequestType() {
+  const existing = await query<{ id: string }>(`SELECT id FROM custom_request_types WHERE code = 'CHANGE_REQUEST'`);
+  let typeId = existing[0]?.id;
+
+  if (!typeId) {
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO custom_request_types (name, code, description, icon, color, category, status)
+       VALUES ('Change Request', 'CHANGE_REQUEST', 'IT/Business change control request', 'GitBranch', '#0ea5e9', 'Change Control', 'ACTIVE')
+       RETURNING id`
+    );
+    typeId = inserted[0].id;
+  }
+
+  await query(`UPDATE custom_request_types SET requires_closure = true WHERE id = $1`, [typeId]);
+
+  const hasFields = await query<{ id: string }>(`SELECT id FROM request_type_fields WHERE request_type_id = $1 LIMIT 1`, [typeId]);
+  if (!hasFields[0]) {
+    const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: { label: string; value: string }[] }> = [
+      { key: "department", label: "Department", type: "text", required: true, placeholder: "Requesting department" },
+      { key: "date_requested", label: "Date Requested", type: "date", required: true },
+      { key: "change_assignee", label: "Change Assignee", type: "user_multi" },
+      { key: "change_type_hardware", label: "Change Type: Hardware", type: "checkbox" },
+      { key: "change_type_system_software", label: "Change Type: System Software", type: "checkbox" },
+      { key: "change_type_applications", label: "Change Type: Applications", type: "checkbox" },
+      { key: "change_type_environment", label: "Change Type: Environment", type: "checkbox" },
+      { key: "change_type_network", label: "Change Type: Network", type: "checkbox" },
+      { key: "change_type_configuration", label: "Change Type: Configuration", type: "checkbox" },
+      { key: "change_type_business_rule", label: "Change Type: Business Rule", type: "checkbox" },
+      { key: "category_business_request", label: "Change Category: Business Request", type: "checkbox" },
+      { key: "category_fix", label: "Change Category: Fix", type: "checkbox" },
+      { key: "category_technical", label: "Change Category: Technical (Hdw/Sw)", type: "checkbox" },
+      { key: "is_urgent", label: "Is this Urgent?", type: "checkbox" },
+      { key: "description_of_change", label: "Description of proposed change", type: "textarea", required: true },
+      { key: "business_justification", label: "Business Justification / Reason for Change", type: "textarea", required: true },
+      { key: "affected_areas", label: "Which IS/IT/Business areas will be affected?", type: "textarea" },
+      { key: "priority", label: "Priority", type: "select", options: [
+        { label: "High", value: "HIGH" }, { label: "Medium", value: "MEDIUM" }, { label: "Low", value: "LOW" }
+      ] },
+      { key: "component_name", label: "Component(s) Name", type: "text" },
+      { key: "platform", label: "Platform", type: "text" },
+      { key: "dependencies", label: "Dependencies", type: "text" },
+      { key: "number_of_changes", label: "Number of Changes", type: "number" },
+      { key: "implementation_date", label: "Implementation Date", type: "date" },
+      { key: "change_implementor", label: "Change Implementor", type: "section" },
+      { key: "time_required", label: "Time Required", type: "text", placeholder: "e.g. 1 day" },
+      { key: "time_scheduled", label: "Time Scheduled", type: "text", placeholder: "e.g. 00:00 AM" },
+      { key: "risk", label: "Risk", type: "select", options: [
+        { label: "High", value: "H" }, { label: "Medium", value: "M" }, { label: "Low", value: "L" }
+      ] },
+      { key: "impact", label: "Impact", type: "select", options: [
+        { label: "Minor", value: "MINOR" }, { label: "Significant", value: "SIGNIFICANT" }, { label: "Major", value: "MAJOR" }
+      ] },
+      { key: "implementation_plan", label: "Implementation Plan", type: "textarea" },
+      { key: "back_out_plan", label: "Back-out Plan", type: "textarea" },
+      { key: "callout_person", label: "Callout Person", type: "text" },
+      { key: "callout_contact_no", label: "Callout Contact No", type: "text" },
+      { key: "documentation_required", label: "Documentation / Procedures Required", type: "textarea" },
+      { key: "business_implications", label: "Business Implications", type: "textarea" }
+    ];
+
+    const placeholders: string[] = [];
+    const params: unknown[] = [];
+    fields.forEach((f, i) => {
+      const base = params.length + 1;
+      params.push(typeId, f.key, f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i);
+      placeholders.push(`($${base},$${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7})`);
+    });
+    await query(
+      `INSERT INTO request_type_fields (request_type_id, field_key, field_label, field_type, is_required, placeholder, options, sort_order)
+       VALUES ${placeholders.join(",")}`,
+      params
+    );
+  }
+
+  // Change Assignee/Implementor types evolved over time (text -> user -> user_multi,
+  // text -> section); existing installs already seeded the old type above, so fix
+  // them up in place rather than re-inserting (which would lose submitted data).
+  await query(
+    `UPDATE request_type_fields SET field_type = 'user_multi' WHERE request_type_id = $1 AND field_key = 'change_assignee'`,
+    [typeId]
+  );
+  await query(
+    `UPDATE request_type_fields SET field_type = 'section' WHERE request_type_id = $1 AND field_key = 'change_implementor'`,
+    [typeId]
+  );
+
+  const hasPermission = await query<{ id: string }>(`SELECT id FROM request_type_permissions WHERE request_type_id = $1 LIMIT 1`, [typeId]);
+  if (!hasPermission[0]) {
+    await query(
+      `INSERT INTO request_type_permissions (request_type_id, permission_type, can_submit, can_design)
+       VALUES ($1, 'ALL', true, false)`,
+      [typeId]
+    );
+  }
+}
+
+// Seeds the "Attendance Register" custom request type (monthly attendance
+// record for temporary staff) — division/section/month header fields plus a
+// "table" field rendering one row per employee x one column per day of the
+// selected month, with auto-summed leave-type totals.
+async function seedAttendanceRegisterType() {
+  const existing = await query<{ id: string }>(`SELECT id FROM custom_request_types WHERE code = 'ATTENDANCE_REGISTER'`);
+  let typeId = existing[0]?.id;
+
+  if (!typeId) {
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO custom_request_types (name, code, description, icon, color, category, status)
+       VALUES ('Attendance Register', 'ATTENDANCE_REGISTER', 'Monthly attendance record for temporary staff', 'CalendarCheck', '#7c3aed', 'HR', 'ACTIVE')
+       RETURNING id`
+    );
+    typeId = inserted[0].id;
+  }
+
+  // Approvers (Compiled/Checked/Approved by) must be management; consolidation
+  // is keyed on division+department+month, which the review console reads
+  // straight off this type's fields.
+  await query(`UPDATE custom_request_types SET restrict_approvers_to_management = true WHERE id = $1`, [typeId]);
+  // Seed once only — admins can edit this list afterwards via the Request
+  // Types designer, so don't stomp their changes on every server restart.
+  await query(
+    `UPDATE custom_request_types SET approver_title_options = $2 WHERE id = $1 AND approver_title_options IS NULL`,
+    [typeId, JSON.stringify(["Checked by", "Approved by"])]
+  );
+
+  const cellOptions = [
+    { value: "R", label: "Regular" },
+    { value: "C", label: "Time compensation for overtime work" },
+    { value: "S", label: "Sick Leave" },
+    { value: "A", label: "Annual Leave (Vacation)" },
+    { value: "O", label: "Official trip" },
+    { value: "H", label: "Holiday" },
+    { value: "E", label: "Emergency" },
+    { value: "T", label: "Study Leave / Training" },
+    { value: "X", label: "Other Absenteeism" }
+  ];
+  const summaryColumns = [
+    { key: "regular", label: "Regular", countsValue: "R" },
+    { key: "holiday", label: "Holiday", countsValue: "H" },
+    { key: "annual", label: "Annual", countsValue: "A" },
+    { key: "official", label: "Official", countsValue: "O" },
+    { key: "sick", label: "Sick Leave", countsValue: "S" }
+  ];
+
+  // Each employee fills in only their own row — "SELF" row source, no
+  // free-text multi-row entry. Field list (with sort order) is upserted
+  // idempotently per field_key so existing installs pick up field changes
+  // (e.g. Section/Team replaced by Department) without losing submitted data.
+  const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: unknown }> = [
+    { key: "division", label: "Division", type: "text", required: true },
+    { key: "department", label: "Department", type: "text", required: true },
+    { key: "month", label: "Month", type: "date", required: true, placeholder: "Pick any date within the target month" },
+    {
+      key: "attendance_grid",
+      label: "Attendance Record",
+      type: "table",
+      required: true,
+      options: {
+        columnMode: "DAY_OF_MONTH",
+        monthFieldKey: "month",
+        rowSource: "SELF",
+        cellOptions,
+        summaryColumns
+      }
+    }
+  ];
+
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    const existingField = await query<{ id: string }>(
+      `SELECT id FROM request_type_fields WHERE request_type_id = $1 AND field_key = $2`,
+      [typeId, f.key]
+    );
+    if (existingField[0]) {
+      await query(
+        `UPDATE request_type_fields
+            SET field_label = $1, field_type = $2, is_required = $3, placeholder = $4, options = $5, sort_order = $6
+          WHERE id = $7`,
+        [f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i, existingField[0].id]
+      );
+    } else {
+      await query(
+        `INSERT INTO request_type_fields (request_type_id, field_key, field_label, field_type, is_required, placeholder, options, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [typeId, f.key, f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i]
+      );
+    }
+  }
+
+  // Section/Team were replaced by Department — deactivate rather than delete
+  // so historical submissions that recorded them keep displaying correctly.
+  await query(
+    `UPDATE request_type_fields SET is_active = false WHERE request_type_id = $1 AND field_key IN ('section', 'team')`,
+    [typeId]
+  );
+
+  const hasPermission = await query<{ id: string }>(`SELECT id FROM request_type_permissions WHERE request_type_id = $1 LIMIT 1`, [typeId]);
+  if (!hasPermission[0]) {
+    await query(
+      `INSERT INTO request_type_permissions (request_type_id, permission_type, can_submit, can_design)
+       VALUES ($1, 'ALL', true, false)`,
+      [typeId]
+    );
+  }
+}
+
+// Seeds the "Computer Request" custom request type (Econet Computer
+// Request Form), available to all users, with a FIXED approval chain
+// (Requester's Manager -> IT Manager -> IS HOD/CIO -> CTO). Unlike most
+// custom request types, submitters don't build their own chain: step 1
+// is auto-resolved from reporting_lines, and steps 2-4 are picked from
+// the org structure's Managers/Exco members so the right people sign off
+// every time.
+async function seedComputerRequestType() {
+  const existing = await query<{ id: string }>(`SELECT id FROM custom_request_types WHERE code = 'COMPUTER_REQUEST'`);
+  let typeId = existing[0]?.id;
+
+  if (!typeId) {
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO custom_request_types (name, code, description, icon, color, category, status)
+       VALUES ('Computer Request', 'COMPUTER_REQUEST', 'Laptop/desktop request for new, replacement or upgraded computer equipment', 'Monitor', '#3b82f6', 'IT', 'ACTIVE')
+       RETURNING id`
+    );
+    typeId = inserted[0].id;
+  }
+
+  // Seed once only — admins can edit this list afterwards via the Request
+  // Types designer, so don't stomp their changes on every server restart.
+  await query(
+    `UPDATE custom_request_types SET fixed_approval_chain = $2 WHERE id = $1 AND fixed_approval_chain IS NULL`,
+    [typeId, JSON.stringify([
+      { title: "Requester's Manager", source: "AUTO_MANAGER" },
+      { title: "IT Manager", source: "ROLE_PICKER", role: "MANAGER" },
+      { title: "IS HOD/CIO", source: "ROLE_PICKER", role: "EXCO" },
+      { title: "CTO", source: "ROLE_PICKER", role: "EXCO" }
+    ])]
+  );
+
+  const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: { label: string; value: string }[] }> = [
+    { key: "position", label: "Position", type: "text", required: true },
+    { key: "department", label: "Department", type: "text", required: true },
+    { key: "phone_no", label: "Phone No.", type: "text" },
+    { key: "emp_no", label: "Emp No.", type: "text", required: true },
+    { key: "computer_type", label: "Type of Computer", type: "select", required: true, options: [
+      { label: "Laptop", value: "LAPTOP" }, { label: "Desktop", value: "DESKTOP" }
+    ] },
+    { key: "request_type", label: "Type of Request", type: "select", required: true, options: [
+      { label: "New", value: "NEW" }, { label: "Replacement", value: "REPLACEMENT" }, { label: "Upgrade", value: "UPGRADE" }
+    ] },
+    { key: "justification", label: "Justification by Supervisor", type: "textarea", required: true,
+      placeholder: "Include information about how the computer will be used. If requesting high-end specifications, be explicit about the function that requires and justifies the cost." }
+  ];
+
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    const existingField = await query<{ id: string }>(
+      `SELECT id FROM request_type_fields WHERE request_type_id = $1 AND field_key = $2`,
+      [typeId, f.key]
+    );
+    if (existingField[0]) {
+      await query(
+        `UPDATE request_type_fields
+            SET field_label = $1, field_type = $2, is_required = $3, placeholder = $4, options = $5, sort_order = $6
+          WHERE id = $7`,
+        [f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i, existingField[0].id]
+      );
+    } else {
+      await query(
+        `INSERT INTO request_type_fields (request_type_id, field_key, field_label, field_type, is_required, placeholder, options, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [typeId, f.key, f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i]
+      );
+    }
+  }
+
+  const hasPermission = await query<{ id: string }>(`SELECT id FROM request_type_permissions WHERE request_type_id = $1 LIMIT 1`, [typeId]);
+  if (!hasPermission[0]) {
+    await query(
+      `INSERT INTO request_type_permissions (request_type_id, permission_type, can_submit, can_design)
+       VALUES ($1, 'ALL', true, false)`,
+      [typeId]
+    );
+  }
 }
 
 async function ensureReportingLinesSchema() {

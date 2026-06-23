@@ -72,6 +72,7 @@ export type TravelType = {
   currency?: string;
   active?: boolean;
   requires_accommodation?: boolean;
+  allowed_payment_methods?: ("ECOCASH" | "BANK")[];
   locations?: TravelLocation[];
 };
 

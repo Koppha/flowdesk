@@ -1,3 +1,8 @@
+/* Block re-clicks on any button for 600ms after first click */
+button[data-clicked="true"] {
+  pointer-events: none !important;
+}
+
 /* Prevent SweetAlert2's global CSS from restyling native form checkboxes */
 input[type="checkbox"] {
   appearance: auto;
@@ -436,6 +441,55 @@ user
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
+.dashboard-search-results {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 76px;
+  z-index: 20;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(15, 23, 42, 0.12));
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.dashboard-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-search-result:last-child {
+  border-bottom: none;
+}
+
+.dashboard-search-result:hover {
+  background: var(--surface-soft);
+}
+
+.dashboard-search-result-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dashboard-search-result-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.dashboard-search-result-empty {
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -518,6 +572,237 @@ user
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+/* Dashboard "My Total Requests" / "Profile Snapshot" cards */
+.dashboard-total-card,
+.dashboard-profile-card {
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dashboard-total-icon {
+  color: var(--muted);
+  opacity: 0.35;
+}
+
+.dashboard-card-sub {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.dashboard-total-card .dashboard-actions {
+  margin-top: 18px;
+}
+
+.dashboard-profile-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.dashboard-profile-fields {
+  display: grid;
+  gap: 8px;
+}
+
+.dashboard-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 800;
+  font-size: 1.1rem;
+}
+
+/* Dashboard "Recent Activity" / "Approval Queue" panels */
+.dashboard-panel-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .dashboard-panel-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard-panel {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dashboard-panel-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.dashboard-panel-link {
+  color: var(--primary);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dashboard-panel-link:hover {
+  text-decoration: underline;
+}
+
+.dashboard-panel-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 16px 0;
+}
+
+.dashboard-panel-footer {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--primary);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+
+.dashboard-panel-footer:hover {
+  text-decoration: underline;
+}
+
+.dashboard-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dashboard-activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.dashboard-activity-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dashboard-activity-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-activity-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dashboard-activity-title strong {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.dashboard-activity-sub {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+
+.dashboard-activity-item time {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.dashboard-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dashboard-queue-group {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-queue-group:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.dashboard-queue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dashboard-queue-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-queue-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dashboard-queue-stages {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-left: 38px;
+}
+
+.dashboard-queue-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.dashboard-queue-stage b {
+  color: var(--primary);
 }
 
 /* Inbox Section */
@@ -729,6 +1014,15 @@ user
 .button-danger:hover {
   background: #b91c1c;
   border-color: #b91c1c;
+}
+.button-success {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #ffffff;
+}
+.button-success:hover {
+  background: #15803d;
+  border-color: #15803d;
 }
 
 .button-secondary {
@@ -1619,6 +1913,92 @@ html[data-theme="dark"] .inbox-review-button:hover {
   max-height: 280px;
 }
 
+.review-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 14px;
+}
+
+@media (max-width: 720px) {
+  .review-field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.review-field-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.review-field-icon {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.review-field-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.review-field-value {
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.review-field-value-multiline {
+  white-space: pre-wrap;
+}
+
+.review-chain-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-chain-step:last-child {
+  border-bottom: none;
+}
+
+.review-chain-step-number {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.review-chain-step-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.review-chain-current-flag {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--primary);
+  flex: none;
+}
+
 .review-form-grid {
   display: grid;
   gap: 12px;
@@ -1669,6 +2049,20 @@ html[data-theme="dark"] .inbox-review-button:hover {
   display: grid;
   gap: 10px;
   min-width: 0;
+}
+
+.review-radio-group {
+  display: grid;
+  gap: 6px;
+}
+
+.review-radio-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+  color: var(--text);
+  text-transform: none;
 }
 
 .review-warning {
@@ -2062,6 +2456,13 @@ html[data-theme="dark"] .status-pill-info { color: #7dd3fc; }
 }
 .advance-form label {
   font-weight: bold;
+}
+/* `.advance-form label` sets a dark text color for field labels, which also
+   matches <label className="button"> wrapper buttons (e.g. "Upload Receipt")
+   and would otherwise win over .button's white text via higher specificity,
+   making the button's label invisible against its dark background. */
+.advance-form label.button {
+  color: var(--button-text);
 }
 .advance-form input[type="text"],
 .advance-form input[type="number"],
@@ -3395,11 +3796,6 @@ html[data-theme="dark"] .advance-form .breakdown-table th {
 .inbox-hero {
   border-radius: 8px;
   padding: 24px;
-}
-
-.inbox-metric-card {
-  border-radius: 8px;
-  background: var(--surface-raised);
 }
 
 .review-modal-backdrop {
@@ -7683,6 +8079,25 @@ html[data-theme="dark"] .workflow-template-preview {
   border-color: var(--border);
 }
 
+html[data-theme="dark"] .workflow-search,
+html[data-theme="dark"] .workflow-search svg {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .workflow-search input::placeholder {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .workflow-list-toolbar select,
+html[data-theme="dark"] .workflow-form-grid input,
+html[data-theme="dark"] .workflow-form-grid select,
+html[data-theme="dark"] .workflow-form-grid textarea,
+html[data-theme="dark"] .workflow-request-type-card select {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
 html[data-theme="dark"] .workflow-row-expanded > td,
 html[data-theme="dark"] .workflow-row-actions-expanded > td {
   background: color-mix(in srgb, var(--surface) 80%, var(--primary) 20%);
@@ -9030,10 +9445,11 @@ button.ep-kpi { cursor: pointer; }
   align-items: center;
   gap: 14px;
   padding: 18px 20px;
+  border: 0;
   border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+  background: linear-gradient(135deg, #1d56d8 0%, #4299e1 100%);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+  color: #fff;
 }
 .flow-stat-icon {
   display: inline-flex;
@@ -9042,18 +9458,19 @@ button.ep-kpi { cursor: pointer; }
   width: 48px;
   height: 48px;
   flex: 0 0 auto;
-  border-radius: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
-.flow-stat-blue   .flow-stat-icon { background: rgba(15, 86, 232, 0.12);  color: #0f56e8; }
-.flow-stat-amber  .flow-stat-icon { background: rgba(217, 119, 6, 0.12); color: #d97706; }
-.flow-stat-purple .flow-stat-icon { background: rgba(124, 58, 237, 0.12); color: #7c3aed; }
-.flow-stat-green  .flow-stat-icon { background: rgba(22, 163, 74, 0.12); color: #16a34a; }
-.flow-stat-rose   .flow-stat-icon { background: rgba(225, 29, 72, 0.12); color: #e11d48; }
+.flow-stat-amber  { background: linear-gradient(135deg, #c2410c 0%, #fb923c 100%); }
+.flow-stat-purple { background: linear-gradient(135deg, #6d28d9 0%, #9333ea 100%); }
+.flow-stat-green  { background: linear-gradient(135deg, #15803d 0%, #4ade80 100%); }
+.flow-stat-rose   { background: linear-gradient(135deg, #be123c 0%, #fb7185 100%); }
 
-.flow-stat-body { display: grid; gap: 2px; }
-.flow-stat-body strong { font-size: 1.7rem; font-weight: 800; color: var(--text); line-height: 1.1; }
-.flow-stat-body span { font-size: 0.85rem; font-weight: 700; color: var(--text); }
-.flow-stat-body small { font-size: 0.75rem; color: var(--muted); }
+.flow-stat-body { display: grid; gap: 4px; }
+.flow-stat-body strong { font-size: 2rem; font-weight: 800; color: #fff; line-height: 1; }
+.flow-stat-body span { font-size: 0.9rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); }
+.flow-stat-body small { font-size: 0.85rem; color: rgba(255, 255, 255, 0.85); }
 
 /* ── Status tabs (My Advances / My Clearances) ── */
 .flow-tabs {
@@ -9829,6 +10246,14 @@ html[data-theme="dark"] .tracking-empty {
 .ep-form-textarea { resize: vertical; line-height: 1.5; }
 .ep-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .ep-form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.ep-form-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 20px;
+  align-items: start;
+}
+.ep-form-fields-grid .ep-form-group { margin-bottom: 8px; }
+.ep-form-field-full { grid-column: 1 / -1; }
 .ep-checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; color: var(--text); cursor: pointer; margin-top: 4px; }
 .ep-required { color: #dc2626; }
 .ep-optional { font-size: 0.78rem; color: var(--muted); }
@@ -9967,7 +10392,11 @@ html[data-theme="dark"] .tracking-empty {
 .stat-card-cyan   { background: linear-gradient(135deg, #0e7490 0%, #06b6d4 100%); }
 .stat-card-purple { background: linear-gradient(135deg, #6d28d9 0%, #9333ea 100%); }
 .stat-card-amber  { background: linear-gradient(135deg, #d97706 0%, #fbbf24 100%); }
-.stat-card .stat-icon  { opacity: 0.9; flex-shrink: 0; }
+.stat-card .stat-icon  {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; flex: 0 0 auto;
+  border-radius: 50%; background: rgba(255, 255, 255, 0.2); color: #fff;
+}
 .stat-card .stat-value { font-size: 2.1rem; font-weight: 800; line-height: 1; letter-spacing: -0.5px; }
 .stat-card .stat-label { font-size: 0.82rem; font-weight: 500; opacity: 0.92; margin-top: 3px; }
 
@@ -10262,4 +10691,185 @@ html[data-theme="dark"] .tracking-empty {
   font-size: 0.78rem;
   font-weight: 600;
   color: #1d4ed8;
+}
+
+/* Full-page request review (replaces the old review-modal popup) */
+.review-page {
+  display: grid;
+  gap: 20px;
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+}
+
+.review-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 24px 28px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.review-page-eyebrow {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.review-page-header h2 {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+}
+
+.review-page-ref {
+  display: inline-block;
+  margin-right: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+
+.review-info-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.review-info-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.review-info-icon {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.review-info-card small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.review-info-card strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.92rem;
+  word-break: break-word;
+}
+
+.review-page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.review-page-main,
+.review-page-sidebar {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.review-card-subtitle {
+  margin-top: 6px;
+  font-size: 0.82rem;
+  border-radius: 6px;
+}
+
+.recon-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+
+.recon-stat {
+  display: grid;
+  gap: 4px;
+}
+
+.recon-stat small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.recon-stat strong {
+  font-size: 1.1rem;
+  color: var(--text);
+}
+
+.recon-stat strong.recon-negative {
+  color: #b91c1c;
+}
+
+.recon-settlement-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 16px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.recon-settlement-banner > div:first-of-type {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.recon-settlement-banner small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.recon-settlement-banner strong {
+  color: var(--text);
+}
+
+.recon-settlement-amount {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.review-action-row-page {
+  padding: 16px;
+}
+
+@media (max-width: 1080px) {
+  .review-info-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-page-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .recon-summary {
+    grid-template-columns: 1fr;
+  }
 }

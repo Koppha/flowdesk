@@ -1,6 +1,5 @@
 import { badRequest, forbidden } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { isFinanceDept } from "../../lib/auth.js";
 import { AdvanceTransitions } from "./advances.types.js";
 import { canApproveStep, chainStepToStatus, getPendingGroup } from "../../lib/workflowEngine.js";
 export function nextStatusOrThrow(current, action) {
@@ -85,18 +84,28 @@ export async function advanceWorkflowStep(args) {
     }
     else {
         const nextIdx = group.indices[group.indices.length - 1] + 1;
-        hasMore = nextIdx < newChain.length;
-        nextStatus = hasMore ? chainStepToStatus(newChain, nextIdx) : "APPROVED";
-        newStepOrder = hasMore ? nextIdx : newChain.length;
-        // If Finance is the one completing the final approval, that same action
-        // also marks the advance as paid — no separate "Mark Advance Paid" step.
-        if (!hasMore && isFinanceDept(userDepartment)) {
-            nextStatus = "PAID";
+        const nextStep = nextIdx < newChain.length ? newChain[nextIdx] : null;
+        if (nextStep?.action_type === "MARK_PAID") {
+            // A dedicated MARK_PAID step follows — stop chain here at APPROVED.
+            // The payment step's team will use the "Mark Advance Paid" button.
+            hasMore = false;
+            nextStatus = "APPROVED";
+            newStepOrder = nextIdx;
         }
-        if (hasMore) {
-            nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
-                name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
-            }));
+        else {
+            hasMore = nextIdx < newChain.length;
+            nextStatus = hasMore ? chainStepToStatus(newChain, nextIdx) : "APPROVED";
+            newStepOrder = hasMore ? nextIdx : newChain.length;
+            // No explicit MARK_PAID step — completing the final approval step also
+            // marks the advance as paid in the same action.
+            if (!hasMore) {
+                nextStatus = "PAID";
+            }
+            if (hasMore) {
+                nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
+                    id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
+                }));
+            }
         }
     }
     const total = typeof approvedTotal === "number" ? approvedTotal : Number(adv.approved_total || adv.requested_total);

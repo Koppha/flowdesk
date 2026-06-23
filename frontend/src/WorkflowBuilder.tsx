@@ -65,7 +65,9 @@ type WorkflowStep = {
   isActive: boolean;
   requiresAccommodation: boolean;
   parallelWithPrevious: boolean;
-  actionType: "APPROVE" | "COUNTER_SIGN";
+  actionType: "APPROVE" | "COUNTER_SIGN" | "MARK_PAID";
+  canReject: boolean;
+  canRollback: boolean;
 };
 
 type WorkflowRule = {
@@ -115,6 +117,7 @@ type WorkflowMetadata = {
   name: string;
   requestType: string;
   advanceSubType: string;
+  division: string;
   department: string;
   section: string;
   team: string;
@@ -149,9 +152,6 @@ const POSITION_TYPE_FALLBACKS: PositionType[] = [
   { id: "system-employee", code: "EMPLOYEE", name: "Employee", description: "Request Initiator", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-hod", code: "HOD", name: "HOD", description: "Department Head", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-manager", code: "MANAGER", name: "Manager", description: "Department Manager", applies_to: ALL_REQUEST_TYPES, is_active: true },
-  // EXCO_OWNER kept as internal code for routing — never shown as a generic card; named EXCO members replace it in the UI
-  // Internal routing code; display name stays user-facing as "EXCO Member".
-  { id: "pos-exco", code: "EXCO_OWNER", name: "EXCO Member", description: "Executive Committee Member", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-finance", code: "FINANCE", name: "Finance", description: "Finance Approval", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-hr-review", code: "HR_REVIEW", name: "HR Review", description: "HR Review", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-ceo", code: "CEO", name: "CEO", description: "Chief Executive Officer", applies_to: ALL_REQUEST_TYPES, is_active: true }
@@ -173,7 +173,6 @@ const TEMPLATE_DEFINITIONS: Array<{ id: string; name: string; description: strin
     steps: [
       "EMPLOYEE",
       { code: "MANAGER",    name: "Counter Signer",          description: "Manager, Supervisor or Delegated person to counter-sign" },
-      { code: "EXCO_OWNER", name: "Approver",                description: "Manager or EXCO member to approve the request" },
       { code: "HR_REVIEW",  name: "Human Resource Manager",  description: "HR Manager review — fixed step, does not change" },
       { code: "HR_REVIEW",  name: "Human Resource",            description: "HR team final check before finance settlement" },
       { code: "FINANCE",    name: "Finance",                  description: "Finance processes and settles the advance" }
@@ -203,6 +202,7 @@ const EMPTY_METADATA: WorkflowMetadata = {
   name: "",
   requestType: "ADVANCE_REQUEST",
   advanceSubType: "SALARY",
+  division: "",
   department: "",
   section: "",
   team: "",
@@ -242,8 +242,8 @@ const DEFAULT_RULES: WorkflowRule[] = [
   }
 ];
 
-const RULE_TARGET_ROLE_CODES = ["HOD", "MANAGER", "EXCO_OWNER", "FINANCE", "HR_REVIEW", "CEO"];
-const RULE_TARGET_STAFF_ROLES = ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "EXCO", "CEO"];
+const RULE_TARGET_ROLE_CODES = ["HOD", "MANAGER", "FINANCE", "HR_REVIEW", "CEO"];
+const RULE_TARGET_STAFF_ROLES = ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "CEO"];
 
 function generateId() {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -287,8 +287,6 @@ function staffOrgPath(user: StaffMember | undefined | null) {
 
 function staffRoleToWorkflowCode(role: string | undefined | null) {
   switch (String(role || "").toUpperCase()) {
-    case "EXCO":
-      return "EXCO_OWNER";
     case "HR_MANAGER":
       return "HR_REVIEW";
     case "HOD":
@@ -312,8 +310,6 @@ function getPositionIcon(code: string) {
       return Users;
     case "MANAGER":
       return UserRoundCheck;
-    case "EXCO_OWNER":
-      return ShieldCheck;
     case "FINANCE":
       return Landmark;
     case "PROCUREMENT":
@@ -348,9 +344,8 @@ export default function WorkflowBuilder() {
   const [positionTypes, setPositionTypes] = useState<PositionType[]>(POSITION_TYPE_FALLBACKS);
   const [departments, setDepartments] = useState<any[]>([]);
   const [orgStructure, setOrgStructure] = useState<{ divisions: any[]; departments: any[]; sections: any[]; teams: any[] }>({ divisions: [], departments: [], sections: [], teams: [] });
-  const [excoMembers, setExcoMembers] = useState<any[]>([]);
   const [extraPositions, setExtraPositions] = useState<PositionType[]>([]);
-  const [addPositionPicker, setAddPositionPicker] = useState<{ department: string; team: string; role: "HOD" | "MANAGER"; anyTeamMember: boolean }>({ department: "", team: "", role: "HOD", anyTeamMember: false });
+  const [addPositionPicker, setAddPositionPicker] = useState<{ division: string; department: string; section: string; team: string; role: string; anyTeamMember: boolean }>({ division: "", department: "", section: "", team: "", role: "HOD", anyTeamMember: false });
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [addPanelMode, setAddPanelMode] = useState<"position" | "member">("position");
   const [addMemberPicker, setAddMemberPicker] = useState<{ department: string; team: string; userId: string }>({ department: "", team: "", userId: "" });
@@ -375,6 +370,12 @@ export default function WorkflowBuilder() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null }>>([]);
   const [stepUserSearch, setStepUserSearch] = useState<Record<string, string>>({});
+  const [managerTypes, setManagerTypes] = useState<Array<{ id: string; name: string; role: string; description: string | null; active: boolean; sort_order: number }>>([]);
+  const [actionTypes, setActionTypes] = useState<Array<{ id: number; code: string; label: string; is_system: boolean; is_active: boolean; sort_order: number }>>([]);
+  const [myRole, setMyRole] = useState<string>("");
+  const [showActionTypesPanel, setShowActionTypesPanel] = useState(false);
+  const [actionTypeDraft, setActionTypeDraft] = useState({ code: "", label: "" });
+  const [actionTypeError, setActionTypeError] = useState("");
 
   const requestTypeOptions = useMemo(() => {
     const custom = customRequestTypes.filter((c) => !BUILTIN_REQUEST_TYPES.some((b) => b.value === c.value));
@@ -428,33 +429,16 @@ export default function WorkflowBuilder() {
   );
 
   const availablePositionTypes = useMemo(
-    () => activePositionTypes.filter((position) => position.code !== "EMPLOYEE" && position.code !== "EXCO_OWNER"),
+    () => activePositionTypes.filter((position) => position.code !== "EMPLOYEE"),
     [activePositionTypes]
   );
-
-  // Named EXCO member cards derived from the live users with role=EXCO.
-  // Uses activePositionTypes (not availablePositionTypes) so the EXCO_OWNER base is found
-  // even though EXCO_OWNER is excluded from the generic drag-panel catalog.
-  const excoMemberCards: PositionType[] = useMemo(() => {
-    const base = activePositionTypes.find((p) => p.code === "EXCO_OWNER");
-    if (!base) return [];
-    return excoMembers.map((member) => ({
-      ...base,
-      id: `exco-member-${member.id}`,
-      description: member.full_name
-        ? `${member.full_name}${member.department ? ` — ${member.department}` : ""}`
-        : `Unassigned — ${base.description}`,
-      assignedUserId: member.id
-    }));
-  }, [availablePositionTypes, excoMembers]);
 
   const scopedPositionTypes = useMemo(() => {
     const byCode = (code: string) => availablePositionTypes.find((position) => position.code === code);
 
     if (!metadata.department) {
-      const base = availablePositionTypes.filter((p) => p.code !== "EXCO_OWNER" && p.code !== "HR_REVIEW" && p.code !== "FINANCE" && p.code !== "CEO");
-      const excoBlock = excoMemberCards.length ? excoMemberCards : (byCode("EXCO_OWNER") ? [byCode("EXCO_OWNER")!] : []);
-      return [...base, ...excoBlock, ...extraPositions];
+      const base = availablePositionTypes.filter((p) => p.code !== "HR_REVIEW" && p.code !== "FINANCE" && p.code !== "CEO");
+      return [...base, ...extraPositions];
     }
 
     const dept = departments.find((department) => getDepartmentName(department) === metadata.department);
@@ -477,38 +461,24 @@ export default function WorkflowBuilder() {
     const manager = byCode("MANAGER");
     if (manager) cards.push({ ...manager, id: `scoped-manager-${scopeKey}`, description: personLabel(orgSection?.manager_name ?? dept?.manager_name) });
 
-    // Named EXCO members — global, not scoped to department
-    excoMemberCards.forEach((card) => cards.push(card));
-    if (!excoMemberCards.length) {
-      const exco = byCode("EXCO_OWNER");
-      if (exco) cards.push({ ...exco, id: `scoped-exco-${scopeKey}`, description: personLabel(orgSection?.exco_name ?? dept?.exco_name) });
-    }
-
     // Extra positions added by admin from other departments/sections
     extraPositions.forEach((p) => cards.push(p));
 
     return cards;
-  }, [availablePositionTypes, departments, orgStructure, metadata.department, metadata.section, excoMemberCards, extraPositions]);
+  }, [availablePositionTypes, departments, orgStructure, metadata.department, metadata.section, extraPositions]);
 
   const selectedStep = useMemo(() => steps.find((step) => step.id === selectedStepId) || steps[0] || null, [steps, selectedStepId]);
 
-  // Position options for the step detail panel — EXCO_OWNER is replaced by named global EXCO members
   const detailPositionOptions = useMemo(() => {
-    const withGlobalExco = (base: PositionType[]) => {
-      const without = base.filter((p) => p.code !== "EXCO_OWNER");
-      return excoMemberCards.length
-        ? [...without, ...excoMemberCards]
-        : [...without, ...base.filter((p) => p.code === "EXCO_OWNER")];
-    };
     // Hide HR Review and Finance from the Position picker — these are no
     // longer assignable as new step positions, but stay selectable if a
     // pre-existing step already uses one (avoids an invalid select value).
     const hideRetiredCodes = (list: PositionType[]) =>
       list.filter((p) => (p.code !== "HR_REVIEW" && p.code !== "FINANCE") || p.code === selectedStep?.positionTypeCode);
     if (!selectedStep || activePositionTypes.some((position) => position.code === selectedStep.positionTypeCode)) {
-      return hideRetiredCodes(withGlobalExco(activePositionTypes));
+      return hideRetiredCodes(activePositionTypes);
     }
-    return hideRetiredCodes(withGlobalExco([
+    return hideRetiredCodes([
       {
         id: selectedStep.positionTypeId || selectedStep.id,
         code: selectedStep.positionTypeCode,
@@ -518,8 +488,8 @@ export default function WorkflowBuilder() {
         is_active: true
       },
       ...activePositionTypes
-    ]));
-  }, [activePositionTypes, excoMemberCards, metadata.requestType, selectedStep]);
+    ]);
+  }, [activePositionTypes, metadata.requestType, selectedStep]);
 
   const ruleTargetOptions = useMemo<RuleTargetOption[]>(() => {
     const options: RuleTargetOption[] = [];
@@ -553,8 +523,7 @@ export default function WorkflowBuilder() {
       if (!deptName) continue;
       const leadership = [
         { code: "HOD", title: "HOD", userId: department.hod_user_id, name: department.hod_name },
-        { code: "MANAGER", title: "Manager", userId: department.manager_user_id, name: department.manager_name },
-        { code: "EXCO_OWNER", title: "EXCO Member", userId: department.exco_user_id || department.section_exco_user_id, name: department.exco_name || department.section_exco_name }
+        { code: "MANAGER", title: "Manager", userId: department.manager_user_id, name: department.manager_name }
       ];
 
       for (const leader of leadership) {
@@ -618,39 +587,88 @@ export default function WorkflowBuilder() {
   );
 
   const departmentOptions = useMemo(() => {
-    return Array.from(
-      new Set([...departments.map(getDepartmentName), metadata.department].filter(Boolean))
-    ).sort((a, b) => a.localeCompare(b));
-  }, [departments, metadata.department]);
+    let base = departments.map(getDepartmentName).filter(Boolean) as string[];
+    if (metadata.division) {
+      const div = orgStructure.divisions.find((d) => d.name === metadata.division);
+      if (div) {
+        base = orgStructure.departments
+          .filter((d) => (d.division_ids as string[] | undefined)?.includes(div.id) || d.division_id === div.id)
+          .map((d) => d.name as string)
+          .filter(Boolean);
+      }
+    }
+    return Array.from(new Set([...base, metadata.department].filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }, [departments, orgStructure, metadata.department, metadata.division]);
 
   const otherDeptOptions = useMemo(
     () => departmentOptions.filter((d) => d !== metadata.department),
     [departmentOptions, metadata.department]
   );
 
-  // Teams belonging to the selected department (across all of its sections),
-  // used to optionally scope the extra position to a specific team.
+  const divisionOptionsForPicker = useMemo(
+    () => orgStructure.divisions.filter((d) => d.active !== false).map((d) => d.name as string).sort((a, b) => a.localeCompare(b)),
+    [orgStructure.divisions]
+  );
+
+  const deptOptionsForAddPicker = useMemo(() => {
+    let depts = orgStructure.departments.map((d) => d.name as string);
+    if (addPositionPicker.division) {
+      const div = orgStructure.divisions.find((d) => d.name === addPositionPicker.division);
+      if (div) {
+        depts = orgStructure.departments
+          .filter((d) => (d.division_ids as string[] | undefined)?.includes(div.id) || d.division_id === div.id)
+          .map((d) => d.name as string);
+      }
+    }
+    return depts.filter((n) => n !== metadata.department).sort((a, b) => a.localeCompare(b));
+  }, [orgStructure, addPositionPicker.division, metadata.department]);
+
+  const sectionOptionsForPosition = useMemo(() => {
+    if (!addPositionPicker.department) return [];
+    const orgDept = orgStructure.departments.find((d) => d?.name === addPositionPicker.department);
+    if (!orgDept) return [];
+    return orgStructure.sections
+      .filter((s) => s?.department_id === orgDept.id)
+      .map((s) => s.name as string)
+      .sort((a, b) => a.localeCompare(b));
+  }, [orgStructure, addPositionPicker.department]);
+
+  // Teams belonging to the selected department, optionally narrowed to a selected section.
   const teamOptionsForPosition = useMemo(() => {
     if (!addPositionPicker.department) return [];
     const orgDept = orgStructure.departments.find((d) => d?.name === addPositionPicker.department);
     if (!orgDept) return [];
-    const sectionIds = new Set(
-      orgStructure.sections.filter((s) => s?.department_id === orgDept.id).map((s) => s.id)
-    );
+    let sectionIds: Set<string>;
+    if (addPositionPicker.section) {
+      const sec = orgStructure.sections.find((s) => s?.name === addPositionPicker.section && s?.department_id === orgDept.id);
+      sectionIds = new Set(sec ? [sec.id] : []);
+    } else {
+      sectionIds = new Set(orgStructure.sections.filter((s) => s?.department_id === orgDept.id).map((s) => s.id));
+    }
     return orgStructure.teams
       .filter((t) => t?.section_id && sectionIds.has(t.section_id))
       .map((t) => t.name as string)
       .sort((a, b) => a.localeCompare(b));
-  }, [orgStructure, addPositionPicker.department]);
+  }, [orgStructure, addPositionPicker.department, addPositionPicker.section]);
+
+  // Manager type IDs are UUIDs; position type codes are short strings (HOD, FINANCE, etc.)
+  const isManagerTypeId = (role: string) => managerTypes.some((mt) => mt.id === role);
+  // All manager types are department-scoped
+  const isRoleDeptScoped = (role: string) =>
+    isManagerTypeId(role) || role === "HOD" || role === "MANAGER";
 
   function addExtraPosition() {
-    if (!addPositionPicker.department) return;
-    const base = activePositionTypes.find((p) => p.code === addPositionPicker.role);
+    const { division, department, section, team, role, anyTeamMember } = addPositionPicker;
+    const selectedManagerType = managerTypes.find((mt) => mt.id === role);
+    // Resolve the position type: from manager type's role code or directly as position code
+    const posCode = selectedManagerType ? selectedManagerType.role : role;
+    const base = activePositionTypes.find((p) => p.code === posCode);
     if (!base) return;
-    const { department, team, role, anyTeamMember } = addPositionPicker;
+    if (isRoleDeptScoped(role) && !department) return;
 
-    // "Any one in <team>" — a single position card representing the whole
-    // team; approving as this position requires ANY_ONE/group-based checks.
+    const resetPicker = () => setAddPositionPicker({ division: "", department: "", section: "", team: "", role: "HOD", anyTeamMember: false });
+
+    // "Any one in <team>" — group-based position card.
     if (anyTeamMember && team) {
       const id = `extra-TEAM-${department}-${team}`;
       if (extraPositions.some((p) => p.id === id)) return;
@@ -668,33 +686,67 @@ export default function WorkflowBuilder() {
           approvalGroupName: `Team: ${team}`
         }
       ]);
-      setAddPositionPicker({ department: "", team: "", role: "HOD", anyTeamMember: false });
+      resetPicker();
       setShowAddPosition(false);
       return;
     }
 
-    const id = team ? `extra-${role}-${department}-${team}` : `extra-${role}-${department}`;
+    const scopeParts = [team, section, department, division].filter(Boolean);
+    const scopeLabel = scopeParts.join(", ") || (selectedManagerType?.name ?? role);
+    const id = `extra-${[role, division, department, section, team].filter(Boolean).join("-")}`;
     if (extraPositions.some((p) => p.id === id)) return;
+
     const dept = departments.find((d) => getDepartmentName(d) === department);
+    const orgDept = orgStructure.departments.find((d) => d?.name === department);
+    const orgSection = section
+      ? orgStructure.sections.find((s) => s?.name === section && s?.department_id === orgDept?.id)
+      : null;
     const orgTeam = team ? orgStructure.teams.find((t) => t?.name === team) : null;
-    const scopeLabel = team ? `${team}, ${department}` : department;
-    // A team's leader stands in for the Manager position on that team; HOD
-    // remains the department-wide HOD regardless of team selection.
-    const personName = role === "HOD" ? dept?.hod_name : (orgTeam?.leader_name ?? dept?.manager_name);
-    const personId = role === "HOD" ? dept?.hod_user_id : (orgTeam?.leader_user_id ?? dept?.manager_user_id);
+
+    let personName: string | null = null;
+    let personId: string | null = null;
+
+    if (selectedManagerType) {
+      // Look up the person in this dept/section/team with that specific manager type
+      const candidates = staff.filter(
+        (u) =>
+          isActiveStaff(u) &&
+          u.manager_type_id === selectedManagerType.id &&
+          (!department || u.department === department)
+      );
+      const person = orgTeam
+        ? candidates.find((u) => u.team_id === orgTeam.id) ?? candidates.find((u) => u.section_id === orgSection?.id) ?? candidates[0]
+        : orgSection
+        ? candidates.find((u) => u.section_id === orgSection.id) ?? candidates[0]
+        : candidates[0];
+      personName = person?.full_name ?? null;
+      personId = person?.id ?? null;
+    } else if (posCode === "HOD") {
+      personName = orgSection?.hod_name ?? dept?.hod_name ?? null;
+      personId = orgSection?.hod_user_id ?? dept?.hod_user_id ?? null;
+    } else if (posCode === "MANAGER") {
+      personName = orgTeam?.leader_name ?? orgSection?.manager_name ?? dept?.manager_name ?? null;
+      personId = orgTeam?.leader_user_id ?? orgSection?.manager_user_id ?? dept?.manager_user_id ?? null;
+    }
+    // For FINANCE, HR_REVIEW, CEO, custom: role-based, no assigned person.
+
+    const displayName = selectedManagerType?.name ?? base.name;
+
     setExtraPositions((prev) => [
       ...prev,
       {
         id,
         code: base.code,
-        name: base.name,
-        description: personName ? `${personName} — ${scopeLabel}` : `Unassigned — ${scopeLabel}`,
+        name: displayName,
+        description: personName
+          ? `${personName} — ${scopeLabel}`
+          : department ? `Unassigned — ${scopeLabel}` : displayName,
         applies_to: base.applies_to,
         is_active: true,
         assignedUserId: personId || null
       }
     ]);
-    setAddPositionPicker({ department: "", team: "", role: "HOD", anyTeamMember: false });
+    resetPicker();
     setShowAddPosition(false);
   }
 
@@ -818,13 +870,15 @@ export default function WorkflowBuilder() {
   async function loadInitialData() {
     setLoading(true);
     try {
-      const [workflowResult, departmentResult, orgStructureResult, excoResult, requestTypesResult, usersResult] = await Promise.all([
+      const [workflowResult, departmentResult, orgStructureResult, requestTypesResult, usersResult, actionTypesResult, meResult, managerTypesResult] = await Promise.all([
         api.workflows(),
         api.departmentsWithSections(),
         api.orgStructure(),
-        api.workflowExcoMembers(),
         api.requestTypes(),
-        api.adminUsers()
+        api.adminUsers(),
+        api.workflowActionTypes(),
+        api.me(),
+        api.managerTypes().catch(() => [])
       ]);
       setWorkflows(Array.isArray(workflowResult) ? workflowResult.map(normalizeWorkflow) : []);
       setDepartments(Array.isArray(departmentResult) ? departmentResult : []);
@@ -836,7 +890,6 @@ export default function WorkflowBuilder() {
           teams: Array.isArray(orgStructureResult.teams) ? orgStructureResult.teams : []
         });
       }
-      setExcoMembers(Array.isArray(excoResult) ? excoResult : []);
       setAllUsers(Array.isArray(usersResult) ? usersResult.filter((u: any) => u.profile_completed && !["EMPLOYEE"].includes(u.role)) : []);
       if (Array.isArray(requestTypesResult)) {
         setCustomRequestTypes(
@@ -844,6 +897,13 @@ export default function WorkflowBuilder() {
             .filter((rt: any) => rt.status === "ACTIVE")
             .map((rt: any) => ({ value: rt.code, label: rt.name }))
         );
+      }
+      if (Array.isArray(actionTypesResult)) setActionTypes(actionTypesResult);
+      if (meResult && typeof meResult === "object") setMyRole((meResult as any).role || "");
+      if (Array.isArray(managerTypesResult)) {
+        const activeMt = managerTypesResult.filter((mt: any) => mt.active !== false);
+        setManagerTypes(activeMt);
+        if (activeMt.length > 0) setAddPositionPicker((p) => ({ ...p, role: activeMt[0].id }));
       }
     } catch (error) {
       console.warn(error);
@@ -912,7 +972,9 @@ export default function WorkflowBuilder() {
       isActive: raw.is_active ?? raw.isActive ?? true,
       requiresAccommodation: raw.requires_accommodation ?? raw.requiresAccommodation ?? false,
       parallelWithPrevious: raw.parallel_with_previous ?? raw.parallelWithPrevious ?? false,
-      actionType: (raw.action_type || raw.actionType || "APPROVE") as "APPROVE" | "COUNTER_SIGN"
+      actionType: (raw.action_type || raw.actionType || "APPROVE") as "APPROVE" | "COUNTER_SIGN" | "MARK_PAID",
+      canReject: raw.can_reject ?? raw.canReject ?? true,
+      canRollback: raw.can_rollback ?? raw.canRollback ?? true
     };
   }
 
@@ -958,7 +1020,7 @@ export default function WorkflowBuilder() {
       description: position.description,
       isRequired: isEmployee || !["HOD"].includes(position.code),
       skipIfUnassigned: position.code === "HOD",
-      allowDelegation: ["HOD", "MANAGER", "EXCO_OWNER"].includes(position.code),
+      allowDelegation: ["HOD", "MANAGER"].includes(position.code),
       commentsRequired: false,
       escalationDays: position.code === "EMPLOYEE" ? 0 : 2,
       isFinalApproval: isFinal,
@@ -967,6 +1029,8 @@ export default function WorkflowBuilder() {
       requiresAccommodation: false,
       parallelWithPrevious: false,
       actionType: position.code === "MANAGER" ? "COUNTER_SIGN" : "APPROVE",
+      canReject: true,
+      canRollback: true,
       ...overrides,
       approvalMode: overrides.approvalMode ?? "SINGLE",
       approvalGroupName: overrides.approvalGroupName ?? null
@@ -1010,8 +1074,29 @@ export default function WorkflowBuilder() {
     setScreen("DETAILS");
   }
 
+  async function verifyAdminPassword(): Promise<boolean> {
+    const result = await Swal.fire({
+      title: "Confirm your password",
+      text: "Please re-enter your password to continue with this action.",
+      input: "password",
+      inputAttributes: { autocapitalize: "off", autocomplete: "current-password" },
+      showCancelButton: true,
+      confirmButtonText: "Confirm",
+      inputValidator: (value) => (!value ? "Password is required" : undefined)
+    });
+    if (!result.isConfirmed) return false;
+    try {
+      await api.verifyPassword(result.value);
+      return true;
+    } catch (error: any) {
+      void Swal.fire({ icon: "error", title: "Incorrect password", text: error?.message || "Unable to verify password." });
+      return false;
+    }
+  }
+
   async function loadWorkflowDetail(workflowId: string, nextMode: WorkflowMode) {
     if (!workflowId) return;
+    if (nextMode === "edit" && !(await verifyAdminPassword())) return;
     setLoading(true);
     try {
       const result = await api.workflowDetail(workflowId);
@@ -1021,6 +1106,7 @@ export default function WorkflowBuilder() {
         name: workflow.name,
         requestType: workflow.requestType,
         advanceSubType: workflow.advanceSubType || "",
+        division: "",
         department: workflow.department || "",
         section: workflow.section || "",
         team: workflow.team || "",
@@ -1148,7 +1234,6 @@ export default function WorkflowBuilder() {
     switch (step.positionTypeCode) {
       case "MANAGER":     roles = ["MANAGER", "HOD"]; break;
       case "HOD":         roles = ["HOD"]; break;
-      case "EXCO_OWNER":  roles = ["EXCO"]; break;
       case "FINANCE":     roles = ["FINANCE"]; break;
       case "CEO":         roles = ["CEO"]; break;
       case "HR_REVIEW":
@@ -1212,7 +1297,9 @@ export default function WorkflowBuilder() {
         is_active: step.isActive,
         requires_accommodation: step.requiresAccommodation,
         parallel_with_previous: step.parallelWithPrevious,
-        action_type: step.actionType
+        action_type: step.actionType,
+        can_reject: step.canReject,
+        can_rollback: step.canRollback
       })),
       rules: rules.map((rule) => {
         const target = resolveRuleTarget(rule);
@@ -1259,6 +1346,7 @@ export default function WorkflowBuilder() {
   }
 
   async function updateWorkflowStatus(workflow: Workflow, status: WorkflowStatus) {
+    if (!(await verifyAdminPassword())) return;
     try {
       await api.updateWorkflow(workflow.id, { status });
       await refreshWorkflows();
@@ -1270,6 +1358,7 @@ export default function WorkflowBuilder() {
   async function deleteWorkflow(workflow: Workflow) {
     const result = await Swal.fire({ title: "Delete workflow?", text: `Delete ${workflow.name}?`, icon: "warning", showCancelButton: true, confirmButtonText: "Delete" });
     if (!result.isConfirmed) return;
+    if (!(await verifyAdminPassword())) return;
     try {
       await api.deleteWorkflow(workflow.id);
       await refreshWorkflows();
@@ -1279,6 +1368,7 @@ export default function WorkflowBuilder() {
   }
 
   async function duplicateWorkflow(workflow: Workflow) {
+    if (!(await verifyAdminPassword())) return;
     try {
       setLoading(true);
       const detail = normalizeWorkflow(await api.workflowDetail(workflow.id));
@@ -1287,6 +1377,7 @@ export default function WorkflowBuilder() {
         name: `${detail.name} Copy`,
         requestType: detail.requestType,
         advanceSubType: detail.advanceSubType || "",
+        division: "",
         department: detail.department || "",
         section: detail.section || "",
         team: detail.team || "",
@@ -1630,6 +1721,120 @@ export default function WorkflowBuilder() {
             </table>
           </div>
         </section>
+
+        {myRole === "ADMIN" && (
+          <section className="workflow-list-panel" style={{ marginTop: 24 }}>
+            <div className="workflow-list-toolbar" style={{ cursor: "pointer" }} onClick={() => setShowActionTypesPanel((v) => !v)}>
+              <strong style={{ fontSize: 14 }}>Step Action Labels</strong>
+              <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--color-muted, #888)" }}>
+                {showActionTypesPanel ? "Hide" : "Manage"}
+              </span>
+            </div>
+            {showActionTypesPanel && (
+              <div style={{ padding: "12px 16px" }}>
+                <table className="workflow-table" style={{ marginBottom: 16 }}>
+                  <thead>
+                    <tr>
+                      <th>Code</th>
+                      <th>Label</th>
+                      <th>Built-in</th>
+                      <th>Active</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {actionTypes.map((at) => (
+                      <tr key={at.id}>
+                        <td><code>{at.code}</code></td>
+                        <td>
+                          <input
+                            type="text"
+                            defaultValue={at.label}
+                            disabled={at.is_system && at.code !== at.code}
+                            onBlur={async (e) => {
+                              const newLabel = e.target.value.trim();
+                              if (!newLabel || newLabel === at.label) return;
+                              await api.updateWorkflowActionType(at.id, { label: newLabel });
+                              setActionTypes((prev) => prev.map((x) => x.id === at.id ? { ...x, label: newLabel } : x));
+                            }}
+                            style={{ border: "1px solid var(--color-border, #ddd)", borderRadius: 4, padding: "2px 6px", width: "100%" }}
+                          />
+                        </td>
+                        <td style={{ textAlign: "center" }}>{at.is_system ? "✓" : ""}</td>
+                        <td style={{ textAlign: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={at.is_active}
+                            onChange={async (e) => {
+                              await api.updateWorkflowActionType(at.id, { is_active: e.target.checked });
+                              setActionTypes((prev) => prev.map((x) => x.id === at.id ? { ...x, is_active: e.target.checked } : x));
+                            }}
+                          />
+                        </td>
+                        <td>
+                          {!at.is_system && (
+                            <button
+                              type="button"
+                              className="ep-btn ep-btn-danger"
+                              style={{ padding: "2px 8px", fontSize: 12 }}
+                              onClick={async () => {
+                                if (!confirm(`Delete "${at.label}"?`)) return;
+                                await api.deleteWorkflowActionType(at.id);
+                                setActionTypes((prev) => prev.filter((x) => x.id !== at.id));
+                              }}
+                            >Remove</button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                  <label style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, marginBottom: 4 }}>Code (e.g. DEPT_REVIEWER)</div>
+                    <input
+                      type="text"
+                      placeholder="DEPT_REVIEWER"
+                      value={actionTypeDraft.code}
+                      onChange={(e) => setActionTypeDraft((d) => ({ ...d, code: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") }))}
+                      style={{ width: "100%", border: "1px solid var(--color-border, #ddd)", borderRadius: 4, padding: "4px 8px" }}
+                    />
+                  </label>
+                  <label style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, marginBottom: 4 }}>Label (shown in dropdown)</div>
+                    <input
+                      type="text"
+                      placeholder="Department Reviewer"
+                      value={actionTypeDraft.label}
+                      onChange={(e) => setActionTypeDraft((d) => ({ ...d, label: e.target.value }))}
+                      style={{ width: "100%", border: "1px solid var(--color-border, #ddd)", borderRadius: 4, padding: "4px 8px" }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="ep-btn"
+                    onClick={async () => {
+                      setActionTypeError("");
+                      if (!actionTypeDraft.code || !actionTypeDraft.label) { setActionTypeError("Both code and label are required."); return; }
+                      if (actionTypes.some((at) => at.code === actionTypeDraft.code)) { setActionTypeError("That code already exists."); return; }
+                      try {
+                        const result = await api.createWorkflowActionType({ code: actionTypeDraft.code, label: actionTypeDraft.label, sort_order: 99 });
+                        setActionTypes((prev) => [...prev, { id: (result as any).id, code: actionTypeDraft.code, label: actionTypeDraft.label, is_system: false, is_active: true, sort_order: 99 }]);
+                        setActionTypeDraft({ code: "", label: "" });
+                      } catch (err: any) {
+                        setActionTypeError(err.message || "Failed to add action type");
+                      }
+                    }}
+                  >Add</button>
+                </div>
+                {actionTypeError && <p style={{ color: "red", fontSize: 12, marginTop: 6 }}>{actionTypeError}</p>}
+                <p style={{ fontSize: 11, color: "var(--color-muted, #888)", marginTop: 8 }}>
+                  Built-in labels (Approver, Counter Signer, Payment Officer) can be renamed but not removed. Custom labels all act as approvers.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
       </div>
     );
   }
@@ -1657,6 +1862,13 @@ export default function WorkflowBuilder() {
                 <span>Request Type <sup>*</sup></span>
                 <select value={step1RequestTypeValue} onChange={(event) => handleStep1RequestTypeChange(event.target.value)}>
                   {step1RequestTypeOptions.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Division</span>
+                <select value={metadata.division} onChange={(event) => updateMetadata({ division: event.target.value, department: "", section: "", team: "" })}>
+                  <option value="">All Divisions</option>
+                  {divisionOptionsForPicker.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
               </label>
               <label>
@@ -1810,6 +2022,13 @@ export default function WorkflowBuilder() {
               ))}
             </select>
           </label>
+          <label className="workflow-config-field">
+            <span>Division</span>
+            <select value={metadata.division} onChange={(event) => updateMetadata({ division: event.target.value, department: "", section: "", team: "" })} disabled={readOnly}>
+              <option value="">All Divisions</option>
+              {divisionOptionsForPicker.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </label>
           <label className="workflow-config-field workflow-config-department">
             <span>Department</span>
             <select value={metadata.department} onChange={(event) => updateMetadata({ department: event.target.value, section: "", team: "" })} disabled={readOnly}>
@@ -1876,7 +2095,11 @@ export default function WorkflowBuilder() {
                 const toneClass = getPositionToneClass(step.positionTypeCode);
                 const statusLabel = step.isSystemStep ? "System Step" : step.isRequired ? "Required" : "Optional";
                 const statusClass = step.isSystemStep ? "status-pill-info" : step.isRequired ? "status-pill-success" : "status-pill-warning";
-                const supportLabel = step.isFinalApproval ? "Final Approval" : step.skipIfUnassigned ? "Skip if unassigned" : step.isRequired ? "Must approve" : "Can be skipped";
+                const actionLabel =
+                  actionTypes.find((at) => at.code === step.actionType)?.label
+                  ?? ({ APPROVE: "Approver", COUNTER_SIGN: "Counter Signer", MARK_PAID: "Payment Officer" } as Record<string, string>)[step.actionType]
+                  ?? step.actionType;
+                const supportLabel = step.isFinalApproval ? `${actionLabel} · Final Approval` : actionLabel;
                 const isGrouped = step.parallelWithPrevious || steps[index + 1]?.parallelWithPrevious;
                 return (
                   <React.Fragment key={step.id}>
@@ -1957,7 +2180,7 @@ export default function WorkflowBuilder() {
                   <select value={selectedStep.positionTypeCode} onChange={(event) => updateStepPosition(selectedStep.id, event.target.value)} disabled={readOnly || selectedStep.isSystemStep}>
                     {detailPositionOptions.map((position) => (
                       <option key={position.id} value={position.code}>
-                        {position.code === "EXCO_OWNER" ? `${position.name} — ${position.description}` : position.name}
+                        {position.name}
                       </option>
                     ))}
                   </select>
@@ -2049,9 +2272,13 @@ export default function WorkflowBuilder() {
                 </label>
                 <label>
                   <span>Action Label</span>
-                  <select value={selectedStep.actionType} onChange={(event) => updateStep(selectedStep.id, { actionType: event.target.value as "APPROVE" | "COUNTER_SIGN" })} disabled={readOnly}>
-                    <option value="APPROVE">Approver</option>
-                    <option value="COUNTER_SIGN">Counter Signer</option>
+                  <select value={selectedStep.actionType} onChange={(event) => updateStep(selectedStep.id, { actionType: event.target.value as "APPROVE" | "COUNTER_SIGN" | "MARK_PAID" })} disabled={readOnly}>
+                    {(actionTypes.filter((at) => at.is_active).length > 0
+                      ? actionTypes.filter((at) => at.is_active)
+                      : [{ code: "APPROVE", label: "Approver" }, { code: "COUNTER_SIGN", label: "Counter Signer" }, { code: "MARK_PAID", label: "Payment Officer" }]
+                    ).map((at) => (
+                      <option key={at.code} value={at.code}>{at.label}</option>
+                    ))}
                   </select>
                 </label>
                 <div className="workflow-checkbox-list">
@@ -2066,6 +2293,14 @@ export default function WorkflowBuilder() {
                   <label className="workflow-checkbox">
                     <input type="checkbox" checked={selectedStep.isFinalApproval} onChange={(event) => updateStep(selectedStep.id, { isFinalApproval: event.target.checked })} disabled={readOnly} />
                     <span>Final Approval</span>
+                  </label>
+                  <label className="workflow-checkbox">
+                    <input type="checkbox" checked={selectedStep.canReject} onChange={(event) => updateStep(selectedStep.id, { canReject: event.target.checked })} disabled={readOnly} />
+                    <span>Allow Reject at this step</span>
+                  </label>
+                  <label className="workflow-checkbox">
+                    <input type="checkbox" checked={selectedStep.canRollback} onChange={(event) => updateStep(selectedStep.id, { canRollback: event.target.checked })} disabled={readOnly} />
+                    <span>Allow Roll Back to Draft at this step</span>
                   </label>
                   <label className="workflow-checkbox">
                     <input type="checkbox" checked={selectedStep.requiresAccommodation} onChange={(event) => updateStep(selectedStep.id, { requiresAccommodation: event.target.checked })} disabled={readOnly} />
@@ -2163,30 +2398,61 @@ export default function WorkflowBuilder() {
                     {addPanelMode === "position" ? (
                       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                         <select
+                          value={addPositionPicker.division}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, division: e.target.value, department: "", section: "", team: "" }))}
+                          style={{ flex: 1, minWidth: 110, fontSize: 13 }}
+                        >
+                          <option value="">All divisions…</option>
+                          {divisionOptionsForPicker.map((d) => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <select
                           value={addPositionPicker.department}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, department: e.target.value, team: "" }))}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, department: e.target.value, section: "", team: "" }))}
                           style={{ flex: 1, minWidth: 140, fontSize: 13 }}
                         >
                           <option value="">Choose department…</option>
-                          {otherDeptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                          {deptOptionsForAddPicker.map((d) => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <select
+                          value={addPositionPicker.section}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, section: e.target.value, team: "" }))}
+                          disabled={sectionOptionsForPosition.length === 0}
+                          style={{ flex: 1, minWidth: 120, fontSize: 13 }}
+                        >
+                          <option value="">All sections…</option>
+                          {sectionOptionsForPosition.map((s) => <option key={s} value={s}>{s}</option>)}
                         </select>
                         <select
                           value={addPositionPicker.team}
                           onChange={(e) => setAddPositionPicker((p) => ({ ...p, team: e.target.value, anyTeamMember: e.target.value ? p.anyTeamMember : false }))}
                           disabled={!addPositionPicker.department || teamOptionsForPosition.length === 0}
-                          style={{ flex: 1, minWidth: 120, fontSize: 13 }}
+                          style={{ flex: 1, minWidth: 110, fontSize: 13 }}
                         >
                           <option value="">All teams…</option>
                           {teamOptionsForPosition.map((t) => <option key={t} value={t}>{t}</option>)}
                         </select>
                         <select
                           value={addPositionPicker.role}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, role: e.target.value as "HOD" | "MANAGER" }))}
+                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, role: e.target.value }))}
                           disabled={addPositionPicker.anyTeamMember}
                           style={{ fontSize: 13 }}
                         >
-                          <option value="HOD">HOD</option>
-                          <option value="MANAGER">Manager</option>
+                          {managerTypes.length > 0 ? (
+                            <>
+                              <optgroup label="Manager Types">
+                                {managerTypes.map((mt) => (
+                                  <option key={mt.id} value={mt.id}>{mt.name}</option>
+                                ))}
+                              </optgroup>
+                              <optgroup label="Other Positions">
+                                {availablePositionTypes
+                                  .filter((p) => p.code !== "HOD" && p.code !== "MANAGER")
+                                  .map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
+                              </optgroup>
+                            </>
+                          ) : (
+                            availablePositionTypes.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)
+                          )}
                         </select>
                         <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, whiteSpace: "nowrap" }}>
                           <input
@@ -2197,7 +2463,12 @@ export default function WorkflowBuilder() {
                           />
                           Any team member
                         </label>
-                        <button type="button" className="button button-subtle small-button" onClick={addExtraPosition} disabled={!addPositionPicker.department}>
+                        <button
+                          type="button"
+                          className="button button-subtle small-button"
+                          onClick={addExtraPosition}
+                          disabled={isRoleDeptScoped(addPositionPicker.role) && !addPositionPicker.department}
+                        >
                           <Plus size={13} aria-hidden /> Add
                         </button>
                         <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(false)}>

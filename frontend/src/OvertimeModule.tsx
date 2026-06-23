@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { HolidayCalendarButton } from "./HolidayCalendar";
 
 type DirectoryUser = {
   id: string;
@@ -22,8 +23,6 @@ type RequestLine = {
   day: string;
   estimated_start: string;
   estimated_end: string;
-  actual_start: string;
-  actual_end: string;
   reason: string;
   noc: string;
   car_reg: string;
@@ -34,7 +33,7 @@ const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","
 
 const EMPTY_LINE: RequestLine = {
   date: "", day: "", estimated_start: "", estimated_end: "",
-  actual_start: "", actual_end: "", reason: "", noc: "", car_reg: ""
+  reason: "", noc: "", car_reg: ""
 };
 
 function dayFromDate(dateStr: string) {
@@ -155,6 +154,7 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
           <p style={{ margin: "4px 0 0", color: "var(--muted)", fontSize: 13 }}>Submit overtime worked for supervisor and management approval.</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <HolidayCalendarButton />
           <button onClick={() => setTab(tab === "REQUEST" ? "RECORDS" : "REQUEST")}
             style={{ padding: "7px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>
             {tab === "REQUEST" ? "View Records" : "New Request"}
@@ -253,7 +253,6 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
                   <th style={th}>Date</th>
                   <th style={th}>Day</th>
                   <th style={{ ...th, textAlign: "center" }} colSpan={2}>Estimated Hours</th>
-                  <th style={{ ...th, textAlign: "center" }} colSpan={2}>Actual Hours</th>
                   <th style={th}>Reason for Overtime</th>
                   <th style={th}>NOC</th>
                   <th style={th}>Car Reg</th>
@@ -262,8 +261,6 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
                 <tr style={{ background: "#f8fafc" }}>
                   <th style={th}></th>
                   <th style={th}></th>
-                  <th style={{ ...th, fontSize: 11, color: "#94a3b8" }}>Start</th>
-                  <th style={{ ...th, fontSize: 11, color: "#94a3b8" }}>End</th>
                   <th style={{ ...th, fontSize: 11, color: "#94a3b8" }}>Start</th>
                   <th style={{ ...th, fontSize: 11, color: "#94a3b8" }}>End</th>
                   <th style={th}></th>
@@ -286,12 +283,6 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
                     </td>
                     <td style={{ ...td, minWidth: 75 }}>
                       <input type="time" value={line.estimated_end} onChange={(e) => updateLine(idx, "estimated_end", e.target.value)} style={timeInp} />
-                    </td>
-                    <td style={{ ...td, minWidth: 75 }}>
-                      <input type="time" value={line.actual_start} onChange={(e) => updateLine(idx, "actual_start", e.target.value)} style={timeInp} />
-                    </td>
-                    <td style={{ ...td, minWidth: 75 }}>
-                      <input type="time" value={line.actual_end} onChange={(e) => updateLine(idx, "actual_end", e.target.value)} style={timeInp} />
                     </td>
                     <td style={{ ...td, minWidth: 220 }}>
                       <textarea value={line.reason} onChange={(e) => updateLine(idx, "reason", e.target.value)}
@@ -324,9 +315,6 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
             <label style={labelStyle}>Remarks</label>
             <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)} rows={3}
               style={{ ...fieldStyle, resize: "vertical", marginBottom: 0 }} placeholder="Any additional remarks…" />
-            <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--muted)" }}>
-              After submitting, this request will be routed to your supervisor for recommendation, then HOD, then CTO for final approval.
-            </p>
           </div>
 
           {/* ── Action buttons ─────────────────────────────── */}

@@ -96,7 +96,7 @@ export async function advanceClaimWorkflowStep(args) {
         newStepOrder = hasMore ? nextIdx : newChain.length;
         if (hasMore) {
             nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
-                name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
+                id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
             }));
         }
     }

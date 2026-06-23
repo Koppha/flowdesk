@@ -2,7 +2,19 @@ import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { logger } from "./lib/logger.js";
 import { bootstrapSystem } from "./bootstrap/system.js";
+import { sendPendingChangeRequestFollowUps } from "./modules/custom-requests/custom-requests.routes.js";
 await bootstrapSystem();
+// Run once at startup then every 24 h to send D+1 post-implementation review emails
+async function runFollowUpScheduler() {
+    try {
+        await sendPendingChangeRequestFollowUps();
+    }
+    catch (err) {
+        logger.warn("change_request_followup_scheduler_failed", { error: String(err) });
+    }
+}
+runFollowUpScheduler();
+setInterval(runFollowUpScheduler, 24 * 60 * 60 * 1000);
 const app = createApp();
 app.listen(env.PORT, "0.0.0.0", () => {
     logger.info("api_started", {

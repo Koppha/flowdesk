@@ -31,6 +31,30 @@ function StatusBadge({ status }: { status: string }) {
 
 const PAGE_SIZE = 20;
 
+const ALL_COLUMNS: { key: string; label: string }[] = [
+  { key: "employee", label: "Employee" },
+  { key: "department", label: "Department" },
+  { key: "type", label: "Type" },
+  { key: "status", label: "Status" },
+  { key: "requested", label: "Requested" },
+  { key: "approved", label: "Approved" },
+  { key: "submitted", label: "Submitted" },
+  { key: "approvedDate", label: "Approved Date" },
+  { key: "paidDate", label: "Paid Date" },
+];
+
+const COLUMNS_STORAGE_KEY = "advancesReportColumns";
+
+function loadVisibleColumns(): Record<string, boolean> {
+  const defaults = Object.fromEntries(ALL_COLUMNS.map(c => [c.key, true]));
+  try {
+    const saved = JSON.parse(localStorage.getItem(COLUMNS_STORAGE_KEY) || "{}");
+    return { ...defaults, ...saved };
+  } catch {
+    return defaults;
+  }
+}
+
 export default function ReportAdvances({ advances, travelTypes, onBack }: Props) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -39,6 +63,18 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
+  const [visibleCols, setVisibleCols] = useState<Record<string, boolean>>(loadVisibleColumns);
+  const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
+
+  function toggleColumn(key: string) {
+    setVisibleCols(prev => {
+      const visibleCount = ALL_COLUMNS.filter(c => prev[c.key]).length;
+      if (prev[key] && visibleCount <= 1) return prev; // keep at least one column visible
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
 
   const uniqueTypes = useMemo(() => [...new Set(advances.map(a => a.type).filter(Boolean))].sort(), [advances]);
   const uniqueDepts = useMemo(() => [...new Set(advances.map(a => a.department).filter(Boolean))].sort(), [advances]);
@@ -72,13 +108,20 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
   }), [advances]);
 
   function exportCsv() {
-    const headers = ["Employee","Department","Type","Status","Requested","Approved","Submitted","Approved Date","Paid Date"];
-    const rows = filtered.map(a => [
-      a.requester_name ?? "", a.department ?? "",
-      travelTypeLabel(a.type, travelTypes), a.status,
-      a.requested_total ?? "", a.approved_total ?? "",
-      fmtDate(a.submitted_at), fmtDate(a.approved_at), fmtDate(a.paid_at),
-    ]);
+    const valueByKey: Record<string, (a: any) => string | number> = {
+      employee: a => a.requester_name ?? "",
+      department: a => a.department ?? "",
+      type: a => travelTypeLabel(a.type, travelTypes),
+      status: a => a.status,
+      requested: a => a.requested_total ?? "",
+      approved: a => a.approved_total ?? "",
+      submitted: a => fmtDate(a.submitted_at),
+      approvedDate: a => fmtDate(a.approved_at),
+      paidDate: a => fmtDate(a.paid_at),
+    };
+    const cols = ALL_COLUMNS.filter(c => visibleCols[c.key]);
+    const headers = cols.map(c => c.label);
+    const rows = filtered.map(a => cols.map(c => valueByKey[c.key](a)));
     const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
     const el = document.createElement("a");
     el.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
@@ -98,7 +141,29 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
           <h1 className="ep-title">Advance Requests</h1>
           <p className="ep-subtitle">Full admin view of all advance requests across the organisation.</p>
         </div>
-        <div className="ep-actions">
+        <div className="ep-actions" style={{ position: "relative" }}>
+          <button className="ep-btn-outline" onClick={() => setColumnsMenuOpen(v => !v)}>
+            Columns ({ALL_COLUMNS.filter(c => visibleCols[c.key]).length}/{ALL_COLUMNS.length})
+          </button>
+          {columnsMenuOpen && (
+            <div style={{
+              position: "absolute", top: "100%", right: 0, marginTop: 6, zIndex: 20,
+              background: "var(--card,#fff)", border: "1px solid var(--border,#e5e7eb)", borderRadius: 8,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.12)", padding: "8px 0", minWidth: 180,
+            }}>
+              {ALL_COLUMNS.map(c => (
+                <label key={c.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 14px", fontSize: 13, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!visibleCols[c.key]}
+                    onChange={() => toggleColumn(c.key)}
+                    style={{ accentColor: "var(--primary,#2563eb)" }}
+                  />
+                  {c.label}
+                </label>
+              ))}
+            </div>
+          )}
           <button className="ep-btn-outline" onClick={exportCsv} disabled={!filtered.length}>
             <Download size={14} /> Export CSV
           </button>
@@ -166,32 +231,34 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
             <table className="ep-table">
               <thead>
                 <tr>
-                  <th>Employee</th>
-                  <th>Department</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Requested</th>
-                  <th>Approved</th>
-                  <th>Submitted</th>
-                  <th>Approved Date</th>
-                  <th>Paid Date</th>
+                  {visibleCols.employee && <th>Employee</th>}
+                  {visibleCols.department && <th>Department</th>}
+                  {visibleCols.type && <th>Type</th>}
+                  {visibleCols.status && <th>Status</th>}
+                  {visibleCols.requested && <th>Requested</th>}
+                  {visibleCols.approved && <th>Approved</th>}
+                  {visibleCols.submitted && <th>Submitted</th>}
+                  {visibleCols.approvedDate && <th>Approved Date</th>}
+                  {visibleCols.paidDate && <th>Paid Date</th>}
                 </tr>
               </thead>
               <tbody>
                 {paged.map(a => (
                   <tr key={a.id}>
-                    <td>
-                      <div style={{ fontWeight: 600, fontSize: "0.87rem" }}>{a.requester_name || "—"}</div>
-                      {a.employee_no && <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{a.employee_no}</div>}
-                    </td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{a.department || "—"}</td>
-                    <td style={{ fontSize: 13 }}>{travelTypeLabel(a.type, travelTypes)}</td>
-                    <td><StatusBadge status={a.status} /></td>
-                    <td style={{ fontWeight: 600 }}>{formatMoney(a.requested_total, "LSL")}</td>
-                    <td style={{ color: "var(--muted)" }}>{formatMoney(a.approved_total, "LSL")}</td>
-                    <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.submitted_at || a.created_at)}</td>
-                    <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.approved_at)}</td>
-                    <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.paid_at)}</td>
+                    {visibleCols.employee && (
+                      <td>
+                        <div style={{ fontWeight: 600, fontSize: "0.87rem" }}>{a.requester_name || "—"}</div>
+                        {a.employee_no && <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{a.employee_no}</div>}
+                      </td>
+                    )}
+                    {visibleCols.department && <td style={{ color: "var(--muted)", fontSize: 13 }}>{a.department || "—"}</td>}
+                    {visibleCols.type && <td style={{ fontSize: 13 }}>{travelTypeLabel(a.type, travelTypes)}</td>}
+                    {visibleCols.status && <td><StatusBadge status={a.status} /></td>}
+                    {visibleCols.requested && <td style={{ fontWeight: 600 }}>{formatMoney(a.requested_total, "LSL")}</td>}
+                    {visibleCols.approved && <td style={{ color: "var(--muted)" }}>{formatMoney(a.approved_total, "LSL")}</td>}
+                    {visibleCols.submitted && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.submitted_at || a.created_at)}</td>}
+                    {visibleCols.approvedDate && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.approved_at)}</td>}
+                    {visibleCols.paidDate && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.paid_at)}</td>}
                   </tr>
                 ))}
               </tbody>

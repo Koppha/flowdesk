@@ -311,35 +311,29 @@ export default function SlaReports({ onBack }: { onBack: () => void }) {
       {report&&(
         <>
           {/* KPI row */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:18 }}>
+          <div className="inbox-metrics" style={{ marginBottom:18 }}>
             {[
-              { icon:<FileText size={22} style={{color:"#3b82f6"}}/>, iconBg:"#eff6ff", iconR:10,
-                title:"Total Requests", val:String(report.summary.total), badge:"", badgeClr:"",
-                sub:`${report.summary.pending} pending`, subClr:"#f59e0b" },
-              { icon:<CheckCircle size={22} style={{color:"#059669"}}/>, iconBg:"#d1fae5", iconR:"50%" as const,
+              { icon:<FileText size={22}/>, metric:"metric-blue",
+                title:"Total Requests", val:String(report.summary.total), badge:"",
+                sub:`${report.summary.pending} pending`, trend:false },
+              { icon:<CheckCircle size={22}/>, metric:"metric-green",
                 title:"Within SLA", val:String(report.summary.on_time),
-                badge:compliance!=null?`(${compliance}%)`:"", badgeClr:"#059669",
-                sub:"On-time compliance", subClr:"#10b981" },
-              { icon:<AlertTriangle size={22} style={{color:"#dc2626"}}/>, iconBg:"#fee2e2", iconR:"50%" as const,
+                badge:compliance!=null?`(${compliance}%)`:"",
+                sub:"On-time compliance", trend:true },
+              { icon:<AlertTriangle size={22}/>, metric:"metric-rose",
                 title:"Breached SLA", val:String(report.summary.breached),
-                badge:report.summary.total>0?`(${Math.round((report.summary.breached/report.summary.total)*100)}%)`:"", badgeClr:"#dc2626",
-                sub:`${report.summary.at_risk} at risk`, subClr:"#f59e0b" },
-              { icon:<Clock size={22} style={{color:"#7c3aed"}}/>, iconBg:"#ede9fe", iconR:"50%" as const,
-                title:"Avg Resolution Time", val:avgDays!=null?`${avgDays} Days`:"—", badge:"", badgeClr:"",
-                sub:"End-to-end processing", subClr:"#64748b" },
-            ].map(({icon,iconBg,iconR,title,val,badge,badgeClr,sub,subClr})=>(
-              <div key={title} style={{...C,display:"flex",alignItems:"center",gap:14}}>
-                <div style={{ width:50,height:50,borderRadius:iconR,background:iconBg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
-                  {icon}
-                </div>
-                <div>
-                  <div style={{ fontSize:11,color:"#94a3b8",fontWeight:500,marginBottom:2 }}>{title}</div>
-                  <div style={{ fontSize:26,fontWeight:800,color:"#0f172a",lineHeight:1.1,display:"flex",alignItems:"baseline",gap:5 }}>
-                    {val}{badge&&<span style={{fontSize:14,fontWeight:600,color:badgeClr}}>{badge}</span>}
-                  </div>
-                  <div style={{ fontSize:12,color:subClr,marginTop:2,display:"flex",alignItems:"center",gap:3 }}>
-                    {subClr==="#10b981"&&<TrendingUp size={11}/>}{sub}
-                  </div>
+                badge:report.summary.total>0?`(${Math.round((report.summary.breached/report.summary.total)*100)}%)`:"",
+                sub:`${report.summary.at_risk} at risk`, trend:false },
+              { icon:<Clock size={22}/>, metric:"metric-gold",
+                title:"Avg Resolution Time", val:avgDays!=null?`${avgDays} Days`:"—", badge:"",
+                sub:"End-to-end processing", trend:false },
+            ].map(({icon,metric,title,val,badge,sub,trend})=>(
+              <div key={title} className={`inbox-metric-card ${metric}`}>
+                <span className="inbox-metric-icon">{icon}</span>
+                <div className="inbox-metric-body">
+                  <strong>{val}{badge&&<span style={{fontSize:14,fontWeight:600,marginLeft:5}}>{badge}</span>}</strong>
+                  <span>{title}</span>
+                  <small style={{display:"flex",alignItems:"center",gap:3}}>{trend&&<TrendingUp size={11}/>}{sub}</small>
                 </div>
               </div>
             ))}
@@ -470,12 +464,13 @@ export default function SlaReports({ onBack }: { onBack: () => void }) {
                           const totalT=report.sla_targets.submission_hours+report.sla_targets.approval_hours+report.sla_targets.payment_hours;
                           const over=r.total_hours!=null&&r.total_hours>totalT?Math.ceil((r.total_hours-totalT)/24):null;
                           const stage=r.status==="SUBMITTED"?"Finance Approval":r.status==="APPROVED"?"Payment Processing":r.status==="PENDING_APPROVAL"?"Manager Approval":r.status;
+                          const dueDate=new Date(new Date(r.created_at).getTime()+totalT*3_600_000).toISOString();
                           return (
                             <tr key={r.id}>
                               <td style={{...TD,fontWeight:600,color:"#374151"}}>{r.requester_name||"—"}</td>
                               <td style={{...TD,color:"#64748b"}}>{r.department||"—"}</td>
                               <td style={{...TD,color:"#64748b"}}>{stage}</td>
-                              <td style={{...TD,color:"#64748b",whiteSpace:"nowrap"}}>{fmtDate(r.created_at)}</td>
+                              <td style={{...TD,color:"#64748b",whiteSpace:"nowrap"}}>{fmtDate(dueDate)}</td>
                               <td style={{...TD,textAlign:"center"}}>{over!=null&&over>0?<span style={{fontWeight:700,color:"#dc2626"}}>{over}</span>:<span style={{color:"#94a3b8"}}>—</span>}</td>
                               <td style={TD}><SlaBadge status={r.sla_status}/></td>
                             </tr>

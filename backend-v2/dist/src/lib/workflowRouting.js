@@ -2,7 +2,6 @@ export const WORKFLOW_ROUTE_LABELS = {
     EMPLOYEE: "Employee",
     HOD: "HOD",
     MANAGER: "Manager",
-    EXCO_OWNER: "EXCO Member",
     FINANCE: "Finance",
     HR_MANAGER_REVIEW: "HR Manager",
     HR_REVIEW: "HR Review",

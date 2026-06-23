@@ -1,0 +1,1105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Advance &amp; Clearance System Training Slides</title>
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #526071;
+      --paper: #ffffff;
+      --soft: #f4f7fb;
+      --line: #dbe4ef;
+      --navy: #182132;
+      --blue: #2563eb;
+      --green: #059669;
+      --amber: #d97706;
+      --red: #dc2626;
+      --teal: #0f766e;
+      --shadow: 0 18px 60px rgba(15, 23, 42, 0.18);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(24, 33, 50, 0.96), rgba(15, 118, 110, 0.9)),
+        radial-gradient(circle at 80% 15%, rgba(37, 99, 235, 0.35), transparent 34%);
+    }
+
+    .topbar {
+      position: fixed;
+      z-index: 20;
+      inset: 0 0 auto;
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 18px;
+      color: #eef4ff;
+      background: rgba(15, 23, 42, 0.8);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(12px);
+    }
+
+    .topbar strong {
+      font-size: 0.95rem;
+      letter-spacing: 0;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .topbar button,
+    .topbar a {
+      height: 34px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 6px;
+      padding: 0 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #eef4ff;
+      background: rgba(255, 255, 255, 0.08);
+      text-decoration: none;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.84rem;
+    }
+
+    .topbar button:hover,
+    .topbar a:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .slide-stage {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 78px 24px 28px;
+    }
+
+    .slide {
+      display: none;
+      position: relative;
+      width: min(1180px, calc(100vw - 48px));
+      aspect-ratio: 16 / 9;
+      min-height: 620px;
+      padding: 52px 58px 42px;
+      background: var(--paper);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .slide.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .slide::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(37, 99, 235, 0.08), transparent 30%),
+        linear-gradient(180deg, rgba(24, 33, 50, 0.05), transparent 22%);
+      pointer-events: none;
+    }
+
+    .slide > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .slide-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 28px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 0.86rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .brand img {
+      width: 108px;
+      max-height: 38px;
+      object-fit: contain;
+    }
+
+    .eyebrow {
+      color: var(--blue);
+      font-size: 0.84rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      max-width: 860px;
+      margin-bottom: 18px;
+      font-size: clamp(2.7rem, 5.5vw, 5rem);
+      line-height: 0.98;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      max-width: 940px;
+      margin-bottom: 20px;
+      font-size: clamp(2rem, 3.2vw, 3.15rem);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: 1.05rem;
+      line-height: 1.25;
+    }
+
+    .subtitle {
+      max-width: 770px;
+      color: var(--muted);
+      font-size: 1.28rem;
+      line-height: 1.45;
+    }
+
+    .footer {
+      margin-top: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      color: #66758a;
+      font-size: 0.82rem;
+      border-top: 1px solid var(--line);
+      padding-top: 16px;
+    }
+
+    .title-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.8fr);
+      gap: 40px;
+      align-items: center;
+      height: 100%;
+    }
+
+    .hero-card {
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #ffffff, #f7fafc);
+    }
+
+    .hero-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .hero-step {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 12px;
+      align-items: center;
+      min-height: 66px;
+      padding: 12px;
+      border-radius: 7px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .hero-step b {
+      color: var(--navy);
+    }
+
+    .icon {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 900;
+    }
+
+    .icon.green { background: var(--green); }
+    .icon.amber { background: var(--amber); }
+    .icon.teal { background: var(--teal); }
+    .icon.red { background: var(--red); }
+    .icon.navy { background: var(--navy); }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card {
+      min-height: 138px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .card p,
+    .mini p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.42;
+      font-size: 0.98rem;
+    }
+
+    .card.compact {
+      min-height: 108px;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      color: #1f334f;
+      background: #eaf2ff;
+      border: 1px solid #cfe0ff;
+      font-size: 0.88rem;
+      font-weight: 700;
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      margin: 20px 0 26px;
+    }
+
+    .stage {
+      position: relative;
+      min-height: 136px;
+      padding: 16px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .stage .number {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 10px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 800;
+      font-size: 0.86rem;
+    }
+
+    .stage p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.35;
+    }
+
+    .callout {
+      padding: 16px 18px;
+      border-left: 5px solid var(--blue);
+      background: #f3f7ff;
+      color: #1f334f;
+      line-height: 1.45;
+    }
+
+    .callout strong {
+      color: var(--navy);
+    }
+
+    .two-column {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .list li {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      align-items: start;
+      color: var(--muted);
+      line-height: 1.42;
+      font-size: 1rem;
+    }
+
+    .check {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--green);
+      font-size: 0.78rem;
+      font-weight: 900;
+    }
+
+    .screen-map {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: 350px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .sidebar-mock {
+      padding: 18px;
+      background: var(--navy);
+      color: #e6eefb;
+    }
+
+    .sidebar-mock div {
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.07);
+      font-size: 0.86rem;
+      font-weight: 700;
+    }
+
+    .sidebar-mock div.active {
+      background: rgba(37, 99, 235, 0.55);
+    }
+
+    .content-mock {
+      padding: 20px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 14px;
+      background: #f8fafc;
+    }
+
+    .mock-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .mock-title {
+      width: 260px;
+      height: 24px;
+      border-radius: 4px;
+      background: #c9d7ea;
+    }
+
+    .mock-button {
+      width: 132px;
+      height: 34px;
+      border-radius: 6px;
+      background: var(--blue);
+    }
+
+    .mock-table {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .mock-row {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr 0.8fr 0.7fr;
+      gap: 12px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .mock-row:last-child {
+      border-bottom: 0;
+    }
+
+    .mock-row span {
+      height: 16px;
+      border-radius: 4px;
+      background: #e3eaf4;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      color: #1f334f;
+      background: #eef4ff;
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+
+    .status-pill.ok {
+      color: #065f46;
+      background: #d1fae5;
+    }
+
+    .status-pill.warn {
+      color: #92400e;
+      background: #fef3c7;
+    }
+
+    .status-pill.danger {
+      color: #991b1b;
+      background: #fee2e2;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: 1.05fr repeat(3, minmax(0, 1fr));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .matrix div {
+      min-height: 54px;
+      padding: 12px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      line-height: 1.3;
+      font-size: 0.92rem;
+    }
+
+    .matrix div:nth-child(4n) {
+      border-right: 0;
+    }
+
+    .matrix .head {
+      color: var(--ink);
+      background: #eef4ff;
+      font-weight: 800;
+    }
+
+    .matrix .role {
+      color: var(--ink);
+      font-weight: 800;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .mini {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .flow .node {
+      min-height: 94px;
+      padding: 13px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .flow .node strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+      font-size: 0.98rem;
+    }
+
+    .flow .node span {
+      color: var(--muted);
+      line-height: 1.32;
+      font-size: 0.85rem;
+    }
+
+    .note-drawer {
+      position: fixed;
+      z-index: 30;
+      left: 18px;
+      right: 18px;
+      bottom: 18px;
+      display: none;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 15px 18px;
+      color: #e6eefb;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      box-shadow: 0 12px 38px rgba(0, 0, 0, 0.28);
+    }
+
+    .note-drawer.show {
+      display: block;
+    }
+
+    .note-drawer strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #fff;
+    }
+
+    .notes {
+      display: none;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.42;
+    }
+
+    @media (max-width: 900px) {
+      .topbar {
+        position: static;
+      }
+
+      .slide-stage {
+        padding: 18px;
+      }
+
+      .slide {
+        width: 100%;
+        min-height: auto;
+        aspect-ratio: auto;
+        padding: 34px 24px 28px;
+      }
+
+      .title-layout,
+      .two-column,
+      .screen-map {
+        grid-template-columns: 1fr;
+      }
+
+      .grid.cols-2,
+      .grid.cols-3,
+      .grid.cols-4,
+      .timeline,
+      .flow,
+      .mini-grid,
+      .matrix {
+        grid-template-columns: 1fr;
+      }
+
+      .matrix div,
+      .matrix div:nth-child(4n) {
+        border-right: 0;
+      }
+
+      .sidebar-mock {
+        display: none;
+      }
+    }
+
+    @media print {
+      @page {
+        size: 13.333in 7.5in;
+        margin: 0;
+      }
+
+      body {
+        background: #fff;
+      }
+
+      .topbar,
+      .note-drawer {
+        display: none !important;
+      }
+
+      .slide-stage {
+        display: block;
+        padding: 0;
+      }
+
+      .slide {
+        display: flex !important;
+        width: 100vw;
+        height: 100vh;
+        min-height: 0;
+        aspect-ratio: auto;
+        border-radius: 0;
+        box-shadow: none;
+        page-break-after: always;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <strong>Advance &amp; Clearance System Training</strong>
+    <div class="topbar-actions">
+      <span id="counter">1 / 15</span>
+      <button type="button" id="prevBtn">Prev</button>
+      <button type="button" id="nextBtn">Next</button>
+      <button type="button" id="notesBtn">Notes</button>
+      <button type="button" onclick="window.print()">Print / PDF</button>
+    </div>
+  </header>
+
+  <main class="slide-stage">
+    <section class="slide active" data-title="Title">
+      <div class="title-layout">
+        <div>
+          <div class="brand"><img src="../media/econetLogo-01.webp" alt="Econet logo"> Training deck</div>
+          <h1>Advance &amp; Clearance System</h1>
+          <p class="subtitle">A practical training deck for requesters, approvers, finance, HR, and administrators using the app.</p>
+          <div class="tag-row">
+            <span class="tag">Requests</span>
+            <span class="tag">Approvals</span>
+            <span class="tag">Clearances</span>
+            <span class="tag">Reporting</span>
+          </div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-stack">
+            <div class="hero-step"><span class="icon">1</span><div><b>Create</b><br><span class="small">Capture the request and save or submit.</span></div></div>
+            <div class="hero-step"><span class="icon green">2</span><div><b>Approve</b><br><span class="small">Route through the configured approval chain.</span></div></div>
+            <div class="hero-step"><span class="icon amber">3</span><div><b>Pay or Settle</b><br><span class="small">Finance records payment references.</span></div></div>
+            <div class="hero-step"><span class="icon teal">4</span><div><b>Audit</b><br><span class="small">Reports and histories keep the trail visible.</span></div></div>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">Open with the simple promise: the app turns travel advances, clearances, overtime, attendance, and custom request approvals into traceable workflows.</aside>
+    </section>
+
+    <section class="slide" data-title="Learning Goals">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Session outcomes</div>
+          <h2>What learners should be able to do</h2>
+        </div>
+        <div class="brand"><img src="../media/econetLogo-01.webp" alt=""> User education</div>
+      </div>
+      <div class="grid cols-2">
+        <div class="card"><h3>Use the right module</h3><p>Recognize when to use advances, clearances, overtime, attendance, change requests, or request types.</p></div>
+        <div class="card"><h3>Submit clean requests</h3><p>Complete profile data, request details, trip lines, receipts, and supporting notes before submitting.</p></div>
+        <div class="card"><h3>Approve confidently</h3><p>Review the summary, chain progress, comments, and financial totals before approving, rolling back, or rejecting.</p></div>
+        <div class="card"><h3>Operate the system</h3><p>Maintain users, org structure, reporting lines, travel rates, workflows, request types, and reports.</p></div>
+      </div>
+      <div class="footer"><span>Recommended length: 45 to 60 minutes</span><span>Use arrow keys to navigate</span></div>
+      <aside class="notes">Position the training as hands-on. Ask each learner to identify which role they play most often: requester, approver, finance, HR, or admin.</aside>
+    </section>
+
+    <section class="slide" data-title="App Map">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">System map</div>
+          <h2>The app is organized around work queues</h2>
+        </div>
+      </div>
+      <div class="screen-map">
+        <div class="sidebar-mock">
+          <div class="active">Dashboard</div>
+          <div>Advance Requests</div>
+          <div>Clearances</div>
+          <div>Overtime</div>
+          <div>Approval Inbox</div>
+          <div>Reports</div>
+          <div>Administration</div>
+        </div>
+        <div class="content-mock">
+          <div class="mock-header"><div class="mock-title"></div><div class="mock-button"></div></div>
+          <div class="mock-table">
+            <div class="mock-row"><span></span><span></span><span></span><span></span></div>
+            <div class="mock-row"><span></span><span></span><span></span><span></span></div>
+            <div class="mock-row"><span></span><span></span><span></span><span></span></div>
+            <div class="mock-row"><span></span><span></span><span></span><span></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="callout" style="margin-top:18px;"><strong>Mental model:</strong> requesters create and track work, approvers act from their inbox, and admins configure the routes that decide who sees what next.</div>
+      <aside class="notes">Use this slide to reduce navigation anxiety. The user rarely needs every menu. Their role determines the daily path.</aside>
+    </section>
+
+    <section class="slide" data-title="Roles">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Roles and responsibilities</div>
+          <h2>Each role owns a different part of the request lifecycle</h2>
+        </div>
+      </div>
+      <div class="matrix">
+        <div class="head">Role</div><div class="head">Main tasks</div><div class="head">Common screens</div><div class="head">Training focus</div>
+        <div class="role">Employee</div><div>Create requests, submit clearances, track status.</div><div>Dashboard, My Advances, My Clearances.</div><div>Complete data before submit.</div>
+        <div class="role">Manager / HOD / EXCO</div><div>Counter sign, approve, reject, or roll back requests.</div><div>Approval Inbox, Reports.</div><div>Check purpose, totals, comments, chain.</div>
+        <div class="role">HR / Finance</div><div>Review policy steps, mark paid, settle claims, record references.</div><div>Inbox, Reports, Audit Trail.</div><div>Use references and comments consistently.</div>
+        <div class="role">Admin</div><div>Maintain users, org structure, travel setup, workflows, request types.</div><div>Settings, User Management, Workflow Builder.</div><div>Keep routing data accurate.</div>
+      </div>
+      <aside class="notes">Call out that Finance is routed by department membership in parts of the app, not only by the FINANCE role label.</aside>
+    </section>
+
+    <section class="slide" data-title="Lifecycle">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Workflow lifecycle</div>
+          <h2>Most work moves from draft to settlement through the inbox</h2>
+        </div>
+      </div>
+      <div class="timeline">
+        <div class="stage"><div class="number">1</div><h3>Draft</h3><p>Requester captures details and can still edit freely.</p></div>
+        <div class="stage"><div class="number">2</div><h3>Submitted</h3><p>The active workflow decides the next approver.</p></div>
+        <div class="stage"><div class="number">3</div><h3>Counter signed</h3><p>Manager or assigned reviewer confirms the request.</p></div>
+        <div class="stage"><div class="number">4</div><h3>Reviewed</h3><p>HOD, EXCO, HR, or custom steps complete their checks.</p></div>
+        <div class="stage"><div class="number">5</div><h3>Approved</h3><p>Finance can prepare payment or settlement.</p></div>
+        <div class="stage"><div class="number">6</div><h3>Paid / Settled</h3><p>Reference numbers close the financial loop.</p></div>
+      </div>
+      <div class="grid cols-3">
+        <div class="card compact"><span class="status-pill warn">Roll back</span><p style="margin-top:10px;">Send back for correction when the request is fixable.</p></div>
+        <div class="card compact"><span class="status-pill danger">Reject</span><p style="margin-top:10px;">Use when the request should not continue. Comments are required.</p></div>
+        <div class="card compact"><span class="status-pill ok">Audit</span><p style="margin-top:10px;">Every key action is available for tracking and reports.</p></div>
+      </div>
+      <aside class="notes">The exact chain can differ by department, section, team, request type, and advance subtype. Avoid promising a single universal approval order.</aside>
+    </section>
+
+    <section class="slide" data-title="Dashboard">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Daily start point</div>
+          <h2>Use the dashboard to decide what needs attention</h2>
+        </div>
+      </div>
+      <div class="two-column">
+        <div>
+          <ul class="list">
+            <li><span class="check">OK</span><span><strong>Confirm profile data.</strong> Department, section, team, employment type, and employee number influence routing and access.</span></li>
+            <li><span class="check">OK</span><span><strong>Check active work.</strong> Open advances, clearances, recent activity, and pending inbox queues from one place.</span></li>
+            <li><span class="check">OK</span><span><strong>Use direct navigation.</strong> Go straight to a request list, inbox queue, report, or settings page from the sidebar.</span></li>
+          </ul>
+        </div>
+        <div class="grid cols-2">
+          <div class="card"><h3>Profile quality</h3><p>Incomplete or incorrect profile data is one of the fastest ways to create routing problems.</p></div>
+          <div class="card"><h3>Inbox count</h3><p>The Approval Inbox count shows work awaiting action by the signed-in user.</p></div>
+          <div class="card"><h3>Recent activity</h3><p>Use audit-linked activity to understand what changed without asking around.</p></div>
+          <div class="card"><h3>Access</h3><p>Visible pages depend on role, feature permissions, and request type configuration.</p></div>
+        </div>
+      </div>
+      <aside class="notes">Before teaching any form, have learners check their visible menu. That reveals role and permission mismatches early.</aside>
+    </section>
+
+    <section class="slide" data-title="Advance Requests">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Requester workflow</div>
+          <h2>Create and submit an advance request</h2>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="node"><strong>1. New request</strong><span>Open Advance Requests and choose New Advance Request.</span></div>
+        <div class="node"><strong>2. Choose type</strong><span>Select salary, loan, or configured travel / per diem type.</span></div>
+        <div class="node"><strong>3. Add details</strong><span>Capture date, purpose, destination, amounts, and travel lines where required.</span></div>
+        <div class="node"><strong>4. Review chain</strong><span>Use the resolved workflow preview to spot missing approvers.</span></div>
+        <div class="node"><strong>5. Submit</strong><span>Submit when complete, then track progress from My Advances.</span></div>
+      </div>
+      <div class="callout" style="margin-top:22px;"><strong>Good habit:</strong> save draft when details are incomplete, submit only when totals, purpose, travel type, dates, and approver chain look correct.</div>
+      <div class="tag-row">
+        <span class="tag">Draft</span>
+        <span class="tag">Submitted</span>
+        <span class="tag">Approved</span>
+        <span class="tag">Paid</span>
+        <span class="tag">Cancelled</span>
+      </div>
+      <aside class="notes">Mention that approved requests may still be awaiting Finance payment. "Approved" and "Paid" are not the same operational state.</aside>
+    </section>
+
+    <section class="slide" data-title="Clearances">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">After travel or spending</div>
+          <h2>Clearances close the loop on an advance</h2>
+        </div>
+      </div>
+      <div class="grid cols-3">
+        <div class="card"><span class="icon teal">A</span><h3 style="margin-top:14px;">Link the advance</h3><p>Start from an eligible advance and create the clearance against that record.</p></div>
+        <div class="card"><span class="icon green">B</span><h3 style="margin-top:14px;">Capture actuals</h3><p>Add trip rows, actual expenses, allowances, and receipts where required.</p></div>
+        <div class="card"><span class="icon amber">C</span><h3 style="margin-top:14px;">Submit for settlement</h3><p>Approvers review the clearance, then Finance settles or records the final reference.</p></div>
+      </div>
+      <div class="two-column" style="margin-top:20px;">
+        <div class="mini"><h3>Accommodation requests</h3><p>The app supports accommodation requests, hotel setup, quotations, finance processing, payment references, and rejection comments.</p></div>
+        <div class="mini"><h3>Receipts and evidence</h3><p>Use uploads and comments to make the record self-explanatory before it reaches the next approver.</p></div>
+      </div>
+      <aside class="notes">Clearance training should emphasize accountability: actuals, receipts, and settlement are the evidence trail after the advance was used.</aside>
+    </section>
+
+    <section class="slide" data-title="Approval Inbox">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Approver workflow</div>
+          <h2>The Approval Inbox is where decisions happen</h2>
+        </div>
+      </div>
+      <div class="two-column">
+        <div>
+          <ul class="list">
+            <li><span class="check">OK</span><span><strong>Open the grouped queue.</strong> Items are grouped by document type, such as advances, clearances, accommodation, overtime, and change requests.</span></li>
+            <li><span class="check">OK</span><span><strong>Review the detail view.</strong> Check summary, lines, quotations or receipts, approved total, requester, and approval progress.</span></li>
+            <li><span class="check">OK</span><span><strong>Add comments.</strong> Comments are especially important for rollback, rejection, or any changed amount.</span></li>
+            <li><span class="check">OK</span><span><strong>Choose the right action.</strong> Approve, counter sign, roll back, reject, mark paid, or settle depending on your role and item state.</span></li>
+          </ul>
+        </div>
+        <div class="hero-card">
+          <h3>Decision checklist</h3>
+          <div class="mini-grid">
+            <div class="mini"><h3>Purpose</h3><p>Is the reason clear and aligned with policy?</p></div>
+            <div class="mini"><h3>Totals</h3><p>Do requested and approved amounts make sense?</p></div>
+            <div class="mini"><h3>Evidence</h3><p>Are receipts, quotations, and comments sufficient?</p></div>
+            <div class="mini"><h3>Routing</h3><p>Is this really your step to approve?</p></div>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">Be explicit: rejecting is not a shortcut for missing information. Roll back when the requester can fix it; reject when it should stop.</aside>
+    </section>
+
+    <section class="slide" data-title="Overtime and Attendance">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">People operations</div>
+          <h2>Attendance and overtime are separate but related records</h2>
+        </div>
+      </div>
+      <div class="grid cols-3">
+        <div class="card"><span class="icon navy">AT</span><h3 style="margin-top:14px;">Attendance</h3><p>Used for attendance records, especially where employment type makes the page visible.</p></div>
+        <div class="card"><span class="icon teal">OR</span><h3 style="margin-top:14px;">Overtime request</h3><p>Submit overtime worked for supervisor and management approval.</p></div>
+        <div class="card"><span class="icon green">OC</span><h3 style="margin-top:14px;">Overtime claim</h3><p>Claim overtime and move through manager authorization, HR notes, finance verification, earnings, and summary transfer steps.</p></div>
+      </div>
+      <div class="callout" style="margin-top:22px;"><strong>Teaching point:</strong> a request asks for approval of the overtime record; a claim supports compensation or recording after that work is confirmed.</div>
+      <aside class="notes">Keep this distinct from travel advances. The forms share workflow behavior, but the operational meaning is different.</aside>
+    </section>
+
+    <section class="slide" data-title="Admin Setup">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Administration</div>
+          <h2>Routing quality depends on clean setup data</h2>
+        </div>
+      </div>
+      <div class="grid cols-4">
+        <div class="card compact"><h3>Users</h3><p>Roles, active status, profile completion, department, and permissions.</p></div>
+        <div class="card compact"><h3>Org structure</h3><p>Divisions, departments, sections, teams, CEO, EXCO, HOD, and manager ownership.</p></div>
+        <div class="card compact"><h3>Reporting lines</h3><p>Employee-to-manager relationships and auto generation tools.</p></div>
+        <div class="card compact"><h3>Travel setup</h3><p>Travel types, locations, rates, currencies, hotels, and meal values.</p></div>
+      </div>
+      <div class="grid cols-2" style="margin-top:16px;">
+        <div class="card"><h3>Permissions</h3><p>Admin feature permissions decide who can access sensitive setup pages such as users, roles, workflows, reporting lines, and org structure.</p></div>
+        <div class="card"><h3>Change control</h3><p>Admins can enable custom request types, build fields, assign permissions, and let requesters define approval chains for change requests.</p></div>
+      </div>
+      <aside class="notes">If a request routes to the wrong person, start troubleshooting with department leadership, reporting lines, feature permissions, and active workflow status.</aside>
+    </section>
+
+    <section class="slide" data-title="Workflow Builder">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Workflow builder</div>
+          <h2>Workflows decide the approval chain</h2>
+        </div>
+      </div>
+      <div class="two-column">
+        <div class="hero-card">
+          <h3>Workflow building blocks</h3>
+          <ul class="list">
+            <li><span class="check">OK</span><span>Request type, department, section, team, and advance subtype.</span></li>
+            <li><span class="check">OK</span><span>Sticky workflows for defaults and temporary workflows for bounded changes.</span></li>
+            <li><span class="check">OK</span><span>Steps such as Employee, Manager, HOD, EXCO Member, HR Review, Finance, CEO, or custom positions.</span></li>
+            <li><span class="check">OK</span><span>Single approver, any-one group approval, accommodation-only steps, and parallel stages.</span></li>
+          </ul>
+        </div>
+        <div>
+          <div class="flow" style="grid-template-columns: 1fr;">
+            <div class="node"><strong>Standard template</strong><span>Counter Signer -> Approver -> HR Manager -> HR Team -> Finance.</span></div>
+            <div class="node"><strong>Executive template</strong><span>Employee -> HOD -> Manager -> Finance.</span></div>
+            <div class="node"><strong>Travel template</strong><span>Employee -> HOD -> Manager -> Finance.</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="callout" style="margin-top:20px;"><strong>Activation rule:</strong> a workflow must be active and must match the request context before it can route real requests.</div>
+      <aside class="notes">Explain specificity: a department and subtype workflow beats a broad global workflow when both are eligible.</aside>
+    </section>
+
+    <section class="slide" data-title="Request Types">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Configurable requests</div>
+          <h2>Request Types let admins add controlled workflows without code</h2>
+        </div>
+      </div>
+      <div class="grid cols-3">
+        <div class="card"><span class="icon blue">1</span><h3 style="margin-top:14px;">Create the type</h3><p>Name it, assign a code, category, color, icon, and status.</p></div>
+        <div class="card"><span class="icon green">2</span><h3 style="margin-top:14px;">Design the form</h3><p>Add short text, number, date, dropdown, textarea, checkbox, or file fields.</p></div>
+        <div class="card"><span class="icon amber">3</span><h3 style="margin-top:14px;">Grant access</h3><p>Control who can submit and who can design forms by all users, department, or named user.</p></div>
+      </div>
+      <div class="callout" style="margin-top:22px;"><strong>Example:</strong> Change Request is treated as a configurable request type and can be turned on or off from request type settings.</div>
+      <aside class="notes">This slide is useful for admins and process owners. It shows where future non-standard forms belong.</aside>
+    </section>
+
+    <section class="slide" data-title="Reports">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Reporting and audit</div>
+          <h2>Reports turn workflow activity into operational control</h2>
+        </div>
+      </div>
+      <div class="grid cols-3">
+        <div class="card"><h3>Advance Requests</h3><p>Admin view with status, type, department, dates, amounts, and CSV export.</p></div>
+        <div class="card"><h3>Approval Performance</h3><p>Approval rates, rejection counts, department breakdowns, and cycle-time metrics.</p></div>
+        <div class="card"><h3>SLA Reports</h3><p>Processing time, SLA breach rate, compliance, and Excel / PDF export paths.</p></div>
+        <div class="card"><h3>Workflow Analytics</h3><p>Workflow coverage, step complexity, and usage by request type.</p></div>
+        <div class="card"><h3>Audit Trail</h3><p>Chronological record of advance and clearance activity with CSV export.</p></div>
+        <div class="card"><h3>My Actions</h3><p>Approvers can see their recent decisions from the inbox.</p></div>
+      </div>
+      <aside class="notes">Reports are not only management dashboards. They are also troubleshooting tools when someone asks, "Where is my request?"</aside>
+    </section>
+
+    <section class="slide" data-title="Operating Habits">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Good operating habits</div>
+          <h2>Small habits prevent most workflow problems</h2>
+        </div>
+      </div>
+      <div class="grid cols-2">
+        <div class="card"><h3>Before submitting</h3><p>Check profile, department, request type, dates, amounts, purpose, travel lines, attachments, and workflow preview.</p></div>
+        <div class="card"><h3>Before approving</h3><p>Check request context, requester, totals, supporting evidence, chain progress, and whether comments are required.</p></div>
+        <div class="card"><h3>Before configuring</h3><p>Confirm the organization structure and reporting lines before changing workflows or feature permissions.</p></div>
+        <div class="card"><h3>Before reporting</h3><p>Use filters first, then export. Confirm date range and status definitions before sharing numbers.</p></div>
+      </div>
+      <div class="callout" style="margin-top:20px;"><strong>Support script:</strong> ask for the request type, requester, department, current status, expected approver, and last audit action.</div>
+      <aside class="notes">This is the practical wrap-up. Encourage teams to standardize comments and payment references so reports stay useful.</aside>
+    </section>
+
+    <section class="slide" data-title="Practice">
+      <div class="slide-header">
+        <div>
+          <div class="eyebrow">Practice session</div>
+          <h2>Hands-on exercises for training</h2>
+        </div>
+      </div>
+      <div class="grid cols-2">
+        <div class="card"><h3>Requester exercise</h3><p>Create a draft advance, preview the workflow chain, submit it, then locate it in My Advances.</p></div>
+        <div class="card"><h3>Approver exercise</h3><p>Open the Approval Inbox, review a request, add a comment, and choose approve or roll back.</p></div>
+        <div class="card"><h3>Finance exercise</h3><p>Record a payment or settlement reference and confirm the status changes to paid or settled.</p></div>
+        <div class="card"><h3>Admin exercise</h3><p>Inspect a workflow, verify its department and steps, then view the audit or SLA report for related items.</p></div>
+      </div>
+      <div class="footer"><span>End with questions by role</span><span>Updated for the local app state on 2026-06-16</span></div>
+      <aside class="notes">Use realistic but non-sensitive sample data. If training in production, avoid submitting test requests unless the business has approved it.</aside>
+    </section>
+  </main>
+
+  <div class="note-drawer" id="noteDrawer" aria-live="polite"></div>
+
+  <script>
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    const counter = document.getElementById("counter");
+    const noteDrawer = document.getElementById("noteDrawer");
+    let index = 0;
+    let notesVisible = false;
+
+    function render() {
+      slides.forEach((slide, i) => slide.classList.toggle("active", i === index));
+      counter.textContent = `${index + 1} / ${slides.length}`;
+      const note = slides[index].querySelector(".notes");
+      noteDrawer.innerHTML = `<strong>Speaker notes: ${slides[index].dataset.title || ""}</strong>${note ? note.textContent : ""}`;
+      noteDrawer.classList.toggle("show", notesVisible);
+      window.location.hash = `slide-${index + 1}`;
+    }
+
+    function go(delta) {
+      index = Math.max(0, Math.min(slides.length - 1, index + delta));
+      render();
+    }
+
+    document.getElementById("prevBtn").addEventListener("click", () => go(-1));
+    document.getElementById("nextBtn").addEventListener("click", () => go(1));
+    document.getElementById("notesBtn").addEventListener("click", () => {
+      notesVisible = !notesVisible;
+      render();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") go(1);
+      if (event.key === "ArrowLeft" || event.key === "PageUp") go(-1);
+      if (event.key.toLowerCase() === "n") {
+        notesVisible = !notesVisible;
+        render();
+      }
+      if (event.key === "Home") {
+        index = 0;
+        render();
+      }
+      if (event.key === "End") {
+        index = slides.length - 1;
+        render();
+      }
+    });
+
+    const match = window.location.hash.match(/slide-(\d+)/);
+    if (match) {
+      index = Math.max(0, Math.min(slides.length - 1, Number(match[1]) - 1));
+    }
+    render();
+  </script>
+</body>
+</html>

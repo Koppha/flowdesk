@@ -69,15 +69,22 @@ export async function resolveWorkflowChain(params) {
         return null;
     const [steps, leadership] = await Promise.all([
         query(`SELECT ws.step_order, ws.position_type_code, ws.position_name,
-              ws.assigned_user_id, u.full_name AS assigned_user_name, u.title AS assigned_user_title, u.email AS assigned_user_email,
+              CASE WHEN u.id IS NOT NULL THEN ws.assigned_user_id ELSE NULL END AS assigned_user_id,
+              u.full_name AS assigned_user_name, u.title AS assigned_user_title, u.email AS assigned_user_email,
               ws.is_required, ws.skip_if_unassigned, ws.is_final_approval,
-              ws.approval_mode, ws.approval_group_name, ws.requires_accommodation, ws.parallel_with_previous, ws.action_type
+              ws.approval_mode, ws.approval_group_name, ws.requires_accommodation, ws.parallel_with_previous, ws.action_type,
+              ws.can_reject, ws.can_rollback
          FROM workflow_steps ws
-         LEFT JOIN users u ON u.id = ws.assigned_user_id
+         LEFT JOIN users u ON u.id = ws.assigned_user_id AND u.is_active = true
         WHERE ws.workflow_id = $1 AND ws.is_active = true
         ORDER BY ws.step_order ASC`, [workflow.id]),
         getDepartmentLeadership(department)
     ]);
+    // HR_MANAGER_REVIEW / HR_REVIEW steps are routed to the org-structure
+    // leadership of the "Human Resource" department, not the requester's own
+    // department — there's no per-requester "HR manager" concept.
+    const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
+    const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
     const chain = [];
     let previousStepPushed = false;
     for (const step of steps) {
@@ -94,33 +101,35 @@ export async function resolveWorkflowChain(params) {
         }
         // A specific assigned user on the step overrides the department-leadership lookup
         // (e.g. a second "Manager" step routed to a different department's manager).
+        const isHrCode = code.startsWith("HR_");
         const approverId = step.assigned_user_id ? step.assigned_user_id :
             code === "HOD" ? leadership.hod_user_id :
                 code === "MANAGER" ? leadership.manager_user_id :
-                    code === "EXCO_OWNER" ? leadership.exco_user_id :
+                    isHrCode ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null) :
                         null;
         const approverName = step.assigned_user_id ? step.assigned_user_name :
             code === "HOD" ? leadership.hod_name :
                 code === "MANAGER" ? leadership.manager_name :
-                    code === "EXCO_OWNER" ? leadership.exco_name :
+                    isHrCode ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
                         null;
         const approverTitle = step.assigned_user_id ? step.assigned_user_title :
             code === "HOD" ? leadership.hod_title :
                 code === "MANAGER" ? leadership.manager_title :
-                    code === "EXCO_OWNER" ? leadership.exco_title :
+                    isHrCode ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
                         null;
         const approverEmail = step.assigned_user_id ? step.assigned_user_email :
             code === "HOD" ? leadership.hod_email :
                 code === "MANAGER" ? leadership.manager_email :
-                    code === "EXCO_OWNER" ? leadership.exco_email :
+                    isHrCode ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
                         null;
-        if (!approverId && step.skip_if_unassigned) {
+        // Group steps (ANY_ONE with approval_group_name) are never "unassigned" —
+        // they're routed to whoever belongs to the group, not a specific individual.
+        const isGroupStep = step.approval_mode === "ANY_ONE" && !!step.approval_group_name;
+        if (!approverId && step.skip_if_unassigned && !isGroupStep) {
             previousStepPushed = false;
             continue;
         }
-        const positionLabel = code === "EXCO_OWNER" && leadership.exco_title
-            ? leadership.exco_title
-            : step.position_name;
+        const positionLabel = step.position_name;
         chain.push({
             step_order: step.step_order,
             position_type_code: code,
@@ -135,7 +144,9 @@ export async function resolveWorkflowChain(params) {
             approval_group_name: step.approval_group_name ?? null,
             requires_accommodation: step.requires_accommodation,
             parallel_with_previous: (step.parallel_with_previous ?? false) && previousStepPushed,
-            action_type: step.action_type || "APPROVE"
+            action_type: step.action_type || "APPROVE",
+            can_reject: step.can_reject ?? true,
+            can_rollback: step.can_rollback ?? true
         });
         previousStepPushed = true;
     }
@@ -149,8 +160,7 @@ export function chainStepToStatus(chain, stepIndex) {
         return "SUBMITTED";
     switch (step.position_type_code) {
         case "MANAGER": return "SUBMITTED";
-        case "HOD":
-        case "EXCO_OWNER": return "COUNTERSIGNED";
+        case "HOD": return "COUNTERSIGNED";
         case "HR_MANAGER_REVIEW": return "HR_MANAGER_REVIEW";
         case "HR_REVIEW": {
             const prevHr = chain.slice(0, stepIndex).some(s => s.position_type_code === "HR_REVIEW" || s.position_type_code === "HR_MANAGER_REVIEW");
@@ -186,17 +196,11 @@ export async function canApproveStep(step, userId, userRole, delegatedManagerId,
             return true;
         return false;
     }
-    // No specific approver — fall back to role-based, except FINANCE which is
-    // now based on org structure (Department: Finance) rather than a role.
+    // No specific approver resolved via org structure — FINANCE is based on
+    // department membership (Department: Finance); everything else has no
+    // role-based fallback. A step with no org-structure approver simply has
+    // no one who can act on it until it's assigned a person or department.
     if (step.position_type_code === "FINANCE")
         return isFinanceDept(userDepartment);
-    const roleMap = {
-        MANAGER: ["MANAGER"],
-        HOD: ["HOD"],
-        EXCO_OWNER: ["EXCO"],
-        HR_MANAGER_REVIEW: ["HR_MANAGER"],
-        HR_REVIEW: ["HR_MANAGER"],
-        CEO: ["CEO"]
-    };
-    return (roleMap[step.position_type_code] ?? []).includes(userRole);
+    return false;
 }

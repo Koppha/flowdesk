@@ -16,6 +16,7 @@ export type TravelTypeRow = {
   currency: string;
   active: boolean;
   requires_accommodation: boolean;
+  allowed_payment_methods: string[];
 };
 
 export type TravelLocationRow = {
@@ -52,6 +53,7 @@ function mapTravelType(row: TravelTypeRow & { locations?: TravelLocationRow[] })
     rate_ceo: toNumber(row.rate_ceo),
     currency: row.currency || "LSL",
     requires_accommodation: row.requires_accommodation ?? false,
+    allowed_payment_methods: row.allowed_payment_methods?.length ? row.allowed_payment_methods : ["ECOCASH", "BANK"],
     locations: row.locations || []
   };
 }
@@ -91,6 +93,7 @@ export async function ensureTravelSchema() {
   await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`);
   await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'LSL'`);
   await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS requires_accommodation boolean NOT NULL DEFAULT false`);
+  await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS allowed_payment_methods text[] NOT NULL DEFAULT ARRAY['ECOCASH','BANK']`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS travel_locations (
@@ -121,7 +124,7 @@ export async function ensureTravelSchema() {
 
 export async function listTravelTypes(includeInactive = false) {
   const rows = await query<TravelTypeRow>(
-    `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation
+    `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods
        FROM travel_types
       ${includeInactive ? "" : "WHERE active = true"}
       ORDER BY name`
@@ -145,7 +148,7 @@ export async function getTravelTypeByCode(code: string) {
   if (!normalized) return null;
   const row = (
     await query<TravelTypeRow>(
-      `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation
+      `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods
          FROM travel_types
         WHERE code = $1
         LIMIT 1`,
