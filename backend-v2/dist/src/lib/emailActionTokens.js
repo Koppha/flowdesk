@@ -16,6 +16,15 @@ export async function createEmailActionToken(args) {
     return jwt.sign({ jti, purpose: EMAIL_ACTION_PURPOSE }, env.JWT_SECRET, { expiresIn: "7d" });
 }
 export function buildEmailActionUrl(token) {
-    const base = env.EMAIL_ACTION_PUBLIC_URL || env.APP_URL;
-    return `${base}/?email_action=${encodeURIComponent(token)}`;
+    // EMAIL_ACTION_PUBLIC_URL points at a restricted proxy that forwards
+    // straight to this backend's /email-actions route (see
+    // email-actions.routes.ts, which renders a self-contained HTML page for
+    // browser requests) - no frontend involved, so it works behind any path
+    // prefix the proxy adds. Falls back to the frontend SPA flow (APP_URL,
+    // internal-only) when unset.
+    if (env.EMAIL_ACTION_PUBLIC_URL) {
+        const base = env.EMAIL_ACTION_PUBLIC_URL.replace(/\/+$/, "");
+        return `${base}/email-actions/${encodeURIComponent(token)}`;
+    }
+    return `${env.APP_URL}/?email_action=${encodeURIComponent(token)}`;
 }

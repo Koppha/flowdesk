@@ -3,13 +3,111 @@ import { z } from "zod";
 import jwt from "jsonwebtoken";
 import { env } from "../../config/env.js";
 import { query } from "../../lib/db.js";
-import { badRequest, notFound } from "../../lib/errors.js";
+import { badRequest, notFound, HttpError } from "../../lib/errors.js";
 import { EMAIL_ACTION_PURPOSE, type EmailActionDocType } from "../../lib/emailActionTokens.js";
 import { performAdvanceApprove, performAdvanceReject, getAdvanceNotificationContext } from "../advances/advances.routes.js";
 import { performClaimApprove, performClaimReject, getClaimNotificationContext } from "../claims/claims.routes.js";
 import { performCustomRequestAction } from "../custom-requests/custom-requests.routes.js";
 
 export const emailActionsRouter = Router();
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!
+  );
+}
+
+// Self-contained page (no external CSS/JS/images) so it renders correctly
+// behind any reverse-proxy path prefix - the confirm button posts to a
+// relative URL ("<token>/confirm") resolved against the page's own address,
+// so it works regardless of what prefix a proxy puts in front of it.
+function renderPage(opts: {
+  token: string;
+  approverName: string | null;
+  alreadyActioned: boolean;
+  liveStatus: string;
+  summary: { docLabel: string; requester: string | null; amount: number | null; status: string } | null;
+}) {
+  const { token, approverName, alreadyActioned, liveStatus, summary } = opts;
+  const amount = summary?.amount != null ? `M${summary.amount.toFixed(2)}` : "—";
+  const body = alreadyActioned
+    ? `<p class="status">This request has already been actioned (current status: <strong>${escapeHtml(liveStatus)}</strong>). No further action is needed.</p>`
+    : `
+      <div id="form">
+        <textarea id="comment" placeholder="Comment (required to reject)"></textarea>
+        <div class="row">
+          <button id="approve" class="btn approve">Approve</button>
+          <button id="reject" class="btn reject">Reject</button>
+        </div>
+      </div>
+      <div id="result" class="status" hidden></div>
+      <script>
+        var token = ${JSON.stringify(token)};
+        function submit(action) {
+          var comment = document.getElementById("comment").value.trim();
+          if (action === "REJECT" && !comment) {
+            alert("A comment is required to reject.");
+            return;
+          }
+          document.getElementById("approve").disabled = true;
+          document.getElementById("reject").disabled = true;
+          fetch(encodeURIComponent(token) + "/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: action, comment: comment || undefined })
+          })
+            .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+            .then(function (r) {
+              var result = document.getElementById("result");
+              document.getElementById("form").hidden = true;
+              result.hidden = false;
+              result.textContent = r.ok
+                ? "Done - new status: " + r.data.status
+                : "Error: " + (r.data && r.data.error ? r.data.error : "Something went wrong.");
+            })
+            .catch(function () {
+              document.getElementById("approve").disabled = false;
+              document.getElementById("reject").disabled = false;
+              alert("Network error - please try again.");
+            });
+        }
+        document.getElementById("approve").addEventListener("click", function () { submit("APPROVE"); });
+        document.getElementById("reject").addEventListener("click", function () { submit("REJECT"); });
+      </script>`;
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FlowDesk - Approval</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:480px;margin:40px auto;padding:0 16px;color:#1f2937}
+  h1{font-size:18px}
+  .card{border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-top:12px}
+  .card div{margin-bottom:6px}
+  textarea{width:100%;min-height:70px;margin:12px 0;padding:8px;font-family:inherit;box-sizing:border-box}
+  .row{display:flex;gap:8px}
+  .btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:15px;cursor:pointer;color:#fff}
+  .approve{background:#16a34a}
+  .reject{background:#dc2626}
+  .status{margin-top:16px;font-weight:600}
+</style></head>
+<body>
+  <h1>Approval request${approverName ? " for " + escapeHtml(approverName) : ""}</h1>
+  <div class="card">
+    <div><strong>${escapeHtml(summary?.docLabel ?? "Request")}</strong></div>
+    <div>Requester: ${escapeHtml(summary?.requester ?? "—")}</div>
+    <div>Amount: ${escapeHtml(amount)}</div>
+    <div>Status: ${escapeHtml(summary?.status ?? liveStatus)}</div>
+  </div>
+  ${body}
+</body></html>`;
+}
+
+function renderErrorPage(message: string) {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>FlowDesk - Approval</title>
+<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:40px auto;padding:0 16px;color:#1f2937}</style>
+</head><body><h1>Approval request</h1><p>${escapeHtml(message)}</p></body></html>`;
+}
 
 type TokenRow = { id: string; jti: string; user_id: string; doc_type: EmailActionDocType; doc_id: string; step_order: number; used_at: string | null };
 
@@ -87,6 +185,7 @@ async function buildSummary(docType: EmailActionDocType, docId: string) {
 // GET /email-actions/:token — safe, read-only. Powers the confirmation page;
 // never mutates anything, so an email link-prefetcher hitting this is harmless.
 emailActionsRouter.get("/:token", async (req, res, next) => {
+  const wantsHtml = req.accepts(["html", "json"]) === "html";
   try {
     const { row, actor } = await resolveToken(req.params.token);
     const live = await getLiveStep(row.doc_type, row.doc_id);
@@ -95,6 +194,11 @@ emailActionsRouter.get("/:token", async (req, res, next) => {
     const alreadyActioned = live.stepOrder !== row.step_order || TERMINAL_STATUSES[row.doc_type].includes(live.status);
     const summary = await buildSummary(row.doc_type, row.doc_id);
 
+    if (wantsHtml) {
+      return res.type("html").send(
+        renderPage({ token: req.params.token, approverName: actor.full_name, alreadyActioned, liveStatus: live.status, summary })
+      );
+    }
     return res.json({
       docType: row.doc_type,
       approverName: actor.full_name,
@@ -103,6 +207,9 @@ emailActionsRouter.get("/:token", async (req, res, next) => {
       summary
     });
   } catch (err) {
+    if (wantsHtml && err instanceof HttpError) {
+      return res.status(err.statusCode).type("html").send(renderErrorPage(err.message));
+    }
     return next(err);
   }
 });

@@ -1,6 +1,9 @@
 import { badRequest, forbidden } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canApproveStep, getPendingGroup } from "../../lib/workflowEngine.js";
+export function nextStatusForFinanceDecision(decision) {
+    return decision === "ACCEPTED" ? "CLOSED" : "PAYMENT_PROCESSING";
+}
 export function nextClaimStatus(current, action) {
     const map = {
         DRAFT: {},
@@ -10,7 +13,9 @@ export function nextClaimStatus(current, action) {
         HR_OFFICER: { HR_MANAGER_APPROVE: "HR_MANAGER_REVIEW" },
         HR_MANAGER_REVIEW: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
         FINANCE_VERIFIED: { SETTLE: "SETTLED" },
+        PAYMENT_PROCESSING: { MARK_SETTLED: "CLOSED" },
         SETTLED: {},
+        CLOSED: {},
         REJECTED: {}
     };
     const next = map[current]?.[action];

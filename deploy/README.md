@@ -109,3 +109,21 @@ Note: the frontend is built with `VITE_API=/api`, so it calls
 `/api/<route>` (e.g. `/api/auth/login`); the nginx config proxies `/api/` to
 the backend with the prefix stripped, matching the backend's root-level
 routes (`/auth`, `/advances`, etc.).
+
+## 8. (Optional) Email-action proxy
+
+If approvers need to act on "Approve or Reject by Email" links from a
+network that can't reach the app directly, add the location block from
+`deploy/nginx-email-action-proxy.conf.example` to an already-reachable
+internal proxy (UAT uses `dt-internalproxy-1.etl.co.ls/flowdesk/uat/`, the
+same host already used for `/ldap/api`). It forwards *only* to this
+backend's `/email-actions` route — the backend renders a self-contained
+HTML confirmation page for browser requests (see `email-actions.routes.ts`),
+so no frontend proxying or `/api/`/`/assets/` forwarding is needed, and
+nothing else under that path is reachable.
+
+After it's live, set `EMAIL_ACTION_PUBLIC_URL=<that proxy's base URL>` (e.g.
+`http://dt-internalproxy-1.etl.co.ls/flowdesk/uat`, no trailing slash) in
+the backend `.env` so generated email links point there instead of the
+internal `APP_URL`. Leave it unset if this isn't needed — email links then
+fall back to `APP_URL` and only work from inside the network via the SPA.

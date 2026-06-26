@@ -1139,6 +1139,34 @@ export async function notifyCustomRequestSectionAssigned(args) {
         });
     }
 }
+// Sent to a registered FlowDesk user named as a custom request's "user_multi"
+// assignee (e.g. Change Assignee) — distinct from notifyCustomRequestUnregisteredAssignee,
+// which only covers people invited by plain email with no account yet.
+export async function notifyCustomRequestAssigneeAssigned(args) {
+    try {
+        const body = [
+            header(`${args.requestTypeName.toUpperCase()} — YOU'VE BEEN ASSIGNED`),
+            ``,
+            `Hello ${args.assigneeName || ""},`,
+            ``,
+            `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and listed you as "${args.fieldLabel}".`,
+            ``,
+            `Log in to FlowDesk to confirm once you're ready — approval can't proceed until every assignee has confirmed.`,
+            ``,
+            footer()
+        ].join("\n");
+        await sendMail({
+            to: [args.assigneeEmail],
+            subject: `[Action Required] ${args.requestTypeName} — ${args.fieldLabel}`,
+            text: body
+        });
+    }
+    catch (error) {
+        logger.warn("custom_request_assignee_assigned_notification_failed", {
+            submission_id: args.submissionId, error: serializeError(error)
+        });
+    }
+}
 // Sent to every current member of a team named as a custom request's
 // "user_multi" assignee (e.g. Change Assignee). Any one member can confirm
 // readiness on the team's behalf, so everyone needs to know they were named.
@@ -1247,6 +1275,33 @@ export async function notifyCustomRequestDecision(args) {
     }
     catch (error) {
         logger.warn("custom_request_notification_failed", {
+            submission_id: args.submissionId, error: serializeError(error)
+        });
+    }
+}
+export async function notifyCustomRequestCancelled(args) {
+    try {
+        if (!args.approverEmail)
+            return;
+        const lines = [
+            header(`${args.requestTypeName.toUpperCase()} — WITHDRAWN`),
+            ``,
+            `Hello ${args.approverName || ""},`,
+            ``,
+            `${args.requesterName || "The requester"} has withdrawn their ${args.requestTypeName.toLowerCase()} that was awaiting your approval. No further action is needed.`,
+            ``,
+            `Comment: ${args.comment}`,
+            ``,
+            footer()
+        ];
+        await sendMail({
+            to: [args.approverEmail],
+            subject: `[Withdrawn] ${args.requestTypeName}`,
+            text: lines.join("\n")
+        });
+    }
+    catch (error) {
+        logger.warn("custom_request_cancel_notification_failed", {
             submission_id: args.submissionId, error: serializeError(error)
         });
     }

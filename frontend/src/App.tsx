@@ -63,6 +63,7 @@ import {
   RefreshCw,
   Settings as SettingsIcon,
   ShieldCheck,
+  Star,
   Sun,
   Trash2,
   User,
@@ -275,6 +276,10 @@ export default function App() {
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelContact, setNewHotelContact] = useState("");
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
+  const [favoritePages, setFavoritePages] = useState<string[]>([]);
+  const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
+  const favoritePagesInitialized = useRef(false);
+  const shortcutPickerRef = useRef<HTMLDivElement>(null);
   const [travelTypes, setTravelTypes] = useState<TravelType[]>([]);
   const [travelTypesLoading, setTravelTypesLoading] = useState(false);
   const [newTravelTypeName, setNewTravelTypeName] = useState("");
@@ -810,6 +815,50 @@ export default function App() {
   const canManageTravelSettings = canAccessFeature("travel_setup");
   const profileCompleted = Boolean(profile?.profile_completed ?? me?.profileCompleted);
   const employmentType = profile?.employment_type || me?.employmentType || "PERMANENT";
+
+  // Dashboard "shortcuts" — every process a user could plausibly pin, gated
+  // by the same visibility rules as the sidebar so the picker never offers
+  // something they can't actually open.
+  const shortcutCatalog: { key: AppPage; label: string; icon: typeof ClipboardList; available: boolean }[] = [
+    { key: "MY_ADVANCES", label: "Advance Requests", icon: ClipboardList, available: true },
+    { key: "MY_CLEARANCES", label: "Clearances", icon: CheckCircle2, available: true },
+    { key: "ATTENDANCE", label: "Attendance", icon: FileText, available: ["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) },
+    { key: "OVERTIME", label: "Overtime Request", icon: Clock3, available: true },
+    { key: "OVERTIME_CLAIM", label: "Overtime Claim", icon: Clock3, available: true },
+    { key: "CHANGE_REQUEST", label: "Custom Requests", icon: GitBranch, available: hasActiveCustomRequestTypes },
+    { key: "INBOX", label: "Approval Inbox", icon: Mail, available: true },
+    { key: "REPORTS", label: "Reports", icon: BarChart3, available: true },
+    { key: "TRAVEL_SETUP", label: "Travel Setup", icon: BriefcaseBusiness, available: canManageTravelSettings },
+    { key: "REQUEST_TYPES", label: "Request Types", icon: ClipboardList, available: canAccessFeature("request_types") },
+    { key: "USER_MANAGEMENT", label: "User Management", icon: Users, available: canAccessFeature("user_management") },
+    { key: "ORG_STRUCTURE", label: "Org Structure", icon: Network, available: canAccessFeature("org_structure") },
+    { key: "SETTINGS", label: "Settings", icon: SettingsIcon, available: true }
+  ];
+  const availableShortcuts = shortcutCatalog.filter((s) => s.available);
+  const favoriteShortcuts = favoritePages
+    .map((key) => availableShortcuts.find((s) => s.key === key))
+    .filter((s): s is (typeof shortcutCatalog)[number] => Boolean(s));
+
+  async function toggleFavoritePage(key: AppPage, pinned: boolean) {
+    const next = pinned ? [...favoritePages, key] : favoritePages.filter((k) => k !== key);
+    setFavoritePages(next);
+    setShortcutPickerOpen(false);
+    try {
+      await api.updateFavoritePages(next);
+    } catch {
+      // Non-critical — local state already reflects the user's intent;
+      // it'll just re-sync from the server next time /auth/me is fetched.
+    }
+  }
+
+  useEffect(() => {
+    if (!shortcutPickerOpen) return;
+    function onOutside(e: MouseEvent) {
+      if (shortcutPickerRef.current && !shortcutPickerRef.current.contains(e.target as Node)) setShortcutPickerOpen(false);
+    }
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, [shortcutPickerOpen]);
   const canRequestForSelf = profileCompleted && employmentType === "PERMANENT";
   const canCreateForOthers = profileCompleted && (employmentType === "PERMANENT" || isApproverRole(role));
   const canOpenAdvanceForm = canRequestForSelf || canCreateForOthers;
@@ -897,6 +946,12 @@ export default function App() {
     setError(null);
     const meResp = await withStartupTimeout(api.me(), "Profile");
     setProfile(meResp);
+    // Only seed from the server once per session — afterwards, local state
+    // (updated optimistically as the user pins/unpins shortcuts) is authoritative.
+    if (meResp && !favoritePagesInitialized.current) {
+      setFavoritePages(Array.isArray(meResp.favorite_pages) ? meResp.favorite_pages : []);
+      favoritePagesInitialized.current = true;
+    }
     // Pre-seed the profile org selection so the profile completion form
     // shows the user's current org placement if they revisit it
     if (meResp) {
@@ -5552,6 +5607,78 @@ export default function App() {
                   <span className="stat-icon"><BarChart3 size={28} /></span>
                   <div><div className="stat-value">{fmtMoney(monthlySpend)}</div><div className="stat-label">Monthly Spend</div></div>
                 </div>
+              </div>
+
+              <div className="card" style={{ marginTop: 20, marginBottom: 4, padding: "14px 20px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: favoriteShortcuts.length ? 12 : 4 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Star size={16} aria-hidden /> Shortcuts
+                  </div>
+                  <div style={{ position: "relative" }} ref={shortcutPickerRef}>
+                    <button
+                      type="button"
+                      className="ep-btn-outline"
+                      style={{ fontSize: 12, padding: "4px 10px", display: "flex", alignItems: "center", gap: 4 }}
+                      onClick={() => setShortcutPickerOpen((v) => !v)}
+                    >
+                      <Plus size={13} aria-hidden /> Add Shortcut
+                    </button>
+                    {shortcutPickerOpen && (
+                      <div
+                        style={{
+                          position: "absolute", right: 0, top: "100%", marginTop: 4, zIndex: 30,
+                          background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8,
+                          boxShadow: "0 8px 24px rgba(0,0,0,0.12)", minWidth: 220, maxHeight: 260, overflowY: "auto"
+                        }}
+                      >
+                        {availableShortcuts.filter((s) => !favoritePages.includes(s.key)).length === 0 ? (
+                          <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--muted)" }}>All available shortcuts are already pinned.</div>
+                        ) : (
+                          availableShortcuts.filter((s) => !favoritePages.includes(s.key)).map((s) => {
+                            const Icon = s.icon;
+                            return (
+                              <button
+                                key={s.key}
+                                type="button"
+                                onClick={() => toggleFavoritePage(s.key, true)}
+                                style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13 }}
+                              >
+                                <Icon size={14} aria-hidden /> {s.label}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {favoriteShortcuts.length === 0 ? (
+                  <div style={{ fontSize: 13, color: "var(--muted)" }}>Pin your most-used processes here for one-click access.</div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                    {favoriteShortcuts.map((s) => {
+                      const Icon = s.icon;
+                      return (
+                        <div
+                          key={s.key}
+                          onClick={() => setPage(s.key)}
+                          style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", cursor: "pointer", background: "var(--surface-soft)" }}
+                        >
+                          <Icon size={16} aria-hidden />
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{s.label}</span>
+                          <button
+                            type="button"
+                            title="Remove shortcut"
+                            onClick={(e) => { e.stopPropagation(); toggleFavoritePage(s.key, false); }}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", display: "flex", marginLeft: 4 }}
+                          >
+                            <X size={13} aria-hidden />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="card-container">

@@ -344,7 +344,7 @@ authRouter.get("/me", async (req, res, next) => {
                 u.division_id, dv.name AS division_name,
                 u.section_id, s.name AS section_name,
                 u.team_id, t.name AS team_name,
-                u.employment_type, u.profile_completed, u.is_active
+                u.employment_type, u.profile_completed, u.is_active, u.favorite_pages
            FROM users u
            LEFT JOIN divisions dv ON dv.id = u.division_id
            LEFT JOIN sections s ON s.id = u.section_id
@@ -353,7 +353,22 @@ authRouter.get("/me", async (req, res, next) => {
         if (!user)
             throw notFound();
         const groups = await getUserGroups(user.id);
-        return res.json({ ...user, groups, profile_completed: isProfileComplete(user) });
+        return res.json({ ...user, favorite_pages: user.favorite_pages ?? [], groups, profile_completed: isProfileComplete(user) });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+const FavoritePagesSchema = z.object({ favorite_pages: z.array(z.string().trim().min(1)).max(20) });
+// PATCH /auth/me/favorites — replace the requesting user's dashboard shortcut list.
+authRouter.patch("/me/favorites", async (req, res, next) => {
+    try {
+        const parsed = FavoritePagesSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid favorites payload", parsed.error.flatten());
+        const deduped = [...new Set(parsed.data.favorite_pages)];
+        await query(`UPDATE users SET favorite_pages = $1 WHERE id = $2`, [deduped, req.user.userId]);
+        return res.json({ favorite_pages: deduped });
     }
     catch (err) {
         return next(err);

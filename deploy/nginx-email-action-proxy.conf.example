@@ -1,0 +1,29 @@
+# Email-action proxy location for dt-internalproxy-1.etl.co.ls
+#
+# This is a SNIPPET to add into the existing server block on
+# dt-internalproxy-1.etl.co.ls (the same internal proxy already used for
+# /ldap/api and the EmailActiveDirectoryAPI) - not a standalone vhost.
+#
+# It exposes ONLY the backend's /email-actions route (GET confirmation page +
+# POST approve/reject) under /flowdesk/uat/email-actions/, matching
+# EMAIL_ACTION_PUBLIC_URL=http://dt-internalproxy-1.etl.co.ls/flowdesk/uat in
+# backend-v2/.env. No frontend involved: the backend renders a fully
+# self-contained HTML page for browser requests (see
+# email-actions.routes.ts), so there's no /assets/ or /api/ path to forward -
+# this is the only location block needed.
+#
+# Adjust 10.3.10.59:4100 if the backend's host/PORT changes.
+
+location /flowdesk/uat/email-actions/ {
+    proxy_pass http://10.3.10.59:4100/email-actions/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# Defense in depth: nothing else under /flowdesk/uat/ should be reachable
+# from here - this proxy must never forward to the rest of the internal API.
+location /flowdesk/uat/ {
+    return 404;
+}

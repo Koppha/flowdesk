@@ -1,13 +1,23 @@
 import { Router } from "express";
 import { z } from "zod";
+import fs from "fs";
+import multer from "multer";
 import { requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { notifyCustomRequestStep, notifyCustomRequestDecision, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned } from "../../lib/notifications.js";
+import { notifyCustomRequestStep, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned } from "../../lib/notifications.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 export const customRequestsRouter = Router();
 customRequestsRouter.use(requireAuth);
+const uploadDir = process.env.UPLOAD_DIR || "uploads";
+if (!fs.existsSync(uploadDir))
+    fs.mkdirSync(uploadDir, { recursive: true });
+const attachmentStorage = multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadDir),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replaceAll(" ", "_")}`)
+});
+const uploadAttachments = multer({ storage: attachmentStorage, limits: { fileSize: 25 * 1024 * 1024 } });
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // True if the actor (by id, or by team membership for team entries) appears
 // in any "user_multi" field's assignee array on this submission — used to
@@ -22,9 +32,14 @@ function isSubmissionAssignee(data, fields, actor) {
 }
 // approver_id/position_name are nullish here because fixed-chain submissions
 // don't send them for the AUTO_MANAGER step — the server resolves it instead.
+// decision_type distinguishes a step that must formally approve (gates progress
+// the same way it always has) from one that's only "noting" the change for the
+// record (e.g. GM Internal Audit & Risk on the ECONET Change Control form) —
+// currently only surfaced in the UI for Change Request.
 const ChainStepSchema = z.object({
     approver_id: z.string().uuid().nullish(),
-    position_name: z.string().trim().nullish()
+    position_name: z.string().trim().nullish(),
+    decision_type: z.enum(["APPROVE", "NOTE"]).default("APPROVE")
 });
 const CreateSchema = z.object({
     request_type_id: z.string().uuid(),
@@ -38,6 +53,9 @@ const ActionSchema = z.object({
 const CloseSchema = z.object({
     implementation_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "implementation_date must be YYYY-MM-DD"),
     closure_notes: z.string().trim().nullish()
+});
+const CancelSchema = z.object({
+    comment: z.string().trim().min(1, "A comment is required to cancel a request")
 });
 async function assertCanSubmit(userId, role, department, employmentType, requestTypeId) {
     if (role === "ADMIN")
@@ -54,10 +72,21 @@ async function assertCanSubmit(userId, role, department, employmentType, request
     if (!perm[0])
         throw forbidden("You do not have permission to submit this request type");
 }
-// POST /custom-requests — submit a new request with a requester-defined approval chain
-customRequestsRouter.post("/", async (req, res, next) => {
+// POST /custom-requests — submit a new request with a requester-defined approval chain.
+// Sent as multipart/form-data so the wizard's attachment step can ride along with the
+// rest of the form in one request — "data" and "approval_chain" arrive as JSON strings.
+customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req, res, next) => {
     try {
-        const parsed = CreateSchema.safeParse(req.body);
+        let bodyData;
+        let bodyChain;
+        try {
+            bodyData = typeof req.body.data === "string" ? JSON.parse(req.body.data) : (req.body.data ?? {});
+            bodyChain = typeof req.body.approval_chain === "string" ? JSON.parse(req.body.approval_chain) : (req.body.approval_chain ?? []);
+        }
+        catch {
+            throw badRequest("Invalid submission payload — data/approval_chain must be valid JSON");
+        }
+        const parsed = CreateSchema.safeParse({ request_type_id: req.body.request_type_id, data: bodyData, approval_chain: bodyChain });
         if (!parsed.success)
             throw badRequest("Invalid submission payload", parsed.error.flatten());
         const requestType = (await query(`SELECT id, name, status, fixed_approval_chain FROM custom_request_types WHERE id = $1 AND is_active = true`, [parsed.data.request_type_id]))[0];
@@ -136,12 +165,12 @@ customRequestsRouter.post("/", async (req, res, next) => {
                     const managerId = (await getManagerChainIds(req.user.userId))[0];
                     if (!managerId)
                         throw badRequest("No manager is set up for you in the org structure — ask HR/Admin to set your reporting line before submitting");
-                    chainInput.push({ approver_id: managerId, position_name: stepDef.title });
+                    chainInput.push({ approver_id: managerId, position_name: stepDef.title, decision_type: "APPROVE" });
                 }
                 else {
                     if (!submitted?.approver_id)
                         throw badRequest(`Please select an approver for "${stepDef.title}"`);
-                    chainInput.push({ approver_id: submitted.approver_id, position_name: stepDef.title });
+                    chainInput.push({ approver_id: submitted.approver_id, position_name: stepDef.title, decision_type: "APPROVE" });
                 }
             }
         }
@@ -149,7 +178,7 @@ customRequestsRouter.post("/", async (req, res, next) => {
             chainInput = parsed.data.approval_chain.map((s) => {
                 if (!s.approver_id || !s.position_name?.trim())
                     throw badRequest("Each approval step requires an approver and a title");
-                return { approver_id: s.approver_id, position_name: s.position_name.trim() };
+                return { approver_id: s.approver_id, position_name: s.position_name.trim(), decision_type: s.decision_type };
             });
         }
         const approverIds = chainInput.map((s) => s.approver_id);
@@ -178,6 +207,7 @@ customRequestsRouter.post("/", async (req, res, next) => {
                 approver_name: approver.full_name,
                 approver_email: approver.email,
                 position_name: step.position_name,
+                decision_type: step.decision_type,
                 status: "PENDING",
                 comment: null,
                 acted_at: null
@@ -186,82 +216,110 @@ customRequestsRouter.post("/", async (req, res, next) => {
         const submission = (await query(`INSERT INTO custom_request_submissions (request_type_id, requester_id, data, approval_chain, current_step_order, status)
        VALUES ($1, $2, $3, $4, 0, 'IN_PROGRESS')
        RETURNING id`, [requestType.id, req.user.userId, JSON.stringify(parsed.data.data), JSON.stringify(chain)]))[0];
-        await notifyCustomRequestStep({
-            submissionId: submission.id,
-            requestTypeName: requestType.name,
-            requesterName: req.user.fullName ?? null,
-            approverEmail: chain[0].approver_email,
-            approverName: chain[0].approver_name,
-            approverId: chain[0].approver_id,
-            stepLabel: chain[0].position_name,
-            stepOrder: 0
-        });
-        // "user"/"user_multi" fields (e.g. Change Assignee) can be filled in with
-        // a plain email instead of a picked system user when the assignee doesn't
-        // have an account yet — let them know they were named on this request.
-        for (const f of fields) {
-            if (f.field_type === "user") {
-                const val = String(parsed.data.data[f.field_key] ?? "").trim();
-                if (val && EMAIL_RE.test(val)) {
-                    await notifyCustomRequestUnregisteredAssignee({
+        const uploadedFiles = req.files ?? [];
+        for (const file of uploadedFiles) {
+            await query(`INSERT INTO custom_request_attachments (submission_id, file_path, original_name, content_type, size_bytes, uploaded_by_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`, [submission.id, file.path, file.originalname, file.mimetype, file.size, req.user.userId]);
+        }
+        // Respond as soon as the submission itself is durably saved — every
+        // notification below is an email/Teams send that can each take seconds,
+        // and the requester doesn't need to wait on any of them to know their
+        // request went through. Fire them in the background instead; each one
+        // already catches and logs its own failures (see notifications.ts), so
+        // nothing here needs to be awaited or can crash the process.
+        res.status(201).json({ id: submission.id });
+        void (async () => {
+            try {
+                await notifyCustomRequestStep({
+                    submissionId: submission.id,
+                    requestTypeName: requestType.name,
+                    requesterName: req.user.fullName ?? null,
+                    approverEmail: chain[0].approver_email,
+                    approverName: chain[0].approver_name,
+                    approverId: chain[0].approver_id,
+                    stepLabel: chain[0].position_name,
+                    stepOrder: 0
+                });
+                // "user"/"user_multi" fields (e.g. Change Assignee) can be filled in with
+                // a plain email instead of a picked system user when the assignee doesn't
+                // have an account yet — let them know they were named on this request.
+                for (const f of fields) {
+                    if (f.field_type === "user") {
+                        const val = String(parsed.data.data[f.field_key] ?? "").trim();
+                        if (val && EMAIL_RE.test(val)) {
+                            await notifyCustomRequestUnregisteredAssignee({
+                                submissionId: submission.id,
+                                requestTypeName: requestType.name,
+                                requesterName: req.user.fullName ?? null,
+                                fieldLabel: f.field_label,
+                                assigneeEmail: val
+                            });
+                        }
+                    }
+                    else if (f.field_type === "user_multi") {
+                        const arr = parsed.data.data[f.field_key];
+                        for (const a of arr ?? []) {
+                            if (a.id && a.email) {
+                                await notifyCustomRequestAssigneeAssigned({
+                                    submissionId: submission.id,
+                                    requestTypeName: requestType.name,
+                                    requesterName: req.user.fullName ?? null,
+                                    fieldLabel: f.field_label,
+                                    assigneeEmail: a.email,
+                                    assigneeName: a.name
+                                });
+                            }
+                            else if (!a.id && !a.teamId && a.email) {
+                                await notifyCustomRequestUnregisteredAssignee({
+                                    submissionId: submission.id,
+                                    requestTypeName: requestType.name,
+                                    requesterName: req.user.fullName ?? null,
+                                    fieldLabel: f.field_label,
+                                    assigneeEmail: a.email
+                                });
+                            }
+                        }
+                    }
+                }
+                for (const t of teamNotifications) {
+                    await notifyCustomRequestTeamAssigned({
+                        submissionId: submission.id,
+                        requestTypeName: requestType.name,
+                        requesterName: req.user.fullName ?? null,
+                        fieldLabel: t.fieldLabel,
+                        teamName: t.teamName,
+                        memberEmails: t.memberEmails
+                    });
+                }
+                // "section" fields (e.g. Change Implementor) store the section's name —
+                // notify everyone currently in that section, since they're the ones
+                // expected to carry out the implementation.
+                for (const f of fields) {
+                    if (f.field_type !== "section")
+                        continue;
+                    const sectionName = String(parsed.data.data[f.field_key] ?? "").trim();
+                    if (!sectionName)
+                        continue;
+                    const section = (await query(`SELECT id, name FROM sections WHERE lower(trim(name)) = lower(trim($1)) AND active = true`, [sectionName]))[0];
+                    if (!section)
+                        continue;
+                    const members = await query(`SELECT email FROM users WHERE section_id = $1 AND is_active = true`, [section.id]);
+                    if (!members.length)
+                        continue;
+                    await notifyCustomRequestSectionAssigned({
                         submissionId: submission.id,
                         requestTypeName: requestType.name,
                         requesterName: req.user.fullName ?? null,
                         fieldLabel: f.field_label,
-                        assigneeEmail: val
+                        sectionName: section.name,
+                        memberEmails: members.map((m) => m.email)
                     });
                 }
             }
-            else if (f.field_type === "user_multi") {
-                const arr = parsed.data.data[f.field_key];
-                for (const a of arr ?? []) {
-                    if (!a.id && !a.teamId && a.email) {
-                        await notifyCustomRequestUnregisteredAssignee({
-                            submissionId: submission.id,
-                            requestTypeName: requestType.name,
-                            requesterName: req.user.fullName ?? null,
-                            fieldLabel: f.field_label,
-                            assigneeEmail: a.email
-                        });
-                    }
-                }
+            catch (bgErr) {
+                logger.warn("custom_request_post_submit_notifications_failed", { submission_id: submission.id, error: serializeError(bgErr) });
             }
-        }
-        for (const t of teamNotifications) {
-            await notifyCustomRequestTeamAssigned({
-                submissionId: submission.id,
-                requestTypeName: requestType.name,
-                requesterName: req.user.fullName ?? null,
-                fieldLabel: t.fieldLabel,
-                teamName: t.teamName,
-                memberEmails: t.memberEmails
-            });
-        }
-        // "section" fields (e.g. Change Implementor) store the section's name —
-        // notify everyone currently in that section, since they're the ones
-        // expected to carry out the implementation.
-        for (const f of fields) {
-            if (f.field_type !== "section")
-                continue;
-            const sectionName = String(parsed.data.data[f.field_key] ?? "").trim();
-            if (!sectionName)
-                continue;
-            const section = (await query(`SELECT id, name FROM sections WHERE lower(trim(name)) = lower(trim($1)) AND active = true`, [sectionName]))[0];
-            if (!section)
-                continue;
-            const members = await query(`SELECT email FROM users WHERE section_id = $1 AND is_active = true`, [section.id]);
-            if (!members.length)
-                continue;
-            await notifyCustomRequestSectionAssigned({
-                submissionId: submission.id,
-                requestTypeName: requestType.name,
-                requesterName: req.user.fullName ?? null,
-                fieldLabel: f.field_label,
-                sectionName: section.name,
-                memberEmails: members.map((m) => m.email)
-            });
-        }
-        return res.status(201).json({ id: submission.id });
+        })();
     }
     catch (err) {
         return next(err);
@@ -270,7 +328,12 @@ customRequestsRouter.post("/", async (req, res, next) => {
 // GET /custom-requests/mine — submissions created by the current user
 customRequestsRouter.get("/mine", async (req, res, next) => {
     try {
-        const rows = await query(`SELECT s.*, rt.name AS request_type_name, rt.code AS request_type_code
+        const rows = await query(`SELECT s.*, rt.name AS request_type_name, rt.code AS request_type_code,
+              COALESCE(
+                (SELECT json_agg(json_build_object('id', a.id, 'original_name', a.original_name) ORDER BY a.uploaded_at)
+                   FROM custom_request_attachments a WHERE a.submission_id = s.id),
+                '[]'
+              ) AS attachments
          FROM custom_request_submissions s
          JOIN custom_request_types rt ON rt.id = s.request_type_id
         WHERE s.requester_id = $1
@@ -331,7 +394,31 @@ customRequestsRouter.get("/:id", async (req, res, next) => {
         if (req.user.role !== "ADMIN" && submission.requester_id !== req.user.userId && !isParticipant && !isAssignee) {
             throw forbidden();
         }
-        return res.json({ ...submission, fields });
+        const attachments = await query(`SELECT id, original_name, content_type, size_bytes, uploaded_at FROM custom_request_attachments WHERE submission_id = $1 ORDER BY uploaded_at`, [submission.id]);
+        return res.json({ ...submission, fields, attachments });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// GET /custom-requests/:id/attachments/:attachmentId — download a single attachment.
+// Same access rule as the submission detail (requester, chain participant, assignee, or admin).
+customRequestsRouter.get("/:id/attachments/:attachmentId", async (req, res, next) => {
+    try {
+        const submission = (await query(`SELECT * FROM custom_request_submissions WHERE id = $1`, [req.params.id]))[0];
+        if (!submission)
+            throw notFound();
+        const fields = await query(`SELECT field_key, field_label, field_type FROM request_type_fields WHERE request_type_id = $1 AND is_active = true`, [submission.request_type_id]);
+        const chain = submission.approval_chain;
+        const isParticipant = chain.some((s) => s.approver_id === req.user.userId);
+        const isAssignee = isSubmissionAssignee(submission.data, fields, { userId: req.user.userId, teamId: req.user.teamId });
+        if (req.user.role !== "ADMIN" && submission.requester_id !== req.user.userId && !isParticipant && !isAssignee) {
+            throw forbidden();
+        }
+        const attachment = (await query(`SELECT file_path, original_name FROM custom_request_attachments WHERE id = $1 AND submission_id = $2`, [req.params.attachmentId, submission.id]))[0];
+        if (!attachment)
+            throw notFound();
+        return res.download(attachment.file_path, attachment.original_name);
     }
     catch (err) {
         return next(err);
@@ -425,8 +512,18 @@ customRequestsRouter.post("/:id/assignees", async (req, res, next) => {
         const updatedData = { ...submission.data, [field.field_key]: [...current, entry] };
         await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updatedData), submission.id]);
         const requestType = (await query(`SELECT name FROM custom_request_types WHERE id = $1`, [submission.request_type_id]))[0];
-        if (!entry.id && !entry.teamId && entry.email) {
-            await notifyCustomRequestUnregisteredAssignee({
+        if (entry.id && entry.email) {
+            void notifyCustomRequestAssigneeAssigned({
+                submissionId: submission.id,
+                requestTypeName: requestType?.name ?? "Request",
+                requesterName: req.user.fullName ?? null,
+                fieldLabel: field.field_label,
+                assigneeEmail: entry.email,
+                assigneeName: entry.name
+            });
+        }
+        else if (!entry.id && !entry.teamId && entry.email) {
+            void notifyCustomRequestUnregisteredAssignee({
                 submissionId: submission.id,
                 requestTypeName: requestType?.name ?? "Request",
                 requesterName: req.user.fullName ?? null,
@@ -435,7 +532,7 @@ customRequestsRouter.post("/:id/assignees", async (req, res, next) => {
             });
         }
         else if (entry.teamId && teamMemberEmails.length) {
-            await notifyCustomRequestTeamAssigned({
+            void notifyCustomRequestTeamAssigned({
                 submissionId: submission.id,
                 requestTypeName: requestType?.name ?? "Request",
                 requesterName: req.user.fullName ?? null,
@@ -487,7 +584,7 @@ customRequestsRouter.post("/:id/assignees/confirm", async (req, res, next) => {
                 const chain = submission.approval_chain;
                 const step = chain[submission.current_step_order];
                 if (step) {
-                    await notifyCustomRequestStep({
+                    void notifyCustomRequestStep({
                         submissionId: submission.id,
                         requestTypeName: submission.request_type_name,
                         requesterName: submission.requester_name,
@@ -580,14 +677,32 @@ export async function performCustomRequestAction(submissionId, actor, action, co
             }
         }
     }
-    step.status = action === "APPROVE" ? "APPROVED" : "REJECTED";
+    // A "NOTE" step (e.g. GM Internal Audit & Risk on the ECONET Change Control
+    // form) still has to act for the chain to move on, but its affirmative action
+    // is recorded as "NOTED" rather than "APPROVED" — it's acknowledging the
+    // change for the record, not formally signing off on it.
+    step.status = action === "APPROVE" ? (step.decision_type === "NOTE" ? "NOTED" : "APPROVED") : "REJECTED";
     step.comment = comment || null;
     step.acted_at = new Date().toISOString();
     let newStatus = submission.status;
     let newStepOrder = stepIdx;
     if (action === "REJECT") {
         newStatus = "REJECTED";
-        await notifyCustomRequestDecision({
+    }
+    else if (stepIdx + 1 >= chain.length) {
+        newStatus = "APPROVED";
+    }
+    else {
+        newStepOrder = stepIdx + 1;
+    }
+    await query(`UPDATE custom_request_submissions
+        SET approval_chain = $1, current_step_order = $2, status = $3, updated_at = now()
+      WHERE id = $4`, [JSON.stringify(chain), newStepOrder, newStatus, submission.id]);
+    // Email/Teams sends are slow relative to a request-response cycle and
+    // already self-log on failure — don't make the caller (the action route,
+    // or the one-click email-approval link) wait on them.
+    if (action === "REJECT") {
+        void notifyCustomRequestDecision({
             submissionId: submission.id,
             requestTypeName: submission.request_type_name,
             requesterEmail: submission.requester_email,
@@ -597,9 +712,8 @@ export async function performCustomRequestAction(submissionId, actor, action, co
             comment: comment ?? null
         });
     }
-    else if (stepIdx + 1 >= chain.length) {
-        newStatus = "APPROVED";
-        await notifyCustomRequestDecision({
+    else if (newStatus === "APPROVED") {
+        void notifyCustomRequestDecision({
             submissionId: submission.id,
             requestTypeName: submission.request_type_name,
             requesterEmail: submission.requester_email,
@@ -610,9 +724,8 @@ export async function performCustomRequestAction(submissionId, actor, action, co
         });
     }
     else {
-        newStepOrder = stepIdx + 1;
         const nextStep = chain[newStepOrder];
-        await notifyCustomRequestStep({
+        void notifyCustomRequestStep({
             submissionId: submission.id,
             requestTypeName: submission.request_type_name,
             requesterName: submission.requester_name,
@@ -623,9 +736,6 @@ export async function performCustomRequestAction(submissionId, actor, action, co
             stepOrder: newStepOrder
         });
     }
-    await query(`UPDATE custom_request_submissions
-        SET approval_chain = $1, current_step_order = $2, status = $3, updated_at = now()
-      WHERE id = $4`, [JSON.stringify(chain), newStepOrder, newStatus, submission.id]);
     return { status: newStatus };
 }
 // POST /custom-requests/:id/action — approve/reject the current step
@@ -636,6 +746,45 @@ customRequestsRouter.post("/:id/action", async (req, res, next) => {
             throw badRequest("Invalid action payload", parsed.error.flatten());
         const result = await performCustomRequestAction(req.params.id, { userId: req.user.userId, role: req.user.role, fullName: req.user.fullName ?? null }, parsed.data.action, parsed.data.comment);
         return res.json({ ok: true, status: result.status });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// POST /custom-requests/:id/cancel — requester withdraws their own request while it's
+// still pending approval. Terminal — cancelled requests cannot be reopened.
+customRequestsRouter.post("/:id/cancel", async (req, res, next) => {
+    try {
+        const parsed = CancelSchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid cancel payload", parsed.error.flatten());
+        const submission = (await query(`SELECT s.*, rt.name AS request_type_name
+         FROM custom_request_submissions s
+         JOIN custom_request_types rt ON rt.id = s.request_type_id
+        WHERE s.id = $1`, [req.params.id]))[0];
+        if (!submission)
+            throw notFound();
+        if (req.user.role !== "ADMIN" && submission.requester_id !== req.user.userId) {
+            throw forbidden("Only the requester can cancel this request");
+        }
+        if (submission.status !== "IN_PROGRESS")
+            throw badRequest("Only a request that is still pending approval can be cancelled");
+        await query(`UPDATE custom_request_submissions
+          SET status = 'CANCELLED', cancel_comment = $1, cancelled_at = now(), updated_at = now()
+        WHERE id = $2`, [parsed.data.comment, submission.id]);
+        const chain = submission.approval_chain;
+        const pendingStep = chain[submission.current_step_order];
+        if (pendingStep) {
+            void notifyCustomRequestCancelled({
+                submissionId: submission.id,
+                requestTypeName: submission.request_type_name,
+                requesterName: req.user.fullName ?? null,
+                approverEmail: pendingStep.approver_email,
+                approverName: pendingStep.approver_name,
+                comment: parsed.data.comment
+            });
+        }
+        return res.json({ ok: true, status: "CANCELLED" });
     }
     catch (err) {
         return next(err);

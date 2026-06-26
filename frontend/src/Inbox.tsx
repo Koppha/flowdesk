@@ -1794,6 +1794,7 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
                       <div className="review-chain-step-number">{idx + 1}</div>
                       <div className="review-chain-step-info">
                         <strong>{step.position_name}</strong> — {step.approver_name || "—"}
+                        {step.decision_type === "NOTE" && <span style={{ color: "var(--muted)", fontSize: 12 }}> (noting)</span>}
                         {step.comment && <div style={{ fontSize: 12, color: "var(--muted)" }}>"{step.comment}"</div>}
                       </div>
                       <span className={`status-pill ${statusTone(isCurrent ? "PENDING" : step.status)}`}>
@@ -1817,7 +1818,7 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
                   />
                   <div style={{ display: "flex", gap: 10 }}>
                     <button className="button small-button button-primary" disabled={busy} onClick={() => act("APPROVE")}>
-                      Approve
+                      {detail.approval_chain?.[detail.current_step_order]?.decision_type === "NOTE" ? "Acknowledge (Note)" : "Approve"}
                     </button>
                     <button className="button small-button button-danger" disabled={busy} onClick={() => act("REJECT")}>
                       Reject

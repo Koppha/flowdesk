@@ -74,7 +74,7 @@ function formatApiError(json: any, fallback: string) {
 
 async function req(path: string, options: RequestInit = {}) {
   const token = getToken();
-  const headers: any = { ...(options.headers || {}) };
+  const headers: any = { Accept: "application/json", ...(options.headers || {}) };
 
   const isForm = options.body instanceof FormData;
   if (!isForm) headers["Content-Type"] = "application/json";
@@ -108,6 +108,7 @@ async function fetchBlob(path: string) {
 export const api = {
   login: (email: string, password: string) => req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => req("/auth/me"),
+  updateFavoritePages: (favorite_pages: string[]) => req("/auth/me/favorites", { method: "PATCH", body: JSON.stringify({ favorite_pages }) }),
   verifyPassword: (password: string) => req("/auth/verify-password", { method: "POST", body: JSON.stringify({ password }) }),
   departments: () => req("/auth/departments"),
   groups: () => req("/auth/groups"),
@@ -289,12 +290,23 @@ export const api = {
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
 
   myManager: () => req("/reporting-lines/my-manager"),
-  submitCustomRequest: (data: any) => req("/custom-requests", { method: "POST", body: JSON.stringify(data) }),
+  // Sent as multipart/form-data so attachments can ride along with the rest of the wizard.
+  submitCustomRequest: (data: { request_type_id: string; data: Record<string, any>; approval_chain: any[] }, files?: File[]) => {
+    const form = new FormData();
+    form.append("request_type_id", data.request_type_id);
+    form.append("data", JSON.stringify(data.data));
+    form.append("approval_chain", JSON.stringify(data.approval_chain));
+    (files || []).forEach((f) => form.append("files", f));
+    return req("/custom-requests", { method: "POST", body: form });
+  },
   myCustomRequests: () => req("/custom-requests/mine"),
   customRequestDetail: (id: string) => req(`/custom-requests/${id}`),
   customRequestConsolidated: (id: string) => req(`/custom-requests/${id}/consolidated`),
+  customRequestAttachmentBlob: (id: string, attachmentId: string) => fetchBlob(`/custom-requests/${id}/attachments/${attachmentId}`),
   actionCustomRequest: (id: string, data: { action: "APPROVE" | "REJECT"; comment?: string }) =>
     req(`/custom-requests/${id}/action`, { method: "POST", body: JSON.stringify(data) }),
+  cancelCustomRequest: (id: string, comment: string) =>
+    req(`/custom-requests/${id}/cancel`, { method: "POST", body: JSON.stringify({ comment }) }),
   closeCustomRequest: (id: string, data: { implementation_date: string; closure_notes?: string }) =>
     req(`/custom-requests/${id}/close`, { method: "POST", body: JSON.stringify(data) }),
   assignedToMeCustomRequests: () => req("/custom-requests/assigned-to-me"),

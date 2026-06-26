@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import fs from "fs";
 import multer from "multer";
-import { isFinanceDept, requireAuth, requireRole } from "../../lib/auth.js";
+import { isFinanceDept, requireAuth, requireFinance } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
@@ -12,7 +12,7 @@ import { isTravelAdvanceType } from "../../lib/travel.js";
 import { canApproveStep, getPendingGroup, resolveWorkflowChain } from "../../lib/workflowEngine.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
-import { nextClaimStatus, chainStepToClaimStatus, getClaimById, advanceClaimWorkflowStep } from "./claims.service.js";
+import { nextClaimStatus, nextStatusForFinanceDecision, chainStepToClaimStatus, getClaimById, advanceClaimWorkflowStep } from "./claims.service.js";
 export { nextClaimStatus };
 export const claimsRouter = Router();
 claimsRouter.use(requireAuth);
@@ -93,10 +93,11 @@ export async function canViewClaim(args) {
                 return true;
         }
     }
-    // FINANCE_VERIFIED claims have left the active workflow chain and now sit
-    // with Finance/HR/EXCO/Managers awaiting settlement — those are the same
-    // roles allowedInboxForRole lists this status for, so let them view it.
-    if (args.status === "FINANCE_VERIFIED" && (isFinanceDept(args.department) || ["MANAGER", "HR_MANAGER", "EXCO"].includes(args.role))) {
+    // FINANCE_VERIFIED/PAYMENT_PROCESSING/CLOSED claims have left the active
+    // workflow chain and now sit with Finance/HR/EXCO/Managers awaiting (or
+    // having completed) settlement — those are the same roles allowedInboxForRole
+    // lists this status for, so let them view it.
+    if (["FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED"].includes(args.status || "") && (isFinanceDept(args.department) || ["MANAGER", "HR_MANAGER", "EXCO"].includes(args.role))) {
         return true;
     }
     // Anyone in the claimant's management chain (org structure) can view
@@ -536,27 +537,34 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req, res, next) => {
         const claim = await getClaimById(req.params.id);
         if (!claim)
             throw notFound();
-        if (!claim.approval_chain?.length) {
-            throw badRequest("This clearance does not follow a dynamic approval workflow.");
-        }
-        const chain = claim.approval_chain;
-        const stepIdx = claim.workflow_step_order ?? 0;
-        const group = getPendingGroup(chain, stepIdx);
-        if (!group.indices.length)
-            throw badRequest("No active workflow step to roll back");
         const role = req.user.role;
         const userId = req.user.userId;
-        const delegated = await getActiveManagerDelegation(userId);
-        if (role !== "ADMIN") {
-            let currentStep;
-            for (const idx of group.indices) {
-                if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user.department)) {
-                    currentStep = chain[idx];
-                    break;
-                }
+        // Finance "Request Correction": the claim has already left the dynamic
+        // workflow chain (status FINANCE_VERIFIED) by the time Finance acts on
+        // it, so there's no pending chain step to gate against — Finance/Admin
+        // can send it straight back to DRAFT, same as canViewClaim's Finance access.
+        const isFinanceCorrection = claim.status === "FINANCE_VERIFIED" && (role === "ADMIN" || isFinanceDept(req.user.department));
+        if (!isFinanceCorrection) {
+            if (!claim.approval_chain?.length) {
+                throw badRequest("This clearance does not follow a dynamic approval workflow.");
             }
-            if (!currentStep)
-                throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+            const chain = claim.approval_chain;
+            const stepIdx = claim.workflow_step_order ?? 0;
+            const group = getPendingGroup(chain, stepIdx);
+            if (!group.indices.length)
+                throw badRequest("No active workflow step to roll back");
+            const delegated = await getActiveManagerDelegation(userId);
+            if (role !== "ADMIN") {
+                let currentStep;
+                for (const idx of group.indices) {
+                    if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user.department)) {
+                        currentStep = chain[idx];
+                        break;
+                    }
+                }
+                if (!currentStep)
+                    throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+            }
         }
         await query(`UPDATE clearance_claims SET
          status='DRAFT', workflow_id=NULL, workflow_step_order=NULL, approval_chain=NULL, updated_at=now()
@@ -579,18 +587,86 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req, res, next) => {
         return next(err);
     }
 });
-claimsRouter.post("/:id/settle", requireRole(["ADMIN"]), async (req, res, next) => {
+const FinanceDecisionSchema = z.object({
+    finance_decision: z.enum(["ACCEPTED", "REFUND_FROM_EMPLOYEE", "REIMBURSE_EMPLOYEE"]),
+    finance_comments: z.string().trim().min(1, "Finance comments are required"),
+    settlement_amount: z.number().optional(),
+    settled_method: z.enum(["ECOCASH", "BANK", "CASH", "OTHER"]).optional(),
+    settled_reference: z.string().optional(),
+    assignee_user_id: z.string().uuid().optional(),
+    assignee_group_name: z.string().optional(),
+    expected_payment_date: z.string().optional()
+});
+// Finance's decision on a FINANCE_VERIFIED clearance. "ACCEPTED" (no money
+// owed either way) closes the claim immediately; the two settlement
+// decisions move it into PAYMENT_PROCESSING, where /:id/mark-settled later
+// closes it once payment has actually been made.
+claimsRouter.post("/:id/settle", requireFinance, async (req, res, next) => {
     try {
-        const body = z.object({ settled_method: z.enum(["ECOCASH", "BANK", "CASH", "OTHER"]), settled_reference: z.string().min(1) }).safeParse(req.body);
+        const body = FinanceDecisionSchema.safeParse(req.body);
         if (!body.success)
             throw badRequest("Invalid payload", body.error.flatten());
         const claim = await getClaimById(req.params.id);
         if (!claim)
             throw notFound();
-        const status = nextClaimStatus(claim.status, "SETTLE");
+        if (claim.status !== "FINANCE_VERIFIED")
+            throw badRequest(`Cannot record a finance decision from status ${claim.status}`);
+        const decision = body.data.finance_decision;
+        if (decision !== "ACCEPTED" && (!body.data.settled_method || !body.data.settled_reference)) {
+            throw badRequest("Settlement method and reference are required for this decision");
+        }
+        const status = nextStatusForFinanceDecision(decision);
         await query(`UPDATE clearance_claims
-       SET status=$2, settled_method=$3, settled_reference=$4, settled_at=now(), updated_at=now()
-       WHERE id=$1`, [claim.id, status, body.data.settled_method, body.data.settled_reference]);
+       SET status=$2, finance_decision=$3, finance_comments=$4, settlement_amount=$5,
+           settled_method=$6, settled_reference=$7, settled_at=CASE WHEN $6 IS NOT NULL THEN now() ELSE settled_at END,
+           assignee_user_id=$8, assignee_group_name=$9, expected_payment_date=$10,
+           closed_at=CASE WHEN $2='CLOSED' THEN now() ELSE closed_at END,
+           updated_at=now()
+       WHERE id=$1`, [
+            claim.id, status, decision, body.data.finance_comments, body.data.settlement_amount ?? null,
+            body.data.settled_method ?? null, body.data.settled_reference ?? null,
+            body.data.assignee_user_id ?? null, body.data.assignee_group_name ?? null, body.data.expected_payment_date ?? null
+        ]);
+        const notificationContext = await getClaimNotificationContext(claim.id);
+        if (notificationContext) {
+            await notifyClaimTask({
+                claimId: claim.id,
+                status,
+                claimantName: notificationContext.full_name,
+                claimantEmail: notificationContext.email,
+                department: notificationContext.department,
+                claimTotal: Number(notificationContext.claim_total),
+                claimType: notificationContext.claim_type
+            });
+        }
+        return res.json({ ok: true, status });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// Finance confirms payment has actually been made for a PAYMENT_PROCESSING
+// clearance, closing it out. Mirrors "Mark Advance Paid" for advances.
+claimsRouter.post("/:id/mark-settled", requireFinance, async (req, res, next) => {
+    try {
+        const body = z.object({
+            settled_method: z.enum(["ECOCASH", "BANK", "CASH", "OTHER"]).optional(),
+            settled_reference: z.string().optional()
+        }).safeParse(req.body);
+        if (!body.success)
+            throw badRequest("Invalid payload", body.error.flatten());
+        const claim = await getClaimById(req.params.id);
+        if (!claim)
+            throw notFound();
+        const status = nextClaimStatus(claim.status, "MARK_SETTLED");
+        await query(`UPDATE clearance_claims
+       SET status=$2,
+           settled_method=COALESCE($3, settled_method),
+           settled_reference=COALESCE($4, settled_reference),
+           settled_at=COALESCE(settled_at, now()),
+           closed_at=now(),
+           updated_at=now()
+       WHERE id=$1`, [claim.id, status, body.data.settled_method ?? null, body.data.settled_reference ?? null]);
         const notificationContext = await getClaimNotificationContext(claim.id);
         if (notificationContext) {
             await notifyClaimTask({

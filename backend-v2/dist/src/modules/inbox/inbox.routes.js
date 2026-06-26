@@ -39,6 +39,7 @@ function allowedInboxForRole(role) {
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
                 { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
                 { doc_type: "OVERTIME_REQUEST", status: "SUBMITTED" },
                 { doc_type: "OVERTIME_REQUEST", status: "SUPERVISOR_APPROVED" },
                 { doc_type: "OVERTIME_CLAIM", status: "SUBMITTED" }
@@ -53,6 +54,7 @@ function allowedInboxForRole(role) {
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
                 { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
                 { doc_type: "OVERTIME_CLAIM", status: "MANAGER_AUTHORISED" },
                 { doc_type: "OVERTIME_CLAIM", status: "FINANCE_VERIFIED" },
                 { doc_type: "OVERTIME_CLAIM", status: "EARNINGS_RECORDED" }
@@ -64,6 +66,7 @@ function allowedInboxForRole(role) {
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
                 { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
                 { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
                 { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
                 { doc_type: "ADVANCE", status: "HR_REVIEW" },
@@ -79,6 +82,7 @@ function allowedInboxForRole(role) {
                 { doc_type: "CLAIM", status: "HR_OFFICER" },
                 { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
                 { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
+                { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
                 { doc_type: "OVERTIME_CLAIM", status: "HR_NOTED" }
             ];
         case "ADMIN":
@@ -307,7 +311,7 @@ inboxRouter.get("/", async (req, res, next) => {
            FROM clearance_claims c
            JOIN users u ON u.id = c.claimant_id
           WHERE c.approval_chain IS NOT NULL
-            AND c.status NOT IN ('DRAFT','SETTLED','REJECTED','FINANCE_VERIFIED')
+            AND c.status NOT IN ('DRAFT','SETTLED','CLOSED','REJECTED','FINANCE_VERIFIED','PAYMENT_PROCESSING')
           ORDER BY c.created_at DESC`);
             for (const c of rows) {
                 const chain = c.approval_chain;
@@ -491,10 +495,10 @@ inboxRouter.get("/", async (req, res, next) => {
                 ownershipFilter = ` AND d.manager_user_id = $${params.length}`;
             }
             // Exclude workflow-driven claims — those are handled by loadWorkflowClaimsForUser.
-            // FINANCE_VERIFIED is the exception: workflow-driven claims leave the
-            // active-step query once their chain completes, but FINANCE/ADMIN still
-            // need to see them here to settle, so include them for that status.
-            if (status !== "FINANCE_VERIFIED") {
+            // FINANCE_VERIFIED/PAYMENT_PROCESSING are the exception: workflow-driven
+            // claims leave the active-step query once their chain completes, but
+            // FINANCE/ADMIN still need to see them here to act on, so include them.
+            if (status !== "FINANCE_VERIFIED" && status !== "PAYMENT_PROCESSING") {
                 ownershipFilter += " AND c.approval_chain IS NULL";
             }
             const rows = await query(`SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, u.full_name AS claimant_name
@@ -593,6 +597,7 @@ inboxRouter.get("/", async (req, res, next) => {
             await loadClaimByStatus("HR_OFFICER");
             await loadClaimByStatus("HR_MANAGER_REVIEW");
             await loadClaimByStatus("FINANCE_VERIFIED");
+            await loadClaimByStatus("PAYMENT_PROCESSING");
             await loadOvertimeRequestByStatus("SUBMITTED");
             await loadOvertimeRequestByStatus("SUPERVISOR_APPROVED");
             await loadOvertimeRequestByStatus("HOD_APPROVED");

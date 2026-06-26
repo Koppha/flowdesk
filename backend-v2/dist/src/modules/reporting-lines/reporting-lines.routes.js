@@ -5,6 +5,27 @@ import { requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departments.js";
+// Falls back to department leadership when no reporting_lines row exists yet,
+// mirroring the chain used by /reporting-lines/auto-generate: EXCO -> CEO,
+// HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else -> MANAGER/HOD/EXCO.
+async function getFallbackManagerId(userId) {
+    const userRows = await query(`SELECT role::text AS role, department FROM users WHERE id = $1`, [userId]);
+    const user = userRows[0];
+    if (!user)
+        return null;
+    if (user.role === "EXCO") {
+        const ceoRows = await query(`SELECT id FROM users WHERE role::text = 'CEO' AND is_active = true ORDER BY full_name LIMIT 1`);
+        return ceoRows[0]?.id ?? null;
+    }
+    if (!user.department)
+        return null;
+    const leadership = await getDepartmentLeadership(user.department);
+    if (user.role === "HOD")
+        return leadership.exco_user_id ?? null;
+    if (user.role === "MANAGER")
+        return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+    return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+}
 export const reportingLinesRouter = Router();
 reportingLinesRouter.use(requireAuth);
 // Walks reporting_lines upward from employeeId, returning the ordered chain
@@ -29,8 +50,12 @@ export async function getManagerChainIds(employeeId) {
 // fixed approval chains (e.g. Computer Request) without exposing the org chart.
 reportingLinesRouter.get("/my-manager", async (req, res, next) => {
     try {
-        const managerId = (await getManagerChainIds(req.user.userId))[0];
-        if (!managerId)
+        const userId = req.user.userId;
+        let managerId = (await getManagerChainIds(userId))[0] ?? null;
+        if (!managerId || managerId === userId) {
+            managerId = await getFallbackManagerId(userId);
+        }
+        if (!managerId || managerId === userId)
             return res.json(null);
         const manager = (await query(`SELECT id, full_name, email, title FROM users WHERE id = $1 AND is_active = true`, [managerId]))[0];
         return res.json(manager ?? null);

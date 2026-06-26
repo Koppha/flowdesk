@@ -49,11 +49,20 @@ async function ensureUserSchema() {
     await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
     await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");
     await ensureEnumColumnValue("clearance_claims", "status", "HR_MANAGER_REVIEW");
+    await ensureEnumColumnValue("clearance_claims", "status", "PAYMENT_PROCESSING");
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS finance_decision text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS finance_comments text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_amount numeric(12,2)`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS assignee_user_id uuid REFERENCES users(id)`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS assignee_group_name text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS expected_payment_date date`);
     await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
     await query(`ALTER TABLE users ALTER COLUMN employment_type SET DEFAULT 'PERMANENT'`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed boolean NOT NULL DEFAULT false`);
+    // Dashboard shortcuts — page keys the user has pinned for quick access.
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS favorite_pages text[] NOT NULL DEFAULT '{}'`);
     await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS created_by_id uuid REFERENCES users(id)`);
     await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS location text`);
     await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS meals_count integer NOT NULL DEFAULT 0`);
@@ -405,6 +414,9 @@ async function ensureRequestTypesSchema() {
     await query(`CREATE INDEX IF NOT EXISTS idx_rtf_type   ON request_type_fields(request_type_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_rtp_type   ON request_type_permissions(request_type_id)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_rtp_user   ON request_type_permissions(user_id)`);
+    // Groups fields into pages of the submission wizard ("Details", "Implementation", …).
+    // The final "Approvals" page is always implicit and not represented here.
+    await query(`ALTER TABLE request_type_fields ADD COLUMN IF NOT EXISTS wizard_step integer NOT NULL DEFAULT 1`);
     await query(`
     CREATE TABLE IF NOT EXISTS custom_request_submissions (
       id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -426,6 +438,22 @@ async function ensureRequestTypesSchema() {
     await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS closed_at timestamptz`);
     await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS follow_up_sent boolean NOT NULL DEFAULT false`);
     await query(`CREATE INDEX IF NOT EXISTS idx_crs_followup ON custom_request_submissions(implementation_date) WHERE status = 'CLOSED' AND follow_up_sent = false`);
+    // The requester can withdraw their own request while it's still pending approval.
+    await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS cancel_comment text`);
+    await query(`ALTER TABLE custom_request_submissions ADD COLUMN IF NOT EXISTS cancelled_at timestamptz`);
+    await query(`
+    CREATE TABLE IF NOT EXISTS custom_request_attachments (
+      id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      submission_id   uuid        NOT NULL REFERENCES custom_request_submissions(id) ON DELETE CASCADE,
+      file_path       text        NOT NULL,
+      original_name   text        NOT NULL,
+      content_type    text,
+      size_bytes      integer,
+      uploaded_by_id  uuid        REFERENCES users(id),
+      uploaded_at     timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_cra_submission ON custom_request_attachments(submission_id)`);
     // Whether this request type supports the post-approval "Close Request" /
     // implementation-date capture flow (only Change Request needs this).
     await query(`ALTER TABLE custom_request_types ADD COLUMN IF NOT EXISTS requires_closure boolean NOT NULL DEFAULT false`);
@@ -518,6 +546,17 @@ async function seedChangeRequestType() {
     // them up in place rather than re-inserting (which would lose submitted data).
     await query(`UPDATE request_type_fields SET field_type = 'user_multi' WHERE request_type_id = $1 AND field_key = 'change_assignee'`, [typeId]);
     await query(`UPDATE request_type_fields SET field_type = 'section' WHERE request_type_id = $1 AND field_key = 'change_implementor'`, [typeId]);
+    // Wizard page 2 starts at "Priority" — everything from there on is the
+    // technical/implementation half of the ECONET form; page 1 is the
+    // request-details half. Re-applied on every boot so it self-heals if an
+    // admin's edits ever drop the column back to its default.
+    const wizardStepTwoKeys = [
+        "priority", "component_name", "platform", "dependencies", "number_of_changes",
+        "implementation_date", "change_implementor", "time_required", "time_scheduled",
+        "risk", "impact", "implementation_plan", "back_out_plan", "callout_person",
+        "callout_contact_no", "documentation_required", "business_implications"
+    ];
+    await query(`UPDATE request_type_fields SET wizard_step = 2 WHERE request_type_id = $1 AND field_key = ANY($2::text[])`, [typeId, wizardStepTwoKeys]);
     const hasPermission = await query(`SELECT id FROM request_type_permissions WHERE request_type_id = $1 LIMIT 1`, [typeId]);
     if (!hasPermission[0]) {
         await query(`INSERT INTO request_type_permissions (request_type_id, permission_type, can_submit, can_design)

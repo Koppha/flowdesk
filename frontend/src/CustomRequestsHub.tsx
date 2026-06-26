@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "./api";
-import { ArrowDown, ArrowUp, ClipboardList, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Calendar, ClipboardList, Download, Paperclip, Plus, Search, Trash2, X } from "lucide-react";
 
 type DirectoryUser = {
   id: string;
@@ -34,7 +35,10 @@ type RequestField = {
   placeholder: string | null;
   options: { label: string; value: string }[] | TableFieldConfig | null;
   sort_order: number;
+  wizard_step: number;
 };
+
+type Attachment = { id: string; original_name: string; content_type?: string | null; size_bytes?: number | null; uploaded_at?: string };
 
 // "user_multi" field value shape (e.g. Change Assignee) — each assignee
 // individually confirms before approvers can act on the request.
@@ -75,13 +79,18 @@ type RequestTypeSummary = {
 type ChainStepDraft = {
   approver_id: string;
   position_name: string;
+  // "NOTE" steps still have to act for the chain to progress, but they're
+  // acknowledging the change for the record rather than formally approving
+  // it (e.g. GM Internal Audit & Risk on the ECONET Change Control form).
+  // Only surfaced in the UI for Change Request.
+  decision_type: "APPROVE" | "NOTE";
 };
 
 type Submission = {
   id: string;
   status: string;
   data: Record<string, any>;
-  approval_chain: Array<{ approver_id: string; approver_name: string | null; position_name: string; status: string; comment: string | null; acted_at: string | null }>;
+  approval_chain: Array<{ approver_id: string; approver_name: string | null; position_name: string; decision_type?: "APPROVE" | "NOTE"; status: string; comment: string | null; acted_at: string | null }>;
   current_step_order: number;
   created_at: string;
   request_type_id: string;
@@ -90,6 +99,9 @@ type Submission = {
   implementation_date: string | null;
   closure_notes: string | null;
   closed_at: string | null;
+  cancel_comment?: string | null;
+  cancelled_at?: string | null;
+  attachments?: Attachment[];
 };
 
 type CustomRequestsHubProps = {
@@ -115,13 +127,47 @@ function statusBadge(status: string) {
     APPROVED: { bg: "#dcfce7", fg: "#15803d" },
     REJECTED: { bg: "#fee2e2", fg: "#b91c1c" },
     CLOSED: { bg: "#f0fdf4", fg: "#166534" },
-    PENDING: { bg: "#fef3c7", fg: "#b45309" }
+    PENDING: { bg: "#fef3c7", fg: "#b45309" },
+    CANCELLED: { bg: "#f1f5f9", fg: "#475569" },
+    NOTED: { bg: "#e0f2fe", fg: "#0369a1" }
   };
   const c = map[status] || { bg: "#f1f5f9", fg: "#475569" };
   return (
     <span style={{ background: c.bg, color: c.fg, fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 999 }}>
       {status.replace(/_/g, " ")}
     </span>
+  );
+}
+
+// Attachments are auth-gated, so a plain <a href> won't carry the bearer
+// token — fetch the blob first, then hand the browser an object URL.
+function AttachmentDownloadLink({ submissionId, attachment }: { submissionId: string; attachment: Attachment }) {
+  const [downloading, setDownloading] = useState(false);
+  async function handleClick() {
+    setDownloading(true);
+    try {
+      const blob = await api.customRequestAttachmentBlob(submissionId, attachment.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = attachment.original_name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      /* silent */
+    } finally {
+      setDownloading(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={downloading}
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--accent, #0ea5e9)", fontSize: 13 }}
+    >
+      <Download size={12} /> {attachment.original_name}
+    </button>
   );
 }
 
@@ -141,36 +187,50 @@ function ApproverCombobox({
   const [openUpward, setOpenUpward] = useState(false);
   const [openLeftward, setOpenLeftward] = useState(false);
   const [dropdownWidth, setDropdownWidth] = useState<number | null>(null);
+  // Anchor coordinates for the portaled dropdown, in viewport (position:fixed)
+  // terms — collision detection against the window only works if the dropdown
+  // actually escapes any ancestor with overflow:hidden (e.g. a wizard panel
+  // card), which an absolutely-positioned child of this combobox can't do.
+  const [anchor, setAnchor] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
   const [query, setQuery] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    function isInside(target: Node) {
+      return Boolean(boxRef.current?.contains(target)) || Boolean(dropdownRef.current?.contains(target));
+    }
     function onOutside(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      if (!isInside(e.target as Node)) setOpen(false);
     }
     function onScroll(e: Event) {
       // Ignore scrolling inside the dropdown's own results list — only
       // close when an ancestor (the page/panel) scrolls underneath it.
-      if (boxRef.current && boxRef.current.contains(e.target as Node)) return;
+      if (isInside(e.target as Node)) return;
       setOpen(false);
     }
     document.addEventListener("mousedown", onOutside);
     window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
     return () => {
       document.removeEventListener("mousedown", onOutside);
       window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
     };
   }, []);
 
   function handleOpen() {
     const rect = boxRef.current?.getBoundingClientRect();
     const spaceBelow = rect ? window.innerHeight - rect.bottom : Infinity;
-    setOpenUpward(spaceBelow < COMBOBOX_DROPDOWN_HEIGHT + 16);
+    const upward = spaceBelow < COMBOBOX_DROPDOWN_HEIGHT + 16;
+    setOpenUpward(upward);
 
     // The dropdown is widened beyond the (often narrow) input column for
     // readability. Anchor it to whichever side of the input has enough
     // room — falling back to clamping its width to the viewport so it
-    // never gets clipped or runs under a neighboring column.
+    // never gets clipped or runs under a neighboring column. Positioned via
+    // a portal to document.body (position: fixed, viewport coordinates) so
+    // it isn't clipped by a parent card/panel with overflow:hidden.
     if (rect) {
       const desiredWidth = Math.max(rect.width, COMBOBOX_DROPDOWN_MIN_WIDTH);
       const spaceRight = window.innerWidth - rect.left;
@@ -178,9 +238,16 @@ function ApproverCombobox({
       const leftward = desiredWidth > spaceRight - 16 && spaceLeft >= desiredWidth;
       setOpenLeftward(leftward);
       setDropdownWidth(Math.min(desiredWidth, window.innerWidth - 16));
+      setAnchor({
+        top: rect.bottom + 2,
+        bottom: window.innerHeight - rect.top + 2,
+        left: rect.left,
+        right: window.innerWidth - rect.right
+      });
     } else {
       setOpenLeftward(false);
       setDropdownWidth(null);
+      setAnchor(null);
     }
 
     setOpen(true);
@@ -219,13 +286,14 @@ function ApproverCombobox({
           </button>
         )}
       </div>
-      {open && (
+      {open && anchor && createPortal(
         <div
+          ref={dropdownRef}
           style={{
-            position: "absolute", zIndex: 20,
+            position: "fixed", zIndex: 1000,
             width: dropdownWidth ?? "100%",
-            ...(openLeftward ? { right: 0 } : { left: 0 }),
-            ...(openUpward ? { bottom: "100%", marginBottom: 2 } : { top: "100%", marginTop: 2 }),
+            ...(openLeftward ? { right: anchor.right } : { left: anchor.left }),
+            ...(openUpward ? { bottom: anchor.bottom } : { top: anchor.top }),
             background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8,
             maxHeight: COMBOBOX_DROPDOWN_HEIGHT, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)"
           }}
@@ -257,7 +325,8 @@ function ApproverCombobox({
               </button>
             ))
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -372,11 +441,151 @@ function daysInMonth(dateValue: string | undefined) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 }
 
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+const MONTH_NAMES_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// <input type="month"> has no usable picker in some browsers (e.g. Firefox
+// falls back to a plain text box), so the month field is a button showing
+// "Month yyyy" with a calendar icon that opens a year/month-grid popup —
+// universally clickable, no typing required. The underlying value stays the
+// 1st of that month (e.g. "2026-06-01") so existing date-based logic
+// (daysInMonth, date_trunc in SQL) keeps working unchanged.
+function MonthYearPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const d = value ? new Date(value) : null;
+  const selectedMonth = d && !Number.isNaN(d.getTime()) ? d.getMonth() : null;
+  const selectedYear = d && !Number.isNaN(d.getTime()) ? d.getFullYear() : null;
+
+  const [open, setOpen] = useState(false);
+  const [viewYear, setViewYear] = useState(selectedYear ?? new Date().getFullYear());
+  const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null);
+  const boxRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function isInside(target: Node) {
+      return Boolean(boxRef.current?.contains(target)) || Boolean(popupRef.current?.contains(target));
+    }
+    function onOutside(e: MouseEvent) {
+      if (!isInside(e.target as Node)) setOpen(false);
+    }
+    function onScroll(e: Event) {
+      if (isInside(e.target as Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onOutside);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, []);
+
+  function handleOpen() {
+    const rect = boxRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ top: rect.bottom + 2, left: rect.left, width: Math.max(rect.width, 260) });
+    setViewYear(selectedYear ?? new Date().getFullYear());
+    setOpen(true);
+  }
+
+  function pickMonth(monthIdx: number) {
+    onChange(`${viewYear}-${String(monthIdx + 1).padStart(2, "0")}-01`);
+    setOpen(false);
+  }
+
+  const displayLabel = selectedMonth !== null && selectedYear !== null ? `${MONTH_NAMES[selectedMonth]} ${selectedYear}` : "";
+
+  return (
+    <>
+      <button
+        ref={boxRef}
+        type="button"
+        className="ep-form-input"
+        onClick={handleOpen}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", textAlign: "left", cursor: "pointer", color: displayLabel ? "inherit" : "var(--muted)" }}
+      >
+        {displayLabel || "Select month…"}
+        <Calendar size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+      </button>
+      {open && anchor && createPortal(
+        <div
+          ref={popupRef}
+          style={{
+            position: "fixed", top: anchor.top, left: anchor.left, width: anchor.width, zIndex: 1000,
+            background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: 10
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <button type="button" className="ep-icon-btn" onClick={() => setViewYear((y) => y - 1)} title="Previous year">
+              <ArrowUp size={14} style={{ transform: "rotate(-90deg)" }} />
+            </button>
+            <strong style={{ fontSize: 13 }}>{viewYear}</strong>
+            <button type="button" className="ep-icon-btn" onClick={() => setViewYear((y) => y + 1)} title="Next year">
+              <ArrowDown size={14} style={{ transform: "rotate(-90deg)" }} />
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+            {MONTH_NAMES_SHORT.map((name, idx) => {
+              const isSelected = selectedYear === viewYear && selectedMonth === idx;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => pickMonth(idx)}
+                  style={{
+                    padding: "8px 4px", borderRadius: 6, fontSize: 13, cursor: "pointer",
+                    border: isSelected ? "1px solid var(--accent, #0ea5e9)" : "1px solid transparent",
+                    background: isSelected ? "var(--accent, #0ea5e9)" : "var(--surface-soft)",
+                    color: isSelected ? "#fff" : "inherit", fontWeight: isSelected ? 700 : 400
+                  }}
+                >
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
 function tableColumns(cfg: TableFieldConfig | null | undefined, values: Record<string, any>) {
   if (!cfg) return [] as { key: string; label: string }[];
   if (cfg.columnMode === "FIXED") return cfg.columns || [];
   const days = daysInMonth(cfg.monthFieldKey ? values[cfg.monthFieldKey] : undefined);
   return Array.from({ length: days }, (_, i) => ({ key: String(i + 1), label: String(i + 1) }));
+}
+
+// True if day-of-month `day` (1-based) falls on a Saturday/Sunday in the
+// month `monthValue` (e.g. "2026-06-01") points to — used to tint weekend
+// columns in a DAY_OF_MONTH table, same as the attendance register mockup.
+function isWeekendDay(monthValue: string | undefined, day: number): boolean {
+  if (!monthValue) return false;
+  const m = new Date(monthValue);
+  if (Number.isNaN(m.getTime())) return false;
+  const wd = new Date(m.getFullYear(), m.getMonth(), day).getDay();
+  return wd === 0 || wd === 6;
+}
+
+const CELL_BADGE_PALETTE = [
+  { bg: "#dbeafe", fg: "#1d4ed8" },
+  { bg: "#ffedd5", fg: "#c2410c" },
+  { bg: "#fef9c3", fg: "#a16207" },
+  { bg: "#dcfce7", fg: "#15803d" },
+  { bg: "#f3e8ff", fg: "#7e22ce" },
+  { bg: "#fee2e2", fg: "#b91c1c" },
+  { bg: "#ccfbf1", fg: "#0f766e" },
+  { bg: "#fce7f3", fg: "#be185d" },
+  { bg: "#f1f5f9", fg: "#475569" }
+];
+
+function cellBadgeColor(idx: number) {
+  return CELL_BADGE_PALETTE[idx % CELL_BADGE_PALETTE.length];
 }
 
 function computeTableSummary(cfg: TableFieldConfig | null | undefined, rows: TableRow[]) {
@@ -408,7 +617,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
   const [fields, setFields] = useState<RequestField[]>([]);
   const [values, setValues] = useState<Record<string, any>>({});
-  const [chain, setChain] = useState<ChainStepDraft[]>([{ approver_id: "", position_name: "" }]);
+  const [chain, setChain] = useState<ChainStepDraft[]>([{ approver_id: "", position_name: "", decision_type: "APPROVE" }]);
   const [myManager, setMyManager] = useState<DirectoryUser | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [mine, setMine] = useState<Submission[]>([]);
@@ -422,7 +631,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   // Local edit buffer for implementation-side fields (Implementation Plan,
   // Callout Person/Contact) an assignee fills in before confirming — keyed
   // by submission id so multiple cards can be edited independently.
-  const [implEdits, setImplEdits] = useState<Record<string, Record<string, string>>>({});
+  const [implEdits, setImplEdits] = useState<Record<string, Record<string, any>>>({});
   const [savingImplId, setSavingImplId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
@@ -430,8 +639,28 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   const [closeNotes, setCloseNotes] = useState("");
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
+  // Which page of the NEW-request wizard is showing — 1-indexed field pages,
+  // plus one implicit final page ("Approvals") past the highest wizard_step.
+  const [wizardStep, setWizardStep] = useState(1);
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelComment, setCancelComment] = useState("");
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const selectedType = types.find((t) => t.id === selectedTypeId) || null;
+  const isChangeRequestType = selectedType?.code === "CHANGE_REQUEST";
+
+  // Group fields into wizard pages by their configured wizard_step, then
+  // append one implicit final page for the approval chain / change control.
+  const fieldStepNumbers = useMemo(() => [...new Set(fields.map((f) => f.wizard_step || 1))].sort((a, b) => a - b), [fields]);
+  const totalWizardSteps = fieldStepNumbers.length + 1;
+  const approvalsStepIndex = totalWizardSteps;
+  const currentStepFields = useMemo(
+    () => fields.filter((f) => (f.wizard_step || 1) === (fieldStepNumbers[wizardStep - 1] ?? 1)),
+    [fields, fieldStepNumbers, wizardStep]
+  );
+  const isApprovalsStep = wizardStep === approvalsStepIndex;
 
   useEffect(() => {
     api.companyDirectory().then((rows: any) => setCompanyDirectory(Array.isArray(rows) ? rows : [])).catch(() => setCompanyDirectory([]));
@@ -497,6 +726,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
         const detail = await api.requestTypeDetail(selectedTypeId);
         const sorted = [...(detail.fields || [])].sort((a: any, b: any) => a.sort_order - b.sort_order);
         setFields(sorted);
+        setWizardStep(1);
+        setAttachmentFiles([]);
         const initialValues: Record<string, any> = {};
         const myName = profile?.full_name || profile?.fullName || "";
         // Known from the requester's own org-structure profile — pre-fill
@@ -525,10 +756,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
         if (fixedChain?.length) {
           setChain(fixedChain.map((step) => ({
             approver_id: step.source === "AUTO_MANAGER" ? (myManager?.id || "") : "",
-            position_name: step.title
+            position_name: step.title,
+            decision_type: "APPROVE"
           })));
         } else {
-          setChain([{ approver_id: "", position_name: "" }]);
+          setChain([{ approver_id: "", position_name: "", decision_type: "APPROVE" }]);
         }
       } catch {
         setError("Failed to load the request form.");
@@ -555,7 +787,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   }
 
   function addChainStep() {
-    setChain((prev) => [...prev, { approver_id: "", position_name: "" }]);
+    setChain((prev) => [...prev, { approver_id: "", position_name: "", decision_type: "APPROVE" }]);
   }
 
   function removeChainStep(idx: number) {
@@ -622,7 +854,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
     }
 
     const fixedChain = selectedType?.fixed_approval_chain;
-    let submitChain: { approver_id: string | null; position_name: string }[];
+    let submitChain: { approver_id: string | null; position_name: string; decision_type: "APPROVE" | "NOTE" }[];
     if (fixedChain?.length) {
       for (let i = 0; i < fixedChain.length; i++) {
         const isAutoManagerResolved = fixedChain[i].source === "AUTO_MANAGER" && myManager;
@@ -633,7 +865,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
       }
       submitChain = fixedChain.map((step, i) => ({
         approver_id: chain[i].approver_id || null,
-        position_name: step.title
+        position_name: step.title,
+        decision_type: "APPROVE"
       }));
     } else {
       const validChain = chain.filter((s) => s.approver_id && s.position_name.trim());
@@ -665,18 +898,56 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
         request_type_id: selectedTypeId,
         data: payloadData,
         approval_chain: submitChain
-      });
+      }, attachmentFiles);
       setValues({});
       setChain(
         fixedChain?.length
-          ? fixedChain.map((step) => ({ approver_id: step.source === "AUTO_MANAGER" ? (myManager?.id || "") : "", position_name: step.title }))
-          : [{ approver_id: "", position_name: "" }]
+          ? fixedChain.map((step) => ({ approver_id: step.source === "AUTO_MANAGER" ? (myManager?.id || "") : "", position_name: step.title, decision_type: "APPROVE" as const }))
+          : [{ approver_id: "", position_name: "", decision_type: "APPROVE" }]
       );
+      setAttachmentFiles([]);
+      setWizardStep(1);
       setTab("MINE");
     } catch (e: any) {
       setError(e?.message || "Failed to submit the request");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Validates the fields on the currently-shown wizard page only, so a user
+  // can't be blocked by a required field on a page they haven't reached yet.
+  function goToNextStep() {
+    setError(null);
+    for (const f of currentStepFields) {
+      if (!f.is_required) continue;
+      const v = values[f.field_key];
+      const isEmpty = f.field_type === "table"
+        ? !v?.rows?.length
+        : f.field_type === "user_multi"
+          ? !Array.isArray(v) || !v.length
+          : (v === undefined || v === null || v === "");
+      if (isEmpty) {
+        setError(`"${f.field_label}" is required`);
+        return;
+      }
+    }
+    setWizardStep((s) => Math.min(s + 1, approvalsStepIndex));
+  }
+
+  async function handleCancelSubmission(id: string) {
+    if (!cancelComment.trim()) { setCancelError("A comment is required to cancel a request."); return; }
+    setCancelError(null);
+    setCancelling(true);
+    try {
+      await api.cancelCustomRequest(id, cancelComment.trim());
+      setCancellingId(null);
+      setCancelComment("");
+      await loadMine();
+    } catch (e: any) {
+      setCancelError(e?.message || "Failed to cancel the request.");
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -717,7 +988,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
     }
   }
 
-  function updateImplEdit(submissionId: string, fieldKey: string, value: string) {
+  function updateImplEdit(submissionId: string, fieldKey: string, value: any) {
     setImplEdits((prev) => ({ ...prev, [submissionId]: { ...prev[submissionId], [fieldKey]: value } }));
   }
 
@@ -725,7 +996,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   // save it and confirm in one action rather than making them click twice.
   // Once every assignee has done this, the current approver is notified
   // their turn has actually arrived (handled server-side on confirm).
-  async function saveImplementationFields(submissionId: string, data: Record<string, string>, confirmFieldKey?: string) {
+  async function saveImplementationFields(submissionId: string, data: Record<string, any>, confirmFieldKey?: string) {
     setAssigneeActionError(null);
     setSavingImplId(submissionId);
     try {
@@ -762,6 +1033,12 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
       updateRows(value.rows.map((r, i) => (i === idx ? { ...r, cells: { ...r.cells, [colKey]: code } } : r)));
     }
 
+    const monthValue: string | undefined = cfg?.monthFieldKey ? values[cfg.monthFieldKey] : undefined;
+    const isDayOfMonth = cfg?.columnMode !== "FIXED";
+    const weekendBg = "#eef2ff";
+    const colorByValue = new Map((cfg?.cellOptions || []).map((o, idx) => [o.value, cellBadgeColor(idx)]));
+    const dayTotals = columns.map((c) => value.rows.filter((r) => r.cells[c.key]).length);
+
     return (
       <div>
         <div className="ep-table-wrap" style={{ overflowX: "auto" }}>
@@ -769,7 +1046,14 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
             <thead>
               <tr>
                 <th>Employee</th>
-                {columns.map((c) => <th key={c.key} style={{ minWidth: 36, textAlign: "center" }}>{c.label}</th>)}
+                {columns.map((c) => {
+                  const weekend = isDayOfMonth && isWeekendDay(monthValue, Number(c.key));
+                  return (
+                    <th key={c.key} style={{ minWidth: 36, textAlign: "center", background: weekend ? weekendBg : undefined }}>
+                      {c.label}
+                    </th>
+                  );
+                })}
                 {(cfg?.summaryColumns || []).map((c) => <th key={c.key} style={{ minWidth: 60 }}>{c.label}</th>)}
                 {cfg?.rowSource !== "SELF" && <th />}
               </tr>
@@ -790,19 +1074,33 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                       />
                     )}
                   </td>
-                  {columns.map((c) => (
-                    <td key={c.key}>
-                      <select
-                        className="ep-form-select"
-                        style={{ padding: "2px 4px", minWidth: 44 }}
-                        value={row.cells[c.key] || ""}
-                        onChange={(e) => updateCell(ri, c.key, e.target.value)}
-                      >
-                        <option value="">—</option>
-                        {(cfg?.cellOptions || []).map((o) => <option key={o.value} value={o.value} title={o.label}>{o.value}</option>)}
-                      </select>
-                    </td>
-                  ))}
+                  {columns.map((c) => {
+                    const weekend = isDayOfMonth && isWeekendDay(monthValue, Number(c.key));
+                    const cellValue = row.cells[c.key] || "";
+                    const color = cellValue ? colorByValue.get(cellValue) : undefined;
+                    return (
+                      <td key={c.key} style={{ background: weekend ? weekendBg : undefined, padding: 4 }}>
+                        <div style={{ position: "relative" }}>
+                          <select
+                            className="ep-form-select"
+                            style={{
+                              padding: "3px 18px 3px 6px", minWidth: 44, appearance: "none", WebkitAppearance: "none",
+                              fontWeight: 700, textAlign: "center", textAlignLast: "center",
+                              background: color ? color.bg : "var(--surface)",
+                              color: color ? color.fg : "var(--muted)",
+                              border: color ? `1px solid ${color.bg}` : undefined
+                            }}
+                            value={cellValue}
+                            onChange={(e) => updateCell(ri, c.key, e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {(cfg?.cellOptions || []).map((o) => <option key={o.value} value={o.value} title={o.label}>{o.value}</option>)}
+                          </select>
+                          <ArrowDown size={10} style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: color ? color.fg : "var(--muted)" }} />
+                        </div>
+                      </td>
+                    );
+                  })}
                   {(cfg?.summaryColumns || []).map((c) => (
                     <td key={c.key} style={{ textAlign: "center", color: "var(--muted)" }}>{summary.perRow[ri]?.[c.key] ?? 0}</td>
                   ))}
@@ -816,7 +1114,14 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
               {value.rows.length > 0 && (
                 <tr>
                   <td style={{ fontWeight: 700 }}>Total</td>
-                  {columns.map((c) => <td key={c.key} />)}
+                  {columns.map((c, ci) => {
+                    const weekend = isDayOfMonth && isWeekendDay(monthValue, Number(c.key));
+                    return (
+                      <td key={c.key} style={{ textAlign: "center", fontWeight: 700, background: weekend ? weekendBg : undefined }}>
+                        {dayTotals[ci]}
+                      </td>
+                    );
+                  })}
                   {(cfg?.summaryColumns || []).map((c) => <td key={c.key} style={{ textAlign: "center", fontWeight: 700 }}>{summary.totals[c.key] ?? 0}</td>)}
                   {cfg?.rowSource !== "SELF" && <td />}
                 </tr>
@@ -830,8 +1135,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
           </button>
         )}
         {!!cfg?.cellOptions?.length && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
-            {cfg.cellOptions.map((o) => `${o.value} - ${o.label}`).join(" · ")}
+          <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 12 }}>
+            {cfg.cellOptions.map((o, idx) => {
+              const color = cellBadgeColor(idx);
+              return (
+                <div key={o.value} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                  <span style={{ background: color.bg, color: color.fg, fontWeight: 700, borderRadius: 4, padding: "2px 7px", fontSize: 11, minWidth: 18, textAlign: "center" }}>{o.value}</span>
+                  <span style={{ color: "var(--muted)" }}>{o.label}</span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -907,6 +1220,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
           />
         );
       case "date":
+        // The "month" field (e.g. Attendance Register) only ever needs a
+        // calendar month, not a specific day.
+        if (f.field_key === "month") {
+          return <MonthYearPicker value={value} onChange={(v) => setValue(f.field_key, v)} />;
+        }
         return (
           <input
             type="date"
@@ -1038,8 +1356,17 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                       })}
 
                       {(() => {
-                        const implKeys = ["implementation_plan", "callout_person", "callout_contact_no"];
-                        const implFields = typeFields.filter((f) => implKeys.includes(f.field_key));
+                        // Show the assignee the same "implementation" page the requester
+                        // filled in (wizard page 2 onward) rather than a fixed three-field
+                        // allowlist — for Change Request that's Priority through Business
+                        // Implications, not just Implementation Plan/Callout. Falls back to
+                        // the old allowlist for single-page request types, where there's no
+                        // separate technical page to single out.
+                        const editableTypes = ["text", "number", "date", "select", "textarea", "checkbox"];
+                        const stepNums = [...new Set(typeFields.map((f) => f.wizard_step || 1))].sort((a, b) => a - b);
+                        const implFields = stepNums.length > 1
+                          ? typeFields.filter((f) => (f.wizard_step || 1) === stepNums[stepNums.length - 1] && editableTypes.includes(f.field_type))
+                          : typeFields.filter((f) => ["implementation_plan", "callout_person", "callout_contact_no"].includes(f.field_key));
                         if (!implFields.length || s.status !== "IN_PROGRESS") return null;
                         const buffer = implEdits[s.id] || {};
                         const currentValue = (f: RequestField) => buffer[f.field_key] ?? s.data?.[f.field_key] ?? "";
@@ -1056,7 +1383,9 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                             <div style={{ display: "grid", gap: 10, marginBottom: 8 }}>
                               {implFields.map((f) => (
                                 <div key={f.field_key}>
-                                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>{f.field_label}</label>
+                                  {f.field_type !== "checkbox" && (
+                                    <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>{f.field_label}</label>
+                                  )}
                                   {f.field_type === "textarea" ? (
                                     <textarea
                                       className="ep-form-textarea"
@@ -1064,9 +1393,31 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                                       value={currentValue(f)}
                                       onChange={(e) => updateImplEdit(s.id, f.field_key, e.target.value)}
                                     />
+                                  ) : f.field_type === "select" ? (
+                                    <select
+                                      className="ep-form-select"
+                                      value={currentValue(f)}
+                                      onChange={(e) => updateImplEdit(s.id, f.field_key, e.target.value)}
+                                    >
+                                      <option value="">{f.placeholder || "Select…"}</option>
+                                      {((f.options as { label: string; value: string }[]) || []).map((o) => (
+                                        <option key={o.value} value={o.value}>{o.label}</option>
+                                      ))}
+                                    </select>
+                                  ) : f.field_type === "checkbox" ? (
+                                    <label className="ep-checkbox-label">
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(currentValue(f))}
+                                        onChange={(e) => updateImplEdit(s.id, f.field_key, e.target.checked as any)}
+                                      />
+                                      {f.placeholder || f.field_label}
+                                    </label>
                                   ) : (
                                     <input
+                                      type={f.field_type === "date" ? "date" : f.field_type === "number" ? "number" : "text"}
                                       className="ep-form-input"
+                                      placeholder={f.placeholder || ""}
                                       value={currentValue(f)}
                                       onChange={(e) => updateImplEdit(s.id, f.field_key, e.target.value)}
                                     />
@@ -1105,21 +1456,97 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
               <div className="ep-panel-title">{selectedType?.name || "Request"} Form</div>
             </div>
             <div className="ep-panel-body">
-              <div className="ep-form-fields-grid">
-                {fields.map((f) => (
-                  <div
-                    className={`ep-form-group ${["textarea", "table"].includes(f.field_type) ? "ep-form-field-full" : ""}`}
-                    key={f.field_key}
-                  >
-                    {f.field_type !== "checkbox" && (
-                      <label>{f.field_label}{f.is_required && <span className="ep-required"> *</span>}</label>
-                    )}
-                    {renderField(f)}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
+                {Array.from({ length: totalWizardSteps }, (_, i) => i + 1).map((step) => (
+                  <div key={step} style={{ display: "flex", alignItems: "center", gap: 8, flex: step < totalWizardSteps ? 1 : "0 0 auto" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                      <div
+                        style={{
+                          width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 12, fontWeight: 700,
+                          background: step <= wizardStep ? "var(--accent, #0ea5e9)" : "var(--surface-soft)",
+                          color: step <= wizardStep ? "#fff" : "var(--muted)"
+                        }}
+                      >
+                        {step}
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: step === wizardStep ? 700 : 400, color: step === wizardStep ? "var(--text)" : "var(--muted)" }}>
+                        {step === approvalsStepIndex ? "Approvals & Change Control" : `Details${fieldStepNumbers.length > 1 ? ` ${step}` : ""}`}
+                      </span>
+                    </div>
+                    {step < totalWizardSteps && <div style={{ flex: 1, height: 1, background: "var(--border)" }} />}
                   </div>
                 ))}
               </div>
 
-              <div style={{ borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 16 }}>
+              {!isApprovalsStep && (
+                <>
+                  <div className="ep-form-fields-grid">
+                    {currentStepFields.map((f) => (
+                      <div
+                        className={`ep-form-group ${["textarea", "table"].includes(f.field_type) ? "ep-form-field-full" : ""}`}
+                        key={f.field_key}
+                      >
+                        {f.field_type !== "checkbox" && (
+                          <label>{f.field_label}{f.is_required && <span className="ep-required"> *</span>}</label>
+                        )}
+                        {renderField(f)}
+                      </div>
+                    ))}
+                  </div>
+
+                  {wizardStep === 1 && (
+                    <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                        <Paperclip size={15} /> Attachments
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
+                        Attach any supporting documents this request needs (e.g. quotations, diagrams, sign-off forms).
+                      </div>
+                      <label
+                        style={{
+                          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
+                          border: "2px dashed var(--border)", borderRadius: 8, padding: "20px 16px", cursor: "pointer",
+                          color: "var(--muted)", fontSize: 13
+                        }}
+                      >
+                        <Paperclip size={20} />
+                        <span>Click to choose files, or drag them here</span>
+                        <input
+                          type="file"
+                          multiple
+                          style={{ display: "none" }}
+                          onChange={(e) => {
+                            const picked = Array.from(e.target.files || []);
+                            if (picked.length) setAttachmentFiles((prev) => [...prev, ...picked]);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                      {attachmentFiles.length > 0 && (
+                        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+                          {attachmentFiles.map((file, idx) => (
+                            <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--surface-soft)", borderRadius: 6, fontSize: 13 }}>
+                              <span>{file.name} <span style={{ color: "var(--muted)" }}>({Math.round(file.size / 1024)} KB)</span></span>
+                              <button
+                                type="button"
+                                className="ep-icon-btn"
+                                title="Remove"
+                                onClick={() => setAttachmentFiles((prev) => prev.filter((_, i) => i !== idx))}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {isApprovalsStep && (
+              <div style={{ marginTop: 8 }}>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Approval Workflow</div>
 
                 {selectedType?.fixed_approval_chain?.length ? (
@@ -1150,10 +1577,14 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                   <>
                     <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>
                       Every request can follow a different approval path. Add the people who need to approve this request, in order.
+                      {isChangeRequestType && " For each step, say whether they're formally approving the change or just noting it for the record (e.g. Internal Audit & Risk)."}
                     </div>
 
                     {chain.map((step, idx) => (
-                      <div key={idx} style={{ display: "grid", gridTemplateColumns: "32px 2fr 2fr auto auto auto", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                      <div
+                        key={idx}
+                        style={{ display: "grid", gridTemplateColumns: isChangeRequestType ? "32px 2fr 2fr 1.3fr auto auto auto" : "32px 2fr 2fr auto auto auto", gap: 8, alignItems: "center", marginBottom: 8 }}
+                      >
                         <div style={{ fontWeight: 700, color: "var(--muted)", textAlign: "center" }}>{idx + 1}</div>
                         <ApproverCombobox users={directorySorted} value={step.approver_id} onChange={(id) => updateChainStep(idx, { approver_id: id })} />
                         {selectedType?.approver_title_options?.length ? (
@@ -1173,6 +1604,17 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                             onChange={(e) => updateChainStep(idx, { position_name: e.target.value })}
                           />
                         )}
+                        {isChangeRequestType && (
+                          <select
+                            className="ep-form-select"
+                            value={step.decision_type}
+                            onChange={(e) => updateChainStep(idx, { decision_type: e.target.value as "APPROVE" | "NOTE" })}
+                            title="Whether this person formally approves the change, or is only noting it for the record"
+                          >
+                            <option value="APPROVE">Approving</option>
+                            <option value="NOTE">Noting</option>
+                          </select>
+                        )}
                         <button type="button" className="ep-btn-outline" onClick={() => moveChainStep(idx, -1)} disabled={idx === 0} title="Move up" style={{ padding: "6px 8px" }}>
                           <ArrowUp size={14} />
                         </button>
@@ -1191,13 +1633,26 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                   </>
                 )}
               </div>
+              )}
 
               {error && <div style={{ color: "#b91c1c", fontSize: 13, marginTop: 16 }}>{error}</div>}
 
-              <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
-                <button className="ep-btn" onClick={handleSubmit} disabled={submitting}>
-                  {submitting ? "Submitting…" : `Submit ${selectedType?.name || "Request"}`}
+              <div style={{ marginTop: 20, display: "flex", justifyContent: "space-between" }}>
+                <button
+                  className="ep-btn-outline"
+                  onClick={() => { setError(null); setWizardStep((s) => Math.max(1, s - 1)); }}
+                  disabled={wizardStep === 1}
+                  style={{ visibility: wizardStep === 1 ? "hidden" : "visible" }}
+                >
+                  Back
                 </button>
+                {isApprovalsStep ? (
+                  <button className="ep-btn" onClick={handleSubmit} disabled={submitting}>
+                    {submitting ? "Submitting…" : `Submit ${selectedType?.name || "Request"}`}
+                  </button>
+                ) : (
+                  <button className="ep-btn" onClick={goToNextStep}>Next</button>
+                )}
               </div>
             </div>
           </div>
@@ -1229,9 +1684,39 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                             Close Request
                           </button>
                         )}
+                        {s.status === "IN_PROGRESS" && cancellingId !== s.id && (
+                          <button
+                            className="ep-btn-danger"
+                            style={{ fontSize: 12, padding: "4px 10px" }}
+                            onClick={(e) => { e.stopPropagation(); setCancellingId(s.id); setCancelComment(""); setCancelError(null); }}
+                          >
+                            Cancel Request
+                          </button>
+                        )}
                         {statusBadge(s.status)}
                       </div>
                     </div>
+
+                    {cancellingId === s.id && (
+                      <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Cancel Request</div>
+                        <div className="ep-form-group">
+                          <label>Reason for cancelling <span className="ep-required">*</span></label>
+                          <textarea
+                            className="ep-form-textarea"
+                            rows={3}
+                            placeholder="Let the current approver know why you're withdrawing this request…"
+                            value={cancelComment}
+                            onChange={(e) => setCancelComment(e.target.value)}
+                          />
+                        </div>
+                        {cancelError && <div style={{ color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>{cancelError}</div>}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button className="ep-btn-danger" onClick={() => handleCancelSubmission(s.id)} disabled={cancelling}>{cancelling ? "Cancelling…" : "Confirm Cancellation"}</button>
+                          <button className="ep-btn-outline" onClick={() => setCancellingId(null)} disabled={cancelling}>Back</button>
+                        </div>
+                      </div>
+                    )}
 
                     {closingId === s.id && (
                       <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }} onClick={(e) => e.stopPropagation()}>
@@ -1255,8 +1740,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                       </div>
                     )}
 
-                    {expanded === s.id && closingId !== s.id && (
+                    {expanded === s.id && closingId !== s.id && cancellingId !== s.id && (
                       <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                        {!!s.attachments?.length && (
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Attachments</div>
+                            <div style={{ display: "grid", gap: 4 }}>
+                              {s.attachments.map((a) => <AttachmentDownloadLink key={a.id} submissionId={s.id} attachment={a} />)}
+                            </div>
+                          </div>
+                        )}
                         {fields.filter((f) => f.field_type === "user_multi").map((f) => {
                           const entries: AssigneeEntry[] = Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : [];
                           if (!entries.length) return null;
@@ -1280,6 +1773,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
                               <div>
                                 <strong>{i + 1}. {step.position_name}</strong> — {step.approver_name || "—"}
+                                {step.decision_type === "NOTE" && <span style={{ color: "var(--muted)", fontSize: 12 }}> (noting)</span>}
                                 {step.comment && <div style={{ color: "var(--muted)", fontSize: 12 }}>"{step.comment}"</div>}
                               </div>
                               {statusBadge(i === s.current_step_order && s.status === "IN_PROGRESS" ? "PENDING" : step.status)}
@@ -1292,6 +1786,13 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                             <div><strong>Implementation Date:</strong> {s.implementation_date || "—"}</div>
                             {s.closure_notes && <div style={{ marginTop: 4 }}><strong>Notes:</strong> {s.closure_notes}</div>}
                             <div style={{ marginTop: 4, color: "var(--muted)" }}>Closed {s.closed_at ? new Date(s.closed_at).toLocaleDateString() : "—"}</div>
+                          </div>
+                        )}
+                        {s.status === "CANCELLED" && (
+                          <div style={{ marginTop: 12, padding: "10px 12px", background: "#f1f5f9", borderRadius: 6, fontSize: 13 }}>
+                            <div style={{ fontWeight: 700, marginBottom: 4 }}>Cancelled</div>
+                            {s.cancel_comment && <div><strong>Reason:</strong> {s.cancel_comment}</div>}
+                            <div style={{ marginTop: 4, color: "var(--muted)" }}>Cancelled {s.cancelled_at ? new Date(s.cancelled_at).toLocaleDateString() : "—"}</div>
                           </div>
                         )}
                       </div>
