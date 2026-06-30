@@ -396,11 +396,22 @@ inboxRouter.get("/", async (req, res, next) => {
             for (const r of rows) {
                 const chain = r.approval_chain;
                 const step = chain[r.current_step_order];
+                const myFieldKeys = multiFieldKeysByType.get(r.request_type_id) || [];
+                // Approving any step is blocked while a "user_multi" field (e.g.
+                // Change Assignee) still has unconfirmed assignees — see the same
+                // check in performCustomRequestAction(). Mirror that here so the
+                // approver's inbox stays empty (not just un-actionable) until the
+                // assignee has actually confirmed the implementation plan; the
+                // assignee themselves still sees it as their own task below.
+                const hasUnconfirmedAssignees = myFieldKeys.some((key) => {
+                    const arr = r.data?.[key];
+                    return Array.isArray(arr) && arr.some((a) => !a.confirmed);
+                });
                 // Only the approver for the CURRENT step belongs in the inbox as an
                 // approval task — a later-step approver shouldn't see (or be able to
-                // act on) this until every earlier step has actually been approved.
-                const actionable = !!step && step.approver_id === req.user.userId;
-                const myFieldKeys = multiFieldKeysByType.get(r.request_type_id) || [];
+                // act on) this until every earlier step has actually been approved,
+                // and no approver should see it until the assignee has signed off.
+                const actionable = !!step && step.approver_id === req.user.userId && !hasUnconfirmedAssignees;
                 const isAssigneeTask = myFieldKeys.some((key) => {
                     const arr = r.data?.[key];
                     return Array.isArray(arr) && arr.some((a) => !a.confirmed && (a.id === req.user.userId || (a.teamId && req.user.teamId && a.teamId === req.user.teamId)));

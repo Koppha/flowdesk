@@ -49,6 +49,7 @@ const CreateWorkflowSchema = z.object({
     workflow_type: z.enum(["STICKY", "TEMPORARY"]).default("STICKY"),
     valid_from: z.string().datetime({ offset: true }).nullish(),
     valid_until: z.string().datetime({ offset: true }).nullish(),
+    requester_roles: z.array(z.enum(["EXCO", "MANAGER", "CEO"])).nullish(),
     steps: z.array(WorkflowStepSchema).min(1, "At least one workflow step is required"),
     rules: z.array(WorkflowRuleSchema).optional()
 });
@@ -64,6 +65,7 @@ const UpdateWorkflowSchema = z.object({
     workflow_type: z.enum(["STICKY", "TEMPORARY"]).optional(),
     valid_from: z.string().datetime({ offset: true }).nullish(),
     valid_until: z.string().datetime({ offset: true }).nullish(),
+    requester_roles: z.array(z.enum(["EXCO", "MANAGER", "CEO"])).nullish(),
     steps: z.array(WorkflowStepSchema).optional(),
     rules: z.array(WorkflowRuleSchema).optional()
 });
@@ -114,6 +116,10 @@ async function ensureWorkflowScopeColumns() {
     await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS section text`);
     await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS team text`);
     await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS advance_sub_type text`);
+    // Optional restriction so a workflow only resolves for requesters holding one of
+    // these roles (e.g. a dedicated EXCO/Manager/CEO travel advance workflow) — NULL
+    // means the workflow applies to any requester, same as before this column existed.
+    await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS requester_roles text[]`);
 }
 async function insertWorkflowSteps(workflowId, steps) {
     if (steps.length === 0)
@@ -230,10 +236,13 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
         const department = String(req.query.department || "").trim();
         const section = String(req.query.section || "").trim();
         const advanceSubType = String(req.query.advance_sub_type || "").trim();
+        const requesterRole = String(req.query.requester_role || "").trim();
         const amount = Number(req.query.amount || 0);
         if (!requestType)
             throw badRequest("requestType query parameter is required");
         // Priority (highest → lowest):
+        //   A workflow restricted to the requester's role (requester_roles) always
+        //   outranks an unrestricted one, regardless of dept/section/sub_type specificity.
         //   0 = section + dept + sub_type exact match
         //   1 = dept + sub_type match (no section constraint)
         //   2 = section + dept match (no sub_type constraint)
@@ -251,7 +260,9 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
             -- "TRAVEL" sub-type covers all travel advance types (anything other than SALARY/LOAN)
             OR ($4 <> '' AND lower(trim(advance_sub_type)) = 'travel' AND upper(trim($4)) NOT IN ('SALARY','LOAN'))
           )
+          AND (requester_roles IS NULL OR ($5 <> '' AND $5 = ANY(requester_roles)))
         ORDER BY
+          CASE WHEN requester_roles IS NOT NULL THEN 0 ELSE 1 END,
           CASE
             WHEN $4 <> '' AND lower(trim(COALESCE(advance_sub_type,''))) = lower(trim($4))
                  AND lower(trim(COALESCE(section,''))) = lower(trim($3))
@@ -274,11 +285,11 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
             ELSE 6
           END,
           updated_at DESC, created_at DESC
-        LIMIT 1`, [requestType, department, section, advanceSubType]);
+        LIMIT 1`, [requestType, department, section, advanceSubType, requesterRole]);
         const workflow = workflows[0];
         if (!workflow)
             return res.json({ workflow: null, chain: [], tasks: [], warnings: ["No active workflow found."] });
-        const [steps, rules, leadership] = await Promise.all([
+        const [steps, rules] = await Promise.all([
             query(`SELECT ws.*,
                 u.full_name AS assigned_user_name, u.email AS assigned_user_email
            FROM workflow_steps ws
@@ -292,32 +303,24 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
            FROM workflow_rules wr
            LEFT JOIN users u ON u.id = wr.additional_assigned_user_id
           WHERE wr.workflow_id=$1 AND wr.is_active = true
-          ORDER BY wr.created_at ASC`, [workflow.id]),
-            getDepartmentLeadership(department)
+          ORDER BY wr.created_at ASC`, [workflow.id])
         ]);
         const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
         const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
+        // HOD/MANAGER no longer dynamically resolve to the requester's department
+        // leadership — every step must carry an explicit assigned_user_id or be a
+        // group/ANY_ONE step. HR_* steps still route to the Human Resource
+        // department's leadership.
         const warnings = [];
         const chain = steps.flatMap((step) => {
             const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
             const isHrCode = code.startsWith("HR_");
-            const approverId = code === "HOD"
-                ? leadership.hod_user_id
-                : code === "MANAGER"
-                    ? leadership.manager_user_id
-                    : isHrCode
-                        ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null)
-                        : step.assigned_user_id || null;
-            const approverName = code === "HOD"
-                ? leadership.hod_name
-                : code === "MANAGER"
-                    ? leadership.manager_name
-                    : isHrCode
-                        ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null)
-                        : step.assigned_user_name || null;
-            if (!approverId && step.is_required && !step.skip_if_unassigned && ["HOD", "MANAGER"].includes(code)) {
-                warnings.push(`${step.position_name} is required but missing for ${department || "the selected department"}.`);
-            }
+            const approverId = isHrCode
+                ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null)
+                : step.assigned_user_id || null;
+            const approverName = isHrCode
+                ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null)
+                : step.assigned_user_name || null;
             if (!approverId && step.is_required && !step.skip_if_unassigned && isHrCode) {
                 warnings.push(`${step.position_name} is required but the Human Resource department has no Manager/HOD assigned.`);
             }
@@ -342,19 +345,8 @@ workflowsRouter.get("/resolve", async (req, res, next) => {
                 rule.condition_operator === "<" ? amount < value :
                     amount === value;
             const code = normalizeWorkflowRouteCode(rule.additional_position_type_code, rule.additional_position_name);
-            const approverId = rule.additional_assigned_user_id ||
-                (code === "HOD"
-                    ? leadership.hod_user_id
-                    : code === "MANAGER"
-                        ? leadership.manager_user_id
-                        : null);
-            const approverName = rule.additional_assigned_user_id
-                ? rule.additional_assigned_user_name
-                : code === "HOD"
-                    ? leadership.hod_name
-                    : code === "MANAGER"
-                        ? leadership.manager_name
-                        : null;
+            const approverId = rule.additional_assigned_user_id || null;
+            const approverName = rule.additional_assigned_user_id ? rule.additional_assigned_user_name : null;
             return matched ? [{
                     rule_name: rule.rule_name,
                     position_name: rule.additional_position_name || workflowRouteLabel(rule.additional_position_type_code, "Additional Approval"),
@@ -518,9 +510,9 @@ workflowsRouter.post("/", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req,
             throw badRequest("Invalid workflow payload", parsed.error.flatten());
         }
         await ensureWorkflowScopeColumns();
-        const workflowRow = (await query(`INSERT INTO workflows (name, request_type, advance_sub_type, department, section, team, description, status, workflow_type, valid_from, valid_until, created_by_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-         RETURNING id`, [parsed.data.name, parsed.data.request_type, parsed.data.advance_sub_type || null, parsed.data.department || null, parsed.data.section || null, parsed.data.team || null, parsed.data.description || null, parsed.data.status, parsed.data.workflow_type ?? "STICKY", parsed.data.valid_from || null, parsed.data.valid_until || null, req.user.userId]))[0];
+        const workflowRow = (await query(`INSERT INTO workflows (name, request_type, advance_sub_type, department, section, team, description, status, workflow_type, valid_from, valid_until, requester_roles, created_by_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         RETURNING id`, [parsed.data.name, parsed.data.request_type, parsed.data.advance_sub_type || null, parsed.data.department || null, parsed.data.section || null, parsed.data.team || null, parsed.data.description || null, parsed.data.status, parsed.data.workflow_type ?? "STICKY", parsed.data.valid_from || null, parsed.data.valid_until || null, parsed.data.requester_roles?.length ? parsed.data.requester_roles : null, req.user.userId]))[0];
         await insertWorkflowSteps(workflowRow.id, parsed.data.steps);
         await insertWorkflowRules(workflowRow.id, parsed.data.rules || []);
         return res.status(201).json({ id: workflowRow.id });
@@ -582,6 +574,10 @@ workflowsRouter.put("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (re
             updates.push(`valid_until=$${params.length + 1}`);
             params.push(parsed.data.valid_until || null);
         }
+        if (parsed.data.requester_roles !== undefined) {
+            updates.push(`requester_roles=$${params.length + 1}`);
+            params.push(parsed.data.requester_roles?.length ? parsed.data.requester_roles : null);
+        }
         if (updates.length > 0) {
             params.push(req.params.id);
             const rows = await query(`UPDATE workflows SET ${updates.join(",")}, updated_at=now() WHERE id=$${params.length} RETURNING id`, params);
@@ -614,6 +610,12 @@ workflowsRouter.delete("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async 
         return res.json({ ok: true });
     }
     catch (err) {
+        // Workflows already referenced by submitted advance requests can't be
+        // deleted outright (advance_requests.workflow_id FK) — guide the admin
+        // to deactivate instead of surfacing a raw 500.
+        if (err?.code === "23503") {
+            return next(badRequest("This workflow has already been used for submitted requests and can't be deleted. Deactivate it instead."));
+        }
         return next(err);
     }
 });

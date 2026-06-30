@@ -48,16 +48,17 @@ function employeeLabel(u: DirectoryUser) {
 }
 
 const th: React.CSSProperties = {
-  background: "#f1f5f9", padding: "8px 10px", textAlign: "left",
+  background: "var(--surface-soft)", padding: "8px 10px", textAlign: "left",
   fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
-  border: "1px solid #e2e8f0"
+  border: "1px solid var(--border)", color: "var(--text)"
 };
 const td: React.CSSProperties = {
-  padding: "4px 6px", border: "1px solid #e2e8f0", verticalAlign: "middle"
+  padding: "4px 6px", border: "1px solid var(--border)", verticalAlign: "middle",
+  color: "var(--text)"
 };
 const inp: React.CSSProperties = {
   width: "100%", border: "none", background: "transparent",
-  fontSize: 13, padding: "3px 4px", outline: "none", minWidth: 0
+  color: "var(--text)", fontSize: 13, padding: "3px 4px", outline: "none", minWidth: 0
 };
 const timeInp: React.CSSProperties = { ...inp, width: 72 };
 
@@ -142,8 +143,8 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
     }
   }
 
-  const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 3 };
-  const fieldStyle: React.CSSProperties = { width: "100%", border: "1px solid #cbd5e1", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "var(--surface-soft)", color: "var(--text)", boxSizing: "border-box" };
+  const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 3 };
+  const fieldStyle: React.CSSProperties = { width: "100%", border: "1px solid var(--border)", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "var(--surface)", color: "var(--text)", boxSizing: "border-box" };
 
   return (
     <div style={{ padding: "0 0 40px" }}>
@@ -185,8 +186,8 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
                   <td style={{ padding: "10px 14px", fontSize: 13 }}>{r.year}</td>
                   <td style={{ padding: "10px 14px" }}>
                     <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, fontWeight: 600,
-                      background: r.status === "SUBMITTED" ? "#dcfce7" : "#fef9c3",
-                      color: r.status === "SUBMITTED" ? "#15803d" : "#a16207" }}>
+                      background: r.status === "SUBMITTED" ? "rgba(22, 163, 74, 0.14)" : "rgba(217, 119, 6, 0.14)",
+                      color: r.status === "SUBMITTED" ? "var(--success)" : "var(--warning)" }}>
                       {r.status}
                     </span>
                   </td>
@@ -258,11 +259,11 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
                   <th style={th}>Car Reg</th>
                   <th style={{ ...th, width: 32 }}></th>
                 </tr>
-                <tr style={{ background: "#f8fafc" }}>
+                <tr style={{ background: "var(--surface-soft)" }}>
                   <th style={th}></th>
                   <th style={th}></th>
-                  <th style={{ ...th, fontSize: 11, color: "#94a3b8" }}>Start</th>
-                  <th style={{ ...th, fontSize: 11, color: "#94a3b8" }}>End</th>
+                  <th style={{ ...th, fontSize: 11, color: "var(--muted)" }}>Start</th>
+                  <th style={{ ...th, fontSize: 11, color: "var(--muted)" }}>End</th>
                   <th style={th}></th>
                   <th style={th}></th>
                   <th style={th}></th>
@@ -271,11 +272,11 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
               </thead>
               <tbody>
                 {lines.map((line, idx) => (
-                  <tr key={idx} style={{ background: idx % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                  <tr key={idx} style={{ background: idx % 2 === 0 ? "var(--surface)" : "var(--surface-soft)" }}>
                     <td style={{ ...td, minWidth: 130 }}>
                       <input type="date" value={line.date} onChange={(e) => updateLine(idx, "date", e.target.value)} style={inp} />
                     </td>
-                    <td style={{ ...td, minWidth: 90, color: "#64748b" }}>
+                    <td style={{ ...td, minWidth: 90, color: "var(--muted)" }}>
                       {line.day || <span style={{ opacity: 0.35 }}>auto</span>}
                     </td>
                     <td style={{ ...td, minWidth: 75 }}>
@@ -296,7 +297,7 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
                     </td>
                     <td style={{ ...td, textAlign: "center" }}>
                       <button onClick={() => removeLine(idx)}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}
                         title="Remove row">×</button>
                     </td>
                   </tr>
@@ -306,7 +307,7 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
           </div>
 
           <button onClick={addLine}
-            style={{ marginBottom: 28, padding: "6px 14px", border: "1px dashed #94a3b8", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 13, color: "#64748b" }}>
+            style={{ marginBottom: 28, padding: "6px 14px", border: "1px dashed var(--border-strong, var(--border))", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 13, color: "var(--muted)" }}>
             + Add Row
           </button>
 
@@ -320,11 +321,11 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
           {/* ── Action buttons ─────────────────────────────── */}
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
             <button onClick={() => void save("DRAFT")} disabled={submitting}
-              style={{ padding: "9px 20px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13 }}>
+              style={{ padding: "9px 20px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13 }}>
               Save Draft
             </button>
             <button onClick={() => void save("SUBMITTED")} disabled={submitting}
-              style={{ padding: "9px 22px", border: "none", borderRadius: 6, background: submitting ? "#93c5fd" : "#1d4ed8", color: "#fff", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600 }}>
+              style={{ padding: "9px 22px", border: "none", borderRadius: 6, background: submitting ? "rgba(147, 197, 253, 0.72)" : "var(--primary, #1d4ed8)", color: "#fff", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600 }}>
               {submitting ? "Submitting…" : "Submit Request"}
             </button>
           </div>

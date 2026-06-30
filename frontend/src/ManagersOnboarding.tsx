@@ -150,6 +150,85 @@ export default function ManagersOnboarding() {
   const [assignOrg, setAssignOrg] = useState<OrgSelection>(EMPTY_ORG);
   const [assigning, setAssigning] = useState(false);
 
+  // Vacant positions — earmarked before anyone is assigned; filled later via
+  // the same Assign/Create flows above.
+  const [vacancies, setVacancies] = useState<any[]>([]);
+  const [fillingVacancyId, setFillingVacancyId] = useState<string | null>(null);
+  const [showVacancyModal, setShowVacancyModal] = useState(false);
+  const [vacancyTitle, setVacancyTitle] = useState("");
+  const [vacancyRole, setVacancyRole] = useState<"HOD" | "MANAGER">("MANAGER");
+  const [vacancyTypeId, setVacancyTypeId] = useState("");
+  const [vacancyOrg, setVacancyOrg] = useState<OrgSelection>(EMPTY_ORG);
+  const [creatingVacancy, setCreatingVacancy] = useState(false);
+
+  async function loadVacancies() {
+    try {
+      const rows: any = await api.positionVacancies();
+      setVacancies(Array.isArray(rows) ? rows.filter((v: any) => v.role === "HOD" || v.role === "MANAGER") : []);
+    } catch {
+      // non-fatal — vacancies are a supplementary list
+    }
+  }
+
+  useEffect(() => { void loadVacancies(); }, []);
+
+  function resetVacancyForm() {
+    setVacancyTitle("");
+    setVacancyRole("MANAGER");
+    setVacancyOrg(EMPTY_ORG);
+    if (managerTypes.length > 0) setVacancyTypeId(managerTypes[0].id);
+  }
+
+  function resolvedVacancyRole(): "HOD" | "MANAGER" {
+    const t = managerTypes.find((x) => x.id === vacancyTypeId);
+    return (t?.role as "HOD" | "MANAGER") || vacancyRole;
+  }
+
+  async function handleCreateVacancy() {
+    setCreatingVacancy(true);
+    try {
+      const selectedTypeName = managerTypes.find((x) => x.id === vacancyTypeId)?.name;
+      await api.createPositionVacancy({
+        role: resolvedVacancyRole(),
+        title: vacancyTitle.trim() || selectedTypeName || undefined,
+        department: vacancyOrg.department || undefined,
+        division_id: vacancyOrg.divisionId || undefined,
+        section_id: vacancyOrg.sectionId || undefined,
+        team_id: vacancyOrg.teamId || undefined
+      });
+      resetVacancyForm();
+      setShowVacancyModal(false);
+      await loadVacancies();
+    } catch (e: any) {
+      alert("Error creating vacant position: " + e.message);
+    } finally {
+      setCreatingVacancy(false);
+    }
+  }
+
+  async function handleRemoveVacancy(id: string) {
+    const confirmed = await confirmAction({ title: "Remove vacant position?", text: "This cannot be undone.", confirmButtonText: "Remove" });
+    if (!confirmed) return;
+    try {
+      await api.deletePositionVacancy(id);
+      await loadVacancies();
+    } catch (e: any) {
+      alert("Error removing vacant position: " + e.message);
+    }
+  }
+
+  function openFillWithAssign(vacancyId: string) {
+    setFillingVacancyId(vacancyId);
+    setAssignOrg(EMPTY_ORG);
+    setShowAssignModal(true);
+  }
+
+  function openFillWithCreate(vacancyId: string) {
+    setFillingVacancyId(vacancyId);
+    resetAddForm();
+    setShowAddModal(true);
+  }
+
   // Manager types
   type MgrType = { id: string; name: string; role: string; description: string | null; active: boolean };
   const [activeTab, setActiveTab] = useState<"MANAGERS" | "TYPES">("MANAGERS");
@@ -312,15 +391,21 @@ export default function ManagersOnboarding() {
   async function handleAssignExisting(user: PickableUser) {
     setAssigning(true);
     try {
-      await api.updateUserRole(user.id, { role: assignRole });
-      const dept = assignOrg.department || assignDept;
-      if (dept) await autoAssignOrgPlacement(user.id, assignRole, { ...assignOrg, department: dept }, { setPrimary: true });
-      // Save org IDs
-      await api.updateUser(user.id, {
-        division_id: assignOrg.divisionId ?? null,
-        section_id: assignOrg.sectionId ?? null,
-        team_id: assignOrg.teamId ?? null,
-      });
+      if (fillingVacancyId) {
+        await api.fillPositionVacancy(fillingVacancyId, { existing_user_id: user.id });
+        setFillingVacancyId(null);
+        await loadVacancies();
+      } else {
+        await api.updateUserRole(user.id, { role: assignRole });
+        const dept = assignOrg.department || assignDept;
+        if (dept) await autoAssignOrgPlacement(user.id, assignRole, { ...assignOrg, department: dept }, { setPrimary: true });
+        // Save org IDs
+        await api.updateUser(user.id, {
+          division_id: assignOrg.divisionId ?? null,
+          section_id: assignOrg.sectionId ?? null,
+          team_id: assignOrg.teamId ?? null,
+        });
+      }
       setShowAssignModal(false);
       setAssignDept("");
       setAssignOrg(EMPTY_ORG);
@@ -399,6 +484,33 @@ export default function ManagersOnboarding() {
   }
 
   async function createManager() {
+    if (fillingVacancyId) {
+      if (!newFirstName.trim() || !newSurname.trim() || !newEmail.trim()) {
+        alert("Please fill first name, surname, and email.");
+        return;
+      }
+      setCreating(true);
+      try {
+        const fullName = `${newFirstName.trim()} ${newSurname.trim()}`;
+        await api.fillPositionVacancy(fillingVacancyId, {
+          email: newEmail.trim(),
+          full_name: fullName,
+          employee_no: newEmployeeNo.trim() || undefined,
+          title: newTitle.trim() || undefined
+        });
+        setFillingVacancyId(null);
+        resetAddForm();
+        setShowAddModal(false);
+        await Promise.all([load(), reloadStaff(), loadVacancies()]);
+        alert("Saved.");
+      } catch (e: any) {
+        alert("Error: " + e.message);
+      } finally {
+        setCreating(false);
+      }
+      return;
+    }
+
     const effectiveDept = newOrg.department || newDepartment;
     if (!newFirstName.trim() || !newSurname.trim() || !newEmail.trim() || !effectiveDept.trim()) {
       alert("Please fill first name, surname, email, and department.");
@@ -654,58 +766,112 @@ export default function ManagersOnboarding() {
           <p className="ep-subtitle">Manage Heads of Department (HOD) and Managers and connect them to departments for approval routing.</p>
         </div>
         <div className="ep-actions">
-          <button className="ep-btn-outline" type="button" onClick={() => { setAssignDept(""); setAssignRole("MANAGER"); setSelectedAssignTypeId(managerTypes[0]?.id || ""); setShowAssignModal(true); }}>
+          <button className="ep-btn-outline" type="button" onClick={() => { resetVacancyForm(); setShowVacancyModal(true); }}>
+            <Plus size={15} aria-hidden /> Create Vacant Position
+          </button>
+          <button className="ep-btn-outline" type="button" onClick={() => { setFillingVacancyId(null); setAssignDept(""); setAssignRole("MANAGER"); setSelectedAssignTypeId(managerTypes[0]?.id || ""); setShowAssignModal(true); }}>
             <UserCheck size={15} aria-hidden /> Assign Existing User
           </button>
-          <button className="ep-btn" type="button" onClick={() => { resetAddForm(); setShowAddModal(true); }}>
+          <button className="ep-btn" type="button" onClick={() => { setFillingVacancyId(null); resetAddForm(); setShowAddModal(true); }}>
             <UserPlus size={15} aria-hidden /> Create New Account
           </button>
         </div>
       </div>
 
+      {/* Vacant Positions */}
+      {vacancies.length > 0 && (
+        <section className="onboarding-panel" style={{ marginBottom: 16 }}>
+          <div className="onboarding-table-wrap">
+            <table className="table onboarding-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Role</th>
+                  <th>Org Path</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vacancies.map((v) => (
+                  <tr key={v.id} style={{ background: "var(--surface-soft)" }}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className="status-pill" style={{ background: "#fef3c7", color: "#92400e" }}>Vacant</span>
+                        <strong>{v.title || "Manager"}</strong>
+                      </div>
+                    </td>
+                    <td><RoleBadge role={v.role} /></td>
+                    <td style={{ fontSize: 12, color: "var(--muted)" }}>
+                      {[v.division_name, v.department, v.section_name, v.team_name].filter(Boolean).join(" › ") || "—"}
+                    </td>
+                    <td style={{ fontSize: 12, color: "var(--muted)" }}>
+                      {v.created_at ? new Date(v.created_at).toLocaleDateString() : "—"}
+                    </td>
+                    <td>
+                      <div className="onboarding-row-actions">
+                        <button className="icon-button leadership-icon-button" type="button" title="Assign existing user" onClick={() => openFillWithAssign(v.id)}><UserCheck size={16} aria-hidden /></button>
+                        <button className="icon-button leadership-icon-button" type="button" title="Create new account" onClick={() => openFillWithCreate(v.id)}><UserPlus size={16} aria-hidden /></button>
+                        <button className="icon-button leadership-icon-button danger" type="button" title="Remove vacancy" onClick={() => void handleRemoveVacancy(v.id)}><Trash2 size={16} aria-hidden /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {/* Add modal */}
       {showAddModal && (
-        <div className="leadership-modal-backdrop" onClick={() => !creating && setShowAddModal(false)}>
+        <div className="leadership-modal-backdrop" onClick={() => !creating && (setShowAddModal(false), setFillingVacancyId(null))}>
           <div className="leadership-modal onboarding-modal" onClick={(e) => e.stopPropagation()}>
             <div className="leadership-modal-head">
-              <h3>Add Manager / HOD</h3>
-              <button className="icon-button leadership-icon-button" type="button" onClick={() => setShowAddModal(false)} disabled={creating} aria-label="Close"><X size={17} aria-hidden /></button>
+              <h3>{fillingVacancyId ? "Fill Vacant Position" : "Add Manager / HOD"}</h3>
+              <button className="icon-button leadership-icon-button" type="button" onClick={() => { setShowAddModal(false); setFillingVacancyId(null); }} disabled={creating} aria-label="Close"><X size={17} aria-hidden /></button>
             </div>
             <div className="onboarding-form-grid onboarding-form-grid-2">
               <label><span>First Name *</span><input value={newFirstName} onChange={(e) => setNewFirstName(e.target.value)} placeholder="First name" /></label>
               <label><span>Surname *</span><input value={newSurname} onChange={(e) => setNewSurname(e.target.value)} placeholder="Surname" /></label>
               <label><span>Employee Number</span><input value={newEmployeeNo} onChange={(e) => setNewEmployeeNo(e.target.value)} placeholder="Employee No." /></label>
-              <label>
-                <span>Manager Type *</span>
-                {managerTypes.filter((t) => t.active).length > 0 ? (
-                  <select value={selectedNewTypeId} onChange={(e) => {
-                    setSelectedNewTypeId(e.target.value);
-                    const t = managerTypes.find((x) => x.id === e.target.value);
-                    if (t) { setNewRole(t.role as "HOD" | "MANAGER"); setNewTitle(t.name); }
-                  }}>
-                    {managerTypes.filter((t) => t.active).map((t) => (
-                      <option key={t.id} value={t.id}>{t.name} ({t.role})</option>
-                    ))}
-                  </select>
-                ) : (
-                  <select value={newRole} onChange={(e) => setNewRole(e.target.value as "HOD" | "MANAGER")}>
-                    <option value="MANAGER">Manager</option>
-                    <option value="HOD">Head of Department (HOD)</option>
-                  </select>
-                )}
-              </label>
+              {!fillingVacancyId && (
+                <label>
+                  <span>Manager Type *</span>
+                  {managerTypes.filter((t) => t.active).length > 0 ? (
+                    <select value={selectedNewTypeId} onChange={(e) => {
+                      setSelectedNewTypeId(e.target.value);
+                      const t = managerTypes.find((x) => x.id === e.target.value);
+                      if (t) { setNewRole(t.role as "HOD" | "MANAGER"); setNewTitle(t.name); }
+                    }}>
+                      {managerTypes.filter((t) => t.active).map((t) => (
+                        <option key={t.id} value={t.id}>{t.name} ({t.role})</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select value={newRole} onChange={(e) => setNewRole(e.target.value as "HOD" | "MANAGER")}>
+                      <option value="MANAGER">Manager</option>
+                      <option value="HOD">Head of Department (HOD)</option>
+                    </select>
+                  )}
+                </label>
+              )}
               <label><span>Position / Title</span><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Department Manager" /></label>
               <label><span>Username or Email *</span><input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="user@etl.co.ls" /></label>
-              <label className="onboarding-check"><input type="checkbox" checked={newIsActive} onChange={(e) => setNewIsActive(e.target.checked)} /> Active</label>
-              <label className="onboarding-check"><input type="checkbox" checked={assignAsDepartmentManager} onChange={(e) => setAssignAsDepartmentManager(e.target.checked)} /> Assign as department {newRole === "HOD" ? "HOD" : "manager"}</label>
-              <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement *</div>
-                <OrgPicker value={newOrg} onChange={(sel) => { setNewOrg(sel); if (sel.department) setNewDepartment(sel.department); }} />
-              </div>
+              {!fillingVacancyId && (
+                <>
+                  <label className="onboarding-check"><input type="checkbox" checked={newIsActive} onChange={(e) => setNewIsActive(e.target.checked)} /> Active</label>
+                  <label className="onboarding-check"><input type="checkbox" checked={assignAsDepartmentManager} onChange={(e) => setAssignAsDepartmentManager(e.target.checked)} /> Assign as department {newRole === "HOD" ? "HOD" : "manager"}</label>
+                  <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement *</div>
+                    <OrgPicker value={newOrg} onChange={(sel) => { setNewOrg(sel); if (sel.department) setNewDepartment(sel.department); }} />
+                  </div>
+                </>
+              )}
             </div>
             <div className="leadership-modal-actions">
-              <button className="button small-button button-subtle" type="button" onClick={() => setShowAddModal(false)} disabled={creating}>Cancel</button>
-              <button className="button button-primary" type="button" onClick={() => void createManager()} disabled={creating}>{creating ? "Saving…" : "Save"}</button>
+              <button className="button small-button button-subtle" type="button" onClick={() => { setShowAddModal(false); setFillingVacancyId(null); }} disabled={creating}>Cancel</button>
+              <button className="button button-primary" type="button" onClick={() => void createManager()} disabled={creating}>{creating ? "Saving…" : fillingVacancyId ? "Fill Position" : "Save"}</button>
             </div>
           </div>
         </div>
@@ -927,15 +1093,18 @@ export default function ManagersOnboarding() {
       {/* Assign existing user as Manager / HOD */}
       {showAssignModal && (
         <UserPicker
-          title="Assign Existing User as Manager / HOD"
-          subtitle="Pick an employee to promote to Manager or HOD and connect them to a department."
+          title={fillingVacancyId ? "Fill Vacant Position" : "Assign Existing User as Manager / HOD"}
+          subtitle={fillingVacancyId
+            ? "Search and select an employee to fill this vacant position. They'll receive an invitation."
+            : "Pick an employee to promote to Manager or HOD and connect them to a department."}
           users={users}
           excludeRoles={[]}
-          onClose={() => setShowAssignModal(false)}
+          onClose={() => { setShowAssignModal(false); setFillingVacancyId(null); }}
           onSelect={handleAssignExisting}
           saving={assigning}
-          saveLabel={`Assign as ${resolvedAssignRole() === "HOD" ? "HOD" : "Manager"}`}
+          saveLabel={fillingVacancyId ? "Fill Position" : `Assign as ${resolvedAssignRole() === "HOD" ? "HOD" : "Manager"}`}
           extra={
+            fillingVacancyId ? undefined : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--muted)", marginBottom: 4 }}>Manager Type *</label>
@@ -969,8 +1138,51 @@ export default function ManagersOnboarding() {
                 <OrgPicker value={assignOrg} onChange={(sel) => { setAssignOrg(sel); if (sel.department) setAssignDept(sel.department); }} />
               </div>
             </div>
+            )
           }
         />
+      )}
+
+      {/* Create Vacant Position */}
+      {showVacancyModal && (
+        <div className="leadership-modal-backdrop" onClick={() => !creatingVacancy && setShowVacancyModal(false)}>
+          <div className="leadership-modal onboarding-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="leadership-modal-head">
+              <h3>Create Vacant Position</h3>
+              <button className="icon-button leadership-icon-button" type="button" onClick={() => setShowVacancyModal(false)} disabled={creatingVacancy} aria-label="Close"><X size={17} aria-hidden /></button>
+            </div>
+            <div className="onboarding-form-grid onboarding-form-grid-2">
+              <label>
+                <span>Manager Type / Role *</span>
+                {managerTypes.filter((t) => t.active).length > 0 ? (
+                  <select value={vacancyTypeId} onChange={(e) => {
+                    setVacancyTypeId(e.target.value);
+                    const t = managerTypes.find((x) => x.id === e.target.value);
+                    if (t) setVacancyRole(t.role as "HOD" | "MANAGER");
+                  }}>
+                    {managerTypes.filter((t) => t.active).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name} ({t.role})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <select value={vacancyRole} onChange={(e) => setVacancyRole(e.target.value as "HOD" | "MANAGER")}>
+                    <option value="MANAGER">Manager</option>
+                    <option value="HOD">Head of Department (HOD)</option>
+                  </select>
+                )}
+              </label>
+              <label><span>Title <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span><input value={vacancyTitle} onChange={(e) => setVacancyTitle(e.target.value)} placeholder="Department Manager" /></label>
+              <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement</div>
+                <OrgPicker value={vacancyOrg} onChange={setVacancyOrg} />
+              </div>
+            </div>
+            <div className="leadership-modal-actions">
+              <button className="button small-button button-subtle" type="button" onClick={() => setShowVacancyModal(false)} disabled={creatingVacancy}>Cancel</button>
+              <button className="button button-primary" type="button" onClick={() => void handleCreateVacancy()} disabled={creatingVacancy}>{creatingVacancy ? "Saving…" : "Create Vacant Position"}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       </div>

@@ -44,11 +44,15 @@ export async function resolveWorkflowChain(params: {
   section?: string;
   advanceSubType?: string;
   needsAccommodation?: boolean;
+  overrideChain?: { label: string; user_id: string; user_name?: string }[];
+  requesterRole?: string;
 }): Promise<{ workflowId: string; chain: ChainStep[] } | null> {
-  const { requestType, department, section = "", advanceSubType = "", needsAccommodation = false } = params;
+  const { requestType, department, section = "", advanceSubType = "", needsAccommodation = false, overrideChain = [], requesterRole = "" } = params;
 
   // TEMPORARY workflows (with a valid date window) take priority over STICKY ones.
-  // Within each type the specificity order is: dept+section+subtype > dept+subtype > dept+section > dept > global.
+  // A workflow restricted to the requester's role (requester_roles) always outranks
+  // an unrestricted one. Within each tier the specificity order is:
+  // dept+section+subtype > dept+subtype > dept+section > dept > global.
   const workflows = await query<{ id: string }>(
     `SELECT w.*
        FROM workflows w
@@ -64,9 +68,13 @@ export async function resolveWorkflowChain(params: {
           -- "TRAVEL" sub-type covers all travel advance types (anything other than SALARY/LOAN)
           OR ($4 <> '' AND lower(trim(w.advance_sub_type)) = 'travel' AND upper(trim($4)) NOT IN ('SALARY','LOAN'))
         )
+        AND (w.requester_roles IS NULL OR ($5 <> '' AND $5 = ANY(w.requester_roles)))
       ORDER BY
         -- TEMPORARY workflows override STICKY ones
         CASE COALESCE(w.workflow_type,'STICKY') WHEN 'TEMPORARY' THEN 0 ELSE 1 END,
+        -- A role-restricted workflow (which already passed the WHERE filter, so it
+        -- matches the requester) outranks an unrestricted one.
+        CASE WHEN w.requester_roles IS NOT NULL THEN 0 ELSE 1 END,
         -- Then by specificity (most specific wins)
         CASE
           WHEN $4 <> '' AND lower(trim(COALESCE(w.advance_sub_type,''))) = lower(trim($4))
@@ -92,51 +100,70 @@ export async function resolveWorkflowChain(params: {
         END,
         w.updated_at DESC, w.created_at DESC
       LIMIT 1`,
-    [requestType, department, section, advanceSubType]
+    [requestType, department, section, advanceSubType, requesterRole]
   );
 
   const workflow = workflows[0];
   if (!workflow) return null;
 
-  const [steps, leadership] = await Promise.all([
-    query<{
-      step_order: number;
-      position_type_code: string | null;
-      position_name: string;
-      assigned_user_id: string | null;
-      assigned_user_name: string | null;
-      assigned_user_title: string | null;
-      assigned_user_email: string | null;
-      is_required: boolean;
-      skip_if_unassigned: boolean;
-      is_final_approval: boolean;
-      approval_mode: string;
-      approval_group_name: string | null;
-      requires_accommodation: boolean;
-      parallel_with_previous: boolean;
-      action_type: string;
-      can_reject: boolean;
-      can_rollback: boolean;
-    }>(
-      `SELECT ws.step_order, ws.position_type_code, ws.position_name,
-              CASE WHEN u.id IS NOT NULL THEN ws.assigned_user_id ELSE NULL END AS assigned_user_id,
-              u.full_name AS assigned_user_name, u.title AS assigned_user_title, u.email AS assigned_user_email,
-              ws.is_required, ws.skip_if_unassigned, ws.is_final_approval,
-              ws.approval_mode, ws.approval_group_name, ws.requires_accommodation, ws.parallel_with_previous, ws.action_type,
-              ws.can_reject, ws.can_rollback
-         FROM workflow_steps ws
-         LEFT JOIN users u ON u.id = ws.assigned_user_id AND u.is_active = true
-        WHERE ws.workflow_id = $1 AND ws.is_active = true
-        ORDER BY ws.step_order ASC`,
-      [(workflow as any).id]
-    ),
-    getDepartmentLeadership(department)
-  ]);
+  const steps = await query<{
+    step_order: number;
+    position_type_code: string | null;
+    position_name: string;
+    assigned_user_id: string | null;
+    assigned_user_name: string | null;
+    assigned_user_title: string | null;
+    assigned_user_email: string | null;
+    is_required: boolean;
+    skip_if_unassigned: boolean;
+    is_final_approval: boolean;
+    approval_mode: string;
+    approval_group_name: string | null;
+    requires_accommodation: boolean;
+    parallel_with_previous: boolean;
+    action_type: string;
+    can_reject: boolean;
+    can_rollback: boolean;
+  }>(
+    `SELECT ws.step_order, ws.position_type_code, ws.position_name,
+            CASE WHEN u.id IS NOT NULL THEN ws.assigned_user_id ELSE NULL END AS assigned_user_id,
+            u.full_name AS assigned_user_name, u.title AS assigned_user_title, u.email AS assigned_user_email,
+            ws.is_required, ws.skip_if_unassigned, ws.is_final_approval,
+            ws.approval_mode, ws.approval_group_name, ws.requires_accommodation, ws.parallel_with_previous, ws.action_type,
+            ws.can_reject, ws.can_rollback
+       FROM workflow_steps ws
+       LEFT JOIN users u ON u.id = ws.assigned_user_id AND u.is_active = true
+      WHERE ws.workflow_id = $1 AND ws.is_active = true
+      ORDER BY ws.step_order ASC`,
+    [(workflow as any).id]
+  );
   // HR_MANAGER_REVIEW / HR_REVIEW steps are routed to the org-structure
   // leadership of the "Human Resource" department, not the requester's own
   // department — there's no per-requester "HR manager" concept.
   const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
   const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
+
+  // Requester-chosen overrides (e.g. a CEO/EXCO/MANAGER picking their own
+  // countersigner/approver for a travel advance) replace the position's
+  // template-driven approver. Matched by the step's action_type, not its
+  // label text — "Counter Signed By" overrides any COUNTER_SIGN step,
+  // "Approved By" overrides any APPROVE step.
+  const overrideUsers = overrideChain.length
+    ? await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+        `SELECT id, full_name, title, email FROM users WHERE id = ANY($1)`,
+        [overrideChain.map((o) => o.user_id)]
+      )
+    : [];
+  const OVERRIDE_LABEL_TO_ACTION_TYPE: Record<string, string> = {
+    "counter signed by": "COUNTER_SIGN",
+    "approved by": "APPROVE"
+  };
+  const overrideByActionType = new Map(
+    overrideChain.map((o) => [
+      OVERRIDE_LABEL_TO_ACTION_TYPE[o.label.trim().toLowerCase()] || o.label.trim().toUpperCase(),
+      overrideUsers.find((u) => u.id === o.user_id)
+    ])
+  );
 
   const chain: ChainStep[] = [];
   let previousStepPushed = false;
@@ -149,35 +176,38 @@ export async function resolveWorkflowChain(params: {
     // A step flagged as accommodation-only is skipped unless this request needs accommodation.
     if (step.requires_accommodation && !needsAccommodation) { previousStepPushed = false; continue; }
 
-    // A specific assigned user on the step overrides the department-leadership lookup
-    // (e.g. a second "Manager" step routed to a different department's manager).
+    // A requester-chosen override for this step's action type replaces the
+    // assigned user entirely (e.g. CEO/EXCO/MANAGER picking their own
+    // countersigner/approver for a travel advance).
+    const override = overrideByActionType.get(step.action_type);
+
+    // HOD/MANAGER no longer dynamically resolve to the requester's department
+    // leadership — every step must carry an explicit assigned_user_id (a
+    // specific person) or be a group/ANY_ONE step. HR_* steps still route to
+    // the Human Resource department's leadership.
     const isHrCode = code.startsWith("HR_");
 
     const approverId =
+      override               ? override.id :
       step.assigned_user_id ? step.assigned_user_id :
-      code === "HOD"        ? leadership.hod_user_id :
-      code === "MANAGER"    ? leadership.manager_user_id :
       isHrCode              ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null) :
                               null;
 
     const approverName =
+      override               ? override.full_name :
       step.assigned_user_id ? step.assigned_user_name :
-      code === "HOD"        ? leadership.hod_name :
-      code === "MANAGER"    ? leadership.manager_name :
       isHrCode              ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
                               null;
 
     const approverTitle =
+      override               ? override.title :
       step.assigned_user_id ? step.assigned_user_title :
-      code === "HOD"        ? leadership.hod_title :
-      code === "MANAGER"    ? leadership.manager_title :
       isHrCode              ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
                               null;
 
     const approverEmail =
+      override               ? override.email :
       step.assigned_user_id ? step.assigned_user_email :
-      code === "HOD"        ? leadership.hod_email :
-      code === "MANAGER"    ? leadership.manager_email :
       isHrCode              ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
                               null;
 

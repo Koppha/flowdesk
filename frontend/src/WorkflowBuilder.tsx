@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api } from "./api";
 import { useStaffDirectory, isActiveStaff, type StaffMember } from "./useStaffDirectory";
+import WorkflowAddParticipantModal from "./WorkflowAddParticipantModal";
 import {
   AlertTriangle,
   Check,
@@ -104,6 +105,7 @@ type Workflow = {
   team?: string | null;
   description?: string | null;
   status: WorkflowStatus;
+  requesterRoles?: string[] | null;
   createdBy: string | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -123,6 +125,7 @@ type WorkflowMetadata = {
   team: string;
   description: string;
   status: WorkflowStatus;
+  requesterRoles: string[];
 };
 
 const ALL_REQUEST_TYPES = [
@@ -152,8 +155,7 @@ const POSITION_TYPE_FALLBACKS: PositionType[] = [
   { id: "system-employee", code: "EMPLOYEE", name: "Employee", description: "Request Initiator", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-hod", code: "HOD", name: "HOD", description: "Department Head", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-manager", code: "MANAGER", name: "Manager", description: "Department Manager", applies_to: ALL_REQUEST_TYPES, is_active: true },
-  { id: "pos-finance", code: "FINANCE", name: "Finance", description: "Finance Approval", applies_to: ALL_REQUEST_TYPES, is_active: true },
-  { id: "pos-hr-review", code: "HR_REVIEW", name: "HR Review", description: "HR Review", applies_to: ALL_REQUEST_TYPES, is_active: true },
+  { id: "pos-exco", code: "EXCO", name: "EXCO Member", description: "Executive Committee Member", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-ceo", code: "CEO", name: "CEO", description: "Chief Executive Officer", applies_to: ALL_REQUEST_TYPES, is_active: true }
 ];
 
@@ -207,7 +209,8 @@ const EMPTY_METADATA: WorkflowMetadata = {
   section: "",
   team: "",
   description: "",
-  status: "DRAFT"
+  status: "DRAFT",
+  requesterRoles: []
 };
 
 const ADVANCE_SUB_TYPES_STATIC = [
@@ -345,10 +348,7 @@ export default function WorkflowBuilder() {
   const [departments, setDepartments] = useState<any[]>([]);
   const [orgStructure, setOrgStructure] = useState<{ divisions: any[]; departments: any[]; sections: any[]; teams: any[] }>({ divisions: [], departments: [], sections: [], teams: [] });
   const [extraPositions, setExtraPositions] = useState<PositionType[]>([]);
-  const [addPositionPicker, setAddPositionPicker] = useState<{ division: string; department: string; section: string; team: string; role: string; anyTeamMember: boolean }>({ division: "", department: "", section: "", team: "", role: "HOD", anyTeamMember: false });
   const [showAddPosition, setShowAddPosition] = useState(false);
-  const [addPanelMode, setAddPanelMode] = useState<"position" | "member">("position");
-  const [addMemberPicker, setAddMemberPicker] = useState<{ department: string; team: string; userId: string }>({ department: "", team: "", userId: "" });
   const { staff } = useStaffDirectory();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
   const [metadata, setMetadata] = useState<WorkflowMetadata>(EMPTY_METADATA);
@@ -437,7 +437,8 @@ export default function WorkflowBuilder() {
     const byCode = (code: string) => availablePositionTypes.find((position) => position.code === code);
 
     if (!metadata.department) {
-      const base = availablePositionTypes.filter((p) => p.code !== "HR_REVIEW" && p.code !== "FINANCE" && p.code !== "CEO");
+      // HOD is a type of Manager, not a separate draggable position — fold it into Manager.
+      const base = availablePositionTypes.filter((p) => p.code !== "HR_REVIEW" && p.code !== "FINANCE" && p.code !== "CEO" && p.code !== "HOD");
       return [...base, ...extraPositions];
     }
 
@@ -455,11 +456,14 @@ export default function WorkflowBuilder() {
 
     const cards: PositionType[] = [];
 
-    const hod = byCode("HOD");
-    if (hod) cards.push({ ...hod, id: `scoped-hod-${scopeKey}`, description: personLabel(orgSection?.hod_name ?? dept?.hod_name) });
-
+    // HOD is a type of Manager, not a separate draggable position — fold it into Manager.
     const manager = byCode("MANAGER");
     if (manager) cards.push({ ...manager, id: `scoped-manager-${scopeKey}`, description: personLabel(orgSection?.manager_name ?? dept?.manager_name) });
+
+    // EXCO Member for this department/section — shown even when vacant
+    // (same "Unassigned — {scope}" treatment as Manager above).
+    const exco = byCode("EXCO");
+    if (exco) cards.push({ ...exco, id: `scoped-exco-${scopeKey}`, description: personLabel(orgSection?.exco_name ?? dept?.exco_name) });
 
     // Extra positions added by admin from other departments/sections
     extraPositions.forEach((p) => cards.push(p));
@@ -468,28 +472,6 @@ export default function WorkflowBuilder() {
   }, [availablePositionTypes, departments, orgStructure, metadata.department, metadata.section, extraPositions]);
 
   const selectedStep = useMemo(() => steps.find((step) => step.id === selectedStepId) || steps[0] || null, [steps, selectedStepId]);
-
-  const detailPositionOptions = useMemo(() => {
-    // Hide HR Review and Finance from the Position picker — these are no
-    // longer assignable as new step positions, but stay selectable if a
-    // pre-existing step already uses one (avoids an invalid select value).
-    const hideRetiredCodes = (list: PositionType[]) =>
-      list.filter((p) => (p.code !== "HR_REVIEW" && p.code !== "FINANCE") || p.code === selectedStep?.positionTypeCode);
-    if (!selectedStep || activePositionTypes.some((position) => position.code === selectedStep.positionTypeCode)) {
-      return hideRetiredCodes(activePositionTypes);
-    }
-    return hideRetiredCodes([
-      {
-        id: selectedStep.positionTypeId || selectedStep.id,
-        code: selectedStep.positionTypeCode,
-        name: selectedStep.positionName,
-        description: selectedStep.description,
-        applies_to: [metadata.requestType],
-        is_active: true
-      },
-      ...activePositionTypes
-    ]);
-  }, [activePositionTypes, metadata.requestType, selectedStep]);
 
   const ruleTargetOptions = useMemo<RuleTargetOption[]>(() => {
     const options: RuleTargetOption[] = [];
@@ -610,188 +592,114 @@ export default function WorkflowBuilder() {
     [orgStructure.divisions]
   );
 
-  const deptOptionsForAddPicker = useMemo(() => {
-    let depts = orgStructure.departments.map((d) => d.name as string);
-    if (addPositionPicker.division) {
-      const div = orgStructure.divisions.find((d) => d.name === addPositionPicker.division);
-      if (div) {
-        depts = orgStructure.departments
-          .filter((d) => (d.division_ids as string[] | undefined)?.includes(div.id) || d.division_id === div.id)
-          .map((d) => d.name as string);
-      }
-    }
-    return depts.filter((n) => n !== metadata.department).sort((a, b) => a.localeCompare(b));
-  }, [orgStructure, addPositionPicker.division, metadata.department]);
-
-  const sectionOptionsForPosition = useMemo(() => {
-    if (!addPositionPicker.department) return [];
-    const orgDept = orgStructure.departments.find((d) => d?.name === addPositionPicker.department);
-    if (!orgDept) return [];
-    return orgStructure.sections
-      .filter((s) => s?.department_id === orgDept.id)
-      .map((s) => s.name as string)
-      .sort((a, b) => a.localeCompare(b));
-  }, [orgStructure, addPositionPicker.department]);
-
-  // Teams belonging to the selected department, optionally narrowed to a selected section.
-  const teamOptionsForPosition = useMemo(() => {
-    if (!addPositionPicker.department) return [];
-    const orgDept = orgStructure.departments.find((d) => d?.name === addPositionPicker.department);
-    if (!orgDept) return [];
-    let sectionIds: Set<string>;
-    if (addPositionPicker.section) {
-      const sec = orgStructure.sections.find((s) => s?.name === addPositionPicker.section && s?.department_id === orgDept.id);
-      sectionIds = new Set(sec ? [sec.id] : []);
-    } else {
-      sectionIds = new Set(orgStructure.sections.filter((s) => s?.department_id === orgDept.id).map((s) => s.id));
-    }
-    return orgStructure.teams
-      .filter((t) => t?.section_id && sectionIds.has(t.section_id))
-      .map((t) => t.name as string)
-      .sort((a, b) => a.localeCompare(b));
-  }, [orgStructure, addPositionPicker.department, addPositionPicker.section]);
-
-  // Manager type IDs are UUIDs; position type codes are short strings (HOD, FINANCE, etc.)
-  const isManagerTypeId = (role: string) => managerTypes.some((mt) => mt.id === role);
-  // All manager types are department-scoped
-  const isRoleDeptScoped = (role: string) =>
-    isManagerTypeId(role) || role === "HOD" || role === "MANAGER";
-
-  function addExtraPosition() {
-    const { division, department, section, team, role, anyTeamMember } = addPositionPicker;
-    const selectedManagerType = managerTypes.find((mt) => mt.id === role);
-    // Resolve the position type: from manager type's role code or directly as position code
-    const posCode = selectedManagerType ? selectedManagerType.role : role;
-    const base = activePositionTypes.find((p) => p.code === posCode);
-    if (!base) return;
-    if (isRoleDeptScoped(role) && !department) return;
-
-    const resetPicker = () => setAddPositionPicker({ division: "", department: "", section: "", team: "", role: "HOD", anyTeamMember: false });
-
-    // "Any one in <team>" — group-based position card.
-    if (anyTeamMember && team) {
-      const id = `extra-TEAM-${department}-${team}`;
-      if (extraPositions.some((p) => p.id === id)) return;
-      setExtraPositions((prev) => [
-        ...prev,
-        {
-          id,
-          code: base.code,
-          name: `Team: ${team}`,
-          description: `Anyone in ${team} — ${department}`,
-          applies_to: base.applies_to,
-          is_active: true,
-          assignedUserId: null,
-          approvalMode: "ANY_ONE",
-          approvalGroupName: `Team: ${team}`
-        }
-      ]);
-      resetPicker();
-      setShowAddPosition(false);
-      return;
-    }
-
-    const scopeParts = [team, section, department, division].filter(Boolean);
-    const scopeLabel = scopeParts.join(", ") || (selectedManagerType?.name ?? role);
-    const id = `extra-${[role, division, department, section, team].filter(Boolean).join("-")}`;
-    if (extraPositions.some((p) => p.id === id)) return;
-
-    const dept = departments.find((d) => getDepartmentName(d) === department);
-    const orgDept = orgStructure.departments.find((d) => d?.name === department);
-    const orgSection = section
-      ? orgStructure.sections.find((s) => s?.name === section && s?.department_id === orgDept?.id)
-      : null;
-    const orgTeam = team ? orgStructure.teams.find((t) => t?.name === team) : null;
-
-    let personName: string | null = null;
-    let personId: string | null = null;
-
-    if (selectedManagerType) {
-      // Look up the person in this dept/section/team with that specific manager type
-      const candidates = staff.filter(
-        (u) =>
-          isActiveStaff(u) &&
-          u.manager_type_id === selectedManagerType.id &&
-          (!department || u.department === department)
-      );
-      const person = orgTeam
-        ? candidates.find((u) => u.team_id === orgTeam.id) ?? candidates.find((u) => u.section_id === orgSection?.id) ?? candidates[0]
-        : orgSection
-        ? candidates.find((u) => u.section_id === orgSection.id) ?? candidates[0]
-        : candidates[0];
-      personName = person?.full_name ?? null;
-      personId = person?.id ?? null;
-    } else if (posCode === "HOD") {
-      personName = orgSection?.hod_name ?? dept?.hod_name ?? null;
-      personId = orgSection?.hod_user_id ?? dept?.hod_user_id ?? null;
-    } else if (posCode === "MANAGER") {
-      personName = orgTeam?.leader_name ?? orgSection?.manager_name ?? dept?.manager_name ?? null;
-      personId = orgTeam?.leader_user_id ?? orgSection?.manager_user_id ?? dept?.manager_user_id ?? null;
-    }
-    // For FINANCE, HR_REVIEW, CEO, custom: role-based, no assigned person.
-
-    const displayName = selectedManagerType?.name ?? base.name;
-
-    setExtraPositions((prev) => [
-      ...prev,
-      {
-        id,
-        code: base.code,
-        name: displayName,
-        description: personName
-          ? `${personName} — ${scopeLabel}`
-          : department ? `Unassigned — ${scopeLabel}` : displayName,
-        applies_to: base.applies_to,
-        is_active: true,
-        assignedUserId: personId || null
-      }
-    ]);
-    resetPicker();
-    setShowAddPosition(false);
-  }
-
-  const deptMembers = useMemo(() => {
-    if (!addMemberPicker.department) return [];
-    return staff.filter((u) => isActiveStaff(u) && u.department === addMemberPicker.department);
-  }, [staff, addMemberPicker.department]);
-
-  const teamOptionsForMember = useMemo(() => {
-    return Array.from(new Set(deptMembers.map((u) => u.team_name).filter(Boolean) as string[]))
-      .sort((a, b) => a.localeCompare(b));
-  }, [deptMembers]);
-
-  const memberOptions = useMemo(() => {
-    return deptMembers
-      .filter((u) => !addMemberPicker.team || u.team_name === addMemberPicker.team)
-      .sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
-  }, [deptMembers, addMemberPicker.team]);
-
-  function addExtraMember() {
-    if (!addMemberPicker.department || !addMemberPicker.userId) return;
-    const member = memberOptions.find((u) => u.id === addMemberPicker.userId);
-    if (!member) return;
-    const id = `extra-member-${member.id}`;
-    if (extraPositions.some((p) => p.id === id)) return;
-    const base = activePositionTypes.find((p) => p.code === "MANAGER") || POSITION_TYPE_FALLBACKS.find((p) => p.code === "MANAGER")!;
-    const scopeLabel = member.team_name ? `${member.team_name}, ${addMemberPicker.department}` : addMemberPicker.department;
-    setExtraPositions((prev) => [
-      ...prev,
-      {
-        id,
-        code: base.code,
-        name: member.full_name || member.email,
-        description: `${member.full_name || member.email} — ${scopeLabel}`,
-        applies_to: base.applies_to,
-        is_active: true,
-        assignedUserId: member.id
-      }
-    ]);
-    setAddMemberPicker({ department: "", team: "", userId: "" });
-    setShowAddPosition(false);
-  }
-
   function removeExtraPosition(id: string) {
     setExtraPositions((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  // Pools + handlers for the unified "Add Workflow Participant" search modal.
+  const allSectionNames = useMemo(
+    () => Array.from(new Set(orgStructure.sections.map((s: any) => s.name as string).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [orgStructure.sections]
+  );
+  const allTeamNames = useMemo(
+    () => Array.from(new Set(orgStructure.teams.map((t: any) => t.name as string).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [orgStructure.teams]
+  );
+
+  const participantPositionPool = useMemo(() => {
+    const fromManagerTypes = managerTypes.map((mt) => ({ id: `mt-${mt.id}`, code: mt.role, name: mt.name, description: mt.description || "Custom position" }));
+    // HOD is a type of Manager, not a separate searchable position here — selecting
+    // "Manager" (or a custom manager type) covers it; only exclude MANAGER itself
+    // once a custom manager type already substitutes for it.
+    const basePositions = availablePositionTypes
+      .filter((p) => p.code !== "HOD" && (managerTypes.length === 0 || p.code !== "MANAGER"))
+      .map((p) => ({ id: p.id, code: p.code, name: p.name, description: p.description }));
+    return [...fromManagerTypes, ...basePositions];
+  }, [managerTypes, availablePositionTypes]);
+
+  const participantTeamPool = useMemo(() => {
+    return orgStructure.teams.map((t: any) => {
+      const section = orgStructure.sections.find((s: any) => s?.id === t.section_id);
+      const dept = section ? orgStructure.departments.find((d: any) => d?.id === section.department_id) : null;
+      return { id: t.id, name: t.name, departmentLabel: dept?.name || "", sectionLabel: section?.name || "" };
+    });
+  }, [orgStructure]);
+
+  // Any active staff member can be named individually as a step's approver,
+  // regardless of role — matches the old addExtraMember picker, which never
+  // restricted by role.
+  const participantEmployeePool = useMemo(() => {
+    return staff
+      .filter((u) => isActiveStaff(u) && u.profile_completed && u.role !== "ADMIN")
+      .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email, title: u.title, department: u.department }));
+  }, [staff]);
+
+  function handleAddParticipantPosition(
+    position: { id: string; code: string; name: string; description: string },
+    filters: { division: string; department: string; section: string; team: string }
+  ) {
+    const { division, department, section, team } = filters;
+    const managerType = managerTypes.find((mt) => mt.role === position.code && mt.name === position.name);
+    let personId: string | null = null;
+    let personName: string | null = null;
+
+    if (department) {
+      const dept = departments.find((d) => getDepartmentName(d) === department);
+      const orgDept = orgStructure.departments.find((d: any) => d?.name === department);
+      const orgSection = section ? orgStructure.sections.find((s: any) => s?.name === section && s?.department_id === orgDept?.id) : null;
+      const orgTeam = team ? orgStructure.teams.find((t: any) => t?.name === team) : null;
+
+      if (managerType) {
+        const candidates = staff.filter((u) => isActiveStaff(u) && u.manager_type_id === managerType.id && u.department === department);
+        const person = orgTeam
+          ? candidates.find((u) => u.team_id === orgTeam.id) ?? candidates.find((u) => u.section_id === orgSection?.id) ?? candidates[0]
+          : orgSection
+          ? candidates.find((u) => u.section_id === orgSection.id) ?? candidates[0]
+          : candidates[0];
+        personId = person?.id ?? null;
+        personName = person?.full_name ?? null;
+      } else if (position.code === "HOD") {
+        personId = orgSection?.hod_user_id ?? dept?.hod_user_id ?? null;
+        personName = orgSection?.hod_name ?? dept?.hod_name ?? null;
+      } else if (position.code === "MANAGER") {
+        personId = orgTeam?.leader_user_id ?? orgSection?.manager_user_id ?? dept?.manager_user_id ?? null;
+        personName = orgTeam?.leader_name ?? orgSection?.manager_name ?? dept?.manager_name ?? null;
+      } else if (position.code === "EXCO") {
+        personId = orgSection?.exco_user_id ?? dept?.exco_user_id ?? null;
+        personName = orgSection?.exco_name ?? dept?.exco_name ?? null;
+      }
+    }
+
+    const scopeLabel = [team, section, department, division].filter(Boolean).join(", ");
+    addStep(position.code, steps.length, {
+      positionName: position.name,
+      description: personName
+        ? `${personName} — ${scopeLabel || position.name}`
+        : department ? `Unassigned — ${scopeLabel}` : position.description,
+      assignedUserId: personId
+    });
+    setShowAddPosition(false);
+  }
+
+  function handleAddParticipantTeam(team: { id: string; name: string; departmentLabel: string }, anyTeamMember: boolean) {
+    if (!anyTeamMember) return;
+    addStep("MANAGER", steps.length, {
+      positionName: `Team: ${team.name}`,
+      description: `Anyone in ${team.name}${team.departmentLabel ? ` — ${team.departmentLabel}` : ""}`,
+      approvalMode: "ANY_ONE",
+      approvalGroupName: `Team: ${team.name}`,
+      assignedUserId: null
+    });
+    setShowAddPosition(false);
+  }
+
+  function handleAddParticipantEmployee(employee: { id: string; full_name: string | null; email: string; department?: string | null }) {
+    addStep("MANAGER", steps.length, {
+      positionName: employee.full_name || employee.email,
+      description: `${employee.full_name || employee.email}${employee.department ? ` — ${employee.department}` : ""}`,
+      assignedUserId: employee.id
+    });
+    setShowAddPosition(false);
   }
 
   const sectionOptions = useMemo(() => {
@@ -901,9 +809,7 @@ export default function WorkflowBuilder() {
       if (Array.isArray(actionTypesResult)) setActionTypes(actionTypesResult);
       if (meResult && typeof meResult === "object") setMyRole((meResult as any).role || "");
       if (Array.isArray(managerTypesResult)) {
-        const activeMt = managerTypesResult.filter((mt: any) => mt.active !== false);
-        setManagerTypes(activeMt);
-        if (activeMt.length > 0) setAddPositionPicker((p) => ({ ...p, role: activeMt[0].id }));
+        setManagerTypes(managerTypesResult.filter((mt: any) => mt.active !== false));
       }
     } catch (error) {
       console.warn(error);
@@ -934,6 +840,7 @@ export default function WorkflowBuilder() {
       team: raw.team || null,
       description: raw.description || "",
       status: raw.status || "DRAFT",
+      requesterRoles: raw.requesterRoles || raw.requester_roles || [],
       createdBy: raw.createdBy || raw.created_by_id || null,
       createdAt: raw.createdAt || raw.created_at || null,
       updatedAt: raw.updatedAt || raw.updated_at || null,
@@ -1111,7 +1018,8 @@ export default function WorkflowBuilder() {
         section: workflow.section || "",
         team: workflow.team || "",
         description: workflow.description || "",
-        status: workflow.status
+        status: workflow.status,
+        requesterRoles: Array.isArray(workflow.requesterRoles) ? workflow.requesterRoles : []
       });
       const loadedSteps = workflow.steps.length ? workflow.steps : buildTemplateSteps("STANDARD");
       setSteps(loadedSteps);
@@ -1160,16 +1068,6 @@ export default function WorkflowBuilder() {
   function updateStep(stepId: string, updates: Partial<WorkflowStep>) {
     if (readOnly) return;
     normalizeSteps(steps.map((step) => (step.id === stepId ? { ...step, ...updates } : step)));
-  }
-
-  function updateStepPosition(stepId: string, positionCode: string) {
-    const positionType = positionByCode(positionCode);
-    updateStep(stepId, {
-      positionTypeCode: positionType.code,
-      positionTypeId: positionType.id,
-      positionName: positionType.name,
-      description: positionType.description
-    });
   }
 
   async function removeStep(stepId: string) {
@@ -1278,6 +1176,7 @@ export default function WorkflowBuilder() {
       team: metadata.team || null,
       description: metadata.description.trim() || null,
       status: targetStatus || metadata.status,
+      requester_roles: metadata.requesterRoles.length ? metadata.requesterRoles : null,
       steps: steps.map((step) => ({
         workflow_id: selectedWorkflowId || undefined,
         step_order: step.stepOrder,
@@ -1382,7 +1281,8 @@ export default function WorkflowBuilder() {
         section: detail.section || "",
         team: detail.team || "",
         description: detail.description || "",
-        status: "DRAFT"
+        status: "DRAFT",
+        requesterRoles: Array.isArray(detail.requesterRoles) ? detail.requesterRoles : []
       });
       const clonedSteps = detail.steps.map((step, index) => ({ ...step, id: generateId(), workflowId: null, stepOrder: index + 1 }));
       setSteps(clonedSteps);
@@ -1893,6 +1793,34 @@ export default function WorkflowBuilder() {
                 </select>
               </label>
               <label className="workflow-form-wide">
+                <span>Requester Scope <span style={{ color: "var(--muted, #6b7280)", fontWeight: 400 }}>(optional)</span></span>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 4 }}>
+                  {[
+                    { code: "EXCO", label: "EXCO" },
+                    { code: "MANAGER", label: "Manager" },
+                    { code: "CEO", label: "CEO" }
+                  ].map((r) => (
+                    <label key={r.code} style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
+                      <input
+                        type="checkbox"
+                        checked={metadata.requesterRoles.includes(r.code)}
+                        onChange={(event) => {
+                          const next = event.target.checked
+                            ? [...metadata.requesterRoles, r.code]
+                            : metadata.requesterRoles.filter((c) => c !== r.code);
+                          updateMetadata({ requesterRoles: next });
+                        }}
+                      />
+                      {r.label}
+                    </label>
+                  ))}
+                </div>
+                <small>
+                  Leave unchecked to apply to all requesters. When checked, this workflow only resolves for requesters
+                  with the selected role(s) — useful for a dedicated EXCO/Manager/CEO travel advance workflow.
+                </small>
+              </label>
+              <label className="workflow-form-wide">
                 <span>Description</span>
                 <textarea value={metadata.description} onChange={(event) => updateMetadata({ description: event.target.value })} maxLength={500} />
                 <small>{metadata.description.length} / 500</small>
@@ -2175,16 +2103,6 @@ export default function WorkflowBuilder() {
             {selectedStep ? (
               <div className="workflow-step-details">
                 <div className="workflow-step-detail-title">Step {selectedStep.stepOrder}: {selectedStep.positionName}</div>
-                <label>
-                  <span>Position <sup>*</sup></span>
-                  <select value={selectedStep.positionTypeCode} onChange={(event) => updateStepPosition(selectedStep.id, event.target.value)} disabled={readOnly || selectedStep.isSystemStep}>
-                    {detailPositionOptions.map((position) => (
-                      <option key={position.id} value={position.code}>
-                        {position.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
                 {!selectedStep.isSystemStep && (() => {
                   const pool = usersForStep(selectedStep);
                   const q = (stepUserSearch[selectedStep.id] ?? "").toLowerCase();
@@ -2196,43 +2114,45 @@ export default function WorkflowBuilder() {
                         Assigned To <span style={{ color: "var(--muted, #6b7280)", fontWeight: 400 }}>(optional)</span>
                       </span>
                       {selectedUser && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--color-green-soft, #f0fdf4)", border: "1px solid var(--color-green, #86efac)", borderRadius: 6, marginBottom: 6, fontSize: 13 }}>
-                          <User size={13} style={{ color: "var(--color-green-dark, #16a34a)", flexShrink: 0 }} aria-hidden />
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
+                          <User size={13} style={{ color: "var(--muted, #6b7280)", flexShrink: 0 }} aria-hidden />
                           <span style={{ flex: 1, fontWeight: 500 }}>{selectedUser.full_name || selectedUser.email}</span>
                           <span style={{ color: "var(--muted, #6b7280)", fontSize: 11 }}>{selectedUser.department || ""}</span>
                           {!readOnly && (
                             <button type="button" onClick={() => { updateStep(selectedStep.id, { assignedUserId: null }); setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" })); }}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "#aaa", padding: 0, fontSize: 16, lineHeight: 1 }} aria-label="Clear assigned user">×</button>
+                              className="ep-icon-btn" style={{ width: 22, height: 22 }} aria-label="Clear assigned user"><X size={13} aria-hidden /></button>
                           )}
                         </div>
                       )}
                       {!readOnly && (
                         <div style={{ position: "relative" }}>
+                          <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted, #9ca3af)", pointerEvents: "none" }} aria-hidden />
                           <input
                             type="text"
                             value={stepUserSearch[selectedStep.id] ?? ""}
                             onChange={e => setStepUserSearch(p => ({ ...p, [selectedStep.id]: e.target.value }))}
                             placeholder={pool.length ? `Search ${pool.length} available ${selectedStep.positionName} users…` : "No users available for this role"}
-                            style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--input-border, #d1d5db)", fontSize: 13, boxSizing: "border-box" }}
+                            className="ep-form-input"
+                            style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
                             disabled={pool.length === 0}
                           />
                           {q && filtered.length > 0 && (
-                            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #d1d5db", borderRadius: 6, zIndex: 50, maxHeight: 200, overflowY: "auto", boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }}>
+                            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
                               {filtered.map(u => (
                                 <div key={u.id}
                                   onMouseDown={e => { e.preventDefault(); updateStep(selectedStep.id, { assignedUserId: u.id }); setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" })); }}
-                                  style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f3f4f6", display: "flex", justifyContent: "space-between", alignItems: "center" }}
-                                  onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#f5f7ff"; }}
+                                  style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                                  onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; }}
                                   onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = ""; }}
                                 >
                                   <span style={{ fontWeight: 500 }}>{u.full_name || u.email}</span>
-                                  <span style={{ color: "#9ca3af", fontSize: 11 }}>{u.department || ""}</span>
+                                  <span style={{ color: "var(--muted, #9ca3af)", fontSize: 11 }}>{u.department || ""}</span>
                                 </div>
                               ))}
                             </div>
                           )}
                           {q && filtered.length === 0 && (
-                            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #d1d5db", borderRadius: 6, zIndex: 50, padding: "8px 12px", fontSize: 13, color: "#9ca3af" }}>
+                            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, padding: "8px 12px", fontSize: 13, color: "var(--muted, #9ca3af)" }}>
                               No matches
                             </div>
                           )}
@@ -2280,6 +2200,10 @@ export default function WorkflowBuilder() {
                       <option key={at.code} value={at.code}>{at.label}</option>
                     ))}
                   </select>
+                  <span style={{ display: "block", fontSize: 11, color: "var(--muted, #6b7280)", marginTop: 4 }}>
+                    Set this to "Counter Signer" or "Approver" to let CEO/Exco/Manager requesters pick
+                    their own countersigner/approver for travel advances, replacing this step.
+                  </span>
                 </label>
                 <div className="workflow-checkbox-list">
                   <label className="workflow-checkbox">
@@ -2374,152 +2298,28 @@ export default function WorkflowBuilder() {
 
             {!readOnly && (
               <div style={{ padding: "10px 0 4px" }}>
-                {showAddPosition ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button
-                        type="button"
-                        className={`button small-button ${addPanelMode === "position" ? "" : "button-subtle"}`}
-                        onClick={() => setAddPanelMode("position")}
-                        style={{ flex: 1 }}
-                      >
-                        Position
-                      </button>
-                      <button
-                        type="button"
-                        className={`button small-button ${addPanelMode === "member" ? "" : "button-subtle"}`}
-                        onClick={() => setAddPanelMode("member")}
-                        style={{ flex: 1 }}
-                      >
-                        Team member
-                      </button>
-                    </div>
-
-                    {addPanelMode === "position" ? (
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                        <select
-                          value={addPositionPicker.division}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, division: e.target.value, department: "", section: "", team: "" }))}
-                          style={{ flex: 1, minWidth: 110, fontSize: 13 }}
-                        >
-                          <option value="">All divisions…</option>
-                          {divisionOptionsForPicker.map((d) => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                        <select
-                          value={addPositionPicker.department}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, department: e.target.value, section: "", team: "" }))}
-                          style={{ flex: 1, minWidth: 140, fontSize: 13 }}
-                        >
-                          <option value="">Choose department…</option>
-                          {deptOptionsForAddPicker.map((d) => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                        <select
-                          value={addPositionPicker.section}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, section: e.target.value, team: "" }))}
-                          disabled={sectionOptionsForPosition.length === 0}
-                          style={{ flex: 1, minWidth: 120, fontSize: 13 }}
-                        >
-                          <option value="">All sections…</option>
-                          {sectionOptionsForPosition.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                        <select
-                          value={addPositionPicker.team}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, team: e.target.value, anyTeamMember: e.target.value ? p.anyTeamMember : false }))}
-                          disabled={!addPositionPicker.department || teamOptionsForPosition.length === 0}
-                          style={{ flex: 1, minWidth: 110, fontSize: 13 }}
-                        >
-                          <option value="">All teams…</option>
-                          {teamOptionsForPosition.map((t) => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                        <select
-                          value={addPositionPicker.role}
-                          onChange={(e) => setAddPositionPicker((p) => ({ ...p, role: e.target.value }))}
-                          disabled={addPositionPicker.anyTeamMember}
-                          style={{ fontSize: 13 }}
-                        >
-                          {managerTypes.length > 0 ? (
-                            <>
-                              <optgroup label="Manager Types">
-                                {managerTypes.map((mt) => (
-                                  <option key={mt.id} value={mt.id}>{mt.name}</option>
-                                ))}
-                              </optgroup>
-                              <optgroup label="Other Positions">
-                                {availablePositionTypes
-                                  .filter((p) => p.code !== "HOD" && p.code !== "MANAGER")
-                                  .map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
-                              </optgroup>
-                            </>
-                          ) : (
-                            availablePositionTypes.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)
-                          )}
-                        </select>
-                        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, whiteSpace: "nowrap" }}>
-                          <input
-                            type="checkbox"
-                            checked={addPositionPicker.anyTeamMember}
-                            disabled={!addPositionPicker.team}
-                            onChange={(e) => setAddPositionPicker((p) => ({ ...p, anyTeamMember: e.target.checked }))}
-                          />
-                          Any team member
-                        </label>
-                        <button
-                          type="button"
-                          className="button button-subtle small-button"
-                          onClick={addExtraPosition}
-                          disabled={isRoleDeptScoped(addPositionPicker.role) && !addPositionPicker.department}
-                        >
-                          <Plus size={13} aria-hidden /> Add
-                        </button>
-                        <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(false)}>
-                          <X size={13} aria-hidden />
-                        </button>
-                      </div>
-                    ) : (
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                        <select
-                          value={addMemberPicker.department}
-                          onChange={(e) => setAddMemberPicker({ department: e.target.value, team: "", userId: "" })}
-                          style={{ flex: 1, minWidth: 140, fontSize: 13 }}
-                        >
-                          <option value="">Choose department…</option>
-                          {departmentOptions.map((d) => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                        <select
-                          value={addMemberPicker.team}
-                          onChange={(e) => setAddMemberPicker((p) => ({ ...p, team: e.target.value, userId: "" }))}
-                          disabled={!addMemberPicker.department || teamOptionsForMember.length === 0}
-                          style={{ flex: 1, minWidth: 120, fontSize: 13 }}
-                        >
-                          <option value="">All teams…</option>
-                          {teamOptionsForMember.map((t) => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                        <select
-                          value={addMemberPicker.userId}
-                          onChange={(e) => setAddMemberPicker((p) => ({ ...p, userId: e.target.value }))}
-                          disabled={!addMemberPicker.department || memberOptions.length === 0}
-                          style={{ flex: 1, minWidth: 140, fontSize: 13 }}
-                        >
-                          <option value="">Choose person…</option>
-                          {memberOptions.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
-                        </select>
-                        <button type="button" className="button button-subtle small-button" onClick={addExtraMember} disabled={!addMemberPicker.userId}>
-                          <Plus size={13} aria-hidden /> Add
-                        </button>
-                        <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(false)}>
-                          <X size={13} aria-hidden />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(true)} style={{ width: "100%" }}>
-                    <Plus size={14} aria-hidden /> Add position or team member from another department
-                  </button>
-                )}
+                <button type="button" className="button button-subtle small-button" onClick={() => setShowAddPosition(true)} style={{ width: "100%" }}>
+                  <Plus size={14} aria-hidden /> Add position or team member from another department
+                </button>
               </div>
             )}
           </aside>
+
+          {showAddPosition && (
+            <WorkflowAddParticipantModal
+              positions={participantPositionPool}
+              teams={participantTeamPool}
+              employees={participantEmployeePool}
+              divisionOptions={divisionOptionsForPicker}
+              departmentOptions={departmentOptions}
+              sectionOptions={allSectionNames}
+              teamOptions={allTeamNames}
+              onAddPosition={handleAddParticipantPosition}
+              onAddTeam={handleAddParticipantTeam}
+              onAddEmployee={handleAddParticipantEmployee}
+              onClose={() => setShowAddPosition(false)}
+            />
+          )}
 
           <section className="workflow-panel workflow-validation-card">
             <h3>Workflow Validation</h3>

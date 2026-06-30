@@ -291,6 +291,21 @@ export default function UserManagement() {
     }
   }
 
+  async function handleDeletePermanent(u: UserRow) {
+    const confirmed = await confirmAction({
+      title: `Permanently delete ${u.full_name || u.email}?`,
+      text: "This removes the account completely and cannot be undone. It is blocked if the user has any requests, claims or approval history (deactivate those users instead).",
+      confirmButtonText: "Delete permanently",
+    });
+    if (!confirmed) return;
+    try {
+      await api.deleteUserPermanent(u.id);
+      await load();
+    } catch (e: any) {
+      alert(e.message || "Could not delete user.");
+    }
+  }
+
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
@@ -472,6 +487,15 @@ export default function UserManagement() {
                               style={{ padding: "5px 9px", border: "1px solid #fecaca", borderRadius: 6, background: "#fff5f5", cursor: "pointer", color: "#ef4444", display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}
                             >
                               <Trash2 size={13} /> Deactivate
+                            </button>
+                          )}
+                          {u.role !== "ADMIN" && (
+                            <button
+                              onClick={() => handleDeletePermanent(u)}
+                              title="Permanently delete user (cannot be undone)"
+                              style={{ padding: "5px 9px", border: "1px solid #dc2626", borderRadius: 6, background: "#dc2626", cursor: "pointer", color: "#fff", display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}
+                            >
+                              <Trash2 size={13} /> Delete
                             </button>
                           )}
                         </div>

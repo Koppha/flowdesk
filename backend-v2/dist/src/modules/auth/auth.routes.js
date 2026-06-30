@@ -4,12 +4,12 @@ import { randomUUID } from "crypto";
 import { comparePassword, hashPassword, signToken, requireAuth, requireRole } from "../../lib/auth.js";
 import { env } from "../../config/env.js";
 import { badRequest, forbidden, notFound, unauthorized } from "../../lib/errors.js";
-import { query } from "../../lib/db.js";
+import { query, pool } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
 import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
-import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded } from "../../lib/notifications.js";
+import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
 import { createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, listPermissionGroups, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
 const LoginSchema = z
     .object({
@@ -72,6 +72,25 @@ const CreateUserSchema = z.object({
     role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
     is_active: z.boolean().optional(),
     groups: z.array(z.string().trim().min(1)).optional()
+});
+const CreatePositionVacancySchema = z.object({
+    role: z.enum(["HOD", "MANAGER", "EXCO", "CEO"]),
+    title: z.string().trim().optional(),
+    department: z.string().trim().optional(),
+    division_id: z.string().uuid().nullable().optional(),
+    section_id: z.string().uuid().nullable().optional(),
+    team_id: z.string().uuid().nullable().optional(),
+    notes: z.string().trim().optional()
+});
+const FillPositionVacancySchema = z.object({
+    existing_user_id: z.string().uuid().optional(),
+    email: z.string().trim().optional(),
+    full_name: z.string().trim().optional(),
+    employee_no: z.string().trim().optional(),
+    title: z.string().trim().optional(),
+    employment_type: z.string().trim().optional()
+}).refine((data) => !!data.existing_user_id || !!data.email, {
+    message: "Either existing_user_id or email is required"
 });
 const UpdateUserSchema = z.object({
     full_name: z.string().trim().min(1).optional(),
@@ -869,7 +888,26 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
         return next(err);
     }
 });
-authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req, res, next) => {
+// Whether the current user is assigned to at least one active workflow step
+// with "Allow Delegation" enabled — gates self-service delegation visibility.
+authRouter.get("/delegations/eligibility", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req, res, next) => {
+    try {
+        const rows = await query(`SELECT EXISTS (
+         SELECT 1
+           FROM workflow_steps ws
+           JOIN workflows w ON w.id = ws.workflow_id
+          WHERE ws.assigned_user_id = $1
+            AND ws.allow_delegation = true
+            AND ws.is_active = true
+            AND w.status = 'ACTIVE'
+       ) AS eligible`, [req.user.userId]);
+        return res.json({ eligible: rows[0]?.eligible ?? false });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req, res, next) => {
     try {
         const isAdmin = req.user.role === "ADMIN";
         const condition = isAdmin ? `` : `WHERE md.manager_id = $1`;
@@ -896,27 +934,35 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req, re
         return next(err);
     }
 });
-authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req, res, next) => {
+authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req, res, next) => {
     try {
         const parsed = CreateDelegationSchema.safeParse(req.body);
         if (!parsed.success)
             throw badRequest("Invalid delegation payload", parsed.error.flatten());
-        const managerId = req.user.role === "MANAGER" ? req.user.userId : parsed.data.manager_id;
+        const managerId = req.user.role !== "ADMIN" ? req.user.userId : parsed.data.manager_id;
         if (!managerId)
             throw badRequest("Manager is required for delegation");
         const users = await query(`SELECT id, role, department, full_name, email FROM users WHERE id IN ($1, $2)`, [managerId, parsed.data.delegate_id]);
         const manager = users.find((user) => user.id === managerId);
         const delegate = users.find((user) => user.id === parsed.data.delegate_id);
-        if (!manager || manager.role !== "MANAGER")
-            throw badRequest("Manager user not found or not a manager");
+        if (!manager || !["MANAGER", "EXCO", "CEO"].includes(manager.role)) {
+            throw badRequest("User must be a Manager, Exco member, or CEO to delegate");
+        }
         if (!delegate)
             throw badRequest("Delegate user not found");
         if (delegate.id === manager.id)
             throw badRequest("Delegate cannot be the same user");
-        const managerDept = String(manager.department || "").trim();
-        const delegateDept = String(delegate.department || "").trim();
-        if (!managerDept || managerDept !== delegateDept) {
-            throw badRequest("Delegate must be in the same department as the manager");
+        // CEO is an org-wide role with no single department, so any active delegate
+        // is acceptable; Manager/Exco delegations stay scoped to their own department.
+        let managerDept = String(manager.department || "").trim();
+        if (manager.role !== "CEO") {
+            const delegateDept = String(delegate.department || "").trim();
+            if (!managerDept || managerDept !== delegateDept) {
+                throw badRequest("Delegate must be in the same department as the manager");
+            }
+        }
+        else {
+            managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
         }
         const rows = await query(`INSERT INTO manager_delegations (id, manager_id, delegate_id, department, from_date, to_date)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -938,13 +984,13 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER"]), async (req, r
         return next(err);
     }
 });
-authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER"]), async (req, res, next) => {
+authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req, res, next) => {
     try {
         const delegation = (await query(`SELECT id, manager_id, delegate_id, department FROM manager_delegations WHERE id=$1`, [req.params.id]))[0];
         if (!delegation)
             throw notFound();
-        if (req.user.role === "MANAGER" && delegation.manager_id !== req.user.userId) {
-            throw forbidden("Managers can only end their own delegations");
+        if (req.user.role !== "ADMIN" && delegation.manager_id !== req.user.userId) {
+            throw forbidden("You can only end your own delegations");
         }
         const [rows, users] = await Promise.all([
             query(`UPDATE manager_delegations
@@ -1002,6 +1048,137 @@ authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "EXCO"]), as
             });
         }
         return res.json(rows[0]);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// Vacant positions — a Manager/HOD/EXCO/CEO seat earmarked before anyone is
+// assigned. Listed separately from `users` and merged client-side; filling
+// one promotes an existing user or creates a new account via the same paths
+// as the routes above, then stamps the vacancy filled.
+authRouter.get("/position-vacancies", requireAuth, async (req, res, next) => {
+    try {
+        const role = String(req.query.role || "").trim();
+        const rows = await query(`SELECT pv.*, d.name AS division_name, s.name AS section_name, t.name AS team_name
+         FROM position_vacancies pv
+         LEFT JOIN divisions d ON d.id = pv.division_id
+         LEFT JOIN sections s ON s.id = pv.section_id
+         LEFT JOIN teams t ON t.id = pv.team_id
+        WHERE pv.filled_by_user_id IS NULL
+          AND ($1 = '' OR pv.role = $1)
+        ORDER BY pv.created_at DESC`, [role]);
+        return res.json(rows);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/position-vacancies", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const parsed = CreatePositionVacancySchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid position vacancy payload", parsed.error.flatten());
+        const rows = await query(`INSERT INTO position_vacancies (role, title, department, division_id, section_id, team_id, notes, created_by_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING *`, [
+            parsed.data.role,
+            parsed.data.title || null,
+            parsed.data.department || null,
+            parsed.data.division_id || null,
+            parsed.data.section_id || null,
+            parsed.data.team_id || null,
+            parsed.data.notes || null,
+            req.user.userId
+        ]);
+        return res.status(201).json(rows[0]);
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.delete("/position-vacancies/:id", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const rows = await query(`DELETE FROM position_vacancies WHERE id=$1 AND filled_by_user_id IS NULL RETURNING id`, [req.params.id]);
+        if (!rows[0])
+            throw notFound();
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+authRouter.post("/position-vacancies/:id/fill", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req, res, next) => {
+    try {
+        const vacancyRows = await query(`SELECT id, role, title, department, division_id, section_id, team_id FROM position_vacancies WHERE id=$1 AND filled_by_user_id IS NULL`, [req.params.id]);
+        const vacancy = vacancyRows[0];
+        if (!vacancy)
+            throw notFound();
+        const parsed = FillPositionVacancySchema.safeParse(req.body);
+        if (!parsed.success)
+            throw badRequest("Invalid fill payload", parsed.error.flatten());
+        if (vacancy.role === "CEO" && req.user.role !== "ADMIN") {
+            throw forbidden("Only system administrators can fill a CEO position");
+        }
+        let userId;
+        let userFullName;
+        let userEmail;
+        if (parsed.data.existing_user_id) {
+            const existing = await query(`SELECT id, department, role FROM users WHERE id=$1`, [parsed.data.existing_user_id]);
+            if (!existing[0])
+                throw badRequest("User not found");
+            assertRoleAssignmentAllowed(req, existing[0], vacancy.role);
+            const updated = await query(`UPDATE users
+            SET role=$2,
+                department=COALESCE($3, department),
+                division_id=COALESCE($4, division_id),
+                section_id=COALESCE($5, section_id),
+                team_id=COALESCE($6, team_id),
+                updated_at=now()
+          WHERE id=$1
+        RETURNING id, full_name, email, department, role`, [parsed.data.existing_user_id, vacancy.role, vacancy.department, vacancy.division_id, vacancy.section_id, vacancy.team_id]);
+            const u = updated[0];
+            userId = u.id;
+            userFullName = u.full_name;
+            userEmail = u.email;
+            if (vacancy.role !== existing[0].role) {
+                void notifyUserRoleChanged({ userId: u.id, email: u.email, fullName: u.full_name, role: u.role, sectionOrDepartment: u.department });
+            }
+        }
+        else {
+            if (!parsed.data.email)
+                throw badRequest("email is required to create a new account");
+            const email = normalizeEmailForStorage(parsed.data.email);
+            const existingEmail = await query(`SELECT id FROM users WHERE lower(email)=lower($1)`, [email]);
+            if (existingEmail[0])
+                throw badRequest("A user with that email already exists");
+            const pwd = randomUUID();
+            const hash = await hashPassword(pwd);
+            const employeeNo = parsed.data.employee_no?.trim() || null;
+            const title = parsed.data.title || vacancy.title || null;
+            const employmentType = parsed.data.employment_type ?? "PERMANENT";
+            const profileCompleted = Boolean(parsed.data.full_name &&
+                vacancy.department &&
+                (vacancy.role === "EXCO" || employmentType !== "PERMANENT" || employeeNo));
+            const created = await query(`INSERT INTO users (id, employee_no, full_name, title, department, division_id, section_id, team_id, email, role, password_hash, is_active, employment_type, profile_completed, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$13,now(),now())
+       RETURNING id, full_name, email, department, role`, [randomUUID(), employeeNo, parsed.data.full_name ?? null, title, vacancy.department, vacancy.division_id, vacancy.section_id, vacancy.team_id, email, vacancy.role, hash, employmentType, profileCompleted]);
+            const u = created[0];
+            userId = u.id;
+            userFullName = u.full_name;
+            userEmail = u.email;
+            await setUserGroups(userId, [vacancy.role]);
+            await notifyUserOnboarded({ userId, email, fullName: u.full_name, role: vacancy.role, sectionOrDepartment: u.department, temporaryPassword: pwd });
+        }
+        await query(`UPDATE position_vacancies SET filled_by_user_id=$2, filled_at=now() WHERE id=$1`, [vacancy.id, userId]);
+        void notifyPositionAssigned({
+            assigneeName: userFullName,
+            assigneeEmail: userEmail,
+            positionLabel: vacancy.title || vacancy.role,
+            groupLabel: vacancy.department || "the organisation",
+            groupType: "Department"
+        });
+        return res.json({ ok: true, user_id: userId });
     }
     catch (err) {
         return next(err);
@@ -1158,6 +1335,95 @@ authRouter.delete("/users/:id", requireRole(["ADMIN"]), async (req, res, next) =
         if (rows[0].role === "ADMIN")
             throw forbidden("Cannot deactivate admin accounts");
         await query(`UPDATE users SET is_active=false, updated_at=now() WHERE id=$1`, [req.params.id]);
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// Permanently delete a user (hard delete). Blocked when the user has real
+// transactional/financial/audit records — those would be destroyed, so the
+// admin is told to deactivate instead. Otherwise operational artifacts are
+// removed, every disassociable reference is nulled, and the row is deleted.
+authRouter.delete("/users/:id/permanent", requireRole(["ADMIN"]), async (req, res, next) => {
+    try {
+        const id = req.params.id;
+        if (id === req.user.userId)
+            throw badRequest("You cannot delete your own account");
+        const existing = await query(`SELECT role::text AS role FROM users WHERE id=$1`, [id]);
+        if (!existing[0])
+            throw notFound("User not found");
+        if (existing[0].role === "ADMIN")
+            throw forbidden("Cannot permanently delete admin accounts");
+        // Records whose deletion would destroy financial / approval / audit
+        // history — refuse if any exist.
+        const blockers = [
+            ["advance_requests", "requester_id = $1 OR created_by_id = $1"],
+            ["clearance_claims", "claimant_id = $1"],
+            ["accommodation_requests", "requester_id = $1 OR created_by_id = $1"],
+            ["accommodation_quotations", "quotation_uploaded_by_id = $1"],
+            ["approvals", "approver_id = $1"],
+            ["attendance_records", "employee_id = $1 OR compiled_by_id = $1"],
+            ["custom_request_submissions", "requester_id = $1"],
+            ["overtime_requests", "employee_id = $1 OR created_by_id = $1"],
+            ["overtime_claims", "employee_id = $1 OR created_by_id = $1"]
+        ];
+        const found = [];
+        for (const [table, where] of blockers) {
+            const rows = await query(`SELECT count(*)::text AS n FROM ${table} WHERE ${where}`, [id]);
+            if (Number(rows[0].n) > 0)
+                found.push(`${table.replace(/_/g, " ")} (${rows[0].n})`);
+        }
+        if (found.length) {
+            throw badRequest(`This user has records that can't be permanently deleted: ${found.join(", ")}. Deactivate the user instead to preserve history.`);
+        }
+        // Nullable references that don't auto-clear on delete (NO ACTION) — set
+        // them to NULL so the user row can be removed without losing the parent rows.
+        const nullables = [
+            ["accommodation_hotels", ["created_by_id"]],
+            ["accommodation_requests", ["quotation_uploaded_by_id"]],
+            ["advance_requests", ["created_by_id"]],
+            ["audit_log", ["actor_id"]],
+            ["clearance_claims", ["assignee_user_id"]],
+            ["custom_request_attachments", ["uploaded_by_id"]],
+            ["custom_request_types", ["created_by_id"]],
+            ["departments", ["exco_user_id", "hod_user_id", "manager_user_id"]],
+            ["overtime_claims", ["manager_authorised_by_id"]],
+            ["overtime_requests", ["cto_approved_by_id", "hod_approved_by_id", "rejected_by_id", "supervisor_approved_by_id"]],
+            ["position_vacancies", ["created_by_id", "filled_by_user_id"]],
+            ["reporting_lines", ["created_by_id", "manager_id"]],
+            ["request_type_permissions", ["created_by_id"]],
+            ["sections", ["exco_user_id", "hod_user_id", "manager_user_id"]],
+            ["teams", ["leader_user_id"]],
+            ["travel_locations", ["created_by_id"]],
+            ["travel_types", ["created_by_id"]],
+            ["workflow_rules", ["additional_assigned_user_id"]],
+            ["workflow_steps", ["assigned_user_id"]],
+            ["workflows", ["created_by_id"]]
+        ];
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            // Operational artifacts (no history value) — safe to drop outright.
+            await client.query(`DELETE FROM email_action_tokens WHERE user_id=$1`, [id]);
+            await client.query(`DELETE FROM manager_delegations WHERE manager_id=$1 OR delegate_id=$1`, [id]);
+            for (const [table, cols] of nullables) {
+                const sets = cols.map((col) => `${col} = NULL`).join(", ");
+                const where = cols.map((col) => `${col} = $1`).join(" OR ");
+                await client.query(`UPDATE ${table} SET ${sets} WHERE ${where}`, [id]);
+            }
+            // CASCADE FKs (reporting_lines.employee_id, request_type_permissions.user_id,
+            // user_permission_groups.user_id) are removed automatically.
+            await client.query(`DELETE FROM users WHERE id=$1`, [id]);
+            await client.query("COMMIT");
+        }
+        catch (e) {
+            await client.query("ROLLBACK");
+            throw e;
+        }
+        finally {
+            client.release();
+        }
         return res.json({ ok: true });
     }
     catch (err) {

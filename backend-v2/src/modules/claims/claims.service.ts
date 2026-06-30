@@ -76,6 +76,8 @@ export async function getClaimById(id: string) {
     claimant_id: string;
     status: ClaimStatus;
     claim_total: string;
+    balance_amount: string;
+    reason_for_overspend: string | null;
     linked_advance_id: string | null;
     workflow_id: string | null;
     workflow_step_order: number | null;
@@ -83,7 +85,7 @@ export async function getClaimById(id: string) {
     claimant_department: string | null;
     claimant_section: string | null;
   }>(
-    `SELECT c.id, c.claimant_id, c.status, c.claim_total, c.linked_advance_id,
+    `SELECT c.id, c.claimant_id, c.status, c.claim_total, c.balance_amount, c.reason_for_overspend, c.linked_advance_id,
             c.workflow_id, c.workflow_step_order, c.approval_chain,
             u.department AS claimant_department,
             s.name AS claimant_section

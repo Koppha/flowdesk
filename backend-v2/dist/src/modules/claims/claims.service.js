@@ -41,7 +41,7 @@ export function chainStepToClaimStatus(chain, stepIndex) {
     return CLAIM_STATUS_PROGRESSION[stepIndex] ?? "FINANCE_VERIFIED";
 }
 export async function getClaimById(id) {
-    const rows = await query(`SELECT c.id, c.claimant_id, c.status, c.claim_total, c.linked_advance_id,
+    const rows = await query(`SELECT c.id, c.claimant_id, c.status, c.claim_total, c.balance_amount, c.reason_for_overspend, c.linked_advance_id,
             c.workflow_id, c.workflow_step_order, c.approval_chain,
             u.department AS claimant_department,
             s.name AS claimant_section

@@ -34,6 +34,7 @@ import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, form
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import {
+  ArrowRightLeft,
   BarChart3,
   Bell,
   BriefcaseBusiness,
@@ -45,6 +46,7 @@ import {
   ChevronUp,
   ClipboardList,
   Clock3,
+  DollarSign,
   Download,
   Edit3,
   Eye,
@@ -53,6 +55,7 @@ import {
   GitBranch,
   Home,
   Hotel,
+  Info,
   Lock,
   LogOut,
   Mail,
@@ -66,6 +69,7 @@ import {
   Star,
   Sun,
   Trash2,
+  Upload,
   User,
   UserRoundCheck,
   Users,
@@ -87,6 +91,9 @@ type ClearanceTripRow = {
   dinner: number;
   other_expenses: number;
   purpose: string;
+  // UI-only: whether this row is in inline-edit mode (stripped before the
+  // payload is sent — persistClearance maps explicit fields only).
+  __editing?: boolean;
 };
 
 type TravelRow = {
@@ -332,6 +339,9 @@ export default function App() {
   const [featurePermSaving, setFeaturePermSaving] = useState(false);
   const [delegations, setDelegations] = useState<any[]>([]);
   const [delegationsLoading, setDelegationsLoading] = useState(false);
+  // Whether the current (non-ADMIN) user is assigned to any active workflow
+  // step with "Allow Delegation" on — gates self-service delegation visibility.
+  const [delegationEligible, setDelegationEligible] = useState(false);
   const [orgAssignModal, setOrgAssignModal] = useState<{ userId: string; userName: string } | null>(null);
   const [orgAssignSelection, setOrgAssignSelection] = useState<OrgSelection>({ divisionId: null, divisionName: null, department: null, departmentId: null, sectionId: null, sectionName: null, teamId: null, teamName: null });
   const [orgAssignSaving, setOrgAssignSaving] = useState(false);
@@ -583,6 +593,12 @@ export default function App() {
   const [clearanceTrips, setClearanceTrips] = useState<ClearanceTripRow[]>([emptyClearanceTripRow()]);
   const [clearanceReceipts, setClearanceReceipts] = useState<any[]>([]);
   const [clearanceSourceLines, setClearanceSourceLines] = useState<any[]>([]);
+  const [clearanceSettlementMethod, setClearanceSettlementMethod] = useState("");
+  const [clearanceSettlementEcocashNumber, setClearanceSettlementEcocashNumber] = useState("");
+  const [clearanceSettlementBankName, setClearanceSettlementBankName] = useState("");
+  const [clearanceSettlementBankAccountNumber, setClearanceSettlementBankAccountNumber] = useState("");
+  const [clearanceSettlementBankBranch, setClearanceSettlementBankBranch] = useState("");
+  const [clearanceReasonForOverspend, setClearanceReasonForOverspend] = useState("");
 
   function emptyTravelRow(date?: string, startDistrict = ""): TravelRow {
     return {
@@ -670,22 +686,21 @@ export default function App() {
   );
   const selectedClearanceAdvance = clearableTravelAdvances.find((a) => a.id === clearanceLinkedAdvanceId) || null;
   const clearanceAdvanceAmount = Number(selectedClearanceAdvance?.approved_total || 0);
-  const clearanceTotals = clearanceSourceLines.reduce(
+  // Actual expenditure is captured per trip line by the employee (Meals /
+  // Transport / Other) so it can exceed the advance — the variance against the
+  // advance drives the overspend / underspend settlement below.
+  const clearanceTotals = clearanceTrips.reduce(
     (acc, trip) => {
-      const meals = Number(trip.line_total || 0) || Number(trip.meals || 0) || Number(trip.lunch || 0) + Number(trip.dinner || 0);
-      const mealCount = Number(trip.meals_count || 0) || (mealValueNumber > 0 ? meals / mealValueNumber : 0);
-      const lineTotal =
-        meals +
-        (Number(trip.other_expenses) || 0) +
-        (Number(trip.petrol_allowance) || 0);
-      acc.petrol += Number(trip.petrol_allowance) || 0;
-      acc.mealCount += mealCount;
+      const meals = Number(trip.lunch) || 0;
+      const transport = Number(trip.petrol_allowance) || 0;
+      const other = Number(trip.other_expenses) || 0;
       acc.meals += meals;
-      acc.other += Number(trip.other_expenses) || 0;
-      acc.total += lineTotal;
+      acc.transport += transport;
+      acc.other += other;
+      acc.total += meals + transport + other;
       return acc;
     },
-    { petrol: 0, mealCount: 0, meals: 0, other: 0, total: 0 }
+    { meals: 0, transport: 0, other: 0, total: 0 }
   );
   const clearanceBalance = Number((clearanceAdvanceAmount - clearanceTotals.total).toFixed(2));
 
@@ -789,7 +804,7 @@ export default function App() {
   const roleName = displayRoleLabel(role);
   const FEATURE_DEFAULTS: Record<string, string[]> = {
     user_management:        ["ADMIN", "MANAGER", "EXCO"],
-    roles_permissions:      ["ADMIN", "MANAGER", "EXCO"],
+    roles_permissions:      ["ADMIN", "MANAGER", "EXCO", "CEO"],
     travel_setup:           ["ADMIN", "MANAGER"],
     org_structure:          ["ADMIN"],
     team_roster:            ["ADMIN"],
@@ -913,8 +928,9 @@ export default function App() {
       return;
     }
     setAdvanceWorkflowFound(null);
-    // Pass the selected advance sub-type so the backend can prefer a sub-type-specific workflow
-    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined)
+    // Pass the selected advance sub-type (and requester role) so the backend can
+    // prefer a sub-type-specific and/or role-restricted workflow.
+    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, role)
       .then((result: any) => {
         const chain: any[] = Array.isArray(result?.chain) ? result.chain : [];
         const filtered = chain.filter((s: any) => s.position_type_code !== "EMPLOYEE");
@@ -940,7 +956,7 @@ export default function App() {
         setAdvanceWorkflowFound(false);
         loadCustomChainData();
       });
-  }, [page, profile?.department, profile?.section_name, advanceType]);
+  }, [page, profile?.department, profile?.section_name, advanceType, role]);
 
   async function refresh() {
     setError(null);
@@ -1098,7 +1114,23 @@ export default function App() {
     api.advanceDetail(clearanceLinkedAdvanceId)
       .then((detail: any) => {
         if (cancelled) return;
-        setClearanceSourceLines(detail.lines || []);
+        const lines = detail.lines || [];
+        setClearanceSourceLines(lines);
+        // Seed editable actual-expenditure rows from the advance's planned
+        // lines (meals pre-filled, transport/other start at 0). When editing
+        // an existing claim, populateClearanceForm overrides this with saved
+        // actuals instead.
+        if (!editingClaimId) {
+          setClearanceTrips(
+            lines.length
+              ? lines.map((line: any) => ({
+                  ...emptyClearanceTripRow(normalizeDateInputValue(line.line_date)),
+                  from_place: line.location || "",
+                  lunch: advanceLineAmount(line)
+                }))
+              : [emptyClearanceTripRow()]
+          );
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -1481,6 +1513,16 @@ export default function App() {
       void loadDelegations();
     }
   }, [delegationsOpen]);
+
+  // ADMIN manages delegations on others' behalf regardless of this check;
+  // for self-service users, only show the delegation option once they're
+  // assigned to a step with "Allow Delegation" on.
+  useEffect(() => {
+    if (page !== "ROLES_PERMISSIONS" || role === "ADMIN") return;
+    api.delegationEligibility()
+      .then((r: any) => setDelegationEligible(!!r?.eligible))
+      .catch(() => setDelegationEligible(false));
+  }, [page, role]);
 
   async function updateUserDepartment(userId: string, department: string, divisionId?: string | null, sectionId?: string | null, teamId?: string | null) {
     try {
@@ -2299,6 +2341,12 @@ export default function App() {
     setClearanceTrips([emptyClearanceTripRow()]);
     setClearanceReceipts([]);
     setClearanceSourceLines([]);
+    setClearanceSettlementMethod("");
+    setClearanceSettlementEcocashNumber("");
+    setClearanceSettlementBankName("");
+    setClearanceSettlementBankAccountNumber("");
+    setClearanceSettlementBankBranch("");
+    setClearanceReasonForOverspend("");
   }
 
   function populateClearanceForm(detail: any) {
@@ -2311,17 +2359,60 @@ export default function App() {
     setClearanceEngineCc(detail.engine_cc || "");
     setClearanceVehicleRate(detail.vehicle_rate != null ? String(detail.vehicle_rate) : "");
     setClearanceLinkedAdvanceId(detail.linked_advance_id || "");
-    setClearanceTrips([emptyClearanceTripRow()]);
+    setClearanceTrips(
+      Array.isArray(detail.trips) && detail.trips.length
+        ? detail.trips.map((t: any) => ({
+            ...emptyClearanceTripRow(normalizeDateInputValue(t.trip_date)),
+            from_place: t.from_place || "",
+            lunch: Number(t.lunch || 0),
+            petrol_allowance: Number(t.petrol_allowance || 0),
+            other_expenses: Number(t.other_expenses || 0),
+            purpose: t.purpose || ""
+          }))
+        : [emptyClearanceTripRow()]
+    );
     setClearanceReceipts(detail.receipts || []);
+    setClearanceSettlementMethod(detail.settlement_method_requested || "");
+    setClearanceSettlementEcocashNumber(detail.settlement_ecocash_number || "");
+    setClearanceSettlementBankName(detail.settlement_bank_name || "");
+    setClearanceSettlementBankAccountNumber(detail.settlement_bank_account_number || "");
+    setClearanceSettlementBankBranch(detail.settlement_bank_branch || "");
+    setClearanceReasonForOverspend(detail.reason_for_overspend || "");
   }
 
-  function buildClearancePayload() {
+  function updateClearanceTrip(index: number, patch: Partial<ClearanceTripRow>) {
+    setClearanceTrips((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  function addClearanceTrip() {
+    setClearanceTrips((prev) => [...prev, { ...emptyClearanceTripRow(), __editing: true }]);
+  }
+
+  function toggleClearanceTripEdit(index: number) {
+    setClearanceTrips((prev) => prev.map((row, i) => (i === index ? { ...row, __editing: !row.__editing } : row)));
+  }
+
+  function removeClearanceTrip(index: number) {
+    setClearanceTrips((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+  }
+
+  function buildClearancePayload(options?: { requireSettlementDetails?: boolean }) {
+    const requireSettlementDetails = Boolean(options?.requireSettlementDetails);
     const monthValue = clearanceMonth.trim();
     const dutyStationValue = clearanceDutyStation.trim();
     const projectNumberValue = clearanceProjectNumber.trim();
     const vehicleRegValue = clearanceVehicleReg.trim();
     const vehicleTypeValue = clearanceVehicleType.trim();
     const engineCcValue = clearanceEngineCc.trim();
+    const settlementEcocashValue = clearanceSettlementEcocashNumber.trim();
+    const normalizedSettlementEcocash = settlementEcocashValue.replace(/[\s-]/g, "");
+    const settlementBankNameValue = clearanceSettlementBankName.trim();
+    const settlementBankAccountValue = clearanceSettlementBankAccountNumber.trim();
+    const settlementBankBranchValue = clearanceSettlementBankBranch.trim();
+    const ecocashPattern = /^\+?\d{7,15}$/;
+    const bankNamePattern = /^[A-Za-z0-9 .,&'-]{2,60}$/;
+    const bankAccountPattern = /^[A-Za-z0-9-]{4,34}$/;
+    const branchPattern = /^[A-Za-z0-9 .,'/-]{2,60}$/;
 
     if (!clearanceLinkedAdvanceId) {
       alert("Select the paid travel advance being cleared.");
@@ -2335,12 +2426,58 @@ export default function App() {
       alert("Month is required.");
       return null;
     }
-    if (clearanceSourceLines.length < 1) {
-      alert("No advance trip lines were found to clear.");
+    if (clearanceTrips.length < 1) {
+      alert("Add at least one trip line with the actual expenditure.");
       return null;
     }
     if (clearanceTotals.total <= 0) {
-      alert("Total expenditure must be greater than 0.");
+      alert("Total actual expenditure must be greater than 0.");
+      return null;
+    }
+    if (requireSettlementDetails && clearanceBalance !== 0 && !clearanceSettlementMethod) {
+      alert("Please select a settlement method before submitting.");
+      return null;
+    }
+    if (requireSettlementDetails && clearanceSettlementMethod === "ECOCASH") {
+      if (!settlementEcocashValue) {
+        alert("EcoCash number is required for settlement.");
+        return null;
+      }
+      if (!ecocashPattern.test(normalizedSettlementEcocash)) {
+        alert("EcoCash number format is invalid.");
+        return null;
+      }
+    }
+    if (requireSettlementDetails && clearanceSettlementMethod === "BANK") {
+      if (!settlementBankNameValue) {
+        alert("Bank is required for settlement.");
+        return null;
+      }
+      if (!bankNamePattern.test(settlementBankNameValue)) {
+        alert("Bank name format is invalid.");
+        return null;
+      }
+      if (!settlementBankAccountValue) {
+        alert("Bank account number is required for settlement.");
+        return null;
+      }
+      if (!bankAccountPattern.test(settlementBankAccountValue)) {
+        alert("Bank account number format is invalid.");
+        return null;
+      }
+      if (!settlementBankBranchValue) {
+        alert("Bank branch is required for settlement.");
+        return null;
+      }
+      if (!branchPattern.test(settlementBankBranchValue)) {
+        alert("Bank branch format is invalid.");
+        return null;
+      }
+    }
+    // Negative balance means actual expenditure exceeded the advance (the
+    // company owes the employee) — an explanation is required before submit.
+    if (requireSettlementDetails && clearanceBalance < 0 && !clearanceReasonForOverspend.trim()) {
+      alert("Please provide a reason for the overspend before submitting.");
       return null;
     }
 
@@ -2352,12 +2489,18 @@ export default function App() {
       vehicle_type: vehicleTypeValue || undefined,
       engine_cc: engineCcValue || undefined,
       vehicle_rate: clearanceVehicleRate ? Number(clearanceVehicleRate) || 0 : undefined,
-      linked_advance_id: clearanceLinkedAdvanceId
+      linked_advance_id: clearanceLinkedAdvanceId,
+      settlement_method_requested: clearanceBalance !== 0 ? (clearanceSettlementMethod || undefined) : undefined,
+      settlement_ecocash_number: clearanceBalance !== 0 && clearanceSettlementMethod === "ECOCASH" ? normalizedSettlementEcocash : undefined,
+      settlement_bank_name: clearanceBalance !== 0 && clearanceSettlementMethod === "BANK" ? settlementBankNameValue : undefined,
+      settlement_bank_account_number: clearanceBalance !== 0 && clearanceSettlementMethod === "BANK" ? settlementBankAccountValue : undefined,
+      settlement_bank_branch: clearanceBalance !== 0 && clearanceSettlementMethod === "BANK" ? settlementBankBranchValue : undefined,
+      reason_for_overspend: clearanceBalance < 0 ? (clearanceReasonForOverspend.trim() || undefined) : undefined
     };
   }
 
   async function persistClearance(submitAfterSave: boolean, options?: { silent?: boolean; refreshAfterSave?: boolean }) {
-    const payload = buildClearancePayload();
+    const payload = buildClearancePayload({ requireSettlementDetails: submitAfterSave });
     if (!payload) return null;
     const silent = Boolean(options?.silent);
     const refreshAfterSave = options?.refreshAfterSave ?? true;
@@ -2371,6 +2514,26 @@ export default function App() {
         claimId = created.id;
         setEditingClaimId(claimId);
       }
+
+      // Persist the employee's actual per-trip expenditure (overrides the
+      // advance-synced lines so claim_total/balance reflect what was really
+      // spent). Must run after create/update and before submit.
+      await api.updateClaimTrips(claimId!, {
+        trips: clearanceTrips.map((row) => ({
+          trip_date: row.trip_date,
+          from_place: row.from_place || undefined,
+          to_place: row.to_place || undefined,
+          depart_time: row.depart_time || undefined,
+          arrive_time: row.arrive_time || undefined,
+          km_travelled: Number(row.km_travelled) || 0,
+          petrol_allowance: Number(row.petrol_allowance) || 0,
+          breakfast: Number(row.breakfast) || 0,
+          lunch: Number(row.lunch) || 0,
+          dinner: Number(row.dinner) || 0,
+          other_expenses: Number(row.other_expenses) || 0,
+          purpose: row.purpose || undefined
+        }))
+      });
 
       if (submitAfterSave) {
         await api.submitClaim(claimId!);
@@ -2390,19 +2553,32 @@ export default function App() {
     }
   }
 
-  async function uploadClearanceReceipt(file: File) {
+  async function uploadClearanceReceipts(files: File[], category?: string) {
+    if (files.length === 0) return;
+
     try {
       const hadDraft = Boolean(editingClaimId);
       const claimId = editingClaimId || await persistClearance(false, { silent: true, refreshAfterSave: false });
       if (!claimId) return;
-      const form = new FormData();
-      form.append("file", file);
-      const result: any = await api.uploadClaimReceipt(claimId, form);
-      setClearanceReceipts((current) => [...current, result.receipt]);
+
+      const uploadedReceipts: any[] = [];
+      for (const file of files) {
+        const form = new FormData();
+        form.append("file", file);
+        if (category) form.append("category", category);
+        const result: any = await api.uploadClaimReceipt(claimId, form);
+        if (result?.receipt) uploadedReceipts.push(result.receipt);
+      }
+
+      if (uploadedReceipts.length > 0) {
+        setClearanceReceipts((current) => [...current, ...uploadedReceipts]);
+      }
       await refresh();
-      alert(hadDraft ? "Receipt uploaded." : "Draft saved and receipt uploaded.");
+      const noun = category ? "document" : "receipt";
+      const plural = files.length === 1 ? noun : `${noun}s`;
+      alert(hadDraft ? `${plural[0].toUpperCase()}${plural.slice(1)} uploaded.` : `Draft saved and ${plural} uploaded.`);
     } catch (e: any) {
-      alert("Error uploading receipt: " + e.message);
+      alert("Error uploading file: " + e.message);
     }
   }
 
@@ -3135,13 +3311,13 @@ export default function App() {
               </select>
 
               <label>HOD</label>
-              {leadershipSelect(leadershipUsers.hods.length ? leadershipUsers.hods : leadershipUsers.managers, editingDepartmentObj.hod_user_id || '', 'No HOD', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, hod_user_id: v || null }))}
+              {leadershipSelect(leadershipUsers.hods.length ? leadershipUsers.hods : leadershipUsers.managers, editingDepartmentObj.hod_user_id || '', 'Vacant — not yet assigned', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, hod_user_id: v || null }))}
 
               <label>Manager</label>
-              {leadershipSelect(leadershipUsers.managers, editingDepartmentObj.manager_user_id || '', 'No manager', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, manager_user_id: v || null }))}
+              {leadershipSelect(leadershipUsers.managers, editingDepartmentObj.manager_user_id || '', 'Vacant — not yet assigned', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, manager_user_id: v || null }))}
 
               <label>EXCO Member</label>
-              {leadershipSelect(leadershipUsers.exco, editingDepartmentObj.exco_user_id || '', 'No EXCO member', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, exco_user_id: v || null }))}
+              {leadershipSelect(leadershipUsers.exco, editingDepartmentObj.exco_user_id || '', 'Vacant — not yet assigned', (v: string) => setEditingDepartmentObj({ ...editingDepartmentObj, exco_user_id: v || null }))}
 
               <label>
                 <input type="checkbox" checked={!!editingDepartmentObj.active} onChange={(e) => setEditingDepartmentObj({ ...editingDepartmentObj, active: e.target.checked })} /> Active
@@ -3165,7 +3341,7 @@ export default function App() {
               <input value={editingSectionObj.name} onChange={(e) => setEditingSectionObj({ ...editingSectionObj, name: e.target.value })} />
 
               <label>EXCO Member</label>
-              {leadershipSelect(leadershipUsers.exco, editingSectionObj.exco_user_id || '', 'No EXCO member', (v: string) => setEditingSectionObj({ ...editingSectionObj, exco_user_id: v || null }))}
+              {leadershipSelect(leadershipUsers.exco, editingSectionObj.exco_user_id || '', 'Vacant — not yet assigned', (v: string) => setEditingSectionObj({ ...editingSectionObj, exco_user_id: v || null }))}
 
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
                 <button className="button small-button" onClick={cancelEditSection}>Cancel</button>
@@ -3299,6 +3475,7 @@ export default function App() {
                 </div>
               </div>
 
+              {(role === "ADMIN" || delegationEligible) && (
               <SettingsAccordion
                 title="Manager Delegations"
                 subtitle="Create a delegation assignment and track active delegations."
@@ -3318,13 +3495,15 @@ export default function App() {
                   </div>
                   <div className="ep-panel-body">
                     <div className="ep-form-row" style={{ marginBottom: 0 }}>
+                      {/* Everyone (including ADMIN) can only delegate their own approval
+                          authority — never set up a delegation on someone else's behalf. */}
                       {role === "ADMIN" ? (
                         <>
                           <div className="ep-form-group">
                             <label>Manager <span className="ep-required">*</span></label>
                             <select className="ep-form-select" value={delegationManagerId} onChange={(e) => setDelegationManagerId(e.target.value)}>
                               <option value="">Select manager</option>
-                              {adminUsers.filter((user) => user.role === "MANAGER").map((user) => (
+                              {adminUsers.filter((user) => ["MANAGER", "EXCO", "CEO"].includes(user.role)).map((user) => (
                                 <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                               ))}
                             </select>
@@ -3334,7 +3513,10 @@ export default function App() {
                             <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)} disabled={!delegationManagerId}>
                               <option value="">Select delegate</option>
                               {adminUsers
-                                .filter((user) => user.department === adminUsers.find((u) => u.id === delegationManagerId)?.department)
+                                .filter((user) => {
+                                  const manager = adminUsers.find((u) => u.id === delegationManagerId);
+                                  return manager?.role === "CEO" ? ["EXCO", "MANAGER"].includes(user.role) : user.department === manager?.department;
+                                })
                                 .filter((user) => user.id !== delegationManagerId)
                                 .map((user) => (
                                   <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
@@ -3347,8 +3529,11 @@ export default function App() {
                           <label>Delegate <span className="ep-required">*</span></label>
                           <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)}>
                             <option value="">Select delegate</option>
-                            {adminUsers
-                              .filter((user) => user.department === adminUsers.find((u) => u.id === (profile?.id || me?.userId))?.department)
+                            {(role === "CEO"
+                              // CEO is org-wide (no single department) — delegate to any active Exco/Manager.
+                              ? adminUsers.filter((user) => ["EXCO", "MANAGER"].includes(user.role))
+                              : adminUsers.filter((user) => user.department === adminUsers.find((u) => u.id === (profile?.id || me?.userId))?.department)
+                            )
                               .filter((user) => user.id !== (profile?.id || me?.userId))
                               .map((user) => (
                                 <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
@@ -3407,6 +3592,7 @@ export default function App() {
                   </div>
                 )}
               </SettingsAccordion>
+              )}
 
               {role === "ADMIN" && (
                 <SettingsAccordion
@@ -4769,19 +4955,26 @@ export default function App() {
                 <input type="text" value={amountInWords} readOnly />
               </div>
 
-              {advanceWorkflowFound === false && advanceType && (
+              {(() => {
+                const isTravelAdvanceUiType = !!advanceType && advanceType !== "SALARY" && advanceType !== "LOAN";
+                const canPickOwnCountersigner = isTravelAdvanceUiType && ["CEO", "EXCO", "MANAGER"].includes(role);
+                const showNoWorkflowFallback = advanceWorkflowFound === false && advanceType && !canPickOwnCountersigner;
+                return canPickOwnCountersigner || showNoWorkflowFallback;
+              })() && (
                 <div className="form-section" style={{ marginTop: 24, border: "1px solid #e2c96e", borderRadius: 8, padding: "16px 18px", background: "#fffdf0" }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Custom Approval Chain</div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                    {["CEO", "EXCO", "MANAGER"].includes(role) && advanceType !== "SALARY" && advanceType !== "LOAN" ? "Choose Your Countersigner / Approver" : "Custom Approval Chain"}
+                  </div>
                   <div style={{ fontSize: 13, color: "#7a6a00", marginBottom: 18 }}>
-                    No workflow is configured for your department/section. Define the approvers for this request.
+                    {["CEO", "EXCO", "MANAGER"].includes(role) && advanceType !== "SALARY" && advanceType !== "LOAN"
+                      ? "For travel advances, select the countersigner/approver for this request."
+                      : "No workflow is configured for your department/section. Define the approvers for this request."}
                   </div>
 
                   <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                     {chainPositionTypes.map((pt) => {
                       const selected = customApprovalChain.find(s => s.label === pt.name);
 
-                      // Counter Signed By: teammates + people in same section/dept + managers/HODs
-                      // Approved By: managers, HODs, and other leadership positions only
                       const myId = profile?.id || me?.userId || "";
                       const myTeamId    = profile?.team_id    || null;
                       const mySectionId = profile?.section_id || null;
@@ -4790,25 +4983,53 @@ export default function App() {
                       const isPermanent = (u: { employment_type?: string | null }) =>
                         String(u.employment_type || "").toUpperCase() === "PERMANENT";
 
-                      const pool = pt.code === "COUNTER_SIGNER"
-                        ? staffDirectory.filter(u =>
-                            u.is_active !== false &&
-                            isPermanent(u) &&
-                            u.role !== "ADMIN" &&
-                            u.id !== myId &&
-                            myTeamId !== null &&
-                            u.team_id === myTeamId
+                      const isTravelAdvanceUiType = !!advanceType && advanceType !== "SALARY" && advanceType !== "LOAN";
+                      const canPickOwnCountersigner = isTravelAdvanceUiType && ["CEO", "EXCO", "MANAGER"].includes(role);
+
+                      // Travel advance, requester is CEO/EXCO/MANAGER: pick own
+                      // countersigner/approver from a role-appropriate pool
+                      // (CEO/EXCO -> Exco members only; Manager -> own
+                      // section/department staff or Exco members).
+                      // Otherwise (no workflow configured fallback): the
+                      // original generic pools.
+                      const pool = canPickOwnCountersigner
+                        ? (role === "MANAGER"
+                            ? staffDirectory.filter(u =>
+                                u.is_active !== false &&
+                                isPermanent(u) &&
+                                u.id !== myId &&
+                                (
+                                  u.role === "EXCO" ||
+                                  (mySectionId !== null && u.section_id === mySectionId) ||
+                                  (!!myDept && (u.department || "").toLowerCase() === myDept)
+                                )
+                              )
+                            : staffDirectory.filter(u =>
+                                u.is_active !== false &&
+                                isPermanent(u) &&
+                                u.id !== myId &&
+                                u.role === "EXCO"
+                              )
                           )
-                        : pt.code === "APPROVED_BY"
+                        : pt.code === "COUNTER_SIGNER"
                           ? staffDirectory.filter(u =>
                               u.is_active !== false &&
                               isPermanent(u) &&
+                              u.role !== "ADMIN" &&
                               u.id !== myId &&
-                              ["MANAGER", "HOD", "EXCO"].includes(u.role)
+                              myTeamId !== null &&
+                              u.team_id === myTeamId
                             )
-                          : staffDirectory.filter(u =>
-                              u.is_active !== false && isPermanent(u) && u.role !== "EMPLOYEE" && u.role !== "ADMIN" && u.id !== myId
-                            );
+                          : pt.code === "APPROVED_BY"
+                            ? staffDirectory.filter(u =>
+                                u.is_active !== false &&
+                                isPermanent(u) &&
+                                u.id !== myId &&
+                                ["MANAGER", "HOD", "EXCO"].includes(u.role)
+                              )
+                            : staffDirectory.filter(u =>
+                                u.is_active !== false && isPermanent(u) && u.role !== "EMPLOYEE" && u.role !== "ADMIN" && u.id !== myId
+                              );
                       const ptSubtitle = pt.code === "COUNTER_SIGNER"
                         ? "Supervisor or Manager to confirm your request details"
                         : pt.code === "APPROVED_BY"
@@ -5188,29 +5409,40 @@ export default function App() {
             </div>
             )
           ) : page === "CLEARANCE" ? (
-            <div className="advance-form modern-form">
-              <h2 className="form-title">{editingClaimId ? "Edit Clearance" : "Travel Advance Clearance Form"}</h2>
-
-              <div className="form-grid-2">
-                <div className="form-field">
-                  <label>Paid Advance</label>
-                  <select value={clearanceLinkedAdvanceId} onChange={(e) => setClearanceLinkedAdvanceId(e.target.value)}>
-                    <option value="">Select paid travel advance</option>
-                    {clearableTravelAdvances.map((advance) => (
-                      <option key={advance.id} value={advance.id}>
-                        {travelTypeLabel(advance.type, travelTypes)} - {fmtMoney(advance.approved_total || advance.requested_total)} - {new Date(advance.created_at).toLocaleDateString()}
-                      </option>
-                    ))}
-                  </select>
-                  {clearableTravelAdvances.length === 0 && (
-                    <div style={{ marginTop: 6, fontSize: 13, color: "crimson" }}>
-                      No paid travel advances are available to clear yet.
-                    </div>
-                  )}
+            <div className="advance-form modern-form clearance-form-v2">
+              {/* Header */}
+              <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22 }}>
+                <div style={{ width: 48, height: 48, borderRadius: 12, background: "#dbeafe", color: "#1d4ed8", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <BriefcaseBusiness size={22} aria-hidden />
                 </div>
-                <div className="form-field">
-                  <label>Month</label>
-                  <div style={{ display: "flex", gap: 8 }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>{editingClaimId ? "Edit Clearance" : "Travel Advance Clearance Form"}</h2>
+                  <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>Submit your travel expenses and supporting receipts for reconciliation.</div>
+                </div>
+              </div>
+
+              {/* Travel Details */}
+              <div className="card" style={{ padding: 18, marginBottom: 18 }}>
+                <div style={{ fontWeight: 600, color: "#2563eb", marginBottom: 14 }}>Travel Details</div>
+                <div className="form-grid-3">
+                  <div className="form-field">
+                    <label>Paid Advance <span style={{ color: "#dc2626" }}>*</span></label>
+                    <select value={clearanceLinkedAdvanceId} onChange={(e) => setClearanceLinkedAdvanceId(e.target.value)}>
+                      <option value="">Select paid travel advance</option>
+                      {clearableTravelAdvances.map((advance) => (
+                        <option key={advance.id} value={advance.id}>
+                          {travelTypeLabel(advance.type, travelTypes)} - {fmtMoney(advance.approved_total || advance.requested_total)} - {new Date(advance.created_at).toLocaleDateString()}
+                        </option>
+                      ))}
+                    </select>
+                    {clearableTravelAdvances.length === 0 && (
+                      <div style={{ marginTop: 6, fontSize: 13, color: "crimson" }}>
+                        No paid travel advances are available to clear yet.
+                      </div>
+                    )}
+                  </div>
+                  <div className="form-field">
+                    <label>Month <span style={{ color: "#dc2626" }}>*</span></label>
                     <select
                       value={clearanceMonth ? clearanceMonth.split("-")[1] || "" : ""}
                       onChange={(e) => {
@@ -5218,13 +5450,15 @@ export default function App() {
                         const yyyy = clearanceMonth ? clearanceMonth.split("-")[0] : String(new Date().getFullYear());
                         setClearanceMonth(mm ? `${yyyy}-${mm}` : "");
                       }}
-                      style={{ flex: 1 }}
                     >
                       <option value="">Month</option>
                       {CLEARANCE_MONTH_NAMES.map((name, idx) => (
                         <option key={name} value={String(idx + 1).padStart(2, "0")}>{name}</option>
                       ))}
                     </select>
+                  </div>
+                  <div className="form-field">
+                    <label>Year <span style={{ color: "#dc2626" }}>*</span></label>
                     <select
                       value={clearanceMonth ? clearanceMonth.split("-")[0] || "" : ""}
                       onChange={(e) => {
@@ -5232,7 +5466,6 @@ export default function App() {
                         const mm = clearanceMonth ? clearanceMonth.split("-")[1] : String(new Date().getMonth() + 1).padStart(2, "0");
                         setClearanceMonth(yyyy ? `${yyyy}-${mm}` : "");
                       }}
-                      style={{ flex: 1 }}
                     >
                       <option value="">Year</option>
                       {clearanceMonthYearRange().map((y) => (
@@ -5241,166 +5474,348 @@ export default function App() {
                     </select>
                   </div>
                 </div>
+
+                <div className="form-grid-3" style={{ marginTop: 4 }}>
+                  <div className="form-field">
+                    <label>Duty Station</label>
+                    <input type="text" value={clearanceDutyStation} onChange={(e) => setClearanceDutyStation(e.target.value)} />
+                  </div>
+                  <div className="form-field">
+                    <label>Project Number</label>
+                    <input type="text" value={clearanceProjectNumber} onChange={(e) => setClearanceProjectNumber(e.target.value)} />
+                  </div>
+                  <div className="form-field">
+                    <label>Vehicle Registration</label>
+                    <input type="text" value={clearanceVehicleReg} onChange={(e) => setClearanceVehicleReg(e.target.value)} />
+                  </div>
+                </div>
+
+                <div className="form-grid-3" style={{ marginTop: 4 }}>
+                  <div className="form-field">
+                    <label>Vehicle Type</label>
+                    <input type="text" value={clearanceVehicleType} onChange={(e) => setClearanceVehicleType(e.target.value)} />
+                  </div>
+                  <div className="form-field">
+                    <label>Engine CC</label>
+                    <input type="text" value={clearanceEngineCc} onChange={(e) => setClearanceEngineCc(e.target.value)} />
+                  </div>
+                  <div className="form-field">
+                    <label>Vehicle Rate (per KM)</label>
+                    <input type="number" value={clearanceVehicleRate} onChange={(e) => setClearanceVehicleRate(e.target.value)} />
+                  </div>
+                </div>
               </div>
 
-              <div className="form-grid-3">
-                <div className="form-field">
-                  <label>Duty Station</label>
-                  <input type="text" value={clearanceDutyStation} onChange={(e) => setClearanceDutyStation(e.target.value)} />
-                </div>
-                <div className="form-field">
-                  <label>Project Number</label>
-                  <input type="text" value={clearanceProjectNumber} onChange={(e) => setClearanceProjectNumber(e.target.value)} />
-                </div>
-                <div className="form-field">
-                  <label>Vehicle Registration</label>
-                  <input type="text" value={clearanceVehicleReg} onChange={(e) => setClearanceVehicleReg(e.target.value)} />
+              {/* Advance Reconciliation Summary */}
+              <div className="card" style={{ padding: 18, marginBottom: 18 }}>
+                <div style={{ fontWeight: 600, color: "#2563eb", marginBottom: 14 }}>Advance Reconciliation Summary</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
+                  {[
+                    { label: "Advance Received", value: fmtMoney(clearanceAdvanceAmount), sub: "", color: "var(--text)", icon: ArrowRightLeft, iconBg: "#dbeafe", iconColor: "#2563eb" },
+                    { label: "Actual Expenditure", value: fmtMoney(clearanceTotals.total), sub: "", color: "var(--text)", icon: Wallet, iconBg: "#ffedd5", iconColor: "#ea580c" },
+                    { label: "Variance (Over / Under)", value: `${clearanceBalance < 0 ? "-" : ""}${fmtMoney(Math.abs(clearanceBalance))}`, sub: "", color: clearanceBalance < 0 ? "#1d4ed8" : clearanceBalance > 0 ? "#b45309" : "#15803d", icon: User, iconBg: "#ede9fe", iconColor: "#7c3aed" },
+                    {
+                      label: "Settlement Status",
+                      value: clearanceBalance < 0 ? "Company Owes Employee" : clearanceBalance > 0 ? "Employee Owes Company" : "Fully Cleared",
+                      sub: clearanceBalance < 0 ? "Additional reimbursement required" : clearanceBalance > 0 ? "Refund to company required" : "No further action needed",
+                      color: clearanceBalance < 0 ? "#1d4ed8" : clearanceBalance > 0 ? "#b45309" : "#15803d",
+                      icon: DollarSign, iconBg: "#dbeafe", iconColor: "#2563eb", small: true
+                    }
+                  ].map((c) => {
+                    const Icon = c.icon;
+                    return (
+                      <div key={c.label} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px", position: "relative" }}>
+                        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 6, paddingRight: 34 }}>{c.label}</div>
+                        <div style={{ fontWeight: 700, fontSize: c.small ? 15 : 20, color: c.color, lineHeight: 1.2 }}>{c.value}</div>
+                        {c.sub && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>{c.sub}</div>}
+                        <div style={{ position: "absolute", top: 14, right: 14, width: 30, height: 30, borderRadius: "50%", background: c.iconBg, color: c.iconColor, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Icon size={15} aria-hidden />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="form-grid-3">
-                <div className="form-field">
-                  <label>Vehicle Type</label>
-                  <input type="text" value={clearanceVehicleType} onChange={(e) => setClearanceVehicleType(e.target.value)} />
-                </div>
-                <div className="form-field">
-                  <label>Engine CC</label>
-                  <input type="text" value={clearanceEngineCc} onChange={(e) => setClearanceEngineCc(e.target.value)} />
-                </div>
-                <div className="form-field">
-                  <label>Vehicle Rate</label>
-                  <input type="number" value={clearanceVehicleRate} onChange={(e) => setClearanceVehicleRate(e.target.value)} />
-                </div>
-              </div>
-
-              <div className="card" style={{ marginTop: 16, padding: 16 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
-                  <div>
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>Advance Received</div>
-                    <div>{fmtMoney(clearanceAdvanceAmount)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>Actual Expenditure</div>
-                    <div>{fmtMoney(clearanceTotals.total)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>Difference</div>
-                    <div>{fmtMoney(Math.abs(clearanceBalance))}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>Outcome</div>
-                    <div>
-                      {clearanceBalance > 0
-                        ? "Employee refunds company"
-                        : clearanceBalance < 0
-                          ? "Company pays employee"
-                          : "Fully cleared"}
+              {/* Two-column body: left = Trip Lines + Receipts + Process, right = Settlement Details */}
+              <div className={`clearance-body-grid${clearanceBalance !== 0 ? " has-settlement" : ""}`}>
+                <div className="clearance-left-stack">
+                  {/* Trip Lines */}
+                  <div className="card" style={{ padding: 18 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <span style={{ fontWeight: 600, color: "#2563eb" }}>Trip Lines</span>
+                      <button className="button button-subtle small-button" type="button" onClick={addClearanceTrip}><Plus size={14} aria-hidden /> Add Trip</button>
                     </div>
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginTop: 20, overflowX: "auto" }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Location</th>
-                      <th>Meals</th>
-                      <th>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {clearanceSourceLines.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} style={{ textAlign: "center" }}>Select a paid travel advance to load its trip lines.</td>
-                      </tr>
-                    ) : (
-                      clearanceSourceLines.map((line, index) => (
-                        <tr key={line.id || index}>
-                          <td>{normalizeDateInputValue(line.line_date)}</td>
-                          <td>{line.location || "—"}</td>
-                          <td>{advanceLineMealCount(line)}</td>
-                          <td>{fmtMoney(advanceLineAmount(line))}</td>
-                        </tr>
-                      ))
-                    )}
-                    <tr>
-                      <td><b>Totals</b></td>
-                      <td>—</td>
-                      <td>{Number(clearanceTotals.mealCount.toFixed(2))}</td>
-                      <td>{fmtMoney(clearanceTotals.total)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="card" style={{ marginTop: 16, padding: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                  <div>
-                    <b>Receipts</b>
-                    <div style={{ marginTop: 4, fontSize: 13, opacity: 0.75 }}>
-                      Upload receipts immediately. If the draft does not exist yet, it will be saved first automatically.
-                    </div>
-                  </div>
-                  <label className="button" style={{ cursor: "pointer", opacity: 1 }}>
-                    Upload Receipt
-                    <input
-                      type="file"
-                      style={{ display: "none" }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) void uploadClearanceReceipt(file);
-                        e.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  {clearanceReceipts.length === 0 ? (
-                    <div style={{ opacity: 0.7 }}>No receipts uploaded yet.</div>
-                  ) : (
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>File</th>
-                          <th>Uploaded</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {clearanceReceipts.map((receipt) => (
-                          <tr key={receipt.id}>
-                            <td>{String(receipt.file_path || "").split("/").pop() || receipt.file_path}</td>
-                            <td>{receipt.uploaded_at ? new Date(receipt.uploaded_at).toLocaleString() : "-"}</td>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="table clearance-trip-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Location</th>
+                            <th>Purpose</th>
+                            <th style={{ textAlign: "right" }}>Meals (M)</th>
+                            <th style={{ textAlign: "right" }}>Transport (M)</th>
+                            <th style={{ textAlign: "right" }}>Other (M)</th>
+                            <th style={{ textAlign: "right" }}>Total (M)</th>
+                            <th style={{ textAlign: "center" }}>Actions</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {clearanceTrips.map((trip, index) => {
+                            const rowTotal = (Number(trip.lunch) || 0) + (Number(trip.petrol_allowance) || 0) + (Number(trip.other_expenses) || 0);
+                            return trip.__editing ? (
+                              <tr key={index}>
+                                <td><input type="date" value={trip.trip_date} onChange={(e) => updateClearanceTrip(index, { trip_date: e.target.value })} style={{ minWidth: 125 }} /></td>
+                                <td><input type="text" value={trip.from_place} placeholder="Location" onChange={(e) => updateClearanceTrip(index, { from_place: e.target.value })} style={{ minWidth: 90 }} /></td>
+                                <td><input type="text" value={trip.purpose} placeholder="Purpose" onChange={(e) => updateClearanceTrip(index, { purpose: e.target.value })} style={{ minWidth: 100 }} /></td>
+                                <td><input type="number" min={0} step="0.01" value={trip.lunch} onChange={(e) => updateClearanceTrip(index, { lunch: Number(e.target.value) })} style={{ width: 80, textAlign: "right" }} /></td>
+                                <td><input type="number" min={0} step="0.01" value={trip.petrol_allowance} onChange={(e) => updateClearanceTrip(index, { petrol_allowance: Number(e.target.value) })} style={{ width: 80, textAlign: "right" }} /></td>
+                                <td><input type="number" min={0} step="0.01" value={trip.other_expenses} onChange={(e) => updateClearanceTrip(index, { other_expenses: Number(e.target.value) })} style={{ width: 80, textAlign: "right" }} /></td>
+                                <td style={{ textAlign: "right", fontWeight: 600 }}>{rowTotal.toFixed(2)}</td>
+                                <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                                  <button type="button" className="icon-button" title="Done editing" onClick={() => toggleClearanceTripEdit(index)} style={{ color: "#16a34a" }}><CheckCircle2 size={15} aria-hidden /></button>
+                                  <button type="button" className="icon-button" title="Remove trip" disabled={clearanceTrips.length <= 1} onClick={() => removeClearanceTrip(index)} style={{ color: "#dc2626" }}><Trash2 size={15} aria-hidden /></button>
+                                </td>
+                              </tr>
+                            ) : (
+                              <tr key={index}>
+                                <td>{trip.trip_date ? new Date(trip.trip_date).toLocaleDateString("en-GB") : "—"}</td>
+                                <td>{trip.from_place || "—"}</td>
+                                <td>{trip.purpose || "—"}</td>
+                                <td style={{ textAlign: "right" }}>{(Number(trip.lunch) || 0).toFixed(2)}</td>
+                                <td style={{ textAlign: "right" }}>{(Number(trip.petrol_allowance) || 0).toFixed(2)}</td>
+                                <td style={{ textAlign: "right" }}>{(Number(trip.other_expenses) || 0).toFixed(2)}</td>
+                                <td style={{ textAlign: "right", fontWeight: 600 }}>{rowTotal.toFixed(2)}</td>
+                                <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                                  <button type="button" className="icon-button" title="Edit trip" onClick={() => toggleClearanceTripEdit(index)} style={{ color: "#2563eb" }}><Edit3 size={15} aria-hidden /></button>
+                                  <button type="button" className="icon-button" title="Remove trip" disabled={clearanceTrips.length <= 1} onClick={() => removeClearanceTrip(index)} style={{ color: "#dc2626" }}><Trash2 size={15} aria-hidden /></button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          <tr>
+                            <td colSpan={3}><b>Totals</b></td>
+                            <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.meals.toFixed(2)}</td>
+                            <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.transport.toFixed(2)}</td>
+                            <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.other.toFixed(2)}</td>
+                            <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.total.toFixed(2)}</td>
+                            <td></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Receipts */}
+                  <div className="card clearance-section-card">
+                    <div className="clearance-card-header">
+                      <div>
+                        <div style={{ fontWeight: 600, color: "#2563eb" }}>Receipts</div>
+                        <div style={{ marginTop: 4, fontSize: 13, color: "var(--muted)" }}>
+                          Upload receipts immediately. If the draft does not exist yet, it will be saved first automatically.
+                        </div>
+                      </div>
+                      <label className="clearance-upload-button">
+                        <Upload size={15} aria-hidden /> Upload Receipt
+                        <input
+                          type="file"
+                          multiple
+                          accept=".pdf,.jpg,.jpeg,.png"
+                          style={{ display: "none" }}
+                          onChange={(e) => {
+                            const files = Array.from(e.currentTarget.files || []);
+                            if (files.length > 0) void uploadClearanceReceipts(files);
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <div style={{ marginTop: 12 }}>
+                      {clearanceReceipts.filter((r) => r.category !== "SUPPORTING_DOCUMENT").length === 0 ? (
+                        <div style={{ color: "var(--muted)", fontSize: 13 }}>No receipts uploaded yet.</div>
+                      ) : (
+                        clearanceReceipts.filter((r) => r.category !== "SUPPORTING_DOCUMENT").map((receipt) => (
+                          <div key={receipt.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 8 }}>
+                            <FileText size={18} style={{ color: "#dc2626", flexShrink: 0 }} aria-hidden />
+                            <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {String(receipt.file_path || "").split("/").pop() || receipt.file_path}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--muted)" }}>{receipt.uploaded_at ? new Date(receipt.uploaded_at).toLocaleDateString() : ""}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Clearance Process stepper */}
+                  <div className="card" style={{ padding: 18 }}>
+                    <div style={{ fontWeight: 600, color: "#2563eb", marginBottom: 16 }}>Clearance Process</div>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 4, overflowX: "auto" }}>
+                      {[
+                        { icon: User, title: "Employee", desc: "Capture expenses and submit for approval", bg: "#dbeafe", color: "#2563eb" },
+                        { icon: UserRoundCheck, title: "Manager", desc: "Review and approve trip and expenses", bg: "#ffedd5", color: "#ea580c" },
+                        { icon: Wallet, title: "Finance", desc: "Verify, reconcile and confirm settlement", bg: "#dcfce7", color: "#16a34a" },
+                        { icon: DollarSign, title: "Payment", desc: "Process refund or reimbursement", bg: "#ede9fe", color: "#7c3aed" },
+                        { icon: CheckCircle2, title: "Closed", desc: "Advance clearance completed", bg: "#dcfce7", color: "#16a34a" }
+                      ].map((step, i, arr) => {
+                        const Icon = step.icon;
+                        return (
+                          <React.Fragment key={step.title}>
+                            <div style={{ flex: 1, minWidth: 90, textAlign: "center" }}>
+                              <div style={{ width: 40, height: 40, borderRadius: "50%", background: step.bg, color: step.color, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 8px" }}>
+                                <Icon size={18} aria-hidden />
+                              </div>
+                              <div style={{ fontWeight: 600, fontSize: 13 }}>{step.title}</div>
+                              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{step.desc}</div>
+                            </div>
+                            {i < arr.length - 1 && <div style={{ color: "var(--muted)", paddingTop: 10, flexShrink: 0 }}><ChevronRight size={16} aria-hidden /></div>}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right column: Settlement Details */}
+                {clearanceBalance !== 0 && (
+                <div className="card clearance-settlement-card">
+                  <div className="clearance-settlement-title">Settlement Details</div>
+
+                  <div className="form-field">
+                    <label>Settlement Method {clearanceBalance !== 0 && <span style={{ color: "#dc2626" }}>*</span>}</label>
+                    <div className="clearance-method-options">
+                      {(["PAYROLL", "ECOCASH", "BANK"] as const).map((method) => (
+                        <label key={method} className="clearance-radio-option">
+                          <input
+                            type="radio"
+                            name="clearance-settlement-method"
+                            checked={clearanceSettlementMethod === method}
+                            onChange={() => setClearanceSettlementMethod(method)}
+                          />
+                          {method === "PAYROLL" ? "Payroll" : method === "ECOCASH" ? "ECOCASH" : "Bank Transfer"}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {clearanceSettlementMethod === "ECOCASH" && (
+                    <div className="form-field" style={{ marginTop: 16 }}>
+                      <label>EcoCash Number <span style={{ color: "#dc2626" }}>*</span></label>
+                      <input
+                        type="text"
+                        required
+                        value={clearanceSettlementEcocashNumber}
+                        onChange={(e) => setClearanceSettlementEcocashNumber(e.target.value)}
+                        placeholder="EcoCash number"
+                      />
+                    </div>
                   )}
+
+                  {clearanceSettlementMethod === "BANK" && (
+                    <div className="clearance-bank-fields">
+                      <div className="form-field">
+                        <label>Bank <span style={{ color: "#dc2626" }}>*</span></label>
+                        <input
+                          type="text"
+                          required
+                          value={clearanceSettlementBankName}
+                          onChange={(e) => setClearanceSettlementBankName(e.target.value)}
+                          placeholder="Bank name"
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label>Account Number <span style={{ color: "#dc2626" }}>*</span></label>
+                        <input
+                          type="text"
+                          required
+                          value={clearanceSettlementBankAccountNumber}
+                          onChange={(e) => setClearanceSettlementBankAccountNumber(e.target.value)}
+                          placeholder="Bank account number"
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label>Branch <span style={{ color: "#dc2626" }}>*</span></label>
+                        <input
+                          type="text"
+                          required
+                          value={clearanceSettlementBankBranch}
+                          onChange={(e) => setClearanceSettlementBankBranch(e.target.value)}
+                          placeholder="Branch"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {clearanceBalance < 0 && (
+                    <div className="form-field" style={{ marginTop: 16 }}>
+                      <label>Reason for Overspend <span style={{ color: "#dc2626" }}>*</span></label>
+                      <textarea
+                        value={clearanceReasonForOverspend}
+                        onChange={(e) => setClearanceReasonForOverspend(e.target.value)}
+                        rows={3}
+                        placeholder="Explain why actual expenditure exceeded the advance received..."
+                        style={{ width: "100%", boxSizing: "border-box" }}
+                      />
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: 16 }}>
+                    <label style={{ fontWeight: 600, fontSize: 13, display: "block", marginBottom: 8 }}>Supporting Documents</label>
+                    <label className="clearance-upload-zone">
+                      <span className="clearance-upload-button">
+                        <Upload size={15} aria-hidden /> Upload Receipt
+                      </span>
+                      <div className="clearance-upload-hint">PDF, JPG, PNG (Max 5MB each)</div>
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.jpg,.jpeg,.png"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const files = Array.from(e.currentTarget.files || []);
+                          if (files.length > 0) void uploadClearanceReceipts(files, "SUPPORTING_DOCUMENT");
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                    {clearanceReceipts.filter((r) => r.category === "SUPPORTING_DOCUMENT").map((receipt) => (
+                      <div key={receipt.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 8 }}>
+                        <FileText size={16} style={{ color: "#dc2626", flexShrink: 0 }} aria-hidden />
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {String(receipt.file_path || "").split("/").pop() || receipt.file_path}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="clearance-info-note">
+                    <Info size={16} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden />
+                    <div>
+                      <strong>Important</strong>
+                      <div style={{ marginTop: 2 }}>
+                        {clearanceBalance < 0
+                          ? "Negative variance means the company owes you. Please ensure all receipts are attached."
+                          : clearanceBalance > 0
+                            ? "Positive variance means you owe the company. A refund will be arranged via the settlement method selected above."
+                            : "This clearance is fully balanced. Attach any supporting documents needed for reconciliation."}
+                      </div>
+                    </div>
+                  </div>
                 </div>
+                )}
               </div>
 
-              <div className="card" style={{ marginTop: 16, padding: 16 }}>
-                <div><b>Clearance Process</b></div>
-                <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
-                  <div>1. Employee captures actual trip expenditure and links the paid advance.</div>
-                  <div>2. Manager certifies the trip was duly ordered.</div>
-                  <div>3. The configured approval workflow routes the clearance through each approver in turn.</div>
-                  <div>4. Finance verifies and settles any amount due or refund reference.</div>
-                </div>
-              </div>
-
-              <div className="footer-buttons">
-                <button className="button" onClick={() => {
+              <div className="footer-buttons" style={{ marginTop: 18 }}>
+                <button className="button button-subtle clearance-action-button" onClick={() => {
                   resetClearanceForm();
                   setPage("MY_CLEARANCES");
                 }}>
                   Cancel
                 </button>
-                <button className="button" type="button" onClick={() => persistClearance(false)}>
+                <button className="button button-subtle clearance-action-button" type="button" onClick={() => persistClearance(false)}>
                   Save Draft
                 </button>
-                <button className="button" type="button" onClick={() => persistClearance(true)} disabled={clearableTravelAdvances.length === 0}>
+                <button className="button clearance-action-button clearance-submit-button" type="button" onClick={() => persistClearance(true)} disabled={clearableTravelAdvances.length === 0}>
                   Submit Clearance
                 </button>
               </div>

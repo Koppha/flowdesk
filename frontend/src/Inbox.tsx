@@ -304,6 +304,18 @@ function actionLabel(value: string | null | undefined) {
   return statusLabel(value);
 }
 
+// Button label for the current workflow step's action, derived from its
+// Action Label (action_type code) so a "Capture" step reads "Capture", etc.
+function actionTypeButtonLabel(code: string | null | undefined) {
+  switch (code) {
+    case "COUNTER_SIGN": return "Counter Sign";
+    case "CAPTURE": return "Capture";
+    case "BOOK_ACC": return "Book Accommodation";
+    case "APPROVE": return "Approve Advance";
+    default: return code ? statusLabel(code) : "Approve Advance";
+  }
+}
+
 export default function Inbox(props: { onBack?: () => void }) {
   const me = getUserFromToken();
   const role = me?.role || "UNKNOWN";
@@ -741,6 +753,15 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // A workflow step can be configured with action type "MARK_PAID" — at that
   // step the assignee records payment instead of approving/rejecting.
   const isMarkPaidStep = isWorkflowDriven && (item as any).current_step_action_type === "MARK_PAID";
+  // The current step's action type / label (drives the action button text and
+  // the post-action travel-form generation on "Capture" steps).
+  const currentStepActionType: string | null = isWorkflowDriven ? ((item as any).current_step_action_type ?? null) : null;
+  const isCaptureStep = currentStepActionType === "CAPTURE";
+  // Custom (non-standard) action types show their own Action Label on the
+  // button; standard APPROVE keeps the existing role-aware labels below.
+  const customActionLabel = currentStepActionType && !["APPROVE", "COUNTER_SIGN", "MARK_PAID"].includes(currentStepActionType)
+    ? actionTypeButtonLabel(currentStepActionType)
+    : null;
 
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
@@ -904,7 +925,21 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
 
   function handleApproveAdvance() {
     const approvedTotal = item.doc_type === "ADVANCE" ? Number(detail?.requested_total || item.requested_total || 0) : 0;
-    void act(() => api.approveAdvance(item.id, approvedTotal, comments));
+    // "Capture" is the action label used for the step that finalizes the
+    // travel form's data — surface the form for view/download right after
+    // that step is actioned, same pattern as the mark-paid PDF popup above.
+    // isCaptureStep is derived from the step's Action Label (current_step_action_type).
+    void act(() => api.approveAdvance(item.id, approvedTotal, comments)).then(async (ok) => {
+      if (!ok || !isCaptureStep) return;
+      try {
+        const blob = await api.advancePdf(item.id);
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank");
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      } catch (e: any) {
+        setError(e?.message || "Captured, but failed to generate the travel form.");
+      }
+    });
   }
 
   function handleCreateAccommodation() {
@@ -1530,7 +1565,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   <>
                     {canApproveAdvance && (
                       <button className="button small-button button-primary" disabled={busy} onClick={handleApproveAdvance}>
-                        {role === "HR_MANAGER" ? "Send to HR" : role === "EXCO" ? "EXCO Approve" : isCounterSignStep ? "Counter Sign" : "Approve Advance"}
+                        {customActionLabel ?? (role === "HR_MANAGER" ? "Send to HR" : role === "EXCO" ? "EXCO Approve" : isCounterSignStep ? "Counter Sign" : "Approve Advance")}
                       </button>
                     )}
                     {canRejectAdvance && (

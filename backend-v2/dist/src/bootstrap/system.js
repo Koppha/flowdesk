@@ -17,6 +17,7 @@ export async function bootstrapSystem() {
     await ensureRequestTypesSchema();
     await ensureEmploymentTypesSchema();
     await ensureEmailActionTokensSchema();
+    await ensurePositionVacanciesSchema();
     await ensureAdminAccount();
 }
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;
@@ -56,6 +57,15 @@ async function ensureUserSchema() {
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS assignee_user_id uuid REFERENCES users(id)`);
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS assignee_group_name text`);
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS expected_payment_date date`);
+    // Employee-requested settlement preference and the explanation required when
+    // the company owes the employee (balance_amount < 0, i.e. they overspent the
+    // advance) — distinct from Finance's own authoritative settled_method/decision.
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_method_requested text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_ecocash_number text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_name text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_account_number text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_branch text`);
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS reason_for_overspend text`);
     await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
@@ -365,6 +375,29 @@ async function ensureFeatureSchema() {
     await query(`INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
 }
+// A "vacant position" — a Manager/HOD/EXCO/CEO seat an admin has earmarked
+// before anyone is assigned to it. Kept separate from `users` (whose email
+// column is NOT NULL UNIQUE, so it can't represent an unfilled seat) and
+// from any other roster query — filling one just promotes/creates a real
+// user via the normal paths and stamps this row as filled.
+async function ensurePositionVacanciesSchema() {
+    await query(`
+    CREATE TABLE IF NOT EXISTS position_vacancies (
+      id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      role             text        NOT NULL,
+      title            text,
+      department       text,
+      division_id      uuid        REFERENCES divisions(id),
+      section_id       uuid        REFERENCES sections(id),
+      team_id          uuid        REFERENCES teams(id),
+      notes            text,
+      created_by_id    uuid        REFERENCES users(id),
+      created_at       timestamptz NOT NULL DEFAULT now(),
+      filled_by_user_id uuid       REFERENCES users(id),
+      filled_at        timestamptz
+    )
+  `);
+}
 async function ensureRequestTypesSchema() {
     await query(`
     CREATE TABLE IF NOT EXISTS custom_request_types (
@@ -546,6 +579,55 @@ async function seedChangeRequestType() {
     // them up in place rather than re-inserting (which would lose submitted data).
     await query(`UPDATE request_type_fields SET field_type = 'user_multi' WHERE request_type_id = $1 AND field_key = 'change_assignee'`, [typeId]);
     await query(`UPDATE request_type_fields SET field_type = 'section' WHERE request_type_id = $1 AND field_key = 'change_implementor'`, [typeId]);
+    // The Change Type / Change Category checkboxes moved from a flat "Change
+    // Type: X" labelling scheme to two grouped boxes with plain labels and
+    // extra ECONET-aligned options. Self-heals on every boot: renames existing
+    // checkboxes, adds the new ones, and reorders the whole field list.
+    const checkboxRelabels = [
+        ["change_type_hardware", "Hardware"],
+        ["change_type_system_software", "System Software"],
+        ["change_type_applications", "Applications"],
+        ["change_type_environment", "Environment"],
+        ["change_type_network", "Network"],
+        ["change_type_configuration", "Configuration"],
+        ["change_type_business_rule", "Business Rule"],
+        ["category_business_request", "Business Request"],
+        ["category_fix", "Fix"],
+        ["category_technical", "Technical (Hardware / Software)"]
+    ];
+    for (const [key, label] of checkboxRelabels) {
+        await query(`UPDATE request_type_fields SET field_label = $1 WHERE request_type_id = $2 AND field_key = $3`, [label, typeId, key]);
+    }
+    const newCheckboxFields = [
+        ["change_type_business_request", "Business Request"],
+        ["change_type_other", "Other"],
+        ["category_enhancement", "Enhancement"],
+        ["category_emergency", "Emergency"],
+        ["category_security", "Security"],
+        ["category_compliance", "Compliance"],
+        ["category_other", "Other"]
+    ];
+    for (const [key, label] of newCheckboxFields) {
+        const exists = await query(`SELECT id FROM request_type_fields WHERE request_type_id = $1 AND field_key = $2`, [typeId, key]);
+        if (!exists[0]) {
+            await query(`INSERT INTO request_type_fields (request_type_id, field_key, field_label, field_type, is_required, sort_order, wizard_step)
+         VALUES ($1, $2, $3, 'checkbox', false, 0, 1)`, [typeId, key, label]);
+        }
+    }
+    const fieldOrder = [
+        "department", "date_requested", "change_assignee",
+        "change_type_hardware", "change_type_configuration", "change_type_system_software", "change_type_business_rule",
+        "change_type_applications", "change_type_business_request", "change_type_environment", "change_type_other", "change_type_network",
+        "category_business_request", "category_enhancement", "category_fix", "category_emergency",
+        "category_technical", "category_security", "category_compliance", "category_other",
+        "is_urgent",
+        "description_of_change", "business_justification", "affected_areas", "priority", "component_name", "platform", "dependencies",
+        "number_of_changes", "implementation_date", "change_implementor", "time_required", "time_scheduled", "risk", "impact",
+        "implementation_plan", "back_out_plan", "callout_person", "callout_contact_no", "documentation_required", "business_implications"
+    ];
+    for (let i = 0; i < fieldOrder.length; i++) {
+        await query(`UPDATE request_type_fields SET sort_order = $1 WHERE request_type_id = $2 AND field_key = $3`, [i, typeId, fieldOrder[i]]);
+    }
     // Wizard page 2 starts at "Priority" — everything from there on is the
     // technical/implementation half of the ECONET form; page 1 is the
     // request-details half. Re-applied on every boot so it self-heals if an

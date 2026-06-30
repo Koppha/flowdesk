@@ -91,9 +91,9 @@ const EMPTY_LINE: ClaimLine = {
   account_or_project: "", activity_name: "", observed_holiday: false
 };
 
-const th: React.CSSProperties = { background: "#f1f5f9", padding: "7px 8px", textAlign: "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", border: "1px solid #e2e8f0" };
-const td: React.CSSProperties = { padding: "3px 5px", border: "1px solid #e2e8f0", verticalAlign: "middle" };
-const inp: React.CSSProperties = { width: "100%", border: "none", background: "transparent", fontSize: 12, padding: "2px 3px", outline: "none", minWidth: 0 };
+const th: React.CSSProperties = { background: "var(--surface-soft)", padding: "7px 8px", textAlign: "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", border: "1px solid var(--border)", color: "var(--text)" };
+const td: React.CSSProperties = { padding: "3px 5px", border: "1px solid var(--border)", verticalAlign: "middle", color: "var(--text)" };
+const inp: React.CSSProperties = { width: "100%", border: "none", background: "transparent", color: "var(--text)", fontSize: 12, padding: "2px 3px", outline: "none", minWidth: 0 };
 const numInp: React.CSSProperties = { ...inp, width: 52, textAlign: "right" };
 
 export default function OvertimeClaimModule({ profile, requestDirectory, onBack }: OvertimeClaimModuleProps) {
@@ -217,8 +217,8 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
     }
   }
 
-  const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 3 };
-  const fieldStyle: React.CSSProperties = { width: "100%", border: "1px solid #cbd5e1", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "var(--surface-soft)", color: "var(--text)", boxSizing: "border-box" };
+  const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 3 };
+  const fieldStyle: React.CSSProperties = { width: "100%", border: "1px solid var(--border)", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "var(--surface)", color: "var(--text)", boxSizing: "border-box" };
 
   const STATUS_STEPS = [
     { key: "SUBMITTED",         label: "Submitted" },
@@ -230,10 +230,10 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
   ];
 
   function statusColor(s: string) {
-    if (s === "SUMMARY_TRANSFERRED") return { bg: "#dcfce7", color: "#15803d" };
-    if (s === "DRAFT") return { bg: "#f1f5f9", color: "#475569" };
-    if (s === "SUBMITTED") return { bg: "#fef9c3", color: "#a16207" };
-    return { bg: "#dbeafe", color: "#1d4ed8" };
+    if (s === "SUMMARY_TRANSFERRED") return { bg: "rgba(22, 163, 74, 0.14)", color: "var(--success)" };
+    if (s === "DRAFT") return { bg: "rgba(100, 116, 139, 0.14)", color: "var(--muted)" };
+    if (s === "SUBMITTED") return { bg: "rgba(217, 119, 6, 0.14)", color: "var(--warning)" };
+    return { bg: "rgba(37, 99, 235, 0.14)", color: "var(--primary, #1d4ed8)" };
   }
 
   return (
@@ -304,8 +304,8 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
         <div className="card" style={{ padding: 28 }}>
 
           {/* Link to approved request */}
-          <div style={{ marginBottom: 16, padding: "12px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
-            <label style={{ ...labelStyle, color: "#0369a1" }}>Link to Approved Overtime Request (optional)</label>
+          <div style={{ marginBottom: 16, padding: "12px 14px", background: "var(--primary-soft)", borderRadius: 8, border: "1px solid rgba(116, 164, 255, 0.32)" }}>
+            <label style={{ ...labelStyle, color: "var(--primary, #1d4ed8)" }}>Link to Approved Overtime Request (optional)</label>
             <select value={selectedRequestId} onChange={(e) => handleRequestSelect(e.target.value)} style={fieldStyle}>
               <option value="">— Select an approved request to pre-fill lines —</option>
               {approvedRequests.map((r) => (
@@ -374,10 +374,10 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                   <th style={th}>Project/Activity</th>
                   <th style={{ ...th, width: 28 }}></th>
                 </tr>
-                <tr style={{ background: "#f8fafc" }}>
+                <tr style={{ background: "var(--surface-soft)" }}>
                   <th style={th}></th><th style={th}></th>
-                  <th style={{ ...th, fontSize: 10, color: "#94a3b8" }}>From</th>
-                  <th style={{ ...th, fontSize: 10, color: "#94a3b8" }}>To</th>
+                  <th style={{ ...th, fontSize: 10, color: "var(--muted)" }}>From</th>
+                  <th style={{ ...th, fontSize: 10, color: "var(--muted)" }}>To</th>
                   <th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th><th style={th}></th>
                 </tr>
               </thead>
@@ -387,15 +387,15 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                   const holiday = lesothoHolidayName(line.date);
                   const rate = rateForDate(line.date, day, day === "Monday" && line.observed_holiday);
                   return (
-                  <tr key={idx} style={{ background: idx % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                  <tr key={idx} style={{ background: idx % 2 === 0 ? "var(--surface)" : "var(--surface-soft)" }}>
                     <td style={{ ...td, minWidth: 120 }}>
                       <input type="date" value={line.date} onChange={(e) => updateLine(idx, "date", e.target.value)} style={inp} />
                     </td>
-                    <td style={{ ...td, minWidth: 80, color: "#64748b", fontSize: 11 }}>
+                    <td style={{ ...td, minWidth: 80, color: "var(--muted)", fontSize: 11 }}>
                       {day || <span style={{ opacity: 0.35 }}>auto</span>}
-                      {holiday && <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 700 }}>{holiday}</div>}
+                      {holiday && <div style={{ fontSize: 10, color: "var(--danger)", fontWeight: 700 }}>{holiday}</div>}
                       {!holiday && day === "Monday" && (
-                        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "#a16207", fontWeight: 600, marginTop: 2, cursor: "pointer" }}
+                        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "var(--warning)", fontWeight: 600, marginTop: 2, cursor: "pointer" }}
                           title="Tick if a weekend public holiday is being observed on this Monday (pays at 200%)">
                           <input type="checkbox" checked={line.observed_holiday}
                             onChange={(e) => updateLine(idx, "observed_holiday", e.target.checked)}
@@ -413,16 +413,16 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                     <td style={{ ...td, minWidth: 110 }}>
                       <input value={line.ordered_by} onChange={(e) => updateLine(idx, "ordered_by", e.target.value)} style={inp} placeholder="Ordered by…" />
                     </td>
-                    <td style={{ ...td, background: rate === 125 ? "#f0fdf4" : "#fafaf9" }}>
+                    <td style={{ ...td, background: rate === 125 ? "rgba(22, 163, 74, 0.12)" : "transparent" }}>
                       <input type="number" min={0} step={0.5} value={line.hours_125 || ""} onChange={(e) => updateLine(idx, "hours_125", Number(e.target.value))} style={numInp} />
                     </td>
-                    <td style={{ ...td, background: rate === 150 ? "#fefce8" : "#fafaf9" }}>
+                    <td style={{ ...td, background: rate === 150 ? "rgba(217, 119, 6, 0.12)" : "transparent" }}>
                       <input type="number" min={0} step={0.5} value={line.hours_150 || ""} onChange={(e) => updateLine(idx, "hours_150", Number(e.target.value))} style={numInp} />
                     </td>
-                    <td style={{ ...td, background: rate === 200 ? "#fef2f2" : "#fafaf9" }}>
+                    <td style={{ ...td, background: rate === 200 ? "rgba(220, 38, 38, 0.12)" : "transparent" }}>
                       <input type="number" min={0} step={0.5} value={line.hours_200 || ""} onChange={(e) => updateLine(idx, "hours_200", Number(e.target.value))} style={numInp} />
                     </td>
-                    <td style={{ ...td, textAlign: "right", fontWeight: 600, fontSize: 12, color: "#1d4ed8" }}>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 600, fontSize: 12, color: "var(--primary, #1d4ed8)" }}>
                       {Number(line.converted_hours || 0).toFixed(2)}
                     </td>
                     <td style={{ ...td, minWidth: 80 }}>
@@ -433,16 +433,16 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                     </td>
                     <td style={{ ...td, textAlign: "center" }}>
                       <button onClick={() => removeLine(idx)}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 15, padding: "1px 3px" }}>×</button>
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", fontSize: 15, padding: "1px 3px" }}>×</button>
                     </td>
                   </tr>
                   );
                 })}
               </tbody>
               <tfoot>
-                <tr style={{ background: "#f1f5f9" }}>
+                <tr style={{ background: "var(--surface-soft)" }}>
                   <td colSpan={8} style={{ ...td, textAlign: "right", fontWeight: 700, fontSize: 12, paddingRight: 8 }}>Total Overtime:</td>
-                  <td style={{ ...td, textAlign: "right", fontWeight: 700, color: "#1d4ed8" }}>{totalOvertime.toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: "right", fontWeight: 700, color: "var(--primary, #1d4ed8)" }}>{totalOvertime.toFixed(2)}</td>
                   <td colSpan={3} style={td}></td>
                 </tr>
               </tfoot>
@@ -450,14 +450,14 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
           </div>
 
           <button onClick={addLine}
-            style={{ marginBottom: 24, padding: "5px 12px", border: "1px dashed #94a3b8", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 12, color: "#64748b" }}>
+            style={{ marginBottom: 24, padding: "5px 12px", border: "1px dashed var(--border-strong, var(--border))", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--muted)" }}>
             + Add Row
           </button>
 
           {/* Compensation type + actions */}
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 18, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", marginBottom: 8 }}>Number of Hours to be Compensated by:</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 8 }}>Number of Hours to be Compensated by:</div>
               <div style={{ display: "flex", gap: 16 }}>
                 {(["PAY", "DAYS"] as const).map((opt) => (
                   <label key={opt} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", fontWeight: compensationType === opt ? 700 : 400 }}>
@@ -471,11 +471,11 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button onClick={() => void save("DRAFT")} disabled={submitting}
-                style={{ padding: "9px 20px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13 }}>
+                style={{ padding: "9px 20px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13 }}>
                 Save Draft
               </button>
               <button onClick={() => void save("SUBMITTED")} disabled={submitting}
-                style={{ padding: "9px 22px", border: "none", borderRadius: 6, background: submitting ? "#93c5fd" : "#1d4ed8", color: "#fff", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600 }}>
+                style={{ padding: "9px 22px", border: "none", borderRadius: 6, background: submitting ? "rgba(147, 197, 253, 0.72)" : "var(--primary, #1d4ed8)", color: "#fff", cursor: submitting ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600 }}>
                 {submitting ? "Submitting…" : "Submit Claim"}
               </button>
             </div>
@@ -483,8 +483,8 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
 
           {/* HR / Finance read-only panel (only visible to HR/Finance) */}
           {(isHR || isFinance) && (
-            <div style={{ marginTop: 24, borderTop: "2px solid #e2e8f0", paddingTop: 18 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>HR & Finance Actions (back-office only)</div>
+            <div style={{ marginTop: 24, borderTop: "2px solid var(--border)", paddingTop: 18 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>HR & Finance Actions (back-office only)</div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 {isHR && <span style={{ fontSize: 12, color: "var(--muted)" }}>Use the Approval Inbox to take action on submitted claims at each workflow stage.</span>}
               </div>
@@ -495,4 +495,3 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
     </div>
   );
 }
-

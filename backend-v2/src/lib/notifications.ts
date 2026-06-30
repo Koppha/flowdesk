@@ -1653,6 +1653,53 @@ export async function notifyDelegationAssigned(args: {
   }
 }
 
+export async function notifyPositionAssigned(args: {
+  assigneeName: string | null;
+  assigneeEmail: string | null;
+  positionLabel: string; // e.g. "HOD", "Manager", "Exco Member"
+  groupLabel: string;    // department or section name
+  groupType: "Department" | "Section";
+}) {
+  if (!args.assigneeEmail) return;
+  try {
+    const body = [
+      header("POSITION ASSIGNED"),
+      ``,
+      `Hello ${args.assigneeName || ""},`,
+      ``,
+      `You have been assigned as ${args.positionLabel} of the ${args.groupLabel} ${args.groupType.toLowerCase()}.`,
+      ``,
+      detailBlock([
+        ["Position",      args.positionLabel],
+        [args.groupType,  args.groupLabel]
+      ]),
+      ``,
+      `Please log in to review your new responsibilities, including any pending approvals routed to this position.`,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({
+      to: [args.assigneeEmail],
+      subject: `[Invitation] You have been assigned as ${args.positionLabel} of ${args.groupLabel}`,
+      text: body
+    });
+
+    sendTeamsCard({
+      title: "Position Assigned",
+      summary: `${args.assigneeName || "A user"} has been assigned as ${args.positionLabel} of ${args.groupLabel}`,
+      color: "0ea5e9",
+      facts: [
+        { name: "Assignee",     value: args.assigneeName || "—" },
+        { name: "Position",     value: args.positionLabel },
+        { name: args.groupType, value: args.groupLabel }
+      ]
+    }).catch((e) => logger.warn("teams_position_assigned_failed", { error: serializeError(e) }));
+  } catch (error) {
+    logger.warn("position_assigned_notification_failed", { error: serializeError(error) });
+  }
+}
+
 export async function notifyAdvanceReminder(args: {
   advanceId: string;
   advanceType: string;

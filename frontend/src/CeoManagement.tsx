@@ -62,6 +62,63 @@ export default function CeoManagement() {
   const [reassignToRole, setReassignToRole] = useState("EXCO");
   const [reassignAction, setReassignAction] = useState<"ROLE" | "DEACTIVATE">("ROLE");
 
+  // Vacant CEO position — earmarked before anyone is assigned; filled later
+  // via the same Assign/Create flows above.
+  const [vacancies, setVacancies] = useState<any[]>([]);
+  const [fillingVacancyId, setFillingVacancyId] = useState<string | null>(null);
+  const [showVacancyModal, setShowVacancyModal] = useState(false);
+  const [vacancyTitle, setVacancyTitle] = useState("Chief Executive Officer");
+  const [creatingVacancy, setCreatingVacancy] = useState(false);
+
+  const loadVacancies = useCallback(async () => {
+    try {
+      const rows: any = await api.positionVacancies("CEO");
+      setVacancies(Array.isArray(rows) ? rows : []);
+    } catch {
+      // non-fatal — vacancies are a supplementary list
+    }
+  }, []);
+
+  useEffect(() => { void loadVacancies(); }, [loadVacancies]);
+
+  async function handleCreateVacancy() {
+    setCreatingVacancy(true);
+    try {
+      await api.createPositionVacancy({ role: "CEO", title: vacancyTitle.trim() || undefined });
+      setVacancyTitle("Chief Executive Officer");
+      setShowVacancyModal(false);
+      await loadVacancies();
+    } catch (e: any) {
+      alert("Error creating vacant position: " + e.message);
+    } finally {
+      setCreatingVacancy(false);
+    }
+  }
+
+  async function handleRemoveVacancy(id: string) {
+    const confirmed = await confirmAction({ title: "Remove vacant position?", text: "This cannot be undone.", confirmButtonText: "Remove" });
+    if (!confirmed) return;
+    try {
+      await api.deletePositionVacancy(id);
+      await loadVacancies();
+    } catch (e: any) {
+      alert("Error removing vacant position: " + e.message);
+    }
+  }
+
+  function openFillWithAssign(vacancyId: string) {
+    setFillingVacancyId(vacancyId);
+    setSelectedUserId("");
+    setAssignSearch("");
+    setShowAssignModal(true);
+  }
+
+  function openFillWithCreate(vacancyId: string) {
+    setFillingVacancyId(vacancyId);
+    setNewFirstName(""); setNewSurname(""); setNewEmail(""); setNewEmployeeNo(""); setNewTitle("Chief Executive Officer");
+    setShowCreateModal(true);
+  }
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -84,7 +141,13 @@ export default function CeoManagement() {
     if (!selectedUserId) { alert("Select a user to assign as CEO."); return; }
     setAssigning(true);
     try {
-      await api.updateUserRole(selectedUserId, { role: "CEO" });
+      if (fillingVacancyId) {
+        await api.fillPositionVacancy(fillingVacancyId, { existing_user_id: selectedUserId });
+        setFillingVacancyId(null);
+        await loadVacancies();
+      } else {
+        await api.updateUserRole(selectedUserId, { role: "CEO" });
+      }
       setShowAssignModal(false);
       setSelectedUserId("");
       setAssignSearch("");
@@ -101,7 +164,18 @@ export default function CeoManagement() {
     setCreating(true);
     try {
       const fullName = [newFirstName.trim(), newSurname.trim()].filter(Boolean).join(" ");
-      await api.createUser({ email: newEmail.trim(), full_name: fullName, employee_no: newEmployeeNo.trim() || undefined, role: "CEO", title: newTitle.trim(), is_active: true });
+      if (fillingVacancyId) {
+        await api.fillPositionVacancy(fillingVacancyId, {
+          email: newEmail.trim(),
+          full_name: fullName,
+          employee_no: newEmployeeNo.trim() || undefined,
+          title: newTitle.trim()
+        });
+        setFillingVacancyId(null);
+        await loadVacancies();
+      } else {
+        await api.createUser({ email: newEmail.trim(), full_name: fullName, employee_no: newEmployeeNo.trim() || undefined, role: "CEO", title: newTitle.trim(), is_active: true });
+      }
       setShowCreateModal(false);
       setNewFirstName(""); setNewSurname(""); setNewEmail(""); setNewEmployeeNo(""); setNewTitle("Chief Executive Officer");
       await Promise.all([load(), reloadStaff()]);
@@ -163,14 +237,57 @@ export default function CeoManagement() {
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" onClick={() => { void load(); void reloadStaff(); }}>Refresh</button>
-          <button className="ep-btn-outline" onClick={() => setShowAssignModal(true)}>
+          <button className="ep-btn-outline" onClick={() => { setVacancyTitle("Chief Executive Officer"); setShowVacancyModal(true); }}>
+            <Plus size={15} /> Create Vacant Position
+          </button>
+          <button className="ep-btn-outline" onClick={() => { setFillingVacancyId(null); setShowAssignModal(true); }}>
             <UserCheck size={15} /> Assign Existing User
           </button>
-          <button className="ep-btn" onClick={() => setShowCreateModal(true)}>
+          <button className="ep-btn" onClick={() => { setFillingVacancyId(null); setShowCreateModal(true); }}>
             <UserPlus size={15} /> Create CEO Account
           </button>
         </div>
       </div>
+
+      {/* ── Vacant Positions ── */}
+      {vacancies.length > 0 && (
+        <div className="ep-panel">
+          <div className="ep-panel-head">
+            <div className="ep-panel-title">Vacant CEO Position{vacancies.length !== 1 ? "s" : ""}</div>
+          </div>
+          <div className="ep-panel-body">
+            <div style={{ display: "grid", gap: 10 }}>
+              {vacancies.map((v) => (
+                <div key={v.id} className="ceo-card" style={{ background: "var(--surface-soft)" }}>
+                  <div className="ceo-avatar" style={{ background: "#fef3c7", color: "#92400e" }}>
+                    <Crown size={18} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: "1.05rem" }}>{v.title || "Chief Executive Officer"}</span>
+                      <span className="status-pill" style={{ background: "#fef3c7", color: "#92400e" }}>Vacant</span>
+                    </div>
+                    <div style={{ fontSize: "0.83rem", color: "var(--muted)", marginTop: 4 }}>
+                      Created {v.created_at ? new Date(v.created_at).toLocaleDateString() : "—"}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexShrink: 0 }}>
+                    <button className="ep-btn-outline" style={{ padding: "6px 12px", fontSize: "0.82rem" }} onClick={() => openFillWithAssign(v.id)}>
+                      <UserCheck size={13} /> Assign Existing
+                    </button>
+                    <button className="ep-btn-outline" style={{ padding: "6px 12px", fontSize: "0.82rem" }} onClick={() => openFillWithCreate(v.id)}>
+                      <UserPlus size={13} /> Create Account
+                    </button>
+                    <button className="ep-btn-outline" style={{ padding: "6px 12px", fontSize: "0.82rem", color: "#dc2626" }} onClick={() => void handleRemoveVacancy(v.id)}>
+                      <X size={13} /> Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Multiple CEO warning ── */}
       {hasMultipleCeos && (
@@ -333,14 +450,18 @@ export default function CeoManagement() {
 
       {/* ── Assign Existing User Modal ── */}
       {showAssignModal && (
-        <div className="ep-modal-overlay" onClick={() => setShowAssignModal(false)}>
+        <div className="ep-modal-overlay" onClick={() => { setShowAssignModal(false); setFillingVacancyId(null); }}>
           <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
             <div className="ep-modal-head">
               <div>
-                <h2 className="ep-modal-title">Assign Existing User as CEO</h2>
-                <p className="ep-modal-sub">Select an active user to assign the CEO role. Their current role will be replaced.</p>
+                <h2 className="ep-modal-title">{fillingVacancyId ? "Fill Vacant Position" : "Assign Existing User as CEO"}</h2>
+                <p className="ep-modal-sub">
+                  {fillingVacancyId
+                    ? "Select an active user to fill this vacant position. They'll receive an invitation."
+                    : "Select an active user to assign the CEO role. Their current role will be replaced."}
+                </p>
               </div>
-              <button className="ep-icon-btn" onClick={() => setShowAssignModal(false)}><X size={18} /></button>
+              <button className="ep-icon-btn" onClick={() => { setShowAssignModal(false); setFillingVacancyId(null); }}><X size={18} /></button>
             </div>
             <div className="ep-modal-body">
               <div className="ep-form-group">
@@ -391,9 +512,9 @@ export default function CeoManagement() {
               })()}
             </div>
             <div className="ep-modal-footer">
-              <button className="ep-btn-outline" onClick={() => setShowAssignModal(false)}>Cancel</button>
+              <button className="ep-btn-outline" onClick={() => { setShowAssignModal(false); setFillingVacancyId(null); }}>Cancel</button>
               <button className="ep-btn" onClick={() => void handleAssign()} disabled={assigning || !selectedUserId}>
-                {assigning ? "Assigning…" : "Assign as CEO"}
+                {assigning ? "Assigning…" : fillingVacancyId ? "Fill Position" : "Assign as CEO"}
               </button>
             </div>
           </div>
@@ -402,14 +523,18 @@ export default function CeoManagement() {
 
       {/* ── Create CEO Account Modal ── */}
       {showCreateModal && (
-        <div className="ep-modal-overlay" onClick={() => setShowCreateModal(false)}>
+        <div className="ep-modal-overlay" onClick={() => { setShowCreateModal(false); setFillingVacancyId(null); }}>
           <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
             <div className="ep-modal-head">
               <div>
-                <h2 className="ep-modal-title">Create CEO Account</h2>
-                <p className="ep-modal-sub">Create a new user account with the CEO role. A welcome email with temporary password will be sent.</p>
+                <h2 className="ep-modal-title">{fillingVacancyId ? "Fill Vacant Position" : "Create CEO Account"}</h2>
+                <p className="ep-modal-sub">
+                  {fillingVacancyId
+                    ? "Create an account for the person filling this vacant position. They'll receive an invitation."
+                    : "Create a new user account with the CEO role. A welcome email with temporary password will be sent."}
+                </p>
               </div>
-              <button className="ep-icon-btn" onClick={() => setShowCreateModal(false)}><X size={18} /></button>
+              <button className="ep-icon-btn" onClick={() => { setShowCreateModal(false); setFillingVacancyId(null); }}><X size={18} /></button>
             </div>
             <div className="ep-modal-body">
               <div className="ep-form-row">
@@ -442,9 +567,9 @@ export default function CeoManagement() {
               </div>
             </div>
             <div className="ep-modal-footer">
-              <button className="ep-btn-outline" onClick={() => setShowCreateModal(false)}>Cancel</button>
+              <button className="ep-btn-outline" onClick={() => { setShowCreateModal(false); setFillingVacancyId(null); }}>Cancel</button>
               <button className="ep-btn" onClick={() => void handleCreate()} disabled={creating}>
-                {creating ? "Creating…" : "Create CEO Account"}
+                {creating ? "Creating…" : fillingVacancyId ? "Fill Position" : "Create CEO Account"}
               </button>
             </div>
           </div>
@@ -511,6 +636,33 @@ export default function CeoManagement() {
               <button className="ep-btn-outline" onClick={() => { setReassignUser(null); setReassignAction("ROLE"); }}>Cancel</button>
               <button className="ep-btn-danger" onClick={() => void handleReassign()}>
                 {reassignAction === "ROLE" ? "Confirm Reassignment" : "Deactivate Account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Create Vacant Position Modal ── */}
+      {showVacancyModal && (
+        <div className="ep-modal-overlay" onClick={() => setShowVacancyModal(false)}>
+          <div className="ep-modal" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+            <div className="ep-modal-head">
+              <div>
+                <h2 className="ep-modal-title">Create Vacant Position</h2>
+                <p className="ep-modal-sub">Earmark the CEO seat before anyone is assigned. Fill it later from this page.</p>
+              </div>
+              <button className="ep-icon-btn" onClick={() => setShowVacancyModal(false)}><X size={18} /></button>
+            </div>
+            <div className="ep-modal-body">
+              <div className="ep-form-group">
+                <label>Title</label>
+                <input className="ep-form-input" value={vacancyTitle} onChange={(e) => setVacancyTitle(e.target.value)} />
+              </div>
+            </div>
+            <div className="ep-modal-footer">
+              <button className="ep-btn-outline" onClick={() => setShowVacancyModal(false)} disabled={creatingVacancy}>Cancel</button>
+              <button className="ep-btn" onClick={() => void handleCreateVacancy()} disabled={creatingVacancy}>
+                {creatingVacancy ? "Creating…" : "Create Vacant Position"}
               </button>
             </div>
           </div>

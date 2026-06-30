@@ -180,7 +180,13 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
         vehicle_type: z.string().optional(),
         engine_cc: z.string().optional(),
         vehicle_rate: z.number().optional(),
-        linked_advance_id: z.string().uuid().optional()
+        linked_advance_id: z.string().uuid().optional(),
+        settlement_method_requested: z.string().optional(),
+        settlement_ecocash_number: z.string().optional(),
+        settlement_bank_name: z.string().optional(),
+        settlement_bank_account_number: z.string().optional(),
+        settlement_bank_branch: z.string().optional(),
+        reason_for_overspend: z.string().optional()
       })
       .safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -194,8 +200,8 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
 
     const rows = await query<{ id: string }>(
       `INSERT INTO clearance_claims
-        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount, settlement_method_requested, settlement_ecocash_number, settlement_bank_name, settlement_bank_account_number, settlement_bank_branch, reason_for_overspend)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING id`,
       [
         req.user!.userId,
@@ -209,7 +215,13 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
         parsed.data.linked_advance_id ?? null,
         advanceAmount,
         claimTotal,
-        Number((advanceAmount - claimTotal).toFixed(2))
+        Number((advanceAmount - claimTotal).toFixed(2)),
+        parsed.data.settlement_method_requested ?? null,
+        parsed.data.settlement_ecocash_number ?? null,
+        parsed.data.settlement_bank_name ?? null,
+        parsed.data.settlement_bank_account_number ?? null,
+        parsed.data.settlement_bank_branch ?? null,
+        parsed.data.reason_for_overspend ?? null
       ]
     );
 
@@ -269,7 +281,13 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         vehicle_type: z.string().optional(),
         engine_cc: z.string().optional(),
         vehicle_rate: z.number().optional(),
-        linked_advance_id: z.string().uuid().optional()
+        linked_advance_id: z.string().uuid().optional(),
+        settlement_method_requested: z.string().optional(),
+        settlement_ecocash_number: z.string().optional(),
+        settlement_bank_name: z.string().optional(),
+        settlement_bank_account_number: z.string().optional(),
+        settlement_bank_branch: z.string().optional(),
+        reason_for_overspend: z.string().optional()
       })
       .safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -299,6 +317,12 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
               linked_advance_id=$9,
               advance_amount=$10,
               balance_amount=$11,
+              settlement_method_requested=$12,
+              settlement_ecocash_number=$13,
+              settlement_bank_name=$14,
+              settlement_bank_account_number=$15,
+              settlement_bank_branch=$16,
+              reason_for_overspend=$17,
               updated_at=now()
         WHERE id=$1`,
       [
@@ -312,7 +336,13 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         parsed.data.vehicle_rate ?? null,
         parsed.data.linked_advance_id ?? null,
         advanceAmount,
-        balanceAmount
+        balanceAmount,
+        parsed.data.settlement_method_requested ?? null,
+        parsed.data.settlement_ecocash_number ?? null,
+        parsed.data.settlement_bank_name ?? null,
+        parsed.data.settlement_bank_account_number ?? null,
+        parsed.data.settlement_bank_branch ?? null,
+        parsed.data.reason_for_overspend ?? null
       ]
     );
 
@@ -468,6 +498,11 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     if (claim.status !== "DRAFT") throw badRequest("Already submitted");
     if (!claim.linked_advance_id) throw badRequest("Select the approved advance being cleared");
     if (Number(claim.claim_total) <= 0) throw badRequest("Clearance total must be > 0");
+    // balance_amount < 0 means actual expenditure exceeded the advance (the
+    // company owes the employee) — require an explanation before submitting.
+    if (Number(claim.balance_amount || 0) < 0 && !String(claim.reason_for_overspend || "").trim()) {
+      throw badRequest("Please provide a reason for the overspend before submitting.");
+    }
 
     // Resolve the workflow for clearance requests in the claimant's department/section.
     const workflowResult = await resolveWorkflowChain({

@@ -124,9 +124,14 @@ export const api = {
   createUser: (data: any) => req("/auth/users", { method: "POST", body: JSON.stringify(data) }),
   updateUser: (id: string, data: any) => req(`/auth/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteUser: (id: string) => req(`/auth/users/${id}`, { method: "DELETE" }),
+  deleteUserPermanent: (id: string) => req(`/auth/users/${id}/permanent`, { method: "DELETE" }),
   updateUserRole: (id: string, data: any) => req(`/auth/users/${id}/role`, { method: "POST", body: JSON.stringify(data) }),
   updateUserDepartment: (id: string, data: { department: string; division_id?: string | null; section_id?: string | null; team_id?: string | null }) => req(`/auth/users/${id}/department`, { method: "POST", body: JSON.stringify(data) }),
   updateUserGroup: (id: string, data: any) => req(`/auth/users/${id}/group`, { method: "POST", body: JSON.stringify(data) }),
+  positionVacancies: (role?: string) => req(`/auth/position-vacancies${role ? `?role=${encodeURIComponent(role)}` : ""}`),
+  createPositionVacancy: (data: any) => req("/auth/position-vacancies", { method: "POST", body: JSON.stringify(data) }),
+  deletePositionVacancy: (id: string) => req(`/auth/position-vacancies/${id}`, { method: "DELETE" }),
+  fillPositionVacancy: (id: string, data: any) => req(`/auth/position-vacancies/${id}/fill`, { method: "POST", body: JSON.stringify(data) }),
   updateDepartmentRole: (department: string, data: any) =>
     req(`/auth/departments/${encodeURIComponent(department)}/role`, { method: "POST", body: JSON.stringify(data) }),
   departmentsWithSections: () => req("/auth/departments-with-sections"),
@@ -154,6 +159,7 @@ export const api = {
   updateEmploymentType: (id: string, data: { name?: string; active?: boolean; sort_order?: number }) => req(`/auth/employment-types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteEmploymentType: (id: string) => req(`/auth/employment-types/${id}`, { method: "DELETE" }),
   delegations: () => req("/auth/delegations"),
+  delegationEligibility: () => req("/auth/delegations/eligibility"),
   workflows: (requestType?: string, department?: string) => {
     const params: string[] = [];
     if (requestType) params.push(`requestType=${encodeURIComponent(requestType)}`);
@@ -164,12 +170,13 @@ export const api = {
   createWorkflow: (data: any) => req("/workflows", { method: "POST", body: JSON.stringify(data) }),
   updateWorkflow: (id: string, data: any) => req(`/workflows/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteWorkflow: (id: string) => req(`/workflows/${id}`, { method: "DELETE" }),
-  resolveWorkflow: (requestType: string, department?: string, amount?: number, section?: string, advanceSubType?: string) => {
+  resolveWorkflow: (requestType: string, department?: string, amount?: number, section?: string, advanceSubType?: string, requesterRole?: string) => {
     const params = [`requestType=${encodeURIComponent(requestType)}`];
     if (department) params.push(`department=${encodeURIComponent(department)}`);
     if (section) params.push(`section=${encodeURIComponent(section)}`);
     if (amount != null) params.push(`amount=${encodeURIComponent(String(amount))}`);
     if (advanceSubType) params.push(`advance_sub_type=${encodeURIComponent(advanceSubType)}`);
+    if (requesterRole) params.push(`requester_role=${encodeURIComponent(requesterRole)}`);
     return req(`/workflows/resolve?${params.join("&")}`);
   },
   chainApprovers: () => req("/workflows/chain-approvers"),

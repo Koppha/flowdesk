@@ -4770,6 +4770,197 @@ html[data-theme="dark"] .review-table th {
   gap: 16px;
 }
 
+/* Compact trip-lines table for the two-column clearance layout */
+.clearance-trip-table {
+  width: 100%;
+  font-size: 12px;
+}
+.clearance-trip-table th,
+.clearance-trip-table td {
+  padding: 7px 5px;
+}
+.clearance-trip-table th:first-child,
+.clearance-trip-table td:first-child {
+  padding-left: 2px;
+}
+/* Date, numeric, total and actions columns stay on one line; Location/Purpose may wrap */
+.clearance-trip-table th:nth-child(1),
+.clearance-trip-table td:nth-child(1),
+.clearance-trip-table th:nth-child(n+4),
+.clearance-trip-table td:nth-child(n+4) {
+  white-space: nowrap;
+}
+.clearance-trip-table .icon-button {
+  padding: 4px;
+}
+
+.clearance-body-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.clearance-body-grid.has-settlement {
+  grid-template-columns: minmax(0, 1.7fr) minmax(360px, 1fr);
+}
+
+.clearance-left-stack {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.clearance-section-card,
+.clearance-settlement-card {
+  padding: 18px;
+}
+
+.clearance-settlement-card {
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.clearance-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.clearance-settlement-title {
+  font-weight: 600;
+  color: #2563eb;
+  margin-bottom: 14px;
+}
+
+.advance-form .clearance-upload-button,
+.clearance-upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
+.clearance-upload-button:hover {
+  background: var(--surface-soft);
+  border-color: var(--border-strong);
+}
+
+.clearance-upload-zone {
+  display: block;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 18px 12px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--surface);
+}
+
+.clearance-upload-zone:hover {
+  background: var(--surface-soft);
+}
+
+.clearance-upload-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.clearance-method-options {
+  display: flex;
+  gap: 18px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.advance-form .clearance-radio-option,
+.clearance-radio-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.clearance-radio-option input[type="radio"] {
+  width: 15px;
+  height: 15px;
+  min-height: 15px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 15px;
+  accent-color: #2563eb;
+}
+
+.clearance-bank-fields {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.clearance-info-note {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  color: #1e40af;
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.clearance-action-button {
+  min-width: 138px;
+}
+
+.clearance-submit-button {
+  background: #071735;
+  border-color: #071735;
+  color: #ffffff;
+  box-shadow: 0 10px 20px rgba(7, 23, 53, 0.18);
+}
+
+.clearance-submit-button:hover:not(:disabled) {
+  background: #0b1f48;
+  border-color: #0b1f48;
+}
+
+@media (max-width: 1180px) {
+  .clearance-body-grid.has-settlement {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .clearance-card-header {
+    align-items: stretch;
+  }
+
+  .clearance-card-header .clearance-upload-button,
+  .clearance-action-button {
+    width: 100%;
+  }
+}
+
 .form-field {
   gap: 7px;
 }
@@ -10256,6 +10447,11 @@ html[data-theme="dark"] .tracking-empty {
 .ep-form-field-full { grid-column: 1 / -1; }
 .ep-checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; color: var(--text); cursor: pointer; margin-top: 4px; }
 .ep-required { color: #dc2626; }
+.ep-checkbox-group { grid-column: span 2; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--surface); }
+.ep-checkbox-group-header { display: block; margin-bottom: 10px; }
+.ep-checkbox-group-title { font-size: 0.92rem; font-weight: 700; color: var(--text); }
+.ep-checkbox-group-desc { display: block; font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+.ep-checkbox-group-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
 .ep-optional { font-size: 0.78rem; color: var(--muted); }
 
 /* ── Tabs ── */
@@ -10871,5 +11067,897 @@ html[data-theme="dark"] .tracking-empty {
 
   .recon-summary {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Dark mode final polish
+   Keep this after the older theme blocks so it wins over page-level hardcoded colors. */
+html[data-theme="dark"] {
+  --surface-hover: #1c2a3f;
+  --text-secondary: #cbd7ea;
+  --border-strong: #465a78;
+  --primary-soft: rgba(116, 164, 255, 0.16);
+}
+
+html[data-theme="dark"] body,
+html[data-theme="dark"] #root,
+html[data-theme="dark"] .app-shell {
+  background: var(--bg);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .header,
+html[data-theme="dark"] .page-workflow-builder .header {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border-bottom-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .header-user-name,
+html[data-theme="dark"] .ep-title {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .header-user-meta,
+html[data-theme="dark"] .ep-subtitle,
+html[data-theme="dark"] .ep-breadcrumb {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .main,
+html[data-theme="dark"] .page-workflow-builder .content {
+  background:
+    radial-gradient(circle at 92% 5%, rgba(116, 164, 255, 0.13), transparent 28%),
+    linear-gradient(180deg, #101a2a 0%, var(--bg) 100%);
+}
+
+html[data-theme="dark"] .icon-button,
+html[data-theme="dark"] .notification-button,
+html[data-theme="dark"] .button-subtle,
+html[data-theme="dark"] .ep-icon-btn {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .icon-button:hover,
+html[data-theme="dark"] .notification-button:hover,
+html[data-theme="dark"] .button-subtle:hover,
+html[data-theme="dark"] .ep-icon-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea {
+  background: #0f1828;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] input::placeholder,
+html[data-theme="dark"] textarea::placeholder {
+  color: #8190a8;
+}
+
+html[data-theme="dark"] input:hover,
+html[data-theme="dark"] select:hover,
+html[data-theme="dark"] textarea:hover {
+  border-color: var(--border-strong);
+}
+
+html[data-theme="dark"] input:focus,
+html[data-theme="dark"] select:focus,
+html[data-theme="dark"] textarea:focus {
+  border-color: #74a4ff;
+  box-shadow: 0 0 0 3px rgba(116, 164, 255, 0.16);
+}
+
+html[data-theme="dark"] .workflow-list-panel,
+html[data-theme="dark"] .workflow-template-panel,
+html[data-theme="dark"] .workflow-config-bar,
+html[data-theme="dark"] .workflow-panel,
+html[data-theme="dark"] .workflow-validation-card,
+html[data-theme="dark"] .workflow-rules-card,
+html[data-theme="dark"] .workflow-summary-card,
+html[data-theme="dark"] .workflow-stepper,
+html[data-theme="dark"] .workflow-template-card,
+html[data-theme="dark"] .workflow-template-preview,
+html[data-theme="dark"] .ep-panel,
+html[data-theme="dark"] .card {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .workflow-search,
+html[data-theme="dark"] .workflow-list-toolbar select,
+html[data-theme="dark"] .workflow-form-grid input,
+html[data-theme="dark"] .workflow-form-grid select,
+html[data-theme="dark"] .workflow-form-grid textarea,
+html[data-theme="dark"] .workflow-request-type-card select,
+html[data-theme="dark"] .workflow-config-field input,
+html[data-theme="dark"] .workflow-config-field select,
+html[data-theme="dark"] .workflow-step-details input,
+html[data-theme="dark"] .workflow-step-details select,
+html[data-theme="dark"] .workflow-rule-form input,
+html[data-theme="dark"] .workflow-rule-form select {
+  background: #0f1828;
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: none;
+}
+
+html[data-theme="dark"] .workflow-search input {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+html[data-theme="dark"] .workflow-search input:focus {
+  box-shadow: none;
+}
+
+html[data-theme="dark"] .workflow-management-table,
+html[data-theme="dark"] .workflow-rules-table,
+html[data-theme="dark"] .ep-table {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .workflow-management-table th,
+html[data-theme="dark"] .workflow-rules-table th,
+html[data-theme="dark"] .ep-table th {
+  background: #172234;
+  color: #dce7f7;
+  border-bottom-color: var(--border);
+}
+
+html[data-theme="dark"] .workflow-management-table td,
+html[data-theme="dark"] .workflow-rules-table td,
+html[data-theme="dark"] .ep-table td {
+  border-bottom-color: var(--border);
+  color: var(--text-secondary);
+}
+
+html[data-theme="dark"] .workflow-management-table tbody tr:hover td,
+html[data-theme="dark"] .workflow-rules-table tbody tr:hover td,
+html[data-theme="dark"] .ep-table tbody tr:hover td {
+  background: var(--surface-hover);
+}
+
+html[data-theme="dark"] .workflow-management-table td:first-child strong,
+html[data-theme="dark"] .workflow-management-table td:nth-child(7) span,
+html[data-theme="dark"] .workflow-rules-table td,
+html[data-theme="dark"] .workflow-stepper-item strong,
+html[data-theme="dark"] .workflow-metadata-card h3,
+html[data-theme="dark"] .workflow-request-type-card h3,
+html[data-theme="dark"] .workflow-template-panel h3,
+html[data-theme="dark"] .workflow-form-grid label,
+html[data-theme="dark"] .workflow-template-card strong,
+html[data-theme="dark"] .workflow-panel-header h3,
+html[data-theme="dark"] .workflow-validation-card h3,
+html[data-theme="dark"] .workflow-rules-card h3,
+html[data-theme="dark"] .workflow-summary-card h3,
+html[data-theme="dark"] .summary-row strong {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .workflow-management-table td:first-child small,
+html[data-theme="dark"] .workflow-management-table td:nth-child(7) small,
+html[data-theme="dark"] .workflow-stepper-item small,
+html[data-theme="dark"] .workflow-request-type-card p,
+html[data-theme="dark"] .workflow-template-card > span,
+html[data-theme="dark"] .workflow-step-labels span,
+html[data-theme="dark"] .workflow-position-card p,
+html[data-theme="dark"] .workflow-step-meta small,
+html[data-theme="dark"] .workflow-page-heading p,
+html[data-theme="dark"] .workflow-panel-header p,
+html[data-theme="dark"] .summary-row,
+html[data-theme="dark"] .workflow-empty-table,
+html[data-theme="dark"] .workflow-flow-arrow,
+html[data-theme="dark"] .workflow-flow-empty {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .workflow-summary-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .workflow-summary-tile:hover {
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme="dark"] .workflow-summary-tile strong {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .workflow-summary-tile small {
+  color: var(--muted);
+  opacity: 1;
+}
+
+html[data-theme="dark"] .workflow-summary-icon {
+  background: rgba(116, 164, 255, 0.15);
+  color: #b7d0ff;
+}
+
+html[data-theme="dark"] .workflow-summary-tile:nth-child(2) .workflow-summary-icon {
+  background: rgba(74, 222, 128, 0.14);
+  color: #9af2b7;
+}
+
+html[data-theme="dark"] .workflow-summary-tile:nth-child(3) .workflow-summary-icon {
+  background: rgba(251, 191, 36, 0.14);
+  color: #fcd56f;
+}
+
+html[data-theme="dark"] .workflow-summary-tile:nth-child(4) .workflow-summary-icon {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fda4af;
+}
+
+html[data-theme="dark"] .workflow-request-chip,
+html[data-theme="dark"] .workflow-table-action.active {
+  background: rgba(116, 164, 255, 0.16);
+  border-color: rgba(116, 164, 255, 0.32);
+  color: #b7d0ff;
+}
+
+html[data-theme="dark"] .workflow-row-expanded > td,
+html[data-theme="dark"] .workflow-row-actions-expanded > td,
+html[data-theme="dark"] .workflow-rule-form,
+html[data-theme="dark"] .workflow-drop-target,
+html[data-theme="dark"] .workflow-position-card,
+html[data-theme="dark"] .workflow-designer-canvas {
+  background: #0f1828;
+  border-color: var(--border);
+}
+
+html[data-theme="dark"] .workflow-inline-actions button {
+  background: #0f1828;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .workflow-inline-actions button:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+html[data-theme="dark"] .workflow-inline-actions button.danger,
+html[data-theme="dark"] .workflow-table-action.danger {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.24);
+  color: #fda4af;
+}
+
+html[data-theme="dark"] .workflow-status-select.status-active {
+  color: #86efac;
+  background:
+    linear-gradient(90deg, rgba(22, 163, 74, 0.2) 12px, rgba(22, 163, 74, 0.2) 76px, transparent 76px),
+    #0f1828;
+}
+
+html[data-theme="dark"] .workflow-status-select.status-draft {
+  color: #fcd34d;
+  background:
+    linear-gradient(90deg, rgba(245, 158, 11, 0.18) 12px, rgba(245, 158, 11, 0.18) 70px, transparent 70px),
+    #0f1828;
+}
+
+html[data-theme="dark"] .workflow-status-select.status-inactive {
+  color: #cbd5e1;
+  background:
+    linear-gradient(90deg, rgba(148, 163, 184, 0.16) 12px, rgba(148, 163, 184, 0.16) 82px, transparent 82px),
+    #0f1828;
+}
+
+html[data-theme="dark"] .workflow-step-card,
+html[data-theme="dark"] .workflow-step-card:hover {
+  background: color-mix(in srgb, var(--workflow-tone-soft) 32%, var(--surface) 68%);
+  border-color: var(--workflow-tone-border);
+}
+
+html[data-theme="dark"] .workflow-tone-employee,
+html[data-theme="dark"] .workflow-tone-procurement {
+  --workflow-tone: #9ec5ff;
+  --workflow-tone-bg: rgba(116, 164, 255, 0.14);
+  --workflow-tone-soft: rgba(116, 164, 255, 0.18);
+  --workflow-tone-border: rgba(116, 164, 255, 0.34);
+}
+
+html[data-theme="dark"] .workflow-tone-hod,
+html[data-theme="dark"] .workflow-tone-legal-review {
+  --workflow-tone: #86efac;
+  --workflow-tone-bg: rgba(74, 222, 128, 0.12);
+  --workflow-tone-soft: rgba(74, 222, 128, 0.16);
+  --workflow-tone-border: rgba(74, 222, 128, 0.32);
+}
+
+html[data-theme="dark"] .workflow-tone-manager {
+  --workflow-tone: #c4b5fd;
+  --workflow-tone-bg: rgba(196, 181, 253, 0.12);
+  --workflow-tone-soft: rgba(196, 181, 253, 0.16);
+  --workflow-tone-border: rgba(196, 181, 253, 0.3);
+}
+
+html[data-theme="dark"] .workflow-tone-exco-owner {
+  --workflow-tone: #fdba74;
+  --workflow-tone-bg: rgba(253, 186, 116, 0.12);
+  --workflow-tone-soft: rgba(253, 186, 116, 0.16);
+  --workflow-tone-border: rgba(253, 186, 116, 0.3);
+}
+
+html[data-theme="dark"] .workflow-tone-finance,
+html[data-theme="dark"] .workflow-tone-hr-review {
+  --workflow-tone: #fda4af;
+  --workflow-tone-bg: rgba(253, 164, 175, 0.12);
+  --workflow-tone-soft: rgba(253, 164, 175, 0.16);
+  --workflow-tone-border: rgba(253, 164, 175, 0.3);
+}
+
+html[data-theme="dark"] .workflow-tone-ceo {
+  --workflow-tone: #fcd34d;
+  --workflow-tone-bg: rgba(252, 211, 77, 0.12);
+  --workflow-tone-soft: rgba(252, 211, 77, 0.16);
+  --workflow-tone-border: rgba(252, 211, 77, 0.3);
+}
+
+/* Custom requests refinement */
+.custom-requests-page {
+  --cr-accent: #2563eb;
+  --cr-accent-soft: rgba(37, 99, 235, 0.1);
+  --cr-accent-border: rgba(37, 99, 235, 0.24);
+  display: grid;
+  gap: 18px;
+  padding: 0 0 40px;
+  color: var(--text);
+}
+
+.custom-requests-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.custom-requests-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.custom-requests-title-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--cr-accent);
+  background: var(--cr-accent-soft);
+  border: 1px solid var(--cr-accent-border);
+}
+
+.cr-impl-card {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 16px 18px;
+}
+.cr-impl-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.cr-impl-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--cr-accent);
+  background: var(--cr-accent-soft);
+  border: 1px solid var(--cr-accent-border);
+  flex-shrink: 0;
+}
+.cr-impl-card-title { font-weight: 700; font-size: 14px; color: var(--text); }
+.cr-impl-card-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.cr-impl-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+.cr-impl-field-full { grid-column: 1 / -1; }
+@media (max-width: 900px) {
+  .cr-impl-fields-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .cr-impl-fields-grid { grid-template-columns: 1fr; }
+}
+
+.custom-requests-title-row h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.custom-requests-subtitle {
+  margin: 6px 0 0 44px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.custom-requests-back {
+  min-height: 36px;
+  padding: 7px 14px;
+}
+
+.custom-request-type-picker {
+  max-width: 360px;
+  margin-bottom: 0;
+}
+
+.custom-request-tabs {
+  margin: 0;
+}
+
+.custom-request-tabs .ep-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 16px;
+}
+
+.custom-request-wizard-panel {
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.08);
+}
+
+.custom-request-panel-head {
+  min-height: 58px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.custom-request-panel-subtitle {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.custom-request-panel-body {
+  padding: 0;
+}
+
+.custom-request-stepper {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, var(--surface-soft) 8%);
+}
+
+.custom-request-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 66px;
+  padding: 16px 20px;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+
+.custom-request-step:last-child {
+  border-right: none;
+}
+
+.custom-request-step::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: -1px;
+  height: 3px;
+  border-radius: 999px 999px 0 0;
+  background: transparent;
+}
+
+.custom-request-step.is-active::after,
+.custom-request-step.is-complete::after {
+  background: var(--cr-accent);
+}
+
+.custom-request-step-index {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.custom-request-step.is-active .custom-request-step-index {
+  color: #fff;
+  background: var(--cr-accent);
+  border-color: var(--cr-accent);
+  box-shadow: 0 8px 16px rgba(37, 99, 235, 0.22);
+}
+
+.custom-request-step.is-complete .custom-request-step-index {
+  color: var(--cr-accent);
+  background: var(--cr-accent-soft);
+  border-color: var(--cr-accent-border);
+}
+
+.custom-request-step-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.custom-request-step-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.custom-request-step-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.custom-request-form-body {
+  padding: 22px 20px 8px;
+}
+
+.custom-request-wizard-panel .ep-form-fields-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px 18px;
+}
+
+.custom-request-wizard-panel .ep-form-field-full {
+  grid-column: 1 / -1;
+}
+
+.custom-request-wizard-panel .ep-form-group {
+  margin-bottom: 0;
+}
+
+.custom-request-wizard-panel .ep-form-group label {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.custom-request-wizard-panel .ep-checkbox-label {
+  min-height: 32px;
+  align-items: center;
+  margin: 0;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.custom-request-wizard-panel .ep-form-input,
+.custom-request-wizard-panel .ep-form-select,
+.custom-request-wizard-panel .ep-form-textarea {
+  min-height: 42px;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.custom-request-wizard-panel .ep-form-textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.custom-attachments {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.custom-attachments-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.custom-attachments-copy {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.custom-attachment-dropzone {
+  min-height: 94px;
+  display: grid;
+  place-items: center;
+  gap: 5px;
+  padding: 18px 16px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface) 28%);
+  border: 1.5px dashed color-mix(in srgb, var(--cr-accent) 35%, var(--border) 65%);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.custom-attachment-dropzone:hover {
+  color: var(--text);
+  background: var(--cr-accent-soft);
+  border-color: var(--cr-accent);
+}
+
+.custom-attachment-dropzone svg,
+.custom-attachment-dropzone strong {
+  color: var(--cr-accent);
+}
+
+.custom-attachment-dropzone span {
+  font-size: 13px;
+}
+
+.custom-attachment-dropzone small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.custom-attachment-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.custom-attachment-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 7px 10px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.custom-request-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.custom-request-error {
+  margin-top: 16px;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.custom-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--status-border, transparent);
+  background: var(--status-bg, #f1f5f9);
+  color: var(--status-fg, #475569);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: capitalize;
+}
+
+.custom-status-submitted,
+.custom-status-noted {
+  --status-bg: #e0f2fe;
+  --status-fg: #0369a1;
+  --status-border: #bae6fd;
+}
+
+.custom-status-in-progress,
+.custom-status-pending {
+  --status-bg: #fef3c7;
+  --status-fg: #b45309;
+  --status-border: #fde68a;
+}
+
+.custom-status-approved,
+.custom-status-closed {
+  --status-bg: #dcfce7;
+  --status-fg: #15803d;
+  --status-border: #bbf7d0;
+}
+
+.custom-status-rejected {
+  --status-bg: #fee2e2;
+  --status-fg: #b91c1c;
+  --status-border: #fecaca;
+}
+
+.custom-status-cancelled {
+  --status-bg: #f1f5f9;
+  --status-fg: #475569;
+  --status-border: #d8e2f2;
+}
+
+.custom-request-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--note-border, var(--border));
+  background: var(--note-bg, var(--surface-soft));
+  color: var(--text);
+  font-size: 13px;
+}
+
+.custom-request-note-success {
+  --note-bg: #f0fdf4;
+  --note-border: #bbf7d0;
+}
+
+.custom-request-note-neutral {
+  --note-bg: #f8fafc;
+  --note-border: #d8e2f2;
+}
+
+.custom-requests-page .card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+html[data-theme="dark"] .custom-requests-page {
+  --cr-accent: #74a4ff;
+  --cr-accent-soft: rgba(116, 164, 255, 0.14);
+  --cr-accent-border: rgba(116, 164, 255, 0.3);
+}
+
+html[data-theme="dark"] .custom-request-wizard-panel,
+html[data-theme="dark"] .custom-requests-page .card {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .custom-request-stepper {
+  background: #101a2b;
+}
+
+html[data-theme="dark"] .custom-request-wizard-panel .ep-form-input,
+html[data-theme="dark"] .custom-request-wizard-panel .ep-form-select,
+html[data-theme="dark"] .custom-request-wizard-panel .ep-form-textarea {
+  background: #0f1828;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .custom-attachment-dropzone {
+  background: rgba(15, 24, 40, 0.8);
+  border-color: rgba(116, 164, 255, 0.34);
+}
+
+html[data-theme="dark"] .custom-attachment-dropzone:hover {
+  background: rgba(116, 164, 255, 0.12);
+  border-color: #74a4ff;
+}
+
+html[data-theme="dark"] .custom-attachment-file {
+  background: #0f1828;
+  border-color: var(--border);
+}
+
+html[data-theme="dark"] .custom-status-submitted,
+html[data-theme="dark"] .custom-status-noted {
+  --status-bg: rgba(56, 189, 248, 0.14);
+  --status-fg: #7dd3fc;
+  --status-border: rgba(56, 189, 248, 0.26);
+}
+
+html[data-theme="dark"] .custom-status-in-progress,
+html[data-theme="dark"] .custom-status-pending {
+  --status-bg: rgba(251, 191, 36, 0.14);
+  --status-fg: #fcd34d;
+  --status-border: rgba(251, 191, 36, 0.28);
+}
+
+html[data-theme="dark"] .custom-status-approved,
+html[data-theme="dark"] .custom-status-closed {
+  --status-bg: rgba(74, 222, 128, 0.14);
+  --status-fg: #86efac;
+  --status-border: rgba(74, 222, 128, 0.28);
+}
+
+html[data-theme="dark"] .custom-status-rejected {
+  --status-bg: rgba(248, 113, 113, 0.14);
+  --status-fg: #fca5a5;
+  --status-border: rgba(248, 113, 113, 0.28);
+}
+
+html[data-theme="dark"] .custom-status-cancelled,
+html[data-theme="dark"] .custom-status-default {
+  --status-bg: rgba(148, 163, 184, 0.13);
+  --status-fg: #cbd5e1;
+  --status-border: rgba(148, 163, 184, 0.24);
+}
+
+html[data-theme="dark"] .custom-request-note-success {
+  --note-bg: rgba(74, 222, 128, 0.1);
+  --note-border: rgba(74, 222, 128, 0.24);
+}
+
+html[data-theme="dark"] .custom-request-note-neutral {
+  --note-bg: rgba(148, 163, 184, 0.1);
+  --note-border: rgba(148, 163, 184, 0.22);
+}
+
+@media (max-width: 1200px) {
+  .custom-request-wizard-panel .ep-form-fields-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .custom-requests-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .custom-requests-subtitle {
+    margin-left: 0;
+  }
+
+  .custom-request-tabs {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .custom-request-stepper,
+  .custom-request-wizard-panel .ep-form-fields-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-request-step {
+    border-right: none;
+  }
+
+  .custom-request-form-body {
+    padding: 18px 16px 8px;
+  }
+
+  .custom-request-footer {
+    align-items: stretch;
+    flex-direction: column-reverse;
   }
 }

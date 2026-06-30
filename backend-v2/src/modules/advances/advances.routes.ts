@@ -721,13 +721,55 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       throw badRequest("Only draft advances can be submitted");
     }
 
+    const requester = (await query<{ role: string; section_id: string | null; department: string | null }>(
+      `SELECT role, section_id, department FROM users WHERE id=$1`,
+      [adv.requester_id]
+    ))[0];
+    if (!requester) throw badRequest("Requester not found");
+
+    // A requester-chosen countersigner/approver (override_chain) is only honored
+    // for travel advances, and only from a role-appropriate pool — validate
+    // server-side rather than trusting the frontend's pool filtering.
+    let overrideChain: { label: string; user_id: string; user_name?: string }[] | undefined;
+    if (adv.override_chain?.length && (await isTravelAdvanceType(adv.type))) {
+      const overrideUserIds = adv.override_chain.map((o) => o.user_id);
+      const overrideUsers = await query<{ id: string; role: string; section_id: string | null; department: string | null }>(
+        `SELECT id, role, section_id, department FROM users WHERE id = ANY($1)`,
+        [overrideUserIds]
+      );
+
+      const isEligible = (u: { role: string; section_id: string | null; department: string | null } | undefined) => {
+        if (!u) return false;
+        if (requester.role === "CEO" || requester.role === "EXCO") return u.role === "EXCO";
+        if (requester.role === "MANAGER") {
+          return (
+            u.role === "EXCO" ||
+            (!!requester.section_id && u.section_id === requester.section_id) ||
+            (!!requester.department && u.department === requester.department)
+          );
+        }
+        return false;
+      };
+
+      if (!["CEO", "EXCO", "MANAGER"].includes(requester.role)) {
+        throw badRequest("Only CEO, Exco, or Manager requesters may choose their own countersigner/approver");
+      }
+      for (const o of adv.override_chain) {
+        const u = overrideUsers.find((x) => x.id === o.user_id);
+        if (!isEligible(u)) throw badRequest(`Selected approver for "${o.label}" is not eligible for this role`);
+      }
+      overrideChain = adv.override_chain;
+    }
+
     // Resolve the workflow for this advance type and department
     const workflowResult = await resolveWorkflowChain({
       requestType: "ADVANCE_REQUEST",
       department: adv.requester_department || "",
       section: adv.requester_section || "",
       advanceSubType: adv.type,
-      needsAccommodation
+      needsAccommodation,
+      overrideChain,
+      requesterRole: requester.role
     });
     if (!workflowResult || workflowResult.chain.length === 0) {
       throw badRequest(

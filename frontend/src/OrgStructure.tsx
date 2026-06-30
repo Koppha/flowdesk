@@ -597,7 +597,7 @@ export default function OrgStructure() {
         {items.map(dept => {
           const secCount = data.sections.filter(s => s.department_id === dept.id).length;
           const bpLabel = dept.is_business_partner ? "Business Partner" : undefined;
-          const hodLabel = dept.hod_name ? `HOD: ${dept.hod_name}` : dept.manager_name ? `Manager: ${dept.manager_name}` : undefined;
+          const hodLabel = dept.hod_name ? `HOD: ${dept.hod_name}` : dept.manager_name ? `Manager: ${dept.manager_name}` : "Leadership: Vacant";
           const subtitle = [bpLabel, hodLabel].filter(Boolean).join(" · ") || undefined;
           return (
             <div key={dept.id}>

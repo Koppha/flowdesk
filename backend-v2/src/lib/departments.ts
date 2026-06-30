@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { badRequest } from "./errors.js";
 import { query } from "./db.js";
+import { notifyPositionAssigned } from "./notifications.js";
 
 // ---------------------------------------------------------------------------
 // Divisions (top-level org unit below Company)
@@ -672,7 +673,40 @@ export async function updateDepartmentGroup(oldName: string, newName: string, op
     await syncDepartmentDivisions(existing[0].id, options.divisionIds);
   }
 
+  await notifyNewPositionAssignees(updatedDepartment, "Department", [
+    { label: "HOD", oldId: existing[0].hod_user_id, newId: hodUserId },
+    { label: "Manager", oldId: existing[0].manager_user_id, newId: managerUserId },
+    { label: "Exco Member", oldId: existing[0].exco_user_id, newId: excoUserId }
+  ]);
+
   return rows[0];
+}
+
+// Fires an "invitation" notification for any leadership slot that was just
+// filled with a different (or newly-assigned) user, so a vacant position
+// created earlier can be filled later and the assignee is notified.
+async function notifyNewPositionAssignees(
+  groupLabel: string,
+  groupType: "Department" | "Section",
+  slots: { label: string; oldId: string | null; newId: string | null }[]
+) {
+  const changed = slots.filter((s) => s.newId && s.newId !== s.oldId);
+  if (!changed.length) return;
+  const users = await query<{ id: string; full_name: string | null; email: string | null }>(
+    `SELECT id, full_name, email FROM users WHERE id = ANY($1)`,
+    [changed.map((s) => s.newId)]
+  );
+  for (const slot of changed) {
+    const user = users.find((u) => u.id === slot.newId);
+    if (!user) continue;
+    void notifyPositionAssigned({
+      assigneeName: user.full_name,
+      assigneeEmail: user.email,
+      positionLabel: slot.label,
+      groupLabel,
+      groupType
+    });
+  }
 }
 
 export async function createSectionGroup(input: string, excoUserId?: string | null, departmentId?: string | null, isBusinessPartner?: boolean, divisionIds?: string[]) {
@@ -752,8 +786,8 @@ export async function updateSectionGroup(id: string, name: string, excoUserId?: 
   if (!section) throw badRequest("Section name is required");
 
   await ensureSectionSchemaWithDeptId();
-  const existing = await query<{ id: string }>(
-    `SELECT id
+  const existing = await query<{ id: string; exco_user_id: string | null }>(
+    `SELECT id, exco_user_id
        FROM sections
       WHERE id = $1
       LIMIT 1`,
@@ -784,6 +818,11 @@ export async function updateSectionGroup(id: string, name: string, excoUserId?: 
     [id, section, ownerId ?? null, excoUserId === undefined, departmentId ?? null, active ?? null, isBusinessPartner ?? null]
   );
   if (divisionIds !== undefined) await syncSectionDivisions(id, divisionIds);
+
+  await notifyNewPositionAssignees(section, "Section", [
+    { label: "Exco Member", oldId: existing[0].exco_user_id, newId: ownerId ?? (excoUserId === undefined ? existing[0].exco_user_id : null) }
+  ]);
+
   return rows[0];
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
-import { ArrowDown, ArrowUp, Calendar, ClipboardList, Download, Paperclip, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, X } from "lucide-react";
 
 type DirectoryUser = {
   id: string;
@@ -121,19 +121,9 @@ function userLabel(u: DirectoryUser) {
 }
 
 function statusBadge(status: string) {
-  const map: Record<string, { bg: string; fg: string }> = {
-    SUBMITTED: { bg: "#e0f2fe", fg: "#0369a1" },
-    IN_PROGRESS: { bg: "#fef3c7", fg: "#b45309" },
-    APPROVED: { bg: "#dcfce7", fg: "#15803d" },
-    REJECTED: { bg: "#fee2e2", fg: "#b91c1c" },
-    CLOSED: { bg: "#f0fdf4", fg: "#166534" },
-    PENDING: { bg: "#fef3c7", fg: "#b45309" },
-    CANCELLED: { bg: "#f1f5f9", fg: "#475569" },
-    NOTED: { bg: "#e0f2fe", fg: "#0369a1" }
-  };
-  const c = map[status] || { bg: "#f1f5f9", fg: "#475569" };
+  const normalized = status.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return (
-    <span style={{ background: c.bg, color: c.fg, fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 999 }}>
+    <span className={`custom-status-badge custom-status-${normalized || "default"}`}>
       {status.replace(/_/g, " ")}
     </span>
   );
@@ -336,6 +326,169 @@ function assigneeLabel(a: AssigneeEntry) {
   return a.teamId ? `Team: ${a.teamName}` : a.name || a.email || "—";
 }
 
+type AssigneePick = { kind: "user"; id: string } | { kind: "team"; id: string } | { kind: "email"; value: string };
+
+// Single combined search/select for picking either a team or an individual
+// (and, optionally, inviting someone by email) — one input with a search
+// icon and a dropdown chevron, not a search box bolted onto a separate
+// native <select>.
+function AssigneeCombobox({
+  users, teams, value, onChange, allowFreeEmail
+}: { users: DirectoryUser[]; teams: TeamOption[]; value: AssigneePick | null; onChange: (v: AssigneePick | null) => void; allowFreeEmail?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
+  const [openLeftward, setOpenLeftward] = useState(false);
+  const [dropdownWidth, setDropdownWidth] = useState<number | null>(null);
+  const [anchor, setAnchor] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
+  const [query, setQuery] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function isInside(target: Node) {
+      return Boolean(boxRef.current?.contains(target)) || Boolean(dropdownRef.current?.contains(target));
+    }
+    function onOutside(e: MouseEvent) {
+      if (!isInside(e.target as Node)) setOpen(false);
+    }
+    function onScroll(e: Event) {
+      if (isInside(e.target as Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onOutside);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, []);
+
+  function handleOpen() {
+    const rect = boxRef.current?.getBoundingClientRect();
+    const spaceBelow = rect ? window.innerHeight - rect.bottom : Infinity;
+    const upward = spaceBelow < COMBOBOX_DROPDOWN_HEIGHT + 16;
+    setOpenUpward(upward);
+
+    if (rect) {
+      const desiredWidth = Math.max(rect.width, COMBOBOX_DROPDOWN_MIN_WIDTH);
+      const spaceRight = window.innerWidth - rect.left;
+      const spaceLeft = rect.right;
+      const leftward = desiredWidth > spaceRight - 16 && spaceLeft >= desiredWidth;
+      setOpenLeftward(leftward);
+      setDropdownWidth(Math.min(desiredWidth, window.innerWidth - 16));
+      setAnchor({
+        top: rect.bottom + 2,
+        bottom: window.innerHeight - rect.top + 2,
+        left: rect.left,
+        right: window.innerWidth - rect.right
+      });
+    } else {
+      setOpenLeftward(false);
+      setDropdownWidth(null);
+      setAnchor(null);
+    }
+
+    setOpen(true);
+    setQuery("");
+  }
+
+  const selectedUserForLabel = value?.kind === "user" ? users.find((u) => u.id === value.id) : undefined;
+  const selectedLabel =
+    value?.kind === "team" ? `Team: ${teams.find((t) => t.id === value.id)?.name ?? ""}`
+    : selectedUserForLabel ? userLabel(selectedUserForLabel)
+    : value?.kind === "email" ? value.value
+    : "";
+
+  const trimmedQuery = query.trim();
+  const q = trimmedQuery.toLowerCase();
+  const matchingTeams = q ? teams.filter((t) => t.name.toLowerCase().includes(q)) : teams;
+  const matchingUsers = q ? users.filter((u) => userLabel(u).toLowerCase().includes(q) || u.email.toLowerCase().includes(q)) : users;
+  const isQueryEmail = Boolean(allowFreeEmail) && EMAIL_RE.test(trimmedQuery);
+  const hasExactEmailMatch = matchingUsers.some((u) => u.email.toLowerCase() === q);
+  const showInviteOption = isQueryEmail && !hasExactEmailMatch;
+
+  return (
+    <div ref={boxRef} style={{ position: "relative" }}>
+      <div style={{ position: "relative" }}>
+        <Search size={13} style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
+        <input
+          className="ep-form-input"
+          style={{ paddingLeft: 26, paddingRight: 26 }}
+          placeholder="Assign a team or individual"
+          value={open ? query : selectedLabel}
+          onFocus={handleOpen}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <ChevronDown size={14} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", pointerEvents: "none" }} />
+      </div>
+      {open && anchor && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{
+            position: "fixed", zIndex: 1000,
+            width: dropdownWidth ?? "100%",
+            ...(openLeftward ? { right: anchor.right } : { left: anchor.left }),
+            ...(openUpward ? { bottom: anchor.bottom } : { top: anchor.top }),
+            background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8,
+            maxHeight: COMBOBOX_DROPDOWN_HEIGHT, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)"
+          }}
+        >
+          {matchingTeams.length > 0 && (
+            <>
+              <div style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Teams</div>
+              {matchingTeams.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => { onChange({ kind: "team", id: t.id }); setOpen(false); setQuery(""); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: value?.kind === "team" && value.id === t.id ? "#eff6ff" : "transparent", cursor: "pointer", fontSize: 13 }}
+                >
+                  <Users size={13} style={{ color: "var(--muted)", flexShrink: 0 }} />
+                  <span style={{ fontWeight: 600 }}>{t.name}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {matchingUsers.length > 0 && (
+            <>
+              <div style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>People</div>
+              {matchingUsers.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => { onChange({ kind: "user", id: u.id }); setOpen(false); setQuery(""); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: value?.kind === "user" && value.id === u.id ? "#eff6ff" : "transparent", cursor: "pointer", fontSize: 13 }}
+                >
+                  <div style={{ fontWeight: 600 }}>{u.full_name || u.email}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>{u.email}{u.title ? ` · ${u.title}` : u.department ? ` · ${u.department}` : ""}</div>
+                </button>
+              ))}
+            </>
+          )}
+          {showInviteOption && (
+            <button
+              type="button"
+              onClick={() => { onChange({ kind: "email", value: trimmedQuery }); setOpen(false); setQuery(""); }}
+              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", borderTop: "1px solid var(--border)", background: "transparent", cursor: "pointer", fontSize: 13 }}
+            >
+              <div style={{ fontWeight: 600 }}>Invite "{trimmedQuery}"</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>Not yet a FlowDesk user — they'll get an email about this request</div>
+            </button>
+          )}
+          {matchingTeams.length === 0 && matchingUsers.length === 0 && !showInviteOption && (
+            <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--muted)" }}>
+              {allowFreeEmail ? "No matches. Type a full email address to invite someone new." : "No matches."}
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
 // Editable list of assignees for a "user_multi" field (e.g. Change Assignee)
 // while composing a new request — pick a system user, invite by email, or
 // assign a whole team (any member can confirm later). Confirmation happens
@@ -343,26 +496,22 @@ function assigneeLabel(a: AssigneeEntry) {
 function UserMultiField({
   entries, users, teams, onAdd, onRemove
 }: { entries: AssigneeEntry[]; users: DirectoryUser[]; teams: TeamOption[]; onAdd: (entry: AssigneeEntry) => void; onRemove: (idx: number) => void }) {
-  const [pending, setPending] = useState("");
-  const [pendingTeamId, setPendingTeamId] = useState("");
+  const [pending, setPending] = useState<AssigneePick | null>(null);
 
-  function commitPick(picked: string) {
-    if (!picked) return;
-    const dirUser = users.find((u) => u.id === picked);
-    onAdd(
-      dirUser
-        ? { id: dirUser.id, name: dirUser.full_name, email: dirUser.email, confirmed: false, confirmed_at: null }
-        : { id: null, name: null, email: picked, confirmed: false, confirmed_at: null }
-    );
-    setPending("");
-  }
-
-  function commitTeam() {
-    if (!pendingTeamId) return;
-    const t = teams.find((x) => x.id === pendingTeamId);
-    if (!t) return;
-    onAdd({ id: null, name: null, email: null, teamId: t.id, teamName: t.name, confirmed: false, confirmed_at: null });
-    setPendingTeamId("");
+  function commitPick() {
+    if (!pending) return;
+    if (pending.kind === "team") {
+      const t = teams.find((x) => x.id === pending.id);
+      if (!t) return;
+      onAdd({ id: null, name: null, email: null, teamId: t.id, teamName: t.name, confirmed: false, confirmed_at: null });
+    } else if (pending.kind === "user") {
+      const u = users.find((x) => x.id === pending.id);
+      if (!u) return;
+      onAdd({ id: u.id, name: u.full_name, email: u.email, confirmed: false, confirmed_at: null });
+    } else {
+      onAdd({ id: null, name: null, email: pending.value, confirmed: false, confirmed_at: null });
+    }
+    setPending(null);
   }
 
   return (
@@ -382,14 +531,9 @@ function UserMultiField({
       ))}
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <div style={{ flex: 1 }}>
-          <ApproverCombobox users={users} value={pending} onChange={commitPick} allowFreeEmail />
+          <AssigneeCombobox users={users} teams={teams} value={pending} onChange={setPending} allowFreeEmail />
         </div>
-        <span style={{ fontSize: 12, color: "var(--muted)" }}>or</span>
-        <select className="ep-form-select" style={{ maxWidth: 200 }} value={pendingTeamId} onChange={(e) => { setPendingTeamId(e.target.value); }}>
-          <option value="">Assign a team…</option>
-          {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-        <button type="button" className="ep-btn-outline" disabled={!pendingTeamId} onClick={commitTeam} style={{ whiteSpace: "nowrap" }}>
+        <button type="button" className="ep-btn-outline" disabled={!pending} onClick={commitPick} style={{ whiteSpace: "nowrap", padding: "0 10px", height: 38 }}>
           <Plus size={14} />
         </button>
       </div>
@@ -402,33 +546,26 @@ function UserMultiField({
 function AssigneeAdder({
   users, teams, onAdd
 }: { users: DirectoryUser[]; teams: TeamOption[]; onAdd: (entry: { id?: string; email?: string; name?: string; team_id?: string }) => void }) {
-  const [pending, setPending] = useState("");
-  const [pendingTeamId, setPendingTeamId] = useState("");
+  const [pending, setPending] = useState<AssigneePick | null>(null);
 
-  function commitPick(picked: string) {
-    if (!picked) return;
-    const dirUser = users.find((u) => u.id === picked);
-    onAdd(dirUser ? { id: dirUser.id } : { email: picked });
-    setPending("");
-  }
-
-  function commitTeam() {
-    if (!pendingTeamId) return;
-    onAdd({ team_id: pendingTeamId });
-    setPendingTeamId("");
+  function commitPick() {
+    if (!pending) return;
+    if (pending.kind === "team") {
+      onAdd({ team_id: pending.id });
+    } else if (pending.kind === "user") {
+      onAdd({ id: pending.id });
+    } else {
+      onAdd({ email: pending.value });
+    }
+    setPending(null);
   }
 
   return (
     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
       <div style={{ flex: 1 }}>
-        <ApproverCombobox users={users} value={pending} onChange={commitPick} allowFreeEmail />
+        <AssigneeCombobox users={users} teams={teams} value={pending} onChange={setPending} allowFreeEmail />
       </div>
-      <span style={{ fontSize: 12, color: "var(--muted)" }}>or</span>
-      <select className="ep-form-select" style={{ maxWidth: 200 }} value={pendingTeamId} onChange={(e) => setPendingTeamId(e.target.value)}>
-        <option value="">Assign a team…</option>
-        {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-      </select>
-      <button type="button" className="ep-btn-outline" disabled={!pendingTeamId} onClick={commitTeam} style={{ whiteSpace: "nowrap" }}>
+      <button type="button" className="ep-btn-outline" disabled={!pending} onClick={commitPick} style={{ whiteSpace: "nowrap", padding: "0 10px", height: 38 }}>
         <Plus size={14} />
       </button>
     </div>
@@ -624,6 +761,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   const [assignedToMe, setAssignedToMe] = useState<Submission[]>([]);
   const [assignedToMeLoading, setAssignedToMeLoading] = useState(false);
   const [assignedToMeError, setAssignedToMeError] = useState<string | null>(null);
+  const [expandedAssigned, setExpandedAssigned] = useState<Set<string>>(new Set());
   // The assigned-to-me list doesn't include field metadata per submission —
   // fetch each distinct request type's "user_multi" fields once and cache.
   const [assignedTypeFields, setAssignedTypeFields] = useState<Record<string, RequestField[]>>({});
@@ -1151,6 +1289,35 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
     );
   }
 
+  const CHECKBOX_GROUPS = [
+    { prefix: "change_type_", title: "Change Type", description: "Select one or more change types that apply." },
+    { prefix: "category_", title: "Change Category", description: "Select one or more change categories that apply." }
+  ];
+
+  type FieldRenderItem =
+    | { kind: "field"; field: RequestField }
+    | { kind: "group"; title: string; description: string; fields: RequestField[] };
+
+  function groupCheckboxFields(allFields: RequestField[]): FieldRenderItem[] {
+    const items: FieldRenderItem[] = [];
+    let i = 0;
+    while (i < allFields.length) {
+      const group = CHECKBOX_GROUPS.find((g) => allFields[i].field_key.startsWith(g.prefix));
+      if (group) {
+        const groupFields: RequestField[] = [];
+        while (i < allFields.length && allFields[i].field_key.startsWith(group.prefix)) {
+          groupFields.push(allFields[i]);
+          i++;
+        }
+        items.push({ kind: "group", title: group.title, description: group.description, fields: groupFields });
+      } else {
+        items.push({ kind: "field", field: allFields[i] });
+        i++;
+      }
+    }
+    return items;
+  }
+
   function renderField(f: RequestField) {
     const value = values[f.field_key] ?? "";
     switch (f.field_type) {
@@ -1262,21 +1429,24 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   }
 
   return (
-    <div style={{ padding: "0 0 40px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+    <div className="custom-requests-page">
+      <div className="custom-requests-header">
         <div>
-          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
-            <ClipboardList size={22} /> Custom Requests
-          </h2>
-          <p style={{ margin: "4px 0 0", color: "var(--muted)", fontSize: 13 }}>
+          <div className="custom-requests-title-row">
+            <span className="custom-requests-title-icon">
+              <ClipboardList size={18} />
+            </span>
+            <h2>Custom Requests</h2>
+          </div>
+          <p className="custom-requests-subtitle">
             Submit any configured request type and define who needs to approve it.
           </p>
         </div>
-        <button onClick={onBack} style={{ padding: "7px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer", fontSize: 13 }}>Back</button>
+        <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
       </div>
 
       {types.length > 1 && (
-        <div className="ep-form-group" style={{ maxWidth: 360 }}>
+        <div className="ep-form-group custom-request-type-picker">
           <label>Request Type</label>
           <select className="ep-form-select" value={selectedTypeId || ""} onChange={(e) => setSelectedTypeId(e.target.value)}>
             {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -1284,10 +1454,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
         </div>
       )}
 
-      <div className="ep-tabs">
-        <a href="#" className={`ep-tab ${tab === "NEW" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("NEW"); }}>New Request</a>
-        <a href="#" className={`ep-tab ${tab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("MINE"); }}>My Requests</a>
-        <a href="#" className={`ep-tab ${tab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("ASSIGNED"); }}>Assigned to Me</a>
+      <div className="ep-tabs custom-request-tabs">
+        <a href="#" className={`ep-tab ${tab === "NEW" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("NEW"); }}>
+          <FileText size={14} /> New Request
+        </a>
+        <a href="#" className={`ep-tab ${tab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("MINE"); }}>
+          <Inbox size={14} /> My Requests
+        </a>
+        <a href="#" className={`ep-tab ${tab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("ASSIGNED"); }}>
+          <UserCheck size={14} /> Assigned to Me
+        </a>
       </div>
 
       {loading ? (
@@ -1310,15 +1486,32 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                 {assignedToMe.map((s) => {
                   const typeFields = assignedTypeFields[s.request_type_id] || [];
                   const multiFields = typeFields.filter((f) => f.field_type === "user_multi");
+                  const isExpanded = expandedAssigned.has(s.id);
+                  const toggleExpanded = () => {
+                    setExpandedAssigned((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
+                      return next;
+                    });
+                  };
                   return (
                     <div key={s.id} className="card" style={{ padding: 14 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || s.request_type_name}</div>
-                          <div style={{ fontSize: 12, color: "var(--muted)" }}>Submitted {new Date(s.created_at).toLocaleDateString()}</div>
+                      <button
+                        type="button"
+                        onClick={toggleExpanded}
+                        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <ChevronDown size={16} style={{ color: "var(--muted)", transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s", flexShrink: 0 }} />
+                          <div>
+                            <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || s.request_type_name}</div>
+                            <div style={{ fontSize: 12, color: "var(--muted)" }}>Submitted {new Date(s.created_at).toLocaleDateString()}</div>
+                          </div>
                         </div>
                         {statusBadge(s.status)}
-                      </div>
+                      </button>
+                      {isExpanded && (
+                      <>
 
                       {multiFields.map((f) => {
                         const entries: AssigneeEntry[] = Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : [];
@@ -1378,13 +1571,19 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                           return mine && !mine.confirmed;
                         });
                         return (
-                          <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-                            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Implementation Details</div>
-                            <div style={{ display: "grid", gap: 10, marginBottom: 8 }}>
+                          <div className="cr-impl-card">
+                            <div className="cr-impl-card-header">
+                              <div className="cr-impl-card-icon"><ClipboardList size={16} /></div>
+                              <div>
+                                <div className="cr-impl-card-title">Implementation Details</div>
+                                <div className="cr-impl-card-desc">Provide detailed information about how the change will be implemented.</div>
+                              </div>
+                            </div>
+                            <div className="cr-impl-fields-grid">
                               {implFields.map((f) => (
-                                <div key={f.field_key}>
+                                <div key={f.field_key} className={["textarea", "table"].includes(f.field_type) ? "cr-impl-field-full" : undefined}>
                                   {f.field_type !== "checkbox" && (
-                                    <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>{f.field_label}</label>
+                                    <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4, fontWeight: 600 }}>{f.field_label}</label>
                                   )}
                                   {f.field_type === "textarea" ? (
                                     <textarea
@@ -1427,7 +1626,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                             </div>
                             <button
                               className="ep-btn"
-                              style={{ fontSize: 12, padding: "5px 12px" }}
+                              style={{ fontSize: 13, padding: "8px 16px", marginTop: 14 }}
                               disabled={savingImplId === s.id}
                               onClick={() => saveImplementationFields(
                                 s.id,
@@ -1440,6 +1639,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                           </div>
                         );
                       })()}
+                      </>
+                      )}
                     </div>
                   );
                 })}
@@ -1451,67 +1652,97 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
         error && !fields.length ? (
           <div className="ep-empty"><p>{error}</p></div>
         ) : (
-          <div className="ep-panel">
-            <div className="ep-panel-head">
-              <div className="ep-panel-title">{selectedType?.name || "Request"} Form</div>
+          <div className="ep-panel custom-request-wizard-panel">
+            <div className="ep-panel-head custom-request-panel-head">
+              <div>
+                <div className="ep-panel-title">{selectedType?.name || "Request"} Form</div>
+                <div className="custom-request-panel-subtitle">Step {wizardStep} of {totalWizardSteps}</div>
+              </div>
             </div>
-            <div className="ep-panel-body">
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-                {Array.from({ length: totalWizardSteps }, (_, i) => i + 1).map((step) => (
-                  <div key={step} style={{ display: "flex", alignItems: "center", gap: 8, flex: step < totalWizardSteps ? 1 : "0 0 auto" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                      <div
-                        style={{
-                          width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
-                          fontSize: 12, fontWeight: 700,
-                          background: step <= wizardStep ? "var(--accent, #0ea5e9)" : "var(--surface-soft)",
-                          color: step <= wizardStep ? "#fff" : "var(--muted)"
-                        }}
-                      >
-                        {step}
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: step === wizardStep ? 700 : 400, color: step === wizardStep ? "var(--text)" : "var(--muted)" }}>
-                        {step === approvalsStepIndex ? "Approvals & Change Control" : `Details${fieldStepNumbers.length > 1 ? ` ${step}` : ""}`}
+            <div className="ep-panel-body custom-request-panel-body">
+              <div className="custom-request-stepper">
+                {Array.from({ length: totalWizardSteps }, (_, i) => i + 1).map((step) => {
+                  const title = step === approvalsStepIndex ? "Approvals & Change Control" : `Details${fieldStepNumbers.length > 1 ? ` ${step}` : ""}`;
+                  const description = step === approvalsStepIndex
+                    ? "Define approvals and control"
+                    : step === 1
+                      ? "Provide request information"
+                      : "Additional information";
+                  const state = step < wizardStep ? "is-complete" : step === wizardStep ? "is-active" : "";
+                  return (
+                    <div key={step} className={`custom-request-step ${state}`}>
+                      <span className="custom-request-step-index">{step}</span>
+                      <span className="custom-request-step-copy">
+                        <strong>{title}</strong>
+                        <small>{description}</small>
                       </span>
                     </div>
-                    {step < totalWizardSteps && <div style={{ flex: 1, height: 1, background: "var(--border)" }} />}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
+              <div className="custom-request-form-body">
               {!isApprovalsStep && (
                 <>
                   <div className="ep-form-fields-grid">
-                    {currentStepFields.map((f) => (
-                      <div
-                        className={`ep-form-group ${["textarea", "table"].includes(f.field_type) ? "ep-form-field-full" : ""}`}
-                        key={f.field_key}
-                      >
-                        {f.field_type !== "checkbox" && (
-                          <label>{f.field_label}{f.is_required && <span className="ep-required"> *</span>}</label>
-                        )}
-                        {renderField(f)}
-                      </div>
-                    ))}
+                    {groupCheckboxFields(currentStepFields).map((item, idx) => {
+                      if (item.kind === "group") {
+                        return (
+                          <div className="ep-checkbox-group" key={`group-${idx}`}>
+                            <div className="ep-checkbox-group-header">
+                              <span className="ep-checkbox-group-title">{item.title} <span className="ep-required">*</span></span>
+                              <span className="ep-checkbox-group-desc">{item.description}</span>
+                            </div>
+                            <div className="ep-checkbox-group-grid">
+                              {item.fields.map((f) => (
+                                <label className="ep-checkbox-label" key={f.field_key}>
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(values[f.field_key])}
+                                    onChange={(e) => setValue(f.field_key, e.target.checked)}
+                                  />
+                                  {f.placeholder || f.field_label}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+                      const f = item.field;
+                      return (
+                        <div
+                          className={`ep-form-group ${["textarea", "table"].includes(f.field_type) ? "ep-form-field-full" : ""}`}
+                          key={f.field_key}
+                        >
+                          {f.field_type !== "checkbox" && (
+                            <label>{f.field_label}{f.is_required && <span className="ep-required"> *</span>}</label>
+                          )}
+                          {renderField(f)}
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {wizardStep === 1 && (
-                    <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                    <div className="custom-attachments">
+                      <div className="custom-attachments-title">
                         <Paperclip size={15} /> Attachments
                       </div>
-                      <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
+                      <div className="custom-attachments-copy">
                         Attach any supporting documents this request needs (e.g. quotations, diagrams, sign-off forms).
                       </div>
                       <label
-                        style={{
-                          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
-                          border: "2px dashed var(--border)", borderRadius: 8, padding: "20px 16px", cursor: "pointer",
-                          color: "var(--muted)", fontSize: 13
+                        className="custom-attachment-dropzone"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const picked = Array.from(e.dataTransfer.files || []);
+                          if (picked.length) setAttachmentFiles((prev) => [...prev, ...picked]);
                         }}
                       >
-                        <Paperclip size={20} />
-                        <span>Click to choose files, or drag them here</span>
+                        <UploadCloud size={24} />
+                        <span>Drag and drop files here or <strong>click to browse</strong></span>
+                        <small>Multiple files supported</small>
                         <input
                           type="file"
                           multiple
@@ -1524,9 +1755,9 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                         />
                       </label>
                       {attachmentFiles.length > 0 && (
-                        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+                        <div className="custom-attachment-list">
                           {attachmentFiles.map((file, idx) => (
-                            <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--surface-soft)", borderRadius: 6, fontSize: 13 }}>
+                            <div key={idx} className="custom-attachment-file">
                               <span>{file.name} <span style={{ color: "var(--muted)" }}>({Math.round(file.size / 1024)} KB)</span></span>
                               <button
                                 type="button"
@@ -1635,9 +1866,9 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
               </div>
               )}
 
-              {error && <div style={{ color: "#b91c1c", fontSize: 13, marginTop: 16 }}>{error}</div>}
+              {error && <div className="custom-request-error">{error}</div>}
 
-              <div style={{ marginTop: 20, display: "flex", justifyContent: "space-between" }}>
+              <div className="custom-request-footer">
                 <button
                   className="ep-btn-outline"
                   onClick={() => { setError(null); setWizardStep((s) => Math.max(1, s - 1)); }}
@@ -1655,6 +1886,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                 )}
               </div>
             </div>
+          </div>
           </div>
         )
       ) : (
@@ -1781,7 +2013,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                           ))}
                         </div>
                         {s.status === "CLOSED" && (
-                          <div style={{ marginTop: 12, padding: "10px 12px", background: "#f0fdf4", borderRadius: 6, fontSize: 13 }}>
+                          <div className="custom-request-note custom-request-note-success">
                             <div style={{ fontWeight: 700, marginBottom: 4 }}>Closure Details</div>
                             <div><strong>Implementation Date:</strong> {s.implementation_date || "—"}</div>
                             {s.closure_notes && <div style={{ marginTop: 4 }}><strong>Notes:</strong> {s.closure_notes}</div>}
@@ -1789,7 +2021,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                           </div>
                         )}
                         {s.status === "CANCELLED" && (
-                          <div style={{ marginTop: 12, padding: "10px 12px", background: "#f1f5f9", borderRadius: 6, fontSize: 13 }}>
+                          <div className="custom-request-note custom-request-note-neutral">
                             <div style={{ fontWeight: 700, marginBottom: 4 }}>Cancelled</div>
                             {s.cancel_comment && <div><strong>Reason:</strong> {s.cancel_comment}</div>}
                             <div style={{ marginTop: 4, color: "var(--muted)" }}>Cancelled {s.cancelled_at ? new Date(s.cancelled_at).toLocaleDateString() : "—"}</div>
