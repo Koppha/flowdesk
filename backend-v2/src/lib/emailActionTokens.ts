@@ -36,7 +36,7 @@ export function buildEmailActionUrl(token: string) {
   // prefix the proxy adds. Falls back to the frontend SPA flow (APP_URL,
   // internal-only) when unset.
   if (env.EMAIL_ACTION_PUBLIC_URL) {
-    const base = env.EMAIL_ACTION_PUBLIC_URL.replace(/\/+$/, "");
+    const base = env.EMAIL_ACTION_PUBLIC_URL.replace(/\/+$/, "").replace(/\/email-actions$/, "");
     return `${base}/email-actions/${encodeURIComponent(token)}`;
   }
   return `${env.APP_URL}/?email_action=${encodeURIComponent(token)}`;
