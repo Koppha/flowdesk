@@ -12,6 +12,9 @@ import { isTravelAdvanceType } from "../../lib/travel.js";
 import { canApproveStep, getPendingGroup, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
+import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
+import { resolveClaimPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
+import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import {
   type ClaimStatus,
   type FinanceDecision,
@@ -255,7 +258,40 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
 
     const trips = await query<any>(`SELECT * FROM claim_trips WHERE clearance_claim_id=$1 ORDER BY trip_date`, [req.params.id]);
     const receipts = await query<any>(`SELECT * FROM receipts WHERE clearance_claim_id=$1 ORDER BY uploaded_at`, [req.params.id]);
-    return res.json({ ...claim, trips, receipts });
+    const isOwner = claim.claimant_id === req.user!.userId;
+    const can_view_pdf = await canAccessPdf({ requestType: "CLEARANCE_CLAIM", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" });
+    return res.json({ ...claim, trips, receipts, can_view_pdf });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
+    if (!claim) throw notFound();
+    const managerChainIds = await getManagerChainIds(claim.claimant_id);
+    if (!(await canViewClaim({ role: req.user!.role, department: req.user!.department, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+      throw forbidden();
+    }
+    const isOwner = claim.claimant_id === req.user!.userId;
+    if (!(await canAccessPdf({ requestType: "CLEARANCE_CLAIM", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" }))) {
+      throw forbidden();
+    }
+
+    const template = (await query<any>(`SELECT * FROM pdf_templates WHERE request_type = 'CLEARANCE_CLAIM' AND status = 'ACTIVE' LIMIT 1`))[0];
+    if (!template) throw badRequest("No PDF template configured for clearance claims yet.");
+
+    const data = await resolveClaimPdfData(req.params.id);
+    const catalog = await getFieldCatalogFor("CLEARANCE_CLAIM");
+    const letterhead = (await query<PdfLetterhead>(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+      logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+    };
+    const doc = renderPdfTemplate(template, letterhead, data, catalog);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="clearance-${req.params.id}.pdf"`);
+    doc.pipe(res);
+    doc.end();
   } catch (err) {
     return next(err);
   }

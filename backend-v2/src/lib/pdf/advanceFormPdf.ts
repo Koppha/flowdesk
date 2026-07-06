@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import type { ChainStep } from "../workflowEngine.js";
+import { dottedLine, formatDate, formatMoney } from "./pdfHelpers.js";
 
 interface AdvanceLineLike {
   line_date: string;
@@ -20,27 +21,6 @@ interface AdvanceRequestLike {
   requested_total: string | number;
   currency?: string | null;
   approval_chain?: ChainStep[] | null;
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function formatMoney(value: string | number | null | undefined, currency: string) {
-  const amount = Number(value || 0);
-  return `${currency} ${amount.toFixed(2)}`;
-}
-
-function dottedLine(doc: PDFKit.PDFDocument, label: string, value: string, width: number) {
-  const labelWidth = doc.widthOfString(label);
-  doc.text(label, { continued: true });
-  const remaining = Math.max(0, width - labelWidth - doc.widthOfString(value) - 10);
-  const dots = ".".repeat(Math.max(0, Math.floor(remaining / doc.widthOfString("."))));
-  doc.text(` ${dots} `, { continued: true });
-  doc.text(value);
 }
 
 export function buildAdvanceRequestPdf(advance: AdvanceRequestLike, lines: AdvanceLineLike[]): PDFKit.PDFDocument {

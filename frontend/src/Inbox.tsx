@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
+import { showNotice } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Clock3, CreditCard, FileText, Flag, Hash, Plane, RefreshCw, ShieldCheck, User, Users } from "lucide-react";
@@ -187,7 +188,7 @@ function statusLabel(value: string | null | undefined) {
 function statusTone(value: string | null | undefined) {
   const status = String(value || "").toUpperCase();
   if (status.includes("REJECT") || status.includes("CANCEL") || status.includes("FAILED")) return "status-pill-danger";
-  if (status.includes("PAID") || status.includes("APPROVED") || status.includes("SETTLED") || status.includes("COMPLETED")) return "status-pill-success";
+  if (status.includes("PAID") || status.includes("APPROVED") || status.includes("SETTLED") || status.includes("CLOSED") || status.includes("COMPLETED")) return "status-pill-success";
   if (status.includes("SUBMITTED") || status.includes("REVIEW") || status.includes("PENDING") || status.includes("OFFICER")) return "status-pill-warning";
   if (status.includes("DRAFT")) return "status-pill-neutral";
   return "status-pill-info";
@@ -207,7 +208,7 @@ function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) 
   }
 }
 
-const TERMINAL_STATUSES = new Set(["DRAFT", "SETTLED", "PAID", "REJECTED", "CANCELLED"]);
+const TERMINAL_STATUSES = new Set(["DRAFT", "SETTLED", "CLOSED", "PAID", "REJECTED", "CANCELLED"]);
 
 function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
   switch (value) {
@@ -1001,9 +1002,28 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           <span className="review-page-ref">{referenceCode}</span>
           <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
         </div>
-        <button className="button small-button button-subtle" onClick={props.onClose}>
-          Back to Inbox
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {item.doc_type === "ACCOMMODATION" && (
+            <button
+              className="button small-button button-subtle"
+              onClick={async () => {
+                try {
+                  const blob = await api.accommodationPdf(item.id);
+                  const url = URL.createObjectURL(blob);
+                  window.open(url, "_blank");
+                  setTimeout(() => URL.revokeObjectURL(url), 30000);
+                } catch (e: any) {
+                  void showNotice(e?.message || "Failed to generate PDF.");
+                }
+              }}
+            >
+              Download PDF
+            </button>
+          )}
+          <button className="button small-button button-subtle" onClick={props.onClose}>
+            Back to Inbox
+          </button>
+        </div>
       </div>
 
       {error && <pre className="inbox-error">{error}</pre>}

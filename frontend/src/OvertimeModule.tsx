@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { showNotice } from "./alerts";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 
 type DirectoryUser = {
@@ -103,6 +104,17 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
 
   useEffect(() => { void loadRecords(); }, []);
 
+  async function downloadOvertimeRequestPdf(id: string) {
+    try {
+      const blob = await api.overtimeRequestPdf(id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err: any) {
+      void showNotice(err?.message || "Failed to generate PDF.");
+    }
+  }
+
   function updateLine(idx: number, field: keyof RequestLine, value: string) {
     setLines((prev) => prev.map((l, i) => {
       if (i !== idx) return l;
@@ -118,7 +130,7 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
   }
 
   async function save(status: "DRAFT" | "SUBMITTED") {
-    if (!employeeId) { alert("Select an employee."); return; }
+    if (!employeeId) { void showNotice("Select an employee."); return; }
     setSubmitting(true);
     try {
       await api.saveOvertimeRequest({
@@ -130,14 +142,14 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
         year, month, remarks, lines, status
       });
       await loadRecords();
-      alert(status === "SUBMITTED" ? "Overtime request submitted for approval." : "Draft saved.");
+      void showNotice(status === "SUBMITTED" ? "Overtime request submitted for approval." : "Draft saved.");
       if (status === "SUBMITTED") {
         setLines([{ ...EMPTY_LINE }]);
         setRemarks("");
         setTab("RECORDS");
       }
     } catch (e: any) {
-      alert("Error: " + (e as any).message);
+      void showNotice("Error: " + (e as any).message);
     } finally {
       setSubmitting(false);
     }
@@ -169,7 +181,7 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "var(--surface-soft)", borderBottom: "2px solid var(--border)" }}>
-                {["Employee","E/N","Section","Month","Year","Status"].map((h) => (
+                {["Employee","E/N","Section","Month","Year","Status",""].map((h) => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>{h}</th>
                 ))}
               </tr>
@@ -190,6 +202,14 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
                       color: r.status === "SUBMITTED" ? "var(--success)" : "var(--warning)" }}>
                       {r.status}
                     </span>
+                  </td>
+                  <td style={{ padding: "10px 14px" }}>
+                    <button
+                      onClick={() => void downloadOvertimeRequestPdf(r.id)}
+                      style={{ fontSize: 12, padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer" }}
+                    >
+                      PDF
+                    </button>
                   </td>
                 </tr>
               ))}

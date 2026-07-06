@@ -1745,7 +1745,7 @@ const FEATURE_KEYS = [
   "user_management", "roles_permissions", "travel_setup", "org_structure",
   "team_roster", "ceo_management", "employees",
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
-  "request_types", "reporting_lines", "advance_pdf", "report_reconciliation"
+  "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer"
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
@@ -1763,7 +1763,8 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   request_types:         ["ADMIN"],
   reporting_lines:       ["ADMIN", "MANAGER", "EXCO"],
   advance_pdf:           ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
-  report_reconciliation: ["ADMIN", "FINANCE"]
+  report_reconciliation: ["ADMIN", "FINANCE"],
+  pdf_designer:          ["ADMIN"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {

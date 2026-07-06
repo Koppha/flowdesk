@@ -8,6 +8,9 @@ import { query } from "../../lib/db.js";
 import { notifyCustomRequestStep, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned } from "../../lib/notifications.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
+import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
+import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
+import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 
 export const customRequestsRouter = Router();
 customRequestsRouter.use(requireAuth);
@@ -469,7 +472,56 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       [submission.id]
     );
 
-    return res.json({ ...submission, fields, attachments });
+    const isOwner = submission.requester_id === req.user!.userId;
+    const can_view_pdf = await canAccessPdf({
+      requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id,
+      userId: req.user!.userId, role: req.user!.role, isOwner, action: "view"
+    });
+    return res.json({ ...submission, fields, attachments, can_view_pdf });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+customRequestsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
+  try {
+    const submission = (await query<any>(`SELECT * FROM custom_request_submissions WHERE id = $1`, [req.params.id]))[0];
+    if (!submission) throw notFound();
+
+    const fields = await query<{ field_key: string; field_label: string; field_type: string }>(
+      `SELECT * FROM request_type_fields WHERE request_type_id = $1 AND is_active = true ORDER BY sort_order, created_at`,
+      [submission.request_type_id]
+    );
+    const chain = submission.approval_chain as Array<{ approver_id: string }>;
+    const isParticipant = chain.some((s) => s.approver_id === req.user!.userId);
+    const isAssignee = isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
+    const isOwner = submission.requester_id === req.user!.userId;
+    if (req.user!.role !== "ADMIN" && !isOwner && !isParticipant && !isAssignee) throw forbidden();
+    if (!(await canAccessPdf({ requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id, userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" }))) {
+      throw forbidden();
+    }
+
+    let template = (await query<any>(
+      `SELECT * FROM pdf_templates WHERE request_type = 'CUSTOM_REQUEST' AND custom_request_type_id = $1 AND status = 'ACTIVE' LIMIT 1`,
+      [submission.request_type_id]
+    ))[0];
+    if (!template) {
+      template = (await query<any>(
+        `SELECT * FROM pdf_templates WHERE request_type = 'CUSTOM_REQUEST' AND custom_request_type_id IS NULL AND status = 'ACTIVE' LIMIT 1`
+      ))[0];
+    }
+    if (!template) throw badRequest("No PDF template configured for this request type yet.");
+
+    const data = await resolveCustomRequestPdfData(req.params.id);
+    const catalog = await getFieldCatalogFor("CUSTOM_REQUEST", submission.request_type_id);
+    const letterhead = (await query<PdfLetterhead>(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+      logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+    };
+    const doc = renderPdfTemplate(template, letterhead, data, catalog);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="request-${req.params.id}.pdf"`);
+    doc.pipe(res);
+    doc.end();
   } catch (err) {
     return next(err);
   }

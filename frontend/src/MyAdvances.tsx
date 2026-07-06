@@ -5,10 +5,12 @@ import { Wallet, Clock3, CheckCircle2, Banknote, XCircle, Edit3, RefreshCw, Plus
 interface Props {
   advances: any[];
   travelTypes: TravelType[];
+  claims?: any[];
   onNew: () => void;
   onEdit: (advance: any) => void;
   onTrack: (advanceId: string) => void;
   onClear: (advanceId: string) => void;
+  onContinueClearance?: (claimId: string) => void;
 }
 
 const PENDING_STATUSES = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER"];
@@ -80,7 +82,7 @@ function advanceStageLabel(status: string) {
 
 const PAGE_SIZE = 10;
 
-export default function MyAdvances({ advances, travelTypes, onNew, onEdit, onTrack, onClear }: Props) {
+export default function MyAdvances({ advances, travelTypes, claims = [], onNew, onEdit, onTrack, onClear, onContinueClearance }: Props) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -88,6 +90,18 @@ export default function MyAdvances({ advances, travelTypes, onNew, onEdit, onTra
   const [dateTo, setDateTo] = useState("");
   const [tab, setTab] = useState("ALL");
   const [page, setPage] = useState(1);
+
+  // An advance already has an active (non-rejected) clearance claim once its
+  // employee starts one — even a DRAFT. Keyed by linked_advance_id so the
+  // "Clear" action can be replaced with "Continue" / hidden instead of
+  // letting the user try to create a second claim for the same advance.
+  const claimByAdvanceId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const c of claims) {
+      if (c.linked_advance_id && c.status !== "REJECTED") map.set(c.linked_advance_id, c);
+    }
+    return map;
+  }, [claims]);
 
   const stats = useMemo(() => ({
     total: advances.length,
@@ -245,9 +259,20 @@ export default function MyAdvances({ advances, travelTypes, onNew, onEdit, onTra
                         <button className="ep-icon-btn" title="Track" onClick={() => onTrack(a.id)}>
                           <RefreshCw size={14} aria-hidden />
                         </button>
-                        {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (
-                          <button className="button small-button" onClick={() => onClear(a.id)}>Clear</button>
-                        )}
+                        {a.status === "PAID" && isTravelTypeCode(a.type, travelTypes) && (() => {
+                          const existingClaim = claimByAdvanceId.get(a.id);
+                          if (!existingClaim) {
+                            return <button className="button small-button" onClick={() => onClear(a.id)}>Clear</button>;
+                          }
+                          if (existingClaim.status === "DRAFT" && onContinueClearance) {
+                            return (
+                              <button className="button small-button" onClick={() => onContinueClearance(existingClaim.id)}>
+                                Continue Clearance
+                              </button>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     </td>
                   </tr>

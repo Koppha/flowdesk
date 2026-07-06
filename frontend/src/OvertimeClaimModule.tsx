@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { showNotice } from "./alerts";
 import { lesothoHolidayName } from "./lesothoHolidays";
 import { HolidayCalendarModal } from "./HolidayCalendar";
 
@@ -148,6 +149,17 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
 
   useEffect(() => { void loadData(); }, []);
 
+  async function downloadOvertimeClaimPdf(id: string) {
+    try {
+      const blob = await api.overtimeClaimPdf(id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err: any) {
+      void showNotice(err?.message || "Failed to generate PDF.");
+    }
+  }
+
   function handleRequestSelect(reqId: string) {
     setSelectedRequestId(reqId);
     if (!reqId) { setLines([{ ...EMPTY_LINE }]); return; }
@@ -184,7 +196,7 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
   }
 
   async function save(status: "DRAFT" | "SUBMITTED") {
-    if (!employeeId) { alert("Select an employee."); return; }
+    if (!employeeId) { void showNotice("Select an employee."); return; }
     setSubmitting(true);
     try {
       const empName = canPickEmployee ? (selectedEmployee?.full_name || "") : (profile?.full_name || "");
@@ -204,14 +216,14 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
         status
       });
       await loadData();
-      alert(status === "SUBMITTED" ? "Claim submitted for manager authorisation." : "Draft saved.");
+      void showNotice(status === "SUBMITTED" ? "Claim submitted for manager authorisation." : "Draft saved.");
       if (status === "SUBMITTED") {
         setLines([{ ...EMPTY_LINE }]);
         setSelectedRequestId("");
         setTab("RECORDS");
       }
     } catch (e: any) {
-      alert("Error: " + (e as any).message);
+      void showNotice("Error: " + (e as any).message);
     } finally {
       setSubmitting(false);
     }
@@ -272,7 +284,7 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "var(--surface-soft)", borderBottom: "2px solid var(--border)" }}>
-                {["Employee","Division","Month","Year","Total Hrs","Status"].map((h) => (
+                {["Employee","Division","Month","Year","Total Hrs","Status",""].map((h) => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>{h}</th>
                 ))}
               </tr>
@@ -293,6 +305,14 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
                       <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, fontWeight: 600, background: sc.bg, color: sc.color }}>
                         {r.status}
                       </span>
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <button
+                        onClick={() => void downloadOvertimeClaimPdf(r.id)}
+                        style={{ fontSize: 12, padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", cursor: "pointer" }}
+                      >
+                        PDF
+                      </button>
                     </td>
                   </tr>
                 );

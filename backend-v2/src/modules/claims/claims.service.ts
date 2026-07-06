@@ -54,9 +54,12 @@ export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
 
 // Maps a workflow chain step index to the corresponding clearance_claims.status.
 // Index 0..4 walk through the existing ClaimStatus progression so the legacy
-// statuses (and the FINANCE settle step) keep working regardless of how many
-// approval steps the configured workflow has. Once every chain step has
-// approved, the claim becomes FINANCE_VERIFIED and is ready for /settle.
+// statuses keep working regardless of how many approval steps the configured
+// workflow has. Once every chain step has approved, the claim is CLOSED
+// directly — the configured workflow is the entire approval process; there's
+// no implicit HR/Finance settlement step tacked on afterwards. A clearance
+// type that actually needs Finance settlement should put a FINANCE step in
+// its workflow rather than relying on this fallback.
 const CLAIM_STATUS_PROGRESSION: ClaimStatus[] = [
   "SUBMITTED",
   "MANAGER_APPROVED",
@@ -66,8 +69,8 @@ const CLAIM_STATUS_PROGRESSION: ClaimStatus[] = [
 ];
 
 export function chainStepToClaimStatus(chain: ChainStep[], stepIndex: number): ClaimStatus {
-  if (stepIndex >= chain.length) return "FINANCE_VERIFIED";
-  return CLAIM_STATUS_PROGRESSION[stepIndex] ?? "FINANCE_VERIFIED";
+  if (stepIndex >= chain.length) return "CLOSED";
+  return CLAIM_STATUS_PROGRESSION[stepIndex] ?? "CLOSED";
 }
 
 export async function getClaimById(id: string) {
@@ -164,7 +167,9 @@ export async function advanceClaimWorkflowStep(args: {
   }
 
   await query(
-    `UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4, updated_at=now() WHERE id=$1`,
+    `UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4,
+       closed_at=CASE WHEN $2='CLOSED' THEN now() ELSE closed_at END, updated_at=now()
+     WHERE id=$1`,
     [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain)]
   );
 

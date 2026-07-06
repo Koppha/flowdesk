@@ -13,6 +13,9 @@ import { canApproveStep, chainStepToStatus, getPendingGroup, resolveWorkflowChai
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
+import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
+import { resolveAdvancePdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
+import { renderPdfTemplate } from "../../lib/pdf/genericPdfRenderer.js";
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 function normalizeEcoCashNumber(value) {
     return String(value || "").trim().replace(/[\s-]/g, "");
@@ -459,8 +462,26 @@ advancesRouter.get("/:id/pdf", async (req, res, next) => {
         if (!adv)
             throw notFound();
         const managerChainIds = await getManagerChainIds(adv.requester_id);
+        const isOwner = adv.requester_id === req.user.userId || adv.created_by_id === req.user.userId;
         if (!(await canViewAdvance({ role: req.user.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user.userId, approvalChain: adv.approval_chain, managerChainIds }))) {
             throw forbidden();
+        }
+        if (!(await canAccessPdf({ requestType: "ADVANCE_REQUEST", userId: req.user.userId, role: req.user.role, isOwner, action: "view" }))) {
+            throw forbidden();
+        }
+        const template = (await query(`SELECT * FROM pdf_templates WHERE request_type = 'ADVANCE_REQUEST' AND status = 'ACTIVE' LIMIT 1`))[0];
+        if (template) {
+            const data = await resolveAdvancePdfData(req.params.id);
+            const catalog = await getFieldCatalogFor("ADVANCE_REQUEST");
+            const letterhead = (await query(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+                logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+            };
+            const doc = renderPdfTemplate(template, letterhead, data, catalog);
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `inline; filename="advance-${req.params.id}.pdf"`);
+            doc.pipe(res);
+            doc.end();
+            return;
         }
         const lines = await query(`SELECT line_date, location FROM advance_lines WHERE advance_request_id=$1 ORDER BY line_date`, [req.params.id]);
         const doc = buildAdvanceRequestPdf(adv, lines);

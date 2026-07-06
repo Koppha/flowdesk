@@ -296,6 +296,47 @@ export const api = {
   addRequestTypePermission: (id: string, data: any) => req(`/request-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
 
+  pdfTemplates: (requestType?: string, customRequestTypeId?: string) => {
+    const params: string[] = [];
+    if (requestType) params.push(`request_type=${encodeURIComponent(requestType)}`);
+    if (customRequestTypeId) params.push(`custom_request_type_id=${encodeURIComponent(customRequestTypeId)}`);
+    return req(`/pdf-templates${params.length ? `?${params.join("&")}` : ""}`);
+  },
+  pdfTemplateDetail: (id: string) => req(`/pdf-templates/${id}`),
+  createPdfTemplate: (data: any) => req("/pdf-templates", { method: "POST", body: JSON.stringify(data) }),
+  updatePdfTemplate: (id: string, data: any) => req(`/pdf-templates/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deletePdfTemplate: (id: string) => req(`/pdf-templates/${id}`, { method: "DELETE" }),
+  pdfFieldCatalog: (requestType: string, customRequestTypeId?: string) => {
+    const params = [`request_type=${encodeURIComponent(requestType)}`];
+    if (customRequestTypeId) params.push(`custom_request_type_id=${encodeURIComponent(customRequestTypeId)}`);
+    return req(`/pdf-templates/field-catalog?${params.join("&")}`);
+  },
+  pdfTemplatePreviewBlob: (id: string, sampleId?: string) => fetchBlob(`/pdf-templates/${id}/preview${sampleId ? `?sample_id=${encodeURIComponent(sampleId)}` : ""}`),
+  pdfTemplatePermissions: (id: string) => req(`/pdf-templates/${id}/permissions`),
+  addPdfTemplatePermission: (id: string, data: any) => req(`/pdf-templates/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
+  removePdfTemplatePermission: (id: string, permId: string) => req(`/pdf-templates/${id}/permissions/${permId}`, { method: "DELETE" }),
+  pdfLetterhead: () => req("/pdf-templates/letterhead"),
+  updatePdfLetterhead: (data: any) => req("/pdf-templates/letterhead", { method: "PUT", body: JSON.stringify(data) }),
+  uploadPdfLetterheadLogo: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return req("/pdf-templates/letterhead/logo", { method: "POST", body: form });
+  },
+  pdfLetterheadPreviewBlob: (draft?: { company_name?: string; address_lines?: string; contact_line?: string; footer_text?: string }) => {
+    const params = new URLSearchParams();
+    if (draft?.company_name !== undefined) params.set("company_name", draft.company_name);
+    if (draft?.address_lines !== undefined) params.set("address_lines", draft.address_lines);
+    if (draft?.contact_line !== undefined) params.set("contact_line", draft.contact_line);
+    if (draft?.footer_text !== undefined) params.set("footer_text", draft.footer_text);
+    const qs = params.toString();
+    return fetchBlob(`/pdf-templates/letterhead/preview${qs ? `?${qs}` : ""}`);
+  },
+  claimPdf: (id: string) => fetchBlob(`/claims/${id}/pdf`),
+  accommodationPdf: (id: string) => fetchBlob(`/accommodation/${id}/pdf`),
+  overtimeRequestPdf: (id: string) => fetchBlob(`/overtime/requests/${id}/pdf`),
+  overtimeClaimPdf: (id: string) => fetchBlob(`/overtime/claims/${id}/pdf`),
+  customRequestPdf: (id: string) => fetchBlob(`/custom-requests/${id}/pdf`),
+
   myManager: () => req("/reporting-lines/my-manager"),
   // Sent as multipart/form-data so attachments can ride along with the rest of the wizard.
   submitCustomRequest: (data: { request_type_id: string; data: Record<string, any>; approval_chain: any[] }, files?: File[]) => {

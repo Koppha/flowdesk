@@ -11,6 +11,7 @@ import LeadershipAssignments from "./LeadershipAssignments";
 import ManagersOnboarding from "./ManagersOnboarding";
 import WorkflowBuilder from "./WorkflowBuilder";
 import ReportingLines from "./ReportingLines";
+import PdfDesigner from "./PdfDesigner";
 import RequestTypes from "./RequestTypes";
 import CustomRequestsHub from "./CustomRequestsHub";
 import EmailActionConfirm from "./EmailActionConfirm";
@@ -29,7 +30,7 @@ import ReportAuditTrail from "./ReportAuditTrail";
 import ReportReconciliation from "./ReportReconciliation";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
-import { confirmAction } from "./alerts";
+import { confirmAction, showNotice } from "./alerts";
 import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
@@ -168,7 +169,7 @@ function dashboardStatusLabel(value: string | null | undefined) {
 function dashboardStatusTone(value: string | null | undefined) {
   const status = String(value || "").toUpperCase();
   if (status.includes("REJECT") || status.includes("CANCEL")) return "status-pill-danger";
-  if (status.includes("PAID") || status.includes("APPROVED") || status.includes("SETTLED")) return "status-pill-success";
+  if (status.includes("PAID") || status.includes("APPROVED") || status.includes("SETTLED") || status.includes("CLOSED")) return "status-pill-success";
   if (status.includes("DRAFT")) return "status-pill-neutral";
   return "status-pill-warning";
 }
@@ -237,7 +238,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER";
+type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -684,6 +685,15 @@ export default function App() {
   const clearableTravelAdvances = advances.filter(
     (a) => isTravelTypeCode(a.type, travelTypes) && a.status === "PAID"
   );
+  // Advances that already have an active (non-rejected) clearance claim can't
+  // start a second one — excludes the claim currently being edited so its own
+  // linked advance still shows up (and stays selected) while resuming a draft.
+  const claimedAdvanceIds = new Set(
+    claims
+      .filter((c: any) => c.status !== "REJECTED" && c.linked_advance_id && c.id !== editingClaimId)
+      .map((c: any) => c.linked_advance_id)
+  );
+  const newClearanceAdvanceOptions = clearableTravelAdvances.filter((a) => !claimedAdvanceIds.has(a.id));
   const selectedClearanceAdvance = clearableTravelAdvances.find((a) => a.id === clearanceLinkedAdvanceId) || null;
   const clearanceAdvanceAmount = Number(selectedClearanceAdvance?.approved_total || 0);
   // Actual expenditure is captured per trip line by the employee (Meals /
@@ -818,6 +828,7 @@ export default function App() {
     reporting_lines:        ["ADMIN", "MANAGER", "EXCO"],
     advance_pdf:            ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     report_reconciliation:  ["ADMIN", "FINANCE"],
+    pdf_designer:           ["ADMIN"],
   };
 
   function canAccessFeature(key: string): boolean {
@@ -1156,7 +1167,7 @@ export default function App() {
     }
   }, [token, page, role]);
 
-  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "TEAM_ROSTER"] as const;
+  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "TEAM_ROSTER", "PDF_DESIGNER"] as const;
 
   useEffect(() => {
     if (ORG_PAGES.includes(page as any)) setOrgNavOpen(true);
@@ -1851,7 +1862,7 @@ export default function App() {
   }
 
   function startNewClearance() {
-    if (clearableTravelAdvances.length === 0) {
+    if (newClearanceAdvanceOptions.length === 0) {
       alert("No paid travel advance is available to clear yet.");
       return;
     }
@@ -1910,6 +1921,7 @@ export default function App() {
       case "DRAFT":
         return "Draft clearance";
       case "SETTLED":
+      case "CLOSED":
         return "Cleared";
       case "REJECTED":
         return "Rejected";
@@ -2013,6 +2025,22 @@ export default function App() {
       alert(err?.message || "Failed to generate PDF.");
     }
   }
+
+  async function openPdfBlob(fetcher: () => Promise<Blob>) {
+    try {
+      const blob = await fetcher();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err: any) {
+      void showNotice(err?.message || "Failed to generate PDF.");
+    }
+  }
+  const downloadClaimPdf = (id: string) => openPdfBlob(() => api.claimPdf(id));
+  const downloadAccommodationPdf = (id: string) => openPdfBlob(() => api.accommodationPdf(id));
+  const downloadOvertimeRequestPdf = (id: string) => openPdfBlob(() => api.overtimeRequestPdf(id));
+  const downloadOvertimeClaimPdf = (id: string) => openPdfBlob(() => api.overtimeClaimPdf(id));
+  const downloadCustomRequestPdf = (id: string) => openPdfBlob(() => api.customRequestPdf(id));
 
   function buildTrackingStages(advance: any, events: any[]) {
     const currentStatus = String(advance?.status || "DRAFT").toUpperCase();
@@ -2179,7 +2207,7 @@ export default function App() {
   function buildClearanceTrackingStages(claim: any) {
     const currentStatus = String(claim?.status || "DRAFT").toUpperCase();
     const terminalFailed = currentStatus === "REJECTED";
-    const terminalDone = currentStatus === "SETTLED";
+    const terminalDone = currentStatus === "SETTLED" || currentStatus === "CLOSED";
     const chain: any[] = Array.isArray(claim?.approval_chain) ? claim.approval_chain : [];
 
     const stages: any[] = [
@@ -2227,10 +2255,10 @@ export default function App() {
 
     stages.push({
       key: "settled",
-      label: "Settled",
-      state: currentStatus === "SETTLED" ? "done" : "waiting",
+      label: currentStatus === "SETTLED" ? "Settled" : "Closed",
+      state: terminalDone ? "done" : "waiting",
       actor: "",
-      status: currentStatus === "SETTLED" ? "Completed" : "Waiting"
+      status: terminalDone ? "Completed" : "Waiting"
     });
 
     if (terminalFailed) {
@@ -2660,7 +2688,7 @@ export default function App() {
 
   // helper summaries
   const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
-  const pendingClaimCount = claims.filter((c) => !["SETTLED", "REJECTED"].includes(c.status)).length;
+  const pendingClaimCount = claims.filter((c) => !["SETTLED", "CLOSED", "REJECTED"].includes(c.status)).length;
   const monthlySpend = claims.reduce((sum, c) => sum + Number(c.claim_total || 0), 0) + advances.reduce((sum, a) => sum + Number(a.approved_total || 0), 0);
   const advancesByType = advances.reduce<Record<string, number>>((acc, advance) => {
     acc[advance.type] = (acc[advance.type] || 0) + 1;
@@ -2950,7 +2978,7 @@ export default function App() {
                   <span>Current Stage</span>
                   <strong>{clearanceStageLabel(claim)}</strong>
                   <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>
-                    {["SETTLED", "REJECTED"].includes(currentStatus) ? humanizeToken(currentStatus) : "In Progress"}
+                    {["SETTLED", "CLOSED", "REJECTED"].includes(currentStatus) ? humanizeToken(currentStatus) : "In Progress"}
                   </em>
                 </div>
                 <div>
@@ -2963,6 +2991,14 @@ export default function App() {
                   <small>{displayRoleLabel(profile?.role || me?.role || "EMPLOYEE")}</small>
                 </div>
               </section>
+
+              {claim.can_view_pdf && (
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                  <button className="button small-button button-subtle" type="button" onClick={() => downloadClaimPdf(claim.id)}>
+                    Download PDF
+                  </button>
+                </div>
+              )}
 
               <section className="tracking-card tracking-progress-card">
                 <h3>Clearance Progress</h3>
@@ -3395,7 +3431,7 @@ export default function App() {
           {canAccessFeature("request_types") && (
             <a href="#" className={navItemClass(page === "REQUEST_TYPES")} onClick={(e) => { e.preventDefault(); setPage("REQUEST_TYPES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Request Types</a>
           )}
-          {(canAccessFeature("org_structure") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines")) && (
+          {(canAccessFeature("org_structure") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines") || canAccessFeature("pdf_designer")) && (
             <div className={`sidebar-group ${orgNavOpen ? "open" : ""}`}>
               <a href="#" className={navItemClass(ORG_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setOrgNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong>{orgNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
               <div className="sidebar-subnav">
@@ -3408,6 +3444,7 @@ export default function App() {
                 {canAccessFeature("leadership_assignments") && <a href="#" className={navItemClass(page === "LEADERSHIP")} onClick={(e) => { e.preventDefault(); setPage("LEADERSHIP"); }}><Users size={14} aria-hidden />Leadership Assignments</a>}
                 {canAccessFeature("workflow_builder") && <a href="#" className={navItemClass(page === "WORKFLOW_BUILDER")} onClick={(e) => { e.preventDefault(); setPage("WORKFLOW_BUILDER"); }}><ShieldCheck size={14} aria-hidden />Approval Workflow Builder</a>}
                 {canAccessFeature("reporting_lines") && <a href="#" className={navItemClass(page === "REPORTING_LINES")} onClick={(e) => { e.preventDefault(); setPage("REPORTING_LINES"); }}><GitBranch size={14} aria-hidden />Reporting Lines</a>}
+                {canAccessFeature("pdf_designer") && <a href="#" className={navItemClass(page === "PDF_DESIGNER")} onClick={(e) => { e.preventDefault(); setPage("PDF_DESIGNER"); }}><FileText size={14} aria-hidden />PDF Designer</a>}
               </div>
             </div>
           )}
@@ -3451,6 +3488,8 @@ export default function App() {
             <WorkflowBuilder />
           ) : page === "REPORTING_LINES" ? (
             <ReportingLines />
+          ) : page === "PDF_DESIGNER" ? (
+            <PdfDesigner />
           ) : page === "ORG_STRUCTURE" ? (
             <OrgStructure />
           ) : page === "TEAM_ROSTER" ? (
@@ -3622,6 +3661,7 @@ export default function App() {
                       { key: "workflow_builder",       label: "Approval Workflow Builder",group: "Org Structure" },
                       { key: "request_types",          label: "Request Types",            group: "Org Structure" },
                       { key: "reporting_lines",        label: "Reporting Lines",          group: "Org Structure" },
+                      { key: "pdf_designer",           label: "PDF Designer",             group: "Org Structure" },
                       { key: "advance_pdf",            label: "Download Advance PDF",     group: "Advances" },
                       { key: "report_reconciliation",  label: "Reconciliation Report",    group: "Reports" },
                     ];
@@ -3641,6 +3681,7 @@ export default function App() {
                       workflow_builder:       ["ADMIN","MANAGER","EXCO"],
                       request_types:          ["ADMIN"],
                       reporting_lines:        ["ADMIN","MANAGER","EXCO"],
+                      pdf_designer:           ["ADMIN"],
                       advance_pdf:            ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       report_reconciliation:  ["ADMIN","FINANCE"],
                     };
@@ -5429,13 +5470,13 @@ export default function App() {
                     <label>Paid Advance <span style={{ color: "#dc2626" }}>*</span></label>
                     <select value={clearanceLinkedAdvanceId} onChange={(e) => setClearanceLinkedAdvanceId(e.target.value)}>
                       <option value="">Select paid travel advance</option>
-                      {clearableTravelAdvances.map((advance) => (
+                      {newClearanceAdvanceOptions.map((advance) => (
                         <option key={advance.id} value={advance.id}>
                           {travelTypeLabel(advance.type, travelTypes)} - {fmtMoney(advance.approved_total || advance.requested_total)} - {new Date(advance.created_at).toLocaleDateString()}
                         </option>
                       ))}
                     </select>
-                    {clearableTravelAdvances.length === 0 && (
+                    {newClearanceAdvanceOptions.length === 0 && (
                       <div style={{ marginTop: 6, fontSize: 13, color: "crimson" }}>
                         No paid travel advances are available to clear yet.
                       </div>
@@ -5824,6 +5865,8 @@ export default function App() {
             <MyAdvances
               advances={advances}
               travelTypes={travelTypes}
+              claims={claims}
+              onContinueClearance={editClearance}
               onNew={startNewAdvanceRequest}
               onEdit={async (a) => {
                 try {

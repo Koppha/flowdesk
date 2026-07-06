@@ -21,7 +21,7 @@ const TABS: { key: string; label: string }[] = [
 function tabStatuses(tab: string) {
   switch (tab) {
     case "PENDING": return PENDING_STATUSES;
-    case "SETTLED": return ["SETTLED"];
+    case "SETTLED": return ["SETTLED", "CLOSED"];
     case "ISSUES": return ["REJECTED"];
     default: return null;
   }
@@ -35,7 +35,7 @@ function statusLabel(value: string | null | undefined) {
 function statusTone(value: string | null | undefined) {
   const status = String(value || "").toUpperCase();
   if (status.includes("REJECT")) return "status-pill-danger";
-  if (status.includes("SETTLED") || status.includes("APPROVED")) return "status-pill-success";
+  if (status.includes("SETTLED") || status.includes("APPROVED") || status.includes("CLOSED")) return "status-pill-success";
   if (status.includes("SUBMITTED") || status.includes("REVIEW") || status.includes("OFFICER") || status.includes("VERIFIED")) return "status-pill-warning";
   if (status.includes("DRAFT")) return "status-pill-neutral";
   return "status-pill-info";
@@ -59,7 +59,8 @@ function claimNumber(claim: any) {
 function clearanceStageLabel(claim: any) {
   switch (claim?.status) {
     case "DRAFT": return "Draft clearance";
-    case "SETTLED": return "Cleared";
+    case "SETTLED":
+    case "CLOSED": return "Cleared";
     case "REJECTED": return "Rejected";
     case "SUBMITTED": return "Waiting Manager Certification";
     case "MANAGER_APPROVED":
@@ -83,7 +84,7 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
 
   const stats = useMemo(() => ({
     total: claims.length,
-    settled: claims.filter((c) => c.status === "SETTLED").length,
+    settled: claims.filter((c) => c.status === "SETTLED" || c.status === "CLOSED").length,
     awaitingCto: claims.filter((c) => c.status === "CHIEF_OFFICER_APPROVED").length,
     issues: claims.filter((c) => c.status === "REJECTED").length,
   }), [claims]);

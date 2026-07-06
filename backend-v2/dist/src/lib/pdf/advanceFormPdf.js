@@ -1,24 +1,5 @@
 import PDFDocument from "pdfkit";
-function formatDate(value) {
-    if (!value)
-        return "";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime()))
-        return "";
-    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-}
-function formatMoney(value, currency) {
-    const amount = Number(value || 0);
-    return `${currency} ${amount.toFixed(2)}`;
-}
-function dottedLine(doc, label, value, width) {
-    const labelWidth = doc.widthOfString(label);
-    doc.text(label, { continued: true });
-    const remaining = Math.max(0, width - labelWidth - doc.widthOfString(value) - 10);
-    const dots = ".".repeat(Math.max(0, Math.floor(remaining / doc.widthOfString("."))));
-    doc.text(` ${dots} `, { continued: true });
-    doc.text(value);
-}
+import { dottedLine, formatDate, formatMoney } from "./pdfHelpers.js";
 export function buildAdvanceRequestPdf(advance, lines) {
     const doc = new PDFDocument({ size: "A4", margin: 56 });
     const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;

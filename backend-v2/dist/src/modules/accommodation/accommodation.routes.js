@@ -13,6 +13,9 @@ import { canApproveStep, getPendingGroup } from "../../lib/workflowEngine.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { notifyAdvanceTask } from "../../lib/notifications.js";
 import { getAdvanceNotificationContext, writeAdvanceAudit } from "../advances/advances.routes.js";
+import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
+import { resolveAccommodationPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
+import { renderPdfTemplate } from "../../lib/pdf/genericPdfRenderer.js";
 const LESOTHO_DISTRICTS = [
     "Butha-Buthe",
     "Leribe",
@@ -423,7 +426,38 @@ accommodationRouter.get("/:id", async (req, res, next) => {
             throw notFound();
         if (!canViewAccommodation({ role: req.user.role, department: req.user.department, userId: req.user.userId, row }))
             throw forbidden();
-        return res.json(row);
+        const isOwner = row.requester_id === req.user.userId || row.created_by_id === req.user.userId;
+        const can_view_pdf = await canAccessPdf({ requestType: "ACCOMMODATION_REQUEST", userId: req.user.userId, role: req.user.role, isOwner, action: "view" });
+        return res.json({ ...row, can_view_pdf });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+accommodationRouter.get("/:id/pdf", async (req, res, next) => {
+    try {
+        const row = await getAccommodationById(req.params.id);
+        if (!row)
+            throw notFound();
+        if (!canViewAccommodation({ role: req.user.role, department: req.user.department, userId: req.user.userId, row }))
+            throw forbidden();
+        const isOwner = row.requester_id === req.user.userId || row.created_by_id === req.user.userId;
+        if (!(await canAccessPdf({ requestType: "ACCOMMODATION_REQUEST", userId: req.user.userId, role: req.user.role, isOwner, action: "view" }))) {
+            throw forbidden();
+        }
+        const template = (await query(`SELECT * FROM pdf_templates WHERE request_type = 'ACCOMMODATION_REQUEST' AND status = 'ACTIVE' LIMIT 1`))[0];
+        if (!template)
+            throw badRequest("No PDF template configured for accommodation requests yet.");
+        const data = await resolveAccommodationPdfData(req.params.id);
+        const catalog = await getFieldCatalogFor("ACCOMMODATION_REQUEST");
+        const letterhead = (await query(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+            logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+        };
+        const doc = renderPdfTemplate(template, letterhead, data, catalog);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="accommodation-${req.params.id}.pdf"`);
+        doc.pipe(res);
+        doc.end();
     }
     catch (err) {
         return next(err);

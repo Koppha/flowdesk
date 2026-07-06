@@ -7,6 +7,9 @@ import { query } from "../../lib/db.js";
 import { getUserAccountState, isProfileComplete } from "../../lib/userProfile.js";
 import { getUserOrgPath } from "../../lib/departments.js";
 import { notifyOvertimeSubmitted } from "../../lib/notifications.js";
+import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
+import { resolveOvertimeRequestPdfData, resolveOvertimeClaimPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
+import { renderPdfTemplate } from "../../lib/pdf/genericPdfRenderer.js";
 const OvertimeRequestLineSchema = z.object({
     date: z.string(),
     day: z.string().optional(),
@@ -95,14 +98,51 @@ overtimeRouter.get("/requests", async (req, res, next) => {
         return next(err);
     }
 });
+function isOvertimeRequestOwner(row, userId) {
+    return row.employee_id === userId || row.created_by_id === userId;
+}
+function isOvertimeClaimOwner(row, userId) {
+    return row.employee_id === userId || row.created_by_id === userId;
+}
 overtimeRouter.get("/requests/:id", async (req, res, next) => {
     try {
         const row = (await query(`SELECT * FROM overtime_requests WHERE id=$1`, [req.params.id]))[0];
         if (!row)
             throw notFound();
-        if (row.employee_id !== req.user.userId && row.created_by_id !== req.user.userId && req.user.role !== "ADMIN")
+        const isOwner = isOvertimeRequestOwner(row, req.user.userId);
+        if (!isOwner && req.user.role !== "ADMIN")
             throw forbidden();
-        return res.json(row);
+        const can_view_pdf = await canAccessPdf({ requestType: "OVERTIME_REQUEST", userId: req.user.userId, role: req.user.role, isOwner, action: "view" });
+        return res.json({ ...row, can_view_pdf });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+overtimeRouter.get("/requests/:id/pdf", async (req, res, next) => {
+    try {
+        const row = (await query(`SELECT * FROM overtime_requests WHERE id=$1`, [req.params.id]))[0];
+        if (!row)
+            throw notFound();
+        const isOwner = isOvertimeRequestOwner(row, req.user.userId);
+        if (!isOwner && req.user.role !== "ADMIN")
+            throw forbidden();
+        if (!(await canAccessPdf({ requestType: "OVERTIME_REQUEST", userId: req.user.userId, role: req.user.role, isOwner, action: "view" }))) {
+            throw forbidden();
+        }
+        const template = (await query(`SELECT * FROM pdf_templates WHERE request_type = 'OVERTIME_REQUEST' AND status = 'ACTIVE' LIMIT 1`))[0];
+        if (!template)
+            throw badRequest("No PDF template configured for overtime requests yet.");
+        const data = await resolveOvertimeRequestPdfData(req.params.id);
+        const catalog = await getFieldCatalogFor("OVERTIME_REQUEST");
+        const letterhead = (await query(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+            logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+        };
+        const doc = renderPdfTemplate(template, letterhead, data, catalog);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="overtime-request-${req.params.id}.pdf"`);
+        doc.pipe(res);
+        doc.end();
     }
     catch (err) {
         return next(err);
@@ -228,9 +268,40 @@ overtimeRouter.get("/claims/:id", async (req, res, next) => {
         const row = (await query(`SELECT * FROM overtime_claims WHERE id=$1`, [req.params.id]))[0];
         if (!row)
             throw notFound();
-        if (row.employee_id !== req.user.userId && row.created_by_id !== req.user.userId && req.user.role !== "ADMIN")
+        const isOwner = isOvertimeClaimOwner(row, req.user.userId);
+        if (!isOwner && req.user.role !== "ADMIN")
             throw forbidden();
-        return res.json(row);
+        const can_view_pdf = await canAccessPdf({ requestType: "OVERTIME_CLAIM", userId: req.user.userId, role: req.user.role, isOwner, action: "view" });
+        return res.json({ ...row, can_view_pdf });
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+overtimeRouter.get("/claims/:id/pdf", async (req, res, next) => {
+    try {
+        const row = (await query(`SELECT * FROM overtime_claims WHERE id=$1`, [req.params.id]))[0];
+        if (!row)
+            throw notFound();
+        const isOwner = isOvertimeClaimOwner(row, req.user.userId);
+        if (!isOwner && req.user.role !== "ADMIN")
+            throw forbidden();
+        if (!(await canAccessPdf({ requestType: "OVERTIME_CLAIM", userId: req.user.userId, role: req.user.role, isOwner, action: "view" }))) {
+            throw forbidden();
+        }
+        const template = (await query(`SELECT * FROM pdf_templates WHERE request_type = 'OVERTIME_CLAIM' AND status = 'ACTIVE' LIMIT 1`))[0];
+        if (!template)
+            throw badRequest("No PDF template configured for overtime claims yet.");
+        const data = await resolveOvertimeClaimPdfData(req.params.id);
+        const catalog = await getFieldCatalogFor("OVERTIME_CLAIM");
+        const letterhead = (await query(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+            logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+        };
+        const doc = renderPdfTemplate(template, letterhead, data, catalog);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="overtime-claim-${req.params.id}.pdf"`);
+        doc.pipe(res);
+        doc.end();
     }
     catch (err) {
         return next(err);

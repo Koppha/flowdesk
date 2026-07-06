@@ -845,7 +845,8 @@ export async function notifyClaimTask(args: {
         CHIEF_OFFICER_APPROVED: `Your clearance claim has been approved by EXCO and is now with HR for processing.`,
         HR_OFFICER:             `Your clearance claim is being reviewed by HR Management.`,
         HR_MANAGER_REVIEW:      `Your clearance claim has been reviewed by HR and forwarded to Finance for verification.`,
-        FINANCE_VERIFIED:       `Your clearance claim has been verified by Finance and is awaiting final settlement.`
+        FINANCE_VERIFIED:       `Your clearance claim has been verified by Finance and is awaiting final settlement.`,
+        CLOSED:                 `Your clearance claim has been fully approved and closed.`
       };
 
       const statusMsg = claimantMessages[args.status];

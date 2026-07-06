@@ -19,6 +19,7 @@ import { reportingLinesRouter } from "./modules/reporting-lines/reporting-lines.
 import { requestTypesRouter } from "./modules/request-types/request-types.routes.js";
 import { customRequestsRouter } from "./modules/custom-requests/custom-requests.routes.js";
 import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
+import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 export function createApp() {
     const app = express();
     app.use(compression());
@@ -55,6 +56,7 @@ export function createApp() {
     app.use("/request-types", requestTypesRouter);
     app.use("/custom-requests", customRequestsRouter);
     app.use("/email-actions", emailActionsRouter);
+    app.use("/pdf-templates", pdfTemplatesRouter);
     app.use("/ai", aiRouter);
     app.use(errorHandler);
     return app;

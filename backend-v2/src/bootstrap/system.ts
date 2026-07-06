@@ -20,6 +20,7 @@ export async function bootstrapSystem() {
   await ensureEmploymentTypesSchema();
   await ensureEmailActionTokensSchema();
   await ensurePositionVacanciesSchema();
+  await ensurePdfSchema();
   await ensureAdminAccount();
 }
 
@@ -1099,4 +1100,252 @@ async function ensureEmploymentTypesSchema() {
       ('TEMPORARY', 'Temporary', 3)
     ON CONFLICT (code) DO NOTHING
   `);
+}
+
+// The 6 scopes the PDF Designer covers. CUSTOM_REQUEST rows with
+// custom_request_type_id = NULL are a generic fallback template/permission
+// set usable by any custom request type that hasn't been given its own.
+export const PDF_REQUEST_TYPES = [
+  "ADVANCE_REQUEST",
+  "CLEARANCE_CLAIM",
+  "ACCOMMODATION_REQUEST",
+  "OVERTIME_REQUEST",
+  "OVERTIME_CLAIM",
+  "CUSTOM_REQUEST"
+] as const;
+
+async function ensurePdfSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS pdf_letterhead_settings (
+      id                          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      logo_path                   text,
+      company_name                text,
+      address_lines               jsonb       NOT NULL DEFAULT '[]',
+      contact_line                text,
+      footer_confidentiality_text text,
+      updated_by_id               uuid        REFERENCES users(id),
+      updated_at                  timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS pdf_templates (
+      id                     uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      name                   text        NOT NULL,
+      request_type           text        NOT NULL,
+      custom_request_type_id uuid        REFERENCES custom_request_types(id) ON DELETE CASCADE,
+      status                 text        NOT NULL DEFAULT 'DRAFT',
+      show_letterhead        boolean     NOT NULL DEFAULT true,
+      header_title           text,
+      footer_text_override   text,
+      accent_color           text,
+      sections               jsonb       NOT NULL DEFAULT '[]',
+      created_by_id          uuid        REFERENCES users(id),
+      created_at             timestamptz NOT NULL DEFAULT now(),
+      updated_at             timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_pdf_templates_type ON pdf_templates(request_type, custom_request_type_id)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS pdf_permissions (
+      id                     uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_type           text        NOT NULL,
+      custom_request_type_id uuid        REFERENCES custom_request_types(id) ON DELETE CASCADE,
+      permission_type        text        NOT NULL DEFAULT 'ALL',
+      group_name             text,
+      user_id                uuid        REFERENCES users(id) ON DELETE CASCADE,
+      can_view_pdf           boolean     NOT NULL DEFAULT false,
+      can_design_pdf         boolean     NOT NULL DEFAULT false,
+      created_by_id          uuid        REFERENCES users(id),
+      created_at             timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_pdf_perm_type ON pdf_permissions(request_type, custom_request_type_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_pdf_perm_user ON pdf_permissions(user_id)`);
+
+  const hasLetterhead = await query<{ id: string }>(`SELECT id FROM pdf_letterhead_settings LIMIT 1`);
+  if (!hasLetterhead[0]) {
+    await query(
+      `INSERT INTO pdf_letterhead_settings (company_name, address_lines, contact_line, footer_confidentiality_text)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        "Econet Telecom Lesotho",
+        JSON.stringify(["Kingsway Road, Maseru"]),
+        "+266 2221 1000  |  www.etl.co.ls",
+        "CONFIDENTIAL — For internal use only."
+      ]
+    );
+  }
+
+  await seedDefaultPdfTemplates();
+}
+
+function pdfSection(section: Record<string, unknown>) {
+  return { id: `sec-${Math.random().toString(36).slice(2, 10)}`, ...section };
+}
+
+function fieldGridSection(title: string, fields: string[], opts?: { numbered?: boolean; columns?: 1 | 2 | 3 | 4 }) {
+  return pdfSection({
+    type: "field_grid",
+    title: title || undefined,
+    numbered: title ? (opts?.numbered ?? true) : false,
+    columns: opts?.columns ?? 2,
+    fields: fields.map((fieldKey) => ({ fieldKey }))
+  });
+}
+
+function tableSection(title: string, tableKey: string, tableColumns: { key: string; label: string }[], opts?: { numbered?: boolean }) {
+  return pdfSection({ type: "table", title, numbered: opts?.numbered ?? true, tableKey, tableColumns });
+}
+
+function twoColumnTableSection(
+  title: string,
+  leftHeader: string,
+  rightHeader: string,
+  leftFields: { fieldKey: string; label: string; checkboxValue?: string }[],
+  rightFields: { fieldKey: string; label: string; checkboxValue?: string }[],
+  opts?: { numbered?: boolean }
+) {
+  return pdfSection({
+    type: "two_column_table",
+    title: title || undefined,
+    numbered: title ? (opts?.numbered ?? true) : false,
+    leftHeader, rightHeader,
+    leftFields: leftFields.map((f) => ({ fieldKey: f.fieldKey, labelOverride: f.label, checkboxValue: f.checkboxValue })),
+    rightFields: rightFields.map((f) => ({ fieldKey: f.fieldKey, labelOverride: f.label, checkboxValue: f.checkboxValue }))
+  });
+}
+
+function approvalSummarySection(title = "Approval Summary") {
+  return pdfSection({ type: "approval_summary", title, numbered: true });
+}
+
+function disclaimerSection(title: string, items: string[]) {
+  return pdfSection({ type: "disclaimer", title, disclaimerItems: items });
+}
+
+const DEFAULT_TEMPLATE_DEFS: Record<(typeof PDF_REQUEST_TYPES)[number], { name: string; headerTitle: string; sections: unknown[] }> = {
+  ADVANCE_REQUEST: {
+    name: "Default Travel Advance Request",
+    headerTitle: "Travel Advance Request",
+    sections: [
+      fieldGridSection("Requester & Traveller Details",
+        ["request_id", "created_at", "created_by_name", "request_type_label", "requester_name", "requester_employee_no", "traveller_type", "status"],
+        { columns: 4 }),
+      fieldGridSection("Trip Details",
+        ["type_label", "destination", "departure_date", "return_date", "travel_duration", "accommodation_summary", "meals_summary"],
+        { columns: 2 }),
+      fieldGridSection("", ["purpose"], { columns: 1 }),
+      fieldGridSection("Payment Details", ["requested_total", "payment_status"], { columns: 2 }),
+      twoColumnTableSection("", "ECOCASH WALLET", "BANK ACCOUNT",
+        [
+          { fieldKey: "wallet_name", label: "Wallet Name" },
+          { fieldKey: "wallet_number", label: "Wallet Number" },
+          { fieldKey: "payment_method", label: "Selected", checkboxValue: "ECOCASH" }
+        ],
+        [
+          { fieldKey: "bank_name", label: "Bank Name" },
+          { fieldKey: "bank_account_number", label: "Account Holder" },
+          { fieldKey: "payment_method", label: "Selected", checkboxValue: "BANK" }
+        ]
+      ),
+      approvalSummarySection(),
+      disclaimerSection("Clearing Requirement & Disclaimer", [
+        "The traveller must submit all original receipts and a completed Travel Expense Claim Form to Finance within **seven (7) working days** of return.",
+        "Any unspent advance must be returned within the same 7-day period via the original disbursement channel.",
+        "Failure to clear within the stipulated period will result in the amount being **deducted from the traveller's next salary** per ETL Financial Policy FP-007.",
+        "All claims are subject to Finance verification and audit. ETL reserves the right to reject claims lacking documentation or exceeding policy limits.",
+        "By submitting this request, the requester and traveller confirm the information is accurate and that they have read the **ETL Travel & Subsistence Policy**."
+      ])
+    ]
+  },
+  CLEARANCE_CLAIM: {
+    name: "Default Travel Advance Clearance",
+    headerTitle: "TRAVEL ADVANCE CLEARANCE",
+    sections: [
+      fieldGridSection("Claimant Details", ["claim_id", "submitted_at", "claimant_name", "department", "status"]),
+      fieldGridSection("Trip Details", ["month", "duty_station", "project_number", "vehicle_reg", "vehicle_type", "engine_cc", "vehicle_rate"]),
+      fieldGridSection("Reconciliation Summary", ["claim_total", "advance_amount", "balance_amount", "reason_for_overspend"]),
+      tableSection("Trip Lines", "claim_trips", [
+        { key: "trip_date", label: "Date" }, { key: "from_place", label: "From" }, { key: "to_place", label: "To" },
+        { key: "km_travelled", label: "KM" }, { key: "breakfast", label: "Breakfast" }, { key: "lunch", label: "Lunch" },
+        { key: "dinner", label: "Dinner" }, { key: "other_expenses", label: "Other" }, { key: "line_total", label: "Total" }
+      ]),
+      approvalSummarySection(),
+      fieldGridSection("Settlement", ["settled_method", "settled_reference", "settled_at", "closed_at"], { numbered: false, columns: 2 })
+    ]
+  },
+  ACCOMMODATION_REQUEST: {
+    name: "Default Accommodation Request",
+    headerTitle: "ACCOMMODATION REQUEST",
+    sections: [
+      fieldGridSection("Requester Details", ["request_id", "created_at", "requester_name", "department", "status"]),
+      fieldGridSection("Accommodation Details", ["location", "provider", "check_in", "check_out", "amount", "notes"]),
+      approvalSummarySection(),
+      fieldGridSection("Payment", ["paid_reference", "paid_at", "rejection_comments"], { numbered: false })
+    ]
+  },
+  OVERTIME_REQUEST: {
+    name: "Default Overtime Request",
+    headerTitle: "OVERTIME REQUEST",
+    sections: [
+      fieldGridSection("Employee Details", ["employee_name", "employee_no", "job_title", "section_name", "year", "month", "status"]),
+      fieldGridSection("Details", ["car_reg", "remarks"], { numbered: false }),
+      tableSection("Overtime Lines", "lines", [
+        { key: "date", label: "Date" }, { key: "day", label: "Day" }, { key: "estimated_start", label: "Est. Start" },
+        { key: "estimated_end", label: "Est. End" }, { key: "actual_start", label: "Actual Start" },
+        { key: "actual_end", label: "Actual End" }, { key: "reason", label: "Reason" }
+      ]),
+      approvalSummarySection()
+    ]
+  },
+  OVERTIME_CLAIM: {
+    name: "Default Overtime Claim",
+    headerTitle: "OVERTIME CLAIM",
+    sections: [
+      fieldGridSection("Employee Details", ["employee_name", "employee_no", "job_title", "division", "year", "month", "status"]),
+      fieldGridSection("Totals", ["total_overtime", "compensated_hours", "pay_days", "hourly_rate", "total_amount"]),
+      tableSection("Overtime Lines", "lines", [
+        { key: "date", label: "Date" }, { key: "from_time", label: "From" }, { key: "to_time", label: "To" },
+        { key: "hours_125", label: "125%" }, { key: "hours_150", label: "150%" }, { key: "hours_200", label: "200%" },
+        { key: "activity_name", label: "Activity" }
+      ]),
+      approvalSummarySection()
+    ]
+  },
+  CUSTOM_REQUEST: {
+    name: "Default Custom Request",
+    headerTitle: "REQUEST FORM",
+    sections: [
+      fieldGridSection("Request Details", ["request_type_name", "requester_name", "submitted_at", "status"]),
+      fieldGridSection("Submitted Fields", [], { numbered: true }),
+      approvalSummarySection()
+    ]
+  }
+};
+
+async function seedDefaultPdfTemplates() {
+  for (const requestType of PDF_REQUEST_TYPES) {
+    const existing = await query<{ id: string }>(
+      `SELECT id FROM pdf_templates WHERE request_type = $1 AND custom_request_type_id IS NULL`,
+      [requestType]
+    );
+    if (existing[0]) continue;
+
+    const def = DEFAULT_TEMPLATE_DEFS[requestType];
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO pdf_templates (name, request_type, status, header_title, sections)
+       VALUES ($1, $2, 'ACTIVE', $3, $4)
+       RETURNING id`,
+      [def.name, requestType, def.headerTitle, JSON.stringify(def.sections)]
+    );
+
+    await query(
+      `INSERT INTO pdf_permissions (request_type, permission_type, can_view_pdf, can_design_pdf)
+       VALUES ($1, 'ALL', true, false)`,
+      [requestType]
+    );
+    void inserted;
+  }
 }
