@@ -1,8 +1,3 @@
-/* Block re-clicks on any button for 600ms after first click */
-button[data-clicked="true"] {
-  pointer-events: none !important;
-}
-
 /* Prevent SweetAlert2's global CSS from restyling native form checkboxes */
 input[type="checkbox"] {
   appearance: auto;

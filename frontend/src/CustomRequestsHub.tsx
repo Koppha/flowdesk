@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api } from "./api";
+import { api, openBlobInNewTab } from "./api";
 import { showNotice } from "./alerts";
 import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, X } from "lucide-react";
 
@@ -1109,10 +1109,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
 
   async function downloadCustomRequestPdf(id: string) {
     try {
-      const blob = await api.customRequestPdf(id);
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      await openBlobInNewTab(() => api.customRequestPdf(id));
     } catch (e: any) {
       void showNotice(e?.message || "Failed to generate PDF.");
     }

@@ -525,6 +525,34 @@ claimsRouter.post("/:id/upload-receipt", upload.single("file"), async (req: Auth
   }
 });
 
+// Lets the claimant remove a wrongly-attached file while the claim is still
+// a DRAFT — mirrors the upload route's same ownership/status gate.
+claimsRouter.delete("/:id/receipts/:receiptId", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = (await query<{ claimant_id: string; status: ClaimStatus }>(
+      `SELECT claimant_id, status FROM clearance_claims WHERE id=$1`,
+      [req.params.id]
+    ))[0];
+    if (!claim) throw notFound();
+    if (claim.claimant_id !== req.user!.userId) throw forbidden("Only claimant can remove a receipt");
+    if (claim.status !== "DRAFT") throw badRequest("Cannot remove a receipt after submit");
+
+    const rows = await query<{ file_path: string }>(
+      `DELETE FROM receipts WHERE id=$1 AND clearance_claim_id=$2 RETURNING file_path`,
+      [req.params.receiptId, req.params.id]
+    );
+    if (!rows[0]) throw notFound();
+
+    fs.unlink(rows[0].file_path, () => {
+      // best-effort — the DB row is already gone either way
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
   try {
     await assertUserCanRequest(req.user!.userId);

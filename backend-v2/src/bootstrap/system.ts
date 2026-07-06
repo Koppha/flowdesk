@@ -21,6 +21,8 @@ export async function bootstrapSystem() {
   await ensureEmailActionTokensSchema();
   await ensurePositionVacanciesSchema();
   await ensurePdfSchema();
+  await ensureClearanceSlaSchema();
+  await ensureAdvanceRecoverySchema();
   await ensureAdminAccount();
 }
 
@@ -1348,4 +1350,56 @@ async function seedDefaultPdfTemplates() {
     );
     void inserted;
   }
+}
+
+// Admin-configurable SLA matrix for clearance-claim approval steps, keyed by
+// position_type_code (the same free-form vocabulary the workflow engine uses
+// everywhere else) with a '*' wildcard row so every step type always
+// resolves to some threshold, even ones with no explicit row.
+async function ensureClearanceSlaSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS clearance_sla_thresholds (
+      id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      position_type_code text        NOT NULL,
+      sla_days           integer     NOT NULL,
+      updated_by_id      uuid        REFERENCES users(id),
+      updated_at         timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT clearance_sla_thresholds_code_uq UNIQUE (position_type_code)
+    )
+  `);
+
+  const hasAny = await query<{ id: string }>(`SELECT id FROM clearance_sla_thresholds LIMIT 1`);
+  if (!hasAny[0]) {
+    await query(`INSERT INTO clearance_sla_thresholds (position_type_code, sla_days) VALUES ('*', 3)`);
+  }
+}
+
+// Advance clearance recovery policy: a single admin-configurable window
+// (days before a paid, unclaimed advance is flagged "Overdue") and recovery
+// period (months over which an advance confirmed as never-cleared would be
+// recovered, if Finance/HR/Admin choose to act on the calculated figure —
+// this system only calculates and displays the amount, it never touches
+// payroll or auto-deducts anything).
+async function ensureAdvanceRecoverySchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS advance_recovery_settings (
+      id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      clearance_duration_days integer   NOT NULL DEFAULT 7,
+      recovery_months       integer     NOT NULL DEFAULT 3,
+      updated_by_id         uuid        REFERENCES users(id),
+      updated_at            timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const hasAny = await query<{ id: string }>(`SELECT id FROM advance_recovery_settings LIMIT 1`);
+  if (!hasAny[0]) {
+    await query(`INSERT INTO advance_recovery_settings (clearance_duration_days, recovery_months) VALUES (7, 3)`);
+  }
+
+  // Set only once an admin/finance user explicitly confirms a paid advance
+  // will never be cleared — not automatically, and not just because it's
+  // overdue (an employee could still clear it late).
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS not_cleared_confirmed_at timestamptz`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS not_cleared_confirmed_by_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_deduction_amount numeric(12,2)`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_months_at_confirmation integer`);
 }

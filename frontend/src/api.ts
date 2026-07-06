@@ -105,6 +105,27 @@ async function fetchBlob(path: string) {
   return res.blob();
 }
 
+// Opens a blank tab *synchronously* (before the async fetch below runs) so
+// browsers still count this as a direct result of the click. Fetching the
+// blob first and calling window.open(url) afterwards — the previous
+// pattern — loses that "user gesture" chain by the time the promise
+// resolves, so strict popup blockers (Firefox in particular) silently
+// swallow the window.open() and no tab ever appears, even though the PDF
+// downloaded fine.
+export async function openBlobInNewTab(fetcher: () => Promise<Blob>) {
+  const tab = window.open("", "_blank");
+  try {
+    const blob = await fetcher();
+    const url = URL.createObjectURL(blob);
+    if (tab) tab.location.href = url;
+    else window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } catch (err) {
+    if (tab) tab.close();
+    throw err;
+  }
+}
+
 export const api = {
   login: (email: string, password: string) => req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => req("/auth/me"),
@@ -214,6 +235,7 @@ export const api = {
   updateClaim: (id: string, data: any) => req(`/claims/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   updateClaimTrips: (id: string, data: any) => req(`/claims/${id}/trips`, { method: "PUT", body: JSON.stringify(data) }),
   uploadClaimReceipt: (id: string, form: FormData) => req(`/claims/${id}/upload-receipt`, { method: "POST", body: form }),
+  deleteClaimReceipt: (id: string, receiptId: string) => req(`/claims/${id}/receipts/${receiptId}`, { method: "DELETE" }),
   submitClaim: (id: string) => req(`/claims/${id}/submit`, { method: "POST", body: JSON.stringify({}) }),
 
   inbox: () => req("/inbox"),
@@ -244,7 +266,15 @@ export const api = {
   aiOcrExtract: (text: string) => req("/ai/ocr-extract", { method: "POST", body: JSON.stringify({ text }) }),
 
   slaReport: (periodDays?: number) => req(`/advances/sla-report${periodDays ? `?period_days=${periodDays}` : ""}`),
+  claimsSlaReport: (periodDays?: number) => req(`/claims/sla-report${periodDays ? `?period_days=${periodDays}` : ""}`),
+  claimsSlaThresholds: () => req("/claims/sla-thresholds"),
+  updateClaimsSlaThresholds: (thresholds: { position_type_code: string; sla_days: number }[]) =>
+    req("/claims/sla-thresholds", { method: "PUT", body: JSON.stringify({ thresholds }) }),
   advanceDetail: (id: string) => req(`/advances/${id}`),
+  advanceRecoverySettings: () => req("/advances/recovery-settings"),
+  updateAdvanceRecoverySettings: (data: { clearance_duration_days: number; recovery_months: number }) =>
+    req("/advances/recovery-settings", { method: "PUT", body: JSON.stringify(data) }),
+  confirmAdvanceNotCleared: (id: string) => req(`/advances/${id}/confirm-not-cleared`, { method: "POST" }),
   createAccommodationRequest: (data: any) => req("/accommodation-requests", { method: "POST", body: JSON.stringify(data) }),
   uploadAccommodationQuotation: (id: string, form: FormData) => req(`/accommodation-requests/${id}/upload-quotation`, { method: "POST", body: form }),
   sendAccommodationToFinance: (id: string) => req(`/accommodation-requests/${id}/send-to-finance`, { method: "POST", body: JSON.stringify({}) }),

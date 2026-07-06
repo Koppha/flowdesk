@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api, getUserFromToken } from "./api";
-import { showNotice } from "./alerts";
+import { api, getUserFromToken, openBlobInNewTab } from "./api";
+import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Clock3, CreditCard, FileText, Flag, Hash, Plane, RefreshCw, ShieldCheck, User, Users } from "lucide-react";
@@ -681,7 +681,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     };
     const chainStages = chain.map((step: any, idx: number) => {
       const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
-      const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.approver_title || step.position_name);
+      // Prefer the workflow's own step label (position_name) over the
+      // approver's personal job title — the tracker should reflect what's
+      // configured in the Workflow Builder, not whoever happens to be assigned.
+      const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.position_name || step.approver_title);
       const isDone = Boolean(step.approved) || stepOrder > idx;
       const isActive = !isDone && pendingStage.has(idx);
       return {
@@ -693,36 +696,21 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       };
     });
 
-    // Once the dynamic chain finishes, a CLAIM moves through fixed
-    // Finance/Payment/Closed stages that aren't part of approval_chain.
+    // The configured workflow chain is the entire approval process — once it
+    // finishes, the claim goes straight to a terminal state (no forced
+    // Finance/Payment stages tacked on; a workflow that actually needs a
+    // Finance step includes one as a regular chain step instead).
     if (item.doc_type === "CLAIM") {
       const claimStatus = detail?.status;
-      const financeDone = ["PAYMENT_PROCESSING", "SETTLED", "CLOSED"].includes(claimStatus);
-      const financeActive = claimStatus === "FINANCE_VERIFIED";
-      const paymentDone = claimStatus === "CLOSED";
-      const paymentActive = claimStatus === "PAYMENT_PROCESSING";
+      const terminalDone = claimStatus === "SETTLED" || claimStatus === "CLOSED";
       return [
         initiatorStage,
         ...chainStages,
         {
-          key: "step-finance",
-          label: "Finance Verification",
-          state: financeDone ? "done" : financeActive ? "active" : "waiting",
-          status: financeDone ? "Verified" : financeActive ? "In Progress" : "Waiting",
-          actor: ""
-        },
-        {
-          key: "step-payment",
-          label: "Payment Processing",
-          state: paymentDone ? "done" : paymentActive ? "active" : "waiting",
-          status: paymentDone ? "Paid" : paymentActive ? "In Progress" : "Waiting",
-          actor: ""
-        },
-        {
           key: "step-closed",
-          label: "Closed",
-          state: claimStatus === "CLOSED" ? "done" : "waiting",
-          status: claimStatus === "CLOSED" ? "Closed" : "Pending",
+          label: claimStatus === "SETTLED" ? "Settled" : "Closed",
+          state: terminalDone ? "done" : "waiting",
+          status: terminalDone ? "Completed" : "Waiting",
           actor: ""
         }
       ];
@@ -811,6 +799,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       : (role === "MANAGER" && ["HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status)));
   const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
   const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
+  const canConfirmNotCleared =
+    item.doc_type === "ADVANCE" &&
+    (role === "ADMIN" || isFinanceDept) &&
+    Boolean((item as any).is_overdue) &&
+    !(item as any).not_cleared_confirmed_at;
 
   // Workflow-driven clearance claims (e.g. "Travel Clearance DT") expose the
   // current step's approver via current_step_approver_id, mirroring advances.
@@ -889,13 +882,20 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     const ok = await act(() => api.markAdvancePaid(item.id, paidRef.trim()));
     if (!ok) return;
     try {
-      const blob = await api.advancePdf(item.id);
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      await openBlobInNewTab(() => api.advancePdf(item.id));
     } catch (e: any) {
       setError(e?.message || "Advance marked as paid, but failed to generate the PDF.");
     }
+  }
+
+  async function handleConfirmNotCleared() {
+    const confirmed = await confirmAction({
+      title: "Confirm this advance was never cleared?",
+      text: "This calculates a recovery deduction (total amount ÷ recovery months) for Finance/HR to action outside this system. This cannot be undone.",
+      confirmButtonText: "Confirm Not Cleared"
+    });
+    if (!confirmed) return;
+    void act(() => api.confirmAdvanceNotCleared(item.id));
   }
 
   function handleRollbackAdvance() {
@@ -933,10 +933,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     void act(() => api.approveAdvance(item.id, approvedTotal, comments)).then(async (ok) => {
       if (!ok || !isCaptureStep) return;
       try {
-        const blob = await api.advancePdf(item.id);
-        const url = URL.createObjectURL(blob);
-        window.open(url, "_blank");
-        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        await openBlobInNewTab(() => api.advancePdf(item.id));
       } catch (e: any) {
         setError(e?.message || "Captured, but failed to generate the travel form.");
       }
@@ -1008,10 +1005,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               className="button small-button button-subtle"
               onClick={async () => {
                 try {
-                  const blob = await api.accommodationPdf(item.id);
-                  const url = URL.createObjectURL(blob);
-                  window.open(url, "_blank");
-                  setTimeout(() => URL.revokeObjectURL(url), 30000);
+                  await openBlobInNewTab(() => api.accommodationPdf(item.id));
                 } catch (e: any) {
                   void showNotice(e?.message || "Failed to generate PDF.");
                 }
@@ -1445,6 +1439,20 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
             <div className="review-card review-card-wide">
               <div className="review-card-title">Action</div>
 
+              {item.doc_type === "ADVANCE" && Boolean((item as any).is_overdue) && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.18)", borderLeft: "4px solid #dc2626", borderRadius: "0 8px 8px 0", marginBottom: 16, fontSize: "0.85rem" }}>
+                  <span style={{ fontSize: 18 }}>⚠️</span>
+                  <div>
+                    <strong style={{ color: "#dc2626" }}>Overdue Clearance</strong>
+                    <span style={{ color: "var(--muted)", marginLeft: 8 }}>
+                      {(item as any).not_cleared_confirmed_at
+                        ? `Confirmed not cleared. Recovery deduction: ${fmt((item as any).recovery_deduction_amount)}`
+                        : "This advance has passed its clearance duration without being cleared."}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {canCreateAccommodation && (
                 <div style={{ marginBottom: 16 }}>
                   {/* Header banner */}
@@ -1608,6 +1616,12 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 {canMarkPaid && (
                   <button className="button small-button button-primary" disabled={busy || !paidRef.trim()} onClick={handleMarkAdvancePaid}>
                     Mark Advance Paid
+                  </button>
+                )}
+
+                {canConfirmNotCleared && (
+                  <button className="button small-button button-danger" disabled={busy} onClick={handleConfirmNotCleared}>
+                    Confirm Not Cleared
                   </button>
                 )}
 

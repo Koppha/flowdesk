@@ -1582,7 +1582,8 @@ const FEATURE_KEYS = [
     "user_management", "roles_permissions", "travel_setup", "org_structure",
     "team_roster", "ceo_management", "employees",
     "exco_members", "managers", "leadership_assignments", "workflow_builder",
-    "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer"
+    "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer",
+    "claims_sla_report"
 ];
 const FEATURE_DEFAULTS = {
     user_management: ["ADMIN", "MANAGER", "EXCO"],
@@ -1600,7 +1601,8 @@ const FEATURE_DEFAULTS = {
     reporting_lines: ["ADMIN", "MANAGER", "EXCO"],
     advance_pdf: ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     report_reconciliation: ["ADMIN", "FINANCE"],
-    pdf_designer: ["ADMIN"]
+    pdf_designer: ["ADMIN"],
+    claims_sla_report: ["ADMIN", "FINANCE", "HR_MANAGER"]
 };
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req, res, next) => {
     try {

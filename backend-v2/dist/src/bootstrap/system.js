@@ -19,6 +19,7 @@ export async function bootstrapSystem() {
     await ensureEmailActionTokensSchema();
     await ensurePositionVacanciesSchema();
     await ensurePdfSchema();
+    await ensureClearanceSlaSchema();
     await ensureAdminAccount();
 }
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;
@@ -1153,5 +1154,25 @@ async function seedDefaultPdfTemplates() {
         await query(`INSERT INTO pdf_permissions (request_type, permission_type, can_view_pdf, can_design_pdf)
        VALUES ($1, 'ALL', true, false)`, [requestType]);
         void inserted;
+    }
+}
+// Admin-configurable SLA matrix for clearance-claim approval steps, keyed by
+// position_type_code (the same free-form vocabulary the workflow engine uses
+// everywhere else) with a '*' wildcard row so every step type always
+// resolves to some threshold, even ones with no explicit row.
+async function ensureClearanceSlaSchema() {
+    await query(`
+    CREATE TABLE IF NOT EXISTS clearance_sla_thresholds (
+      id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      position_type_code text        NOT NULL,
+      sla_days           integer     NOT NULL,
+      updated_by_id      uuid        REFERENCES users(id),
+      updated_at         timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT clearance_sla_thresholds_code_uq UNIQUE (position_type_code)
+    )
+  `);
+    const hasAny = await query(`SELECT id FROM clearance_sla_thresholds LIMIT 1`);
+    if (!hasAny[0]) {
+        await query(`INSERT INTO clearance_sla_thresholds (position_type_code, sla_days) VALUES ('*', 3)`);
     }
 }

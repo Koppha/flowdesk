@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "./api";
+import { api, openBlobInNewTab } from "./api";
 import { showNotice } from "./alerts";
 import { lesothoHolidayName } from "./lesothoHolidays";
 import { HolidayCalendarModal } from "./HolidayCalendar";
@@ -151,10 +151,7 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
 
   async function downloadOvertimeClaimPdf(id: string) {
     try {
-      const blob = await api.overtimeClaimPdf(id);
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      await openBlobInNewTab(() => api.overtimeClaimPdf(id));
     } catch (err: any) {
       void showNotice(err?.message || "Failed to generate PDF.");
     }

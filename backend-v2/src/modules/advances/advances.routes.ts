@@ -10,7 +10,7 @@ import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notif
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
-import { canApproveStep, chainStepToStatus, getPendingGroup, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
@@ -242,12 +242,6 @@ export async function canViewAdvance(args: {
 // ── SLA Report ──────────────────────────────────────────────────────────────
 const SLA_TARGETS = { submission_hours: 48, approval_hours: 72, payment_hours: 48 };
 
-function hoursBetween(a: string | null | undefined, b: string | null | undefined): number | null {
-  if (!a || !b) return null;
-  const diff = new Date(b).getTime() - new Date(a).getTime();
-  return Math.round(diff / 3_600_000 * 10) / 10;
-}
-
 advancesRouter.get("/sla-report", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const isAdmin = req.user!.role === "ADMIN";
@@ -362,6 +356,72 @@ advancesRouter.get("/sla-report", requireAuth, async (req: AuthedRequest, res, n
   }
 });
 
+// ── Advance Clearance Recovery Policy ────────────────────────────────────────
+// Admin-configurable clearance window + recovery period. This only computes
+// and displays a figure for Finance/HR to act on manually — it never touches
+// payroll or auto-deducts anything.
+const RECOVERY_FEATURE_KEY = "advance_recovery_settings";
+
+advancesRouter.get("/recovery-settings", requireAuth, requireFeatureAccess(RECOVERY_FEATURE_KEY, ["ADMIN", "FINANCE"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    const row = (await query<any>(`SELECT clearance_duration_days, recovery_months, updated_at FROM advance_recovery_settings LIMIT 1`))[0];
+    return res.json(row);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const RecoverySettingsSchema = z.object({
+  clearance_duration_days: z.coerce.number().int().min(1),
+  recovery_months: z.coerce.number().int().min(1)
+});
+
+advancesRouter.put("/recovery-settings", requireAuth, requireFeatureAccess(RECOVERY_FEATURE_KEY, ["ADMIN", "FINANCE"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = RecoverySettingsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid settings payload", parsed.error.flatten());
+    await query(
+      `UPDATE advance_recovery_settings SET clearance_duration_days=$1, recovery_months=$2, updated_by_id=$3, updated_at=now()`,
+      [parsed.data.clearance_duration_days, parsed.data.recovery_months, req.user!.userId]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Finance/HR/Admin confirms a paid, overdue advance will never be cleared —
+// calculates (and stores) the monthly deduction figure it would be recovered
+// over. Requires the advance to actually be overdue, and only once.
+advancesRouter.post("/:id/confirm-not-cleared", requireAuth, requireFeatureAccess(RECOVERY_FEATURE_KEY, ["ADMIN", "FINANCE"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const adv = (await query<any>(
+      `SELECT ar.*, ${OVERDUE_SELECT}
+         FROM advance_requests ar
+         CROSS JOIN advance_recovery_settings ars
+        WHERE ar.id=$1`,
+      [req.params.id]
+    ))[0];
+    if (!adv) throw notFound();
+    if (adv.not_cleared_confirmed_at) throw badRequest("Already confirmed as not cleared");
+    if (!adv.is_overdue) throw badRequest("This advance is not overdue for clearance yet");
+
+    const settings = (await query<{ recovery_months: number }>(`SELECT recovery_months FROM advance_recovery_settings LIMIT 1`))[0];
+    const months = settings.recovery_months;
+    const amount = Number((Number(adv.approved_total || adv.requested_total || 0) / months).toFixed(2));
+
+    await query(
+      `UPDATE advance_requests SET not_cleared_confirmed_at=now(), not_cleared_confirmed_by_id=$2,
+         recovery_deduction_amount=$3, recovery_months_at_confirmation=$4
+       WHERE id=$1`,
+      [req.params.id, req.user!.userId, amount, months]
+    );
+    return res.json({ ok: true, recovery_deduction_amount: amount, recovery_months: months });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // ── Finance Reconciliation Report ───────────────────────────────────────────
 advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("report_reconciliation", ["ADMIN", "FINANCE"]), async (req: AuthedRequest, res, next) => {
   try {
@@ -414,14 +474,25 @@ advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("
   }
 });
 
+// A paid advance is "Overdue" once it's past the admin-configured clearance
+// window with no clearance claim even started for it yet — purely a derived
+// display flag (not a stored status), so changing the setting immediately
+// reflects on every advance rather than needing a backfill/migration.
+const OVERDUE_SELECT = `
+  (ar.status = 'PAID' AND ar.not_cleared_confirmed_at IS NULL AND ar.paid_at IS NOT NULL
+    AND now() > ar.paid_at + (ars.clearance_duration_days || ' days')::interval
+    AND NOT EXISTS (SELECT 1 FROM clearance_claims cc WHERE cc.linked_advance_id = ar.id AND cc.status != 'REJECTED')
+  ) AS is_overdue`;
+
 advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const mine = req.query.mine === "true";
     if (mine) {
       const rows = await query(
-        `SELECT ar.*, u.full_name AS requester_name, u.department AS department
+        `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ${OVERDUE_SELECT}
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
+           CROSS JOIN advance_recovery_settings ars
           WHERE ar.requester_id=$1 OR ar.created_by_id=$1
           ORDER BY ar.created_at DESC`,
         [req.user!.userId]
@@ -431,9 +502,10 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
 
     if (req.user?.role !== "ADMIN") throw forbidden("Only admin can list all advances");
     const rows = await query(
-      `SELECT ar.*, u.full_name AS requester_name, u.department AS department
+      `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ${OVERDUE_SELECT}
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
+         CROSS JOIN advance_recovery_settings ars
         ORDER BY ar.created_at DESC`
     );
     return res.json(rows);
@@ -457,10 +529,12 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
                 tt.rate_general_staff AS travel_rate_general_staff,
                 tt.rate_exco AS travel_rate_exco,
                 tt.rate_ceo AS travel_rate_ceo,
-                (tt.id IS NOT NULL AND tt.active = true) AS is_travel_type
+                (tt.id IS NOT NULL AND tt.active = true) AS is_travel_type,
+                ${OVERDUE_SELECT}
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
          LEFT JOIN travel_types tt ON tt.code = ar.type
+         CROSS JOIN advance_recovery_settings ars
          WHERE ar.id=$1`,
         [req.params.id]
       )

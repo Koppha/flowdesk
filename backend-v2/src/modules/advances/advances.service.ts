@@ -114,9 +114,10 @@ export async function advanceWorkflowStep(args: {
   if (actedIdx == null) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
 
   const currentStep = chain[actedIdx];
-  const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true } : s));
+  const actedAt = new Date().toISOString();
+  const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true, approved_at: actedAt } : s));
   if (role === "ADMIN") {
-    for (const idx of group.indices) newChain[idx] = { ...newChain[idx], approved: true };
+    for (const idx of group.indices) newChain[idx] = { ...newChain[idx], approved: true, approved_at: actedAt };
   }
 
   const stillPending = group.indices.some((idx) => !newChain[idx].approved);

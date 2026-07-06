@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, openBlobInNewTab } from "./api";
 import { confirmAction, showNotice } from "./alerts";
 import { ArrowDown, ArrowUp, FileText, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
 
@@ -154,10 +154,7 @@ export default function PdfDesigner() {
   const preview = async () => {
     if (!activeTemplate) return;
     try {
-      const blob = await api.pdfTemplatePreviewBlob(activeTemplate.id);
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      await openBlobInNewTab(() => api.pdfTemplatePreviewBlob(activeTemplate.id));
     } catch (err: any) {
       void showNotice(err?.message || "Failed to render preview.");
     }

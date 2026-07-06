@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { confirmAction, showNotice } from "./alerts";
 import {
   AlertTriangle, Calendar, CheckCircle, Clock, Download,
-  FileText, RefreshCw, Settings, Shield, Star, TrendingUp, XCircle,
+  FileText, Plus, RefreshCw, Settings, Shield, Star, Trash2, TrendingUp, Users, X, XCircle,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -27,6 +28,29 @@ type SlaReport = {
   by_department: Record<string, { total: number; on_time: number; breached: number; at_risk: number }>;
   by_type: Record<string, { total: number; on_time: number; breached: number; avg_total_hours: number | null }>;
   requests: SlaRequest[];
+};
+
+type ClaimSlaStatus = "on_time" | "late" | "at_risk" | "pending" | "no_data";
+
+type ByApprover = {
+  approver_id: string; approver_name: string;
+  on_time: number; late: number; at_risk: number; pending: number; no_data: number;
+  avg_turnaround_hours: number | null;
+};
+
+type LateApproval = {
+  claim_id: string; claimant_name: string | null; department: string | null;
+  approver_name: string | null; position_name: string;
+  hours_late: number | null; still_pending: boolean;
+};
+
+type SlaThreshold = { position_type_code: string; sla_days: number };
+
+type ClaimsSlaReport = {
+  thresholds: SlaThreshold[];
+  summary: { on_time: number; late: number; at_risk: number; pending: number; no_data: number };
+  by_approver: ByApprover[];
+  late_approvals: LateApproval[];
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -152,6 +176,18 @@ function SlaBadge({ status }: { status: SlaStatus }) {
   return <span style={{ padding:"3px 10px", borderRadius:99, fontSize:12, fontWeight:700, background:bg, color, whiteSpace:"nowrap" }}>{label}</span>;
 }
 
+function ClaimSlaBadge({ status }: { status: ClaimSlaStatus }) {
+  const m: Record<ClaimSlaStatus,[string,string,string]> = {
+    on_time:  ["On Time",   "#d1fae5","#065f46"],
+    late:     ["Late",      "#fee2e2","#dc2626"],
+    at_risk:  ["Near Due",  "#fef3c7","#92400e"],
+    pending:  ["Pending",   "#e0f2fe","#075985"],
+    no_data:  ["No Data",   "#f1f5f9","#64748b"],
+  };
+  const [label,bg,color]=m[status];
+  return <span style={{ padding:"3px 10px", borderRadius:99, fontSize:12, fontWeight:700, background:bg, color, whiteSpace:"nowrap" }}>{label}</span>;
+}
+
 // ─── Data builders ────────────────────────────────────────────────────────────
 
 function buildTrend(requests: SlaRequest[]) {
@@ -199,13 +235,21 @@ const TD: React.CSSProperties = { padding:"9px 10px", borderBottom:"1px solid #f
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function SlaReports({ onBack }: { onBack: () => void }) {
+export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBack: () => void; canViewClaimsSla?: boolean }) {
+  const [reportKind, setReportKind] = useState<"advances" | "clearance">("advances");
   const [report,   setReport]   = useState<SlaReport|null>(null);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState<string|null>(null);
   const [periodDays, setPeriodDays] = useState(90);
   const [filterDept, setFilterDept] = useState("");
   const [showAll,  setShowAll]  = useState(false);
+
+  const [claimsReport, setClaimsReport] = useState<ClaimsSlaReport|null>(null);
+  const [claimsLoading, setClaimsLoading] = useState(false);
+  const [claimsError, setClaimsError] = useState<string|null>(null);
+  const [showThresholdsModal, setShowThresholdsModal] = useState(false);
+  const [thresholdRows, setThresholdRows] = useState<SlaThreshold[]>([]);
+  const [savingThresholds, setSavingThresholds] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -214,7 +258,48 @@ export default function SlaReports({ onBack }: { onBack: () => void }) {
     finally { setLoading(false); }
   }, [periodDays]);
 
+  const loadClaims = useCallback(async () => {
+    setClaimsLoading(true); setClaimsError(null);
+    try { setClaimsReport(await api.claimsSlaReport(periodDays) as ClaimsSlaReport); }
+    catch (e:any) { setClaimsError(e.message||"Failed to load clearance SLA report"); }
+    finally { setClaimsLoading(false); }
+  }, [periodDays]);
+
   useEffect(()=>{ void load(); },[load]);
+  useEffect(()=>{ if (reportKind === "clearance" && canViewClaimsSla) void loadClaims(); },[reportKind, canViewClaimsSla, loadClaims]);
+
+  async function openThresholdsModal() {
+    try {
+      const rows = await api.claimsSlaThresholds() as SlaThreshold[];
+      setThresholdRows(rows.length ? rows : [{ position_type_code: "*", sla_days: 3 }]);
+      setShowThresholdsModal(true);
+    } catch (e:any) {
+      void showNotice(e?.message || "Failed to load SLA thresholds.");
+    }
+  }
+
+  async function saveThresholds() {
+    setSavingThresholds(true);
+    try {
+      await api.updateClaimsSlaThresholds(thresholdRows);
+      setShowThresholdsModal(false);
+      await loadClaims();
+    } catch (e:any) {
+      void showNotice(e?.message || "Failed to save SLA thresholds.");
+    } finally {
+      setSavingThresholds(false);
+    }
+  }
+
+  async function removeThresholdRow(index: number) {
+    if (thresholdRows[index]?.position_type_code === "*") {
+      void showNotice("The default (*) threshold can't be removed — edit its days instead.");
+      return;
+    }
+    const ok = await confirmAction({ title: "Remove this threshold row?", confirmButtonText: "Remove" });
+    if (!ok) return;
+    setThresholdRows((rows) => rows.filter((_, i) => i !== index));
+  }
 
   const compliance = useMemo(()=>
     report?.summary.total?Math.round((report.summary.on_time/report.summary.total)*100):null,[report]);
@@ -283,6 +368,20 @@ export default function SlaReports({ onBack }: { onBack: () => void }) {
           <h1 style={{ margin:0, fontSize:22, fontWeight:800, color:"#0f172a" }}>SLA Reports</h1>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          {canViewClaimsSla && (
+            <div style={{ display:"flex", background:"#f1f5f9", border:"1px solid #e2e8f0", borderRadius:8, padding:3, gap:2 }}>
+              {([["advances","Advances"],["clearance","Clearance Approvals"]] as const).map(([k,label])=>(
+                <button key={k} onClick={()=>setReportKind(k)}
+                  style={{
+                    border:"none", borderRadius:6, padding:"6px 12px", fontSize:13, fontWeight:700, cursor:"pointer",
+                    background: reportKind===k ? "#1d4ed8" : "transparent",
+                    color: reportKind===k ? "white" : "#374151",
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <div style={{ display:"flex", alignItems:"center", gap:7, background:"white", border:"1px solid #e2e8f0", borderRadius:8, padding:"7px 12px", fontSize:13, color:"#374151" }}>
             <Calendar size={13} style={{ color:"#3b82f6" }}/>{periodLabel}
           </div>
@@ -306,9 +405,9 @@ export default function SlaReports({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      {error&&<div style={{ padding:"10px 16px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, color:"#dc2626", marginBottom:16, fontSize:13 }}>{error}</div>}
+      {reportKind==="advances" && error&&<div style={{ padding:"10px 16px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, color:"#dc2626", marginBottom:16, fontSize:13 }}>{error}</div>}
 
-      {report&&(
+      {reportKind==="advances" && report&&(
         <>
           {/* KPI row */}
           <div className="inbox-metrics" style={{ marginBottom:18 }}>
@@ -568,6 +667,152 @@ export default function SlaReports({ onBack }: { onBack: () => void }) {
             </div>
           </div>
         </>
+      )}
+
+      {reportKind==="clearance" && canViewClaimsSla && (
+        <>
+          {claimsError&&<div style={{ padding:"10px 16px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, color:"#dc2626", marginBottom:16, fontSize:13 }}>{claimsError}</div>}
+
+          {claimsLoading&&!claimsReport?(
+            <div style={{...C,textAlign:"center",padding:60,color:"#94a3b8"}}>Loading clearance SLA report…</div>
+          ):claimsReport&&(
+            <>
+              {/* KPI row */}
+              <div className="inbox-metrics" style={{ marginBottom:18 }}>
+                {[
+                  { icon:<CheckCircle size={22}/>, metric:"metric-green", title:"On Time", val:String(claimsReport.summary.on_time) },
+                  { icon:<AlertTriangle size={22}/>, metric:"metric-rose", title:"Late", val:String(claimsReport.summary.late) },
+                  { icon:<Clock size={22}/>, metric:"metric-gold", title:"Near Due", val:String(claimsReport.summary.at_risk) },
+                  { icon:<Users size={22}/>, metric:"metric-blue", title:"Pending", val:String(claimsReport.summary.pending) },
+                ].map(({icon,metric,title,val})=>(
+                  <div key={title} className={`inbox-metric-card ${metric}`}>
+                    <span className="inbox-metric-icon">{icon}</span>
+                    <div className="inbox-metric-body"><strong>{val}</strong><span>{title}</span></div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr", gap:14, marginBottom:18 }}>
+                <div style={C}>
+                  <div style={{ fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:14 }}>SLA by Approver</div>
+                  {claimsReport.by_approver.length===0?(
+                    <div style={{textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13}}>No approver activity in this period</div>
+                  ):(
+                    <div style={{ overflowX:"auto" }}>
+                      <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
+                        <thead style={{background:"#f8fafc"}}>
+                          <tr>{["Approver","On Time","Late","Near Due","Pending","No Data","Avg Turnaround"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
+                        </thead>
+                        <tbody>
+                          {claimsReport.by_approver.map(a=>(
+                            <tr key={a.approver_id}>
+                              <td style={{...TD,fontWeight:600,color:"#374151"}}>{a.approver_name}</td>
+                              <td style={{...TD,color:"#059669",fontWeight:700}}>{a.on_time}</td>
+                              <td style={{...TD,color:a.late>0?"#dc2626":"#94a3b8",fontWeight:a.late>0?700:400}}>{a.late}</td>
+                              <td style={{...TD,color:"#92400e"}}>{a.at_risk}</td>
+                              <td style={{...TD,color:"#64748b"}}>{a.pending}</td>
+                              <td style={{...TD,color:"#94a3b8"}}>{a.no_data}</td>
+                              <td style={{...TD,color:"#64748b"}}>{fmtHours(a.avg_turnaround_hours)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div style={C}>
+                  <div style={{ fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:6 }}>SLA Thresholds</div>
+                  <div style={{ fontSize:12,color:"#94a3b8",marginBottom:12 }}>Day-thresholds per workflow position/step type. "*" is the default for any type with no explicit row.</div>
+                  <div style={{ display:"grid",gap:5,marginBottom:12 }}>
+                    {claimsReport.thresholds.map(t=>(
+                      <div key={t.position_type_code} style={{ fontSize:12,display:"flex",justifyContent:"space-between",gap:8 }}>
+                        <span style={{color:"#64748b"}}>{t.position_type_code}</span>
+                        <span style={{fontWeight:700,color:"#374151"}}>{t.sla_days} day{t.sla_days===1?"":"s"}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={()=>void openThresholdsModal()}
+                    style={{ width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:7,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 0",fontSize:13,color:"#374151",fontWeight:600,cursor:"pointer" }}>
+                    <Settings size={13}/> Manage SLA Thresholds
+                  </button>
+                </div>
+              </div>
+
+              <div style={C}>
+                <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:14 }}>
+                  <span style={{ fontWeight:700,fontSize:14,color:"#0f172a" }}>Late Approvals</span>
+                  {claimsReport.late_approvals.length>0&&<span style={{ background:"#dc2626",color:"white",borderRadius:99,fontSize:11,fontWeight:700,padding:"2px 7px" }}>{claimsReport.late_approvals.length}</span>}
+                </div>
+                {claimsReport.late_approvals.length===0?(
+                  <div style={{ textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13 }}>
+                    <CheckCircle size={28} style={{ color:"#10b981",display:"block",margin:"0 auto 6px" }}/>
+                    No late approvals in this period
+                  </div>
+                ):(
+                  <div style={{ overflowX:"auto" }}>
+                    <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
+                      <thead style={{ background:"#f8fafc" }}>
+                        <tr>{["Claimant","Department","Approver","Step","Hours Late","Status"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
+                      </thead>
+                      <tbody>
+                        {claimsReport.late_approvals.map((r,i)=>(
+                          <tr key={i}>
+                            <td style={{...TD,fontWeight:600,color:"#374151"}}>{r.claimant_name||"—"}</td>
+                            <td style={{...TD,color:"#64748b"}}>{r.department||"—"}</td>
+                            <td style={{...TD,color:"#64748b"}}>{r.approver_name||"—"}</td>
+                            <td style={{...TD,color:"#64748b"}}>{r.position_name}</td>
+                            <td style={{...TD,fontWeight:700,color:"#dc2626"}}>{r.hours_late!=null?fmtHours(r.hours_late):"—"}</td>
+                            <td style={TD}>
+                              <ClaimSlaBadge status="late"/>
+                              {r.still_pending && <span style={{marginLeft:6,fontSize:11,color:"#94a3b8"}}>(still pending)</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {showThresholdsModal && (
+        <div className="ep-modal-overlay" onClick={()=>setShowThresholdsModal(false)}>
+          <div className="ep-modal" onClick={(e)=>e.stopPropagation()}>
+            <div className="ep-modal-head">
+              <div><h2 className="ep-modal-title">Manage SLA Thresholds</h2><p className="ep-modal-sub">Day-thresholds per workflow position/step type for clearance approvals.</p></div>
+              <button className="ep-icon-btn" onClick={()=>setShowThresholdsModal(false)}><X size={18}/></button>
+            </div>
+            <div className="ep-modal-body">
+              <div style={{ display:"grid", gap:8 }}>
+                {thresholdRows.map((row, i)=>(
+                  <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
+                    <input className="ep-form-input" placeholder="Position type code (e.g. MANAGER, HOD, * for default)"
+                      value={row.position_type_code} disabled={row.position_type_code==="*"}
+                      onChange={(e)=>setThresholdRows(rows=>rows.map((r,idx)=>idx===i?{...r, position_type_code:e.target.value}:r))}
+                      style={{ flex:1 }}/>
+                    <input className="ep-form-input" type="number" min={0} value={row.sla_days}
+                      onChange={(e)=>setThresholdRows(rows=>rows.map((r,idx)=>idx===i?{...r, sla_days:Number(e.target.value)}:r))}
+                      style={{ width:90 }}/>
+                    <span style={{fontSize:12,color:"#94a3b8",whiteSpace:"nowrap"}}>days</span>
+                    <button className="ep-icon-btn danger" onClick={()=>void removeThresholdRow(i)} title="Remove"><Trash2 size={13}/></button>
+                  </div>
+                ))}
+              </div>
+              <button className="ep-btn-outline" style={{ marginTop:12 }}
+                onClick={()=>setThresholdRows(rows=>[...rows, { position_type_code:"", sla_days:3 }])}>
+                <Plus size={13}/> Add Row
+              </button>
+            </div>
+            <div className="ep-modal-footer">
+              <button className="ep-btn-outline" onClick={()=>setShowThresholdsModal(false)} disabled={savingThresholds}>Cancel</button>
+              <button className="ep-btn" onClick={()=>void saveThresholds()} disabled={savingThresholds}>{savingThresholds?"Saving…":"Save"}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

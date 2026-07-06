@@ -82,10 +82,11 @@ export async function advanceClaimWorkflowStep(args) {
     if (actedIdx == null)
         throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
     const currentStep = chain[actedIdx];
-    const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true } : s));
+    const actedAt = new Date().toISOString();
+    const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true, approved_at: actedAt } : s));
     if (role === "ADMIN") {
         for (const idx of group.indices)
-            newChain[idx] = { ...newChain[idx], approved: true };
+            newChain[idx] = { ...newChain[idx], approved: true, approved_at: actedAt };
     }
     const stillPending = group.indices.some((idx) => !newChain[idx].approved);
     let nextStatus;
@@ -108,9 +109,13 @@ export async function advanceClaimWorkflowStep(args) {
             }));
         }
     }
+    // $2 (status) is bound to the claim_status enum column, so it can't also be
+    // compared against a text literal in the same statement (Postgres requires
+    // one type per parameter) — pass the "did this just close" check as its own
+    // boolean parameter instead of reusing $2 in a second, conflicting context.
     await query(`UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4,
-       closed_at=CASE WHEN $2='CLOSED' THEN now() ELSE closed_at END, updated_at=now()
-     WHERE id=$1`, [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain)]);
+       closed_at=CASE WHEN $5 THEN now() ELSE closed_at END, updated_at=now()
+     WHERE id=$1`, [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain), nextStatus === "CLOSED"]);
     const nextApprover = nextApprovers[0] ?? null;
     return { nextStatus, newStepOrder, hasMore, currentStep, stillPending, nextApprover, nextApprovers };
 }

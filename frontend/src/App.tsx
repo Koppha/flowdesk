@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStaffDirectory } from "./useStaffDirectory";
-import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale } from "./api";
+import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
 import AttendanceModule from "./AttendanceModule";
 import Inbox from "./Inbox";
 import OvertimeModule from "./OvertimeModule";
@@ -106,6 +106,46 @@ type TravelRow = {
   city: string;
   meals: number;
 };
+
+type HotelImportRow = {
+  name: string;
+  district: string;
+  country: string;
+  province: string;
+  city: string;
+  address: string;
+  contact: string;
+};
+
+function parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let cell = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"' && inQ && line[i + 1] === '"') { cell += '"'; i++; }
+    else if (c === '"') { inQ = !inQ; }
+    else if (c === "," && !inQ) { result.push(cell); cell = ""; }
+    else { cell += c; }
+  }
+  result.push(cell);
+  return result;
+}
+
+function csvCell(v: string) { return `"${(v || "").replace(/"/g, '""')}"`; }
+
+function downloadCsv(filename: string, rows: string[][]) {
+  const csv = rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 type RequestDirectoryUser = {
   id: string;
@@ -238,7 +278,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -283,6 +323,11 @@ export default function App() {
   const [newHotelCity, setNewHotelCity] = useState("");
   const [newHotelAddress, setNewHotelAddress] = useState("");
   const [newHotelContact, setNewHotelContact] = useState("");
+  const [showImportHotelsModal, setShowImportHotelsModal] = useState(false);
+  const [importHotelRows, setImportHotelRows] = useState<HotelImportRow[] | null>(null);
+  const [importHotelProcessing, setImportHotelProcessing] = useState(false);
+  const [importHotelResult, setImportHotelResult] = useState<{ created: number; skipped: number; errors: string[] } | null>(null);
+  const hotelFileInputRef = useRef<HTMLInputElement>(null);
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
@@ -329,6 +374,11 @@ export default function App() {
   const [sectionManagementOpen, setSectionManagementOpen] = useState(true);
   const [delegationsOpen, setDelegationsOpen] = useState(false);
   const [adminUsersOpen, setAdminUsersOpen] = useState(false);
+  const [recoverySettingsOpen, setRecoverySettingsOpen] = useState(false);
+  const [recoveryDurationDraft, setRecoveryDurationDraft] = useState("7");
+  const [recoveryMonthsDraft, setRecoveryMonthsDraft] = useState("3");
+  const [recoverySettingsLoading, setRecoverySettingsLoading] = useState(false);
+  const [recoverySettingsSaving, setRecoverySettingsSaving] = useState(false);
   const [orgNavOpen, setOrgNavOpen] = useState(false);
   const [featurePermissions, setFeaturePermissions] = useState<Record<string, string[]>>({});
   const [featurePermOpen, setFeaturePermOpen] = useState(false);
@@ -338,6 +388,9 @@ export default function App() {
   const [manageColumnsOpen, setManageColumnsOpen] = useState(false);
   const [groupSaving, setGroupSaving] = useState(false);
   const [featurePermSaving, setFeaturePermSaving] = useState(false);
+  const [featureAccessSearch, setFeatureAccessSearch] = useState("");
+  const [featureAccessModuleFilter, setFeatureAccessModuleFilter] = useState("ALL");
+  const [featureAccessSelectedKey, setFeatureAccessSelectedKey] = useState<string | null>(null);
   const [delegations, setDelegations] = useState<any[]>([]);
   const [delegationsLoading, setDelegationsLoading] = useState(false);
   // Whether the current (non-ADMIN) user is assigned to any active workflow
@@ -829,6 +882,9 @@ export default function App() {
     advance_pdf:            ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     report_reconciliation:  ["ADMIN", "FINANCE"],
     pdf_designer:           ["ADMIN"],
+    claims_sla_report:      ["ADMIN", "FINANCE", "HR_MANAGER"],
+    advance_recovery_settings: ["ADMIN", "FINANCE"],
+    manager_delegations:    ["ADMIN"],
   };
 
   function canAccessFeature(key: string): boolean {
@@ -947,7 +1003,7 @@ export default function App() {
         const filtered = chain.filter((s: any) => s.position_type_code !== "EMPLOYEE");
         setAdvanceApprovalChain(
           filtered.map((s: any) => {
-            const rawTitle = s.approver_title || s.position_name;
+            const rawTitle = s.position_name || s.approver_title;
             const isTeamGroup = rawTitle.startsWith("Team: ");
             const title = isTeamGroup ? rawTitle.slice("Team: ".length) : rawTitle;
             return {
@@ -1154,7 +1210,7 @@ export default function App() {
   }, [page, clearanceLinkedAdvanceId]);
 
   useEffect(() => {
-    if (token && ["SETTINGS", "REPORTS", "USER_MANAGEMENT", "ROLES_PERMISSIONS"].includes(page)) {
+    if (token && ["SETTINGS", "REPORTS", "USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS"].includes(page)) {
       if (role === "ADMIN" || role === "MANAGER") {
         void loadAdminUsers();
         void loadDelegations();
@@ -1216,6 +1272,87 @@ export default function App() {
       alert("Error loading hotels: " + e.message);
     } finally {
       setHotelsLoading(false);
+    }
+  }
+
+  function exportHotelsCSV() {
+    const header = ["Name", "District", "Country", "Province", "City", "Address", "Contact"];
+    const rows: string[][] = [header];
+    for (const h of hotels) {
+      rows.push([h.name || "", h.district || "", h.country || "", h.province || "", h.city || "", h.address || "", h.contact || ""]);
+    }
+    downloadCsv(`hotels-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  }
+
+  function handleImportHotelsFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      const parsed: HotelImportRow[] = [];
+      for (const line of lines.slice(1)) {
+        const cells = parseCsvLine(line);
+        const name = cells[0]?.trim() ?? "";
+        if (!name) continue;
+        parsed.push({
+          name,
+          district: cells[1]?.trim() ?? "",
+          country: cells[2]?.trim() ?? "",
+          province: cells[3]?.trim() ?? "",
+          city: cells[4]?.trim() ?? "",
+          address: cells[5]?.trim() ?? "",
+          contact: cells[6]?.trim() ?? ""
+        });
+      }
+      setImportHotelRows(parsed);
+      setImportHotelResult(null);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  async function runImportHotels() {
+    if (!importHotelRows?.length) return;
+    setImportHotelProcessing(true);
+    let created = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+    try {
+      let existing: any[] = await api.hotels();
+      for (const row of importHotelRows) {
+        const dupe = existing.some(
+          (h) => h.name.trim().toLowerCase() === row.name.toLowerCase() && (h.district || "").trim().toLowerCase() === row.district.toLowerCase()
+        );
+        if (dupe) { skipped++; continue; }
+        if (!row.district && !(row.country && row.city)) {
+          errors.push(`"${row.name}": needs either a District, or both Country and City`);
+          continue;
+        }
+        try {
+          await api.createHotel({
+            name: row.name,
+            district: row.district || undefined,
+            country: row.country || undefined,
+            province: row.province || undefined,
+            city: row.city || undefined,
+            address: row.address || undefined,
+            contact: row.contact || undefined
+          });
+          created++;
+          existing = [...existing, row];
+        } catch (e: any) {
+          errors.push(`"${row.name}": ${e.message}`);
+        }
+      }
+      await loadHotels();
+      setImportHotelResult({ created, skipped, errors });
+    } catch (e: any) {
+      errors.push(`Unexpected: ${e.message}`);
+      setImportHotelResult({ created, skipped, errors });
+    } finally {
+      setImportHotelProcessing(false);
     }
   }
 
@@ -1520,20 +1657,21 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (delegationsOpen && delegations.length === 0 && !delegationsLoading) {
+    if (page === "MANAGER_DELEGATIONS" && delegations.length === 0 && !delegationsLoading) {
       void loadDelegations();
     }
-  }, [delegationsOpen]);
+  }, [page]);
 
   // ADMIN manages delegations on others' behalf regardless of this check;
-  // for self-service users, only show the delegation option once they're
-  // assigned to a step with "Allow Delegation" on.
+  // for self-service users, the sidebar link (and page) only appear once
+  // they're assigned to a step with "Allow Delegation" on — so this must be
+  // fetched independent of which page is open, not gated on visiting it.
   useEffect(() => {
-    if (page !== "ROLES_PERMISSIONS" || role === "ADMIN") return;
+    if (!role || role === "ADMIN") return;
     api.delegationEligibility()
       .then((r: any) => setDelegationEligible(!!r?.eligible))
       .catch(() => setDelegationEligible(false));
-  }, [page, role]);
+  }, [role]);
 
   async function updateUserDepartment(userId: string, department: string, divisionId?: string | null, sectionId?: string | null, teamId?: string | null) {
     try {
@@ -1627,6 +1765,37 @@ export default function App() {
       alert("Error saving permissions: " + e.message);
     } finally {
       setFeaturePermSaving(false);
+    }
+  }
+
+  async function loadRecoverySettings() {
+    setRecoverySettingsLoading(true);
+    try {
+      const data: any = await api.advanceRecoverySettings();
+      if (data) {
+        setRecoveryDurationDraft(String(data.clearance_duration_days ?? 7));
+        setRecoveryMonthsDraft(String(data.recovery_months ?? 3));
+      }
+    } catch (e: any) {
+      alert("Error loading recovery settings: " + e.message);
+    } finally {
+      setRecoverySettingsLoading(false);
+    }
+  }
+
+  async function saveRecoverySettings() {
+    const days = Number(recoveryDurationDraft);
+    const months = Number(recoveryMonthsDraft);
+    if (!Number.isFinite(days) || days < 1) { alert("Clearance duration must be at least 1 day."); return; }
+    if (!Number.isFinite(months) || months < 1) { alert("Recovery months must be at least 1."); return; }
+    setRecoverySettingsSaving(true);
+    try {
+      await api.updateAdvanceRecoverySettings({ clearance_duration_days: days, recovery_months: months });
+      alert("Advance recovery settings saved.");
+    } catch (e: any) {
+      alert("Error saving recovery settings: " + e.message);
+    } finally {
+      setRecoverySettingsSaving(false);
     }
   }
 
@@ -2017,10 +2186,7 @@ export default function App() {
 
   async function downloadAdvancePdf(advanceId: string) {
     try {
-      const blob = await api.advancePdf(advanceId);
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      await openBlobInNewTab(() => api.advancePdf(advanceId));
     } catch (err: any) {
       alert(err?.message || "Failed to generate PDF.");
     }
@@ -2028,10 +2194,7 @@ export default function App() {
 
   async function openPdfBlob(fetcher: () => Promise<Blob>) {
     try {
-      const blob = await fetcher();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      await openBlobInNewTab(fetcher);
     } catch (err: any) {
       void showNotice(err?.message || "Failed to generate PDF.");
     }
@@ -2098,7 +2261,10 @@ export default function App() {
         // specific individual returned as approver_name/approver_title (the
         // department HOD) — show the group name instead, with no fixed actor.
         const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
-        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.approver_title || step.position_name);
+        // Prefer the workflow's own step label (position_name) over the
+        // approver's personal job title — the tracker should reflect what's
+        // configured in the Workflow Builder, not whoever happens to be assigned.
+        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.position_name || step.approver_title);
         const actorName = isTeamGroup ? "" : (approveEvent?.actor_name || step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -2241,7 +2407,10 @@ export default function App() {
         const isDone = terminalDone || stepApproved || currentStepIdx > idx;
         const isActive = !terminalFailed && !isDone && pendingStage.has(idx);
         const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
-        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.approver_title || step.position_name);
+        // Prefer the workflow's own step label (position_name) over the
+        // approver's personal job title — the tracker should reflect what's
+        // configured in the Workflow Builder, not whoever happens to be assigned.
+        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.position_name || step.approver_title);
         const actorName = isTeamGroup ? "" : (step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -2610,6 +2779,19 @@ export default function App() {
     }
   }
 
+  // Lets the claimant pull a wrongly-chosen file back off the draft before submitting.
+  async function removeClearanceReceipt(receiptId: string) {
+    if (!editingClaimId) return;
+    const ok = await confirmAction({ title: "Remove this file?", text: "This cannot be undone.", confirmButtonText: "Remove" });
+    if (!ok) return;
+    try {
+      await api.deleteClaimReceipt(editingClaimId, receiptId);
+      setClearanceReceipts((current) => current.filter((r) => r.id !== receiptId));
+    } catch (e: any) {
+      alert("Error removing file: " + e.message);
+    }
+  }
+
   // dashboard quick search across advances and clearances
   const dashboardSearchResults = useMemo(() => {
     const term = dashboardSearch.trim().toLowerCase();
@@ -2956,9 +3138,16 @@ export default function App() {
                 <p>Track the progress and status of your clearance</p>
               </div>
             </div>
-            <button className="tracking-close-icon" type="button" onClick={() => setClearanceTrackOpen(false)} aria-label="Close tracking">
-              <X size={22} aria-hidden />
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+              {claim.can_view_pdf && (
+                <button className="button small-button button-subtle" type="button" onClick={() => downloadClaimPdf(claim.id)}>
+                  Download PDF
+                </button>
+              )}
+              <button className="tracking-close-icon" type="button" onClick={() => setClearanceTrackOpen(false)} aria-label="Close tracking">
+                <X size={22} aria-hidden />
+              </button>
+            </div>
           </div>
 
           {clearanceTrackLoading ? (
@@ -2991,14 +3180,6 @@ export default function App() {
                   <small>{displayRoleLabel(profile?.role || me?.role || "EMPLOYEE")}</small>
                 </div>
               </section>
-
-              {claim.can_view_pdf && (
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-                  <button className="button small-button button-subtle" type="button" onClick={() => downloadClaimPdf(claim.id)}>
-                    Download PDF
-                  </button>
-                </div>
-              )}
 
               <section className="tracking-card tracking-progress-card">
                 <h3>Clearance Progress</h3>
@@ -3416,12 +3597,13 @@ export default function App() {
             </div>
           </div>
           <div className="sidebar-section-label">Administration</div>
-          {(canAccessFeature("user_management") || canAccessFeature("roles_permissions")) && (
-            <div className={`sidebar-group ${["USER_MANAGEMENT", "ROLES_PERMISSIONS"].includes(page) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          {(canAccessFeature("user_management") || canAccessFeature("roles_permissions") || canAccessFeature("manager_delegations") || delegationEligible) && (
+            <div className={`sidebar-group ${["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS"].includes(page) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
               <div className="sidebar-subnav">
                 {canAccessFeature("user_management") && <a href="#" className={navItemClass(page === "USER_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><Users size={14} aria-hidden />Users</a>}
                 {canAccessFeature("roles_permissions") && <a href="#" className={navItemClass(page === "ROLES_PERMISSIONS")} onClick={(e) => { e.preventDefault(); setPage("ROLES_PERMISSIONS"); }}><ShieldCheck size={14} aria-hidden />Roles & Permissions</a>}
+                {(canAccessFeature("manager_delegations") || delegationEligible) && <a href="#" className={navItemClass(page === "MANAGER_DELEGATIONS")} onClick={(e) => { e.preventDefault(); setPage("MANAGER_DELEGATIONS"); }}><Users size={14} aria-hidden />Manager Delegations</a>}
               </div>
             </div>
           )}
@@ -3501,137 +3683,140 @@ export default function App() {
               <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Users</span></div>
               <UserManagement />
             </div>
+          ) : page === "MANAGER_DELEGATIONS" ? (
+            <div className="ep-page">
+              <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Manager Delegations</span></div>
+              <div className="ep-header">
+                <div className="ep-header-text">
+                  <h1 className="ep-title">Manager Delegations</h1>
+                  <p className="ep-subtitle">Create a delegation assignment and track active delegations.</p>
+                </div>
+                <div className="ep-actions">
+                  <button className="ep-btn-outline" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
+                    {delegationsLoading ? "Loading…" : "Refresh"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Create Delegation form */}
+              <div className="ep-panel" style={{ marginBottom: 16 }}>
+                <div className="ep-panel-head">
+                  <div>
+                    <div className="ep-panel-title">Create Delegation</div>
+                    <div className="ep-panel-sub">Temporarily assign a manager's approval authority to a delegate.</div>
+                  </div>
+                </div>
+                <div className="ep-panel-body">
+                  <div className="ep-form-row" style={{ marginBottom: 0 }}>
+                    {/* Everyone (including ADMIN) can only delegate their own approval
+                        authority — never set up a delegation on someone else's behalf. */}
+                    {role === "ADMIN" ? (
+                      <>
+                        <div className="ep-form-group">
+                          <label>Manager <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={delegationManagerId} onChange={(e) => setDelegationManagerId(e.target.value)}>
+                            <option value="">Select manager</option>
+                            {adminUsers.filter((user) => ["MANAGER", "EXCO", "CEO"].includes(user.role)).map((user) => (
+                              <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Delegate <span className="ep-required">*</span></label>
+                          <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)} disabled={!delegationManagerId}>
+                            <option value="">Select delegate</option>
+                            {adminUsers
+                              .filter((user) => {
+                                const manager = adminUsers.find((u) => u.id === delegationManagerId);
+                                return manager?.role === "CEO" ? ["EXCO", "MANAGER"].includes(user.role) : user.department === manager?.department;
+                              })
+                              .filter((user) => user.id !== delegationManagerId)
+                              .map((user) => (
+                                <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
+                              ))}
+                          </select>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
+                        <label>Delegate <span className="ep-required">*</span></label>
+                        <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)}>
+                          <option value="">Select delegate</option>
+                          {(role === "CEO"
+                            // CEO is org-wide (no single department) — delegate to any active Exco/Manager.
+                            ? adminUsers.filter((user) => ["EXCO", "MANAGER"].includes(user.role))
+                            : adminUsers.filter((user) => user.department === adminUsers.find((u) => u.id === (profile?.id || me?.userId))?.department)
+                          )
+                            .filter((user) => user.id !== (profile?.id || me?.userId))
+                            .map((user) => (
+                              <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
+                            ))}
+                        </select>
+                      </div>
+                    )}
+                    <div className="ep-form-group">
+                      <label>From Date <span className="ep-optional">(Optional)</span></label>
+                      <input type="date" className="ep-form-input" value={delegationFromDate} onChange={(e) => setDelegationFromDate(e.target.value)} />
+                    </div>
+                    <div className="ep-form-group">
+                      <label>To Date <span className="ep-optional">(Optional)</span></label>
+                      <input type="date" className="ep-form-input" value={delegationToDate} onChange={(e) => setDelegationToDate(e.target.value)} />
+                    </div>
+                  </div>
+                  <button className="ep-btn" style={{ marginTop: 8 }} onClick={() => void createDelegation()}>Create Delegation</button>
+                </div>
+              </div>
+
+              {/* Delegations table */}
+              {delegationsLoading ? (
+                <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>Loading…</div>
+              ) : delegations.length === 0 ? (
+                <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>No delegations found.</div>
+              ) : (
+                <div className="ep-table-wrap">
+                  <table className="ep-table">
+                    <thead>
+                      <tr><th>Manager</th><th>Delegate</th><th>Department</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                      {delegations.map((delegation) => (
+                        <tr key={delegation.id}>
+                          <td style={{ fontWeight: 600 }}>{delegation.manager_name || "—"}</td>
+                          <td>{delegation.delegate_name || "—"}</td>
+                          <td style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{delegation.department || "—"}</td>
+                          <td style={{ fontSize: "0.85rem" }}>{delegation.from_date || "—"}</td>
+                          <td style={{ fontSize: "0.85rem" }}>{delegation.to_date || "—"}</td>
+                          <td>
+                            <span className={`status-pill ${delegation.active ? "status-pill-success" : "status-pill-danger"}`}>
+                              {delegation.active ? "Active" : "Ended"}
+                            </span>
+                          </td>
+                          <td>
+                            {delegation.active && (
+                              <button className="ep-btn-danger" style={{ padding: "5px 10px", fontSize: "0.8rem" }} onClick={() => void endDelegation(delegation.id)}>
+                                End
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           ) : page === "ROLES_PERMISSIONS" ? (
             <div className="ep-page">
               <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Roles & Permissions</span></div>
               <div className="ep-header">
                 <div className="ep-header-text">
                   <h1 className="ep-title">Roles & Permissions</h1>
-                  <p className="ep-subtitle">Manage manager delegations and feature access permissions.</p>
+                  <p className="ep-subtitle">Manage feature access permissions and advance recovery settings.</p>
                 </div>
                 <div className="ep-actions">
                   <button className="ep-btn-outline" onClick={() => void loadAdminUsers()} disabled={adminUsersLoading}>{adminUsersLoading ? "Loading…" : "Refresh"}</button>
                 </div>
               </div>
-
-              {(role === "ADMIN" || delegationEligible) && (
-              <SettingsAccordion
-                title="Manager Delegations"
-                subtitle="Create a delegation assignment and track active delegations."
-                open={delegationsOpen}
-                onToggle={() => setDelegationsOpen((current) => !current)}
-              >
-                {/* Create Delegation form */}
-                <div className="ep-panel" style={{ marginBottom: 16 }}>
-                  <div className="ep-panel-head">
-                    <div>
-                      <div className="ep-panel-title">Create Delegation</div>
-                      <div className="ep-panel-sub">Temporarily assign a manager's approval authority to a delegate.</div>
-                    </div>
-                    <button className="ep-btn-outline" onClick={() => void loadDelegations()} disabled={delegationsLoading}>
-                      {delegationsLoading ? "Loading…" : "Refresh"}
-                    </button>
-                  </div>
-                  <div className="ep-panel-body">
-                    <div className="ep-form-row" style={{ marginBottom: 0 }}>
-                      {/* Everyone (including ADMIN) can only delegate their own approval
-                          authority — never set up a delegation on someone else's behalf. */}
-                      {role === "ADMIN" ? (
-                        <>
-                          <div className="ep-form-group">
-                            <label>Manager <span className="ep-required">*</span></label>
-                            <select className="ep-form-select" value={delegationManagerId} onChange={(e) => setDelegationManagerId(e.target.value)}>
-                              <option value="">Select manager</option>
-                              {adminUsers.filter((user) => ["MANAGER", "EXCO", "CEO"].includes(user.role)).map((user) => (
-                                <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="ep-form-group">
-                            <label>Delegate <span className="ep-required">*</span></label>
-                            <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)} disabled={!delegationManagerId}>
-                              <option value="">Select delegate</option>
-                              {adminUsers
-                                .filter((user) => {
-                                  const manager = adminUsers.find((u) => u.id === delegationManagerId);
-                                  return manager?.role === "CEO" ? ["EXCO", "MANAGER"].includes(user.role) : user.department === manager?.department;
-                                })
-                                .filter((user) => user.id !== delegationManagerId)
-                                .map((user) => (
-                                  <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
-                                ))}
-                            </select>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
-                          <label>Delegate <span className="ep-required">*</span></label>
-                          <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)}>
-                            <option value="">Select delegate</option>
-                            {(role === "CEO"
-                              // CEO is org-wide (no single department) — delegate to any active Exco/Manager.
-                              ? adminUsers.filter((user) => ["EXCO", "MANAGER"].includes(user.role))
-                              : adminUsers.filter((user) => user.department === adminUsers.find((u) => u.id === (profile?.id || me?.userId))?.department)
-                            )
-                              .filter((user) => user.id !== (profile?.id || me?.userId))
-                              .map((user) => (
-                                <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
-                              ))}
-                          </select>
-                        </div>
-                      )}
-                      <div className="ep-form-group">
-                        <label>From Date <span className="ep-optional">(Optional)</span></label>
-                        <input type="date" className="ep-form-input" value={delegationFromDate} onChange={(e) => setDelegationFromDate(e.target.value)} />
-                      </div>
-                      <div className="ep-form-group">
-                        <label>To Date <span className="ep-optional">(Optional)</span></label>
-                        <input type="date" className="ep-form-input" value={delegationToDate} onChange={(e) => setDelegationToDate(e.target.value)} />
-                      </div>
-                    </div>
-                    <button className="ep-btn" style={{ marginTop: 8 }} onClick={() => void createDelegation()}>Create Delegation</button>
-                  </div>
-                </div>
-
-                {/* Delegations table */}
-                {delegationsLoading ? (
-                  <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>Loading…</div>
-                ) : delegations.length === 0 ? (
-                  <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>No delegations found.</div>
-                ) : (
-                  <div className="ep-table-wrap">
-                    <table className="ep-table">
-                      <thead>
-                        <tr><th>Manager</th><th>Delegate</th><th>Department</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
-                      </thead>
-                      <tbody>
-                        {delegations.map((delegation) => (
-                          <tr key={delegation.id}>
-                            <td style={{ fontWeight: 600 }}>{delegation.manager_name || "—"}</td>
-                            <td>{delegation.delegate_name || "—"}</td>
-                            <td style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{delegation.department || "—"}</td>
-                            <td style={{ fontSize: "0.85rem" }}>{delegation.from_date || "—"}</td>
-                            <td style={{ fontSize: "0.85rem" }}>{delegation.to_date || "—"}</td>
-                            <td>
-                              <span className={`status-pill ${delegation.active ? "status-pill-success" : "status-pill-danger"}`}>
-                                {delegation.active ? "Active" : "Ended"}
-                              </span>
-                            </td>
-                            <td>
-                              {delegation.active && (
-                                <button className="ep-btn-danger" style={{ padding: "5px 10px", fontSize: "0.8rem" }} onClick={() => void endDelegation(delegation.id)}>
-                                  End
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </SettingsAccordion>
-              )}
 
               {role === "ADMIN" && (
                 <SettingsAccordion
@@ -3664,6 +3849,9 @@ export default function App() {
                       { key: "pdf_designer",           label: "PDF Designer",             group: "Org Structure" },
                       { key: "advance_pdf",            label: "Download Advance PDF",     group: "Advances" },
                       { key: "report_reconciliation",  label: "Reconciliation Report",    group: "Reports" },
+                      { key: "claims_sla_report",      label: "Clearance SLA Report",     group: "Reports" },
+                      { key: "advance_recovery_settings", label: "Advance Recovery Settings", group: "Advances" },
+                      { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
@@ -3684,6 +3872,9 @@ export default function App() {
                       pdf_designer:           ["ADMIN"],
                       advance_pdf:            ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       report_reconciliation:  ["ADMIN","FINANCE"],
+                      claims_sla_report:      ["ADMIN","FINANCE","HR_MANAGER"],
+                      advance_recovery_settings: ["ADMIN","FINANCE"],
+                      manager_delegations:    ["ADMIN"],
                     };
                     function toggleRole(featureKey: string, roleKey: string) {
                       if (roleKey === "ADMIN") return;
@@ -3733,71 +3924,175 @@ export default function App() {
                       }
                     }
                     const groups = Array.from(new Set(FEATURES_LIST.map((f) => f.group)));
+                    const totalRoles = GROUPS_LIST.length;
+                    const totalFeatures = FEATURES_LIST.length;
+                    const totalCells = totalRoles * totalFeatures;
+                    const grantedCells = FEATURES_LIST.reduce((sum, feat) => {
+                      const allowed = draft[feat.key] ?? DEFAULTS[feat.key] ?? [];
+                      return sum + GROUPS_LIST.filter((r) => allowed.includes(r.key)).length;
+                    }, 0);
+                    const restrictedCells = totalCells - grantedCells;
+                    const coveragePct = totalCells > 0 ? Math.round((grantedCells / totalCells) * 100) : 0;
+                    const searchQuery = featureAccessSearch.trim().toLowerCase();
+                    const filteredFeatures = FEATURES_LIST.filter((f) =>
+                      (featureAccessModuleFilter === "ALL" || f.group === featureAccessModuleFilter) &&
+                      (!searchQuery || f.label.toLowerCase().includes(searchQuery) || f.key.toLowerCase().includes(searchQuery))
+                    );
+                    const visibleGroups = groups.filter((group) => filteredFeatures.some((f) => f.group === group));
+                    const selectedFeature = FEATURES_LIST.find((f) => f.key === featureAccessSelectedKey) || null;
+                    async function handleRestoreDefaults() {
+                      if (!window.confirm("Restore all features to their default role access? This discards any unsaved changes and any previously saved customizations once you click Save Changes.")) return;
+                      setFeaturePermDraft({ ...DEFAULTS });
+                    }
                     return (
                       <div>
-                        <div style={{ overflowX: "auto" }}>
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                            <thead>
-                              <tr>
-                                <th style={{ textAlign: "left", padding: "6px 10px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", minWidth: 180 }}>Feature</th>
-                                {GROUPS_LIST.map((r) => (
-                                  <th key={r.key} style={{ padding: "6px 8px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", textAlign: "center", minWidth: 70, fontSize: 12, fontWeight: 600 }}>
-                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
-                                      <span>{r.label}</span>
-                                      {r.key !== "ADMIN" && !r.dynamic && (
-                                        <button
-                                          type="button"
-                                          onClick={() => void handleRemoveGroup(r.key)}
-                                          disabled={groupSaving}
-                                          title={`Remove ${r.label} group`}
-                                          style={{ border: "none", background: "none", cursor: groupSaving ? "not-allowed" : "pointer", color: "var(--text-muted,#6b7280)", fontSize: 12, lineHeight: 1, padding: 0 }}
-                                        >
-                                          ×
-                                        </button>
-                                      )}
-                                    </div>
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {groups.map((group) => {
-                                const groupFeatures = FEATURES_LIST.filter((f) => f.group === group);
-                                return (
-                                  <React.Fragment key={group}>
-                                    <tr>
-                                      <td colSpan={GROUPS_LIST.length + 1} style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted,#6b7280)", background: "var(--bg-secondary,#f8fafc)", borderTop: "1px solid var(--border,#e5e7eb)" }}>{group}</td>
-                                    </tr>
-                                    {groupFeatures.map((feat, idx) => {
-                                      const allowed = draft[feat.key] ?? DEFAULTS[feat.key] ?? [];
-                                      return (
-                                        <tr key={feat.key} style={{ background: idx % 2 === 0 ? "transparent" : "var(--bg-secondary,#f8fafc)" }}>
-                                          <td style={{ padding: "7px 10px", borderBottom: "1px solid var(--border,#e5e7eb)" }}>{feat.label}</td>
-                                          {GROUPS_LIST.map((r) => {
-                                            const checked = allowed.includes(r.key);
-                                            const isAdmin = r.key === "ADMIN";
-                                            return (
-                                              <td key={r.key} style={{ textAlign: "center", borderBottom: "1px solid var(--border,#e5e7eb)", padding: "7px 8px" }}>
-                                                <input
-                                                  type="checkbox"
-                                                  checked={checked}
-                                                  disabled={isAdmin}
-                                                  title={isAdmin ? "Admin always has access" : undefined}
-                                                  onChange={() => toggleRole(feat.key, r.key)}
-                                                  style={{ cursor: isAdmin ? "not-allowed" : "pointer", accentColor: "var(--primary,#2563eb)" }}
-                                                />
-                                              </td>
-                                            );
-                                          })}
-                                        </tr>
-                                      );
-                                    })}
-                                  </React.Fragment>
-                                );
-                              })}
-                            </tbody>
-                          </table>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+                          {[
+                            { label: "Total Roles", value: totalRoles },
+                            { label: "Total Features", value: totalFeatures },
+                            { label: "Granted", value: grantedCells },
+                            { label: "Restricted", value: restrictedCells },
+                            { label: "Access Coverage", value: `${coveragePct}%` }
+                          ].map((tile) => (
+                            <div key={tile.label} style={{ border: "1px solid var(--border,#e5e7eb)", borderRadius: 8, padding: "10px 12px", background: "var(--bg-secondary,#f8fafc)" }}>
+                              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted,#6b7280)", fontWeight: 600 }}>{tile.label}</div>
+                              <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>{tile.value}</div>
+                            </div>
+                          ))}
                         </div>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                          <input
+                            type="text"
+                            placeholder="Search features…"
+                            value={featureAccessSearch}
+                            onChange={(e) => setFeatureAccessSearch(e.target.value)}
+                            style={{ padding: "6px 10px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 13, minWidth: 200 }}
+                          />
+                          <select
+                            value={featureAccessModuleFilter}
+                            onChange={(e) => setFeatureAccessModuleFilter(e.target.value)}
+                            style={{ padding: "6px 10px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 13 }}
+                          >
+                            <option value="ALL">All Modules</option>
+                            {groups.map((group) => (
+                              <option key={group} value={group}>{group}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+                          <div style={{ overflowX: "auto", flex: 1, minWidth: 0 }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                              <thead>
+                                <tr>
+                                  <th style={{ textAlign: "left", padding: "6px 10px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", minWidth: 180 }}>Feature</th>
+                                  {GROUPS_LIST.map((r) => (
+                                    <th key={r.key} style={{ padding: "6px 8px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", textAlign: "center", minWidth: 70, fontSize: 12, fontWeight: 600 }}>
+                                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                                        <span>{r.label}</span>
+                                        {r.key !== "ADMIN" && !r.dynamic && (
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleRemoveGroup(r.key)}
+                                            disabled={groupSaving}
+                                            title={`Remove ${r.label} group`}
+                                            style={{ border: "none", background: "none", cursor: groupSaving ? "not-allowed" : "pointer", color: "var(--text-muted,#6b7280)", fontSize: 12, lineHeight: 1, padding: 0 }}
+                                          >
+                                            ×
+                                          </button>
+                                        )}
+                                      </div>
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {visibleGroups.map((group) => {
+                                  const groupFeatures = filteredFeatures.filter((f) => f.group === group);
+                                  return (
+                                    <React.Fragment key={group}>
+                                      <tr>
+                                        <td colSpan={GROUPS_LIST.length + 1} style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted,#6b7280)", background: "var(--bg-secondary,#f8fafc)", borderTop: "1px solid var(--border,#e5e7eb)" }}>{group}</td>
+                                      </tr>
+                                      {groupFeatures.map((feat, idx) => {
+                                        const allowed = draft[feat.key] ?? DEFAULTS[feat.key] ?? [];
+                                        const isSelected = feat.key === featureAccessSelectedKey;
+                                        return (
+                                          <tr key={feat.key} style={{ background: isSelected ? "rgba(37,99,235,0.08)" : idx % 2 === 0 ? "transparent" : "var(--bg-secondary,#f8fafc)" }}>
+                                            <td
+                                              style={{ padding: "7px 10px", borderBottom: "1px solid var(--border,#e5e7eb)", cursor: "pointer" }}
+                                              onClick={() => setFeatureAccessSelectedKey(isSelected ? null : feat.key)}
+                                            >
+                                              {feat.label}
+                                            </td>
+                                            {GROUPS_LIST.map((r) => {
+                                              const checked = allowed.includes(r.key);
+                                              const isAdmin = r.key === "ADMIN";
+                                              return (
+                                                <td key={r.key} style={{ textAlign: "center", borderBottom: "1px solid var(--border,#e5e7eb)", padding: "7px 8px" }}>
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    disabled={isAdmin}
+                                                    title={isAdmin ? "Admin always has access" : undefined}
+                                                    onChange={() => toggleRole(feat.key, r.key)}
+                                                    style={{ cursor: isAdmin ? "not-allowed" : "pointer", accentColor: "var(--primary,#2563eb)" }}
+                                                  />
+                                                </td>
+                                              );
+                                            })}
+                                          </tr>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                })}
+                                {visibleGroups.length === 0 && (
+                                  <tr>
+                                    <td colSpan={GROUPS_LIST.length + 1} style={{ padding: "16px 10px", textAlign: "center", color: "var(--text-muted,#6b7280)" }}>
+                                      No features match your search/filter.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {selectedFeature && (
+                            <div style={{ width: 260, flexShrink: 0, border: "1px solid var(--border,#e5e7eb)", borderRadius: 8, padding: 14, background: "var(--bg-secondary,#f8fafc)" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                                <div style={{ fontWeight: 700, fontSize: 14 }}>{selectedFeature.label}</div>
+                                <button type="button" onClick={() => setFeatureAccessSelectedKey(null)} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text-muted,#6b7280)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                              </div>
+                              <div style={{ fontSize: 12, color: "var(--text-muted,#6b7280)", marginBottom: 2 }}>Module</div>
+                              <div style={{ fontSize: 13, marginBottom: 10 }}>{selectedFeature.group}</div>
+                              <div style={{ fontSize: 12, color: "var(--text-muted,#6b7280)", marginBottom: 2 }}>Key</div>
+                              <div style={{ fontSize: 13, fontFamily: "monospace", marginBottom: 10 }}>{selectedFeature.key}</div>
+                              <div style={{ fontSize: 12, color: "var(--text-muted,#6b7280)", marginBottom: 4 }}>Has Access</div>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                {GROUPS_LIST.map((r) => {
+                                  const allowed = draft[selectedFeature.key] ?? DEFAULTS[selectedFeature.key] ?? [];
+                                  const checked = allowed.includes(r.key);
+                                  const isAdmin = r.key === "ADMIN";
+                                  return (
+                                    <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: isAdmin ? "not-allowed" : "pointer" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        disabled={isAdmin}
+                                        onChange={() => toggleRole(selectedFeature.key, r.key)}
+                                        style={{ accentColor: "var(--primary,#2563eb)" }}
+                                      />
+                                      <span>{r.label}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14 }}>
                           <input
                             type="text"
@@ -3843,12 +4138,46 @@ export default function App() {
                           </div>
                         )}
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
+                          <button className="ep-btn-outline" onClick={() => void handleRestoreDefaults()}>Restore Defaults</button>
                           <button className="ep-btn-outline" onClick={() => setFeaturePermDraft({ ...featurePermissions })}>Reset</button>
                           <button className="ep-btn" onClick={() => void saveFeaturePermissions()} disabled={featurePermSaving}>{featurePermSaving ? "Saving…" : "Save Changes"}</button>
                         </div>
                       </div>
                     );
                   })()}
+                </SettingsAccordion>
+              )}
+
+              {canAccessFeature("advance_recovery_settings") && (
+                <SettingsAccordion
+                  title="Advance Recovery Settings"
+                  subtitle="How long an employee has to clear a paid travel advance before it's flagged Overdue, and the recovery period used to calculate a not-cleared deduction."
+                  open={recoverySettingsOpen}
+                  onToggle={() => { const next = !recoverySettingsOpen; setRecoverySettingsOpen(next); if (next) void loadRecoverySettings(); }}
+                >
+                  {recoverySettingsLoading ? (
+                    <div style={{ color: "var(--muted)" }}>Loading…</div>
+                  ) : (
+                    <div>
+                      <div className="form-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 520 }}>
+                        <div className="form-field">
+                          <label>Clearance Duration (days)</label>
+                          <input type="number" min={1} value={recoveryDurationDraft} onChange={(e) => setRecoveryDurationDraft(e.target.value)} />
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Days after payment before an uncleared advance shows as Overdue.</div>
+                        </div>
+                        <div className="form-field">
+                          <label>Recovery Period (months)</label>
+                          <input type="number" min={1} value={recoveryMonthsDraft} onChange={(e) => setRecoveryMonthsDraft(e.target.value)} />
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Total amount not cleared ÷ this number = monthly deduction shown to Finance.</div>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 16 }}>
+                        <button className="button" onClick={() => void saveRecoverySettings()} disabled={recoverySettingsSaving}>
+                          {recoverySettingsSaving ? "Saving…" : "Save Settings"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </SettingsAccordion>
               )}
             </div>
@@ -3920,7 +4249,11 @@ export default function App() {
                     <div className="ep-panel-title">Hotels & Accommodation</div>
                     <div className="ep-panel-sub">Manage approved hotels available for accommodation requests.</div>
                   </div>
-                  <button className="ep-btn" onClick={() => setShowAddHotelModal(true)}><Plus size={15} />Add Hotel</button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="ep-btn-outline" onClick={exportHotelsCSV} disabled={hotels.length === 0}><Download size={15} />Export CSV</button>
+                    <button className="ep-btn-outline" onClick={() => setShowImportHotelsModal(true)}><Upload size={15} />Import CSV</button>
+                    <button className="ep-btn" onClick={() => setShowAddHotelModal(true)}><Plus size={15} />Add Hotel</button>
+                  </div>
                 </div>
                 <div className="ep-table-wrap">
                   {hotelsLoading ? (
@@ -4238,6 +4571,82 @@ export default function App() {
                     <div className="ep-modal-footer">
                       <button className="ep-btn-outline" onClick={() => setEditingHotel(null)}>Cancel</button>
                       <button className="ep-btn" onClick={() => void saveHotel()} disabled={savingHotel}>{savingHotel ? "Saving…" : "Save Changes"}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Import Hotels Modal ── */}
+              {showImportHotelsModal && (
+                <div className="ep-modal-overlay" onClick={() => { if (!importHotelProcessing) { setShowImportHotelsModal(false); setImportHotelRows(null); setImportHotelResult(null); } }}>
+                  <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="ep-modal-head">
+                      <div><h2 className="ep-modal-title">Import Hotels</h2><p className="ep-modal-sub">Bulk-add hotels from a CSV file. Existing hotels with the same name and district are skipped.</p></div>
+                      <button className="ep-icon-btn" onClick={() => { setShowImportHotelsModal(false); setImportHotelRows(null); setImportHotelResult(null); }}><X size={18} /></button>
+                    </div>
+                    <div className="ep-modal-body">
+                      <input ref={hotelFileInputRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleImportHotelsFile} />
+
+                      {!importHotelRows && !importHotelResult && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                          <div style={{ padding: "10px 12px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 7, fontSize: 12, color: "var(--muted)", lineHeight: 1.6 }}>
+                            <div style={{ fontWeight: 600, color: "var(--text)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                              <FileText size={13} /> Expected CSV format
+                            </div>
+                            <code style={{ fontSize: 11, display: "block", whiteSpace: "pre" }}>
+                              {"Name,District,Country,Province,City,Address,Contact\n"}
+                              {"Lancer's Inn,Maseru,,,,,22312114 / 59439591\n"}
+                              {"Bruvita,Thaba-Tseka,,,Katse,,63681450"}
+                            </code>
+                          </div>
+                          <button className="ep-btn" style={{ alignSelf: "flex-start" }} onClick={() => hotelFileInputRef.current?.click()}>
+                            <Upload size={13} /> Choose CSV File
+                          </button>
+                        </div>
+                      )}
+
+                      {importHotelRows && !importHotelResult && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                          {importHotelRows.length === 0 ? (
+                            <div style={{ fontSize: 13, color: "#dc2626" }}>No valid rows found in the file. Check the format.</div>
+                          ) : (
+                            <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                              {importHotelRows.length} hotel{importHotelRows.length !== 1 ? "s" : ""} ready to import. Existing hotels with the same name + district will be skipped.
+                            </div>
+                          )}
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button className="ep-btn-outline" onClick={() => { setImportHotelRows(null); hotelFileInputRef.current?.click(); }} disabled={importHotelProcessing}>
+                              Choose Different File
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {importHotelResult && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                          <div style={{ padding: "10px 14px", background: importHotelResult.errors.length ? "#fef2f2" : "#f0fdf4", border: `1px solid ${importHotelResult.errors.length ? "#fca5a5" : "#86efac"}`, borderRadius: 7, fontSize: 13 }}>
+                            <div style={{ fontWeight: 600, marginBottom: 4, color: importHotelResult.errors.length ? "#dc2626" : "#16a34a" }}>
+                              {importHotelResult.errors.length ? "Import completed with errors" : "Import successful"}
+                            </div>
+                            <div style={{ color: "var(--text)" }}>{importHotelResult.created} created · {importHotelResult.skipped} skipped (already exist)</div>
+                          </div>
+                          {importHotelResult.errors.length > 0 && (
+                            <div style={{ maxHeight: 160, overflowY: "auto", fontSize: 12, color: "#dc2626" }}>
+                              {importHotelResult.errors.map((err, i) => <div key={i}>{err}</div>)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="ep-modal-footer">
+                      <button className="ep-btn-outline" onClick={() => { setShowImportHotelsModal(false); setImportHotelRows(null); setImportHotelResult(null); }} disabled={importHotelProcessing}>
+                        {importHotelResult ? "Close" : "Cancel"}
+                      </button>
+                      {importHotelRows && !importHotelResult && (
+                        <button className="ep-btn" onClick={() => void runImportHotels()} disabled={importHotelProcessing || importHotelRows.length === 0}>
+                          {importHotelProcessing ? "Importing…" : "Confirm Import"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -4566,7 +4975,7 @@ export default function App() {
               </div>
             </div>
           ) : page === "SLA_REPORTS" ? (
-            <SlaReports onBack={() => setPage("REPORTS")} />
+            <SlaReports onBack={() => setPage("REPORTS")} canViewClaimsSla={canAccessFeature("claims_sla_report")} />
           ) : page === "REPORT_ADVANCES" ? (
             <ReportAdvances advances={advances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_APPROVAL" ? (
@@ -5672,16 +6081,19 @@ export default function App() {
                       </label>
                     </div>
                     <div style={{ marginTop: 12 }}>
-                      {clearanceReceipts.filter((r) => r.category !== "SUPPORTING_DOCUMENT").length === 0 ? (
+                      {clearanceReceipts.length === 0 ? (
                         <div style={{ color: "var(--muted)", fontSize: 13 }}>No receipts uploaded yet.</div>
                       ) : (
-                        clearanceReceipts.filter((r) => r.category !== "SUPPORTING_DOCUMENT").map((receipt) => (
+                        clearanceReceipts.map((receipt) => (
                           <div key={receipt.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 8 }}>
                             <FileText size={18} style={{ color: "#dc2626", flexShrink: 0 }} aria-hidden />
                             <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                               {String(receipt.file_path || "").split("/").pop() || receipt.file_path}
                             </div>
                             <div style={{ fontSize: 11, color: "var(--muted)" }}>{receipt.uploaded_at ? new Date(receipt.uploaded_at).toLocaleDateString() : ""}</div>
+                            <button type="button" className="ep-icon-btn danger" title="Remove" onClick={() => void removeClearanceReceipt(receipt.id)}>
+                              <Trash2 size={14} />
+                            </button>
                           </div>
                         ))
                       )}
@@ -5799,35 +6211,6 @@ export default function App() {
                       />
                     </div>
                   )}
-
-                  <div style={{ marginTop: 16 }}>
-                    <label style={{ fontWeight: 600, fontSize: 13, display: "block", marginBottom: 8 }}>Supporting Documents</label>
-                    <label className="clearance-upload-zone">
-                      <span className="clearance-upload-button">
-                        <Upload size={15} aria-hidden /> Upload Receipt
-                      </span>
-                      <div className="clearance-upload-hint">PDF, JPG, PNG (Max 5MB each)</div>
-                      <input
-                        type="file"
-                        multiple
-                        accept=".pdf,.jpg,.jpeg,.png"
-                        style={{ display: "none" }}
-                        onChange={(e) => {
-                          const files = Array.from(e.currentTarget.files || []);
-                          if (files.length > 0) void uploadClearanceReceipts(files, "SUPPORTING_DOCUMENT");
-                          e.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
-                    {clearanceReceipts.filter((r) => r.category === "SUPPORTING_DOCUMENT").map((receipt) => (
-                      <div key={receipt.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 8 }}>
-                        <FileText size={16} style={{ color: "#dc2626", flexShrink: 0 }} aria-hidden />
-                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {String(receipt.file_path || "").split("/").pop() || receipt.file_path}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
 
                   <div className="clearance-info-note">
                     <Info size={16} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden />

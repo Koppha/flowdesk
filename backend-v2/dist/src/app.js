@@ -10,6 +10,7 @@ import { advancesRouter } from "./modules/advances/advances.routes.js";
 import { aiRouter } from "./modules/ai/ai.routes.js";
 import { attendanceRouter } from "./modules/attendance/attendance.routes.js";
 import { claimsRouter } from "./modules/claims/claims.routes.js";
+import { claimsSlaRouter } from "./modules/claims/claims-sla.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { inboxRouter } from "./modules/inbox/inbox.routes.js";
 import { overtimeRouter } from "./modules/overtime/overtime.routes.js";
@@ -46,6 +47,10 @@ export function createApp() {
     app.use("/advances", advancesRouter);
     app.use("/accommodation-requests", accommodationRouter);
     app.use("/accommodation", accommodationRouter);
+    // claimsSlaRouter's fixed paths (/sla-report, /sla-thresholds) must be
+    // registered before claimsRouter's GET /:id, or that route would swallow
+    // them (treating "sla-report" as a claim id).
+    app.use("/claims", claimsSlaRouter);
     app.use("/claims", claimsRouter);
     app.use("/inbox", inboxRouter);
     app.use("/attendance", attendanceRouter);

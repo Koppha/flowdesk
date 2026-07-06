@@ -3,6 +3,13 @@ import { getDepartmentLeadership } from "./departments.js";
 import { isFinanceDept } from "./auth.js";
 import { getUserGroups } from "./permissionGroups.js";
 import { normalizeWorkflowRouteCode } from "./workflowRouting.js";
+// Shared by the advances and claims SLA-report endpoints.
+export function hoursBetween(a, b) {
+    if (!a || !b)
+        return null;
+    const diff = new Date(b).getTime() - new Date(a).getTime();
+    return Math.round((diff / 3_600_000) * 10) / 10;
+}
 // Returns the contiguous "stage" of chain steps starting at stepIdx: the step
 // at stepIdx plus any immediately-following steps flagged parallel_with_previous.
 // All members of a stage become pending simultaneously and the chain only

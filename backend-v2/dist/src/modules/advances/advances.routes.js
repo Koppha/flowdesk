@@ -9,7 +9,7 @@ import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notif
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
-import { canApproveStep, chainStepToStatus, getPendingGroup, resolveWorkflowChain } from "../../lib/workflowEngine.js";
+import { canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
@@ -198,12 +198,6 @@ export async function canViewAdvance(args) {
 }
 // ── SLA Report ──────────────────────────────────────────────────────────────
 const SLA_TARGETS = { submission_hours: 48, approval_hours: 72, payment_hours: 48 };
-function hoursBetween(a, b) {
-    if (!a || !b)
-        return null;
-    const diff = new Date(b).getTime() - new Date(a).getTime();
-    return Math.round(diff / 3_600_000 * 10) / 10;
-}
 advancesRouter.get("/sla-report", requireAuth, async (req, res, next) => {
     try {
         const isAdmin = req.user.role === "ADMIN";

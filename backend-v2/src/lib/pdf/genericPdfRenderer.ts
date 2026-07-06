@@ -212,7 +212,6 @@ function renderSection(
       return;
 
     case "field_grid": {
-      sectionTitle(doc, section.title, section.numbered, nextNumber);
       let fields = section.fields || [];
       // Custom requests: an unconfigured field_grid falls back to every
       // remaining scalar the resolver produced (all the submission's own fields).
@@ -221,6 +220,15 @@ function renderSection(
           .filter((k) => !CUSTOM_REQUEST_META_KEYS.has(k))
           .map((fieldKey) => ({ fieldKey }));
       }
+      // Fields with nothing to show (common for optional fields like Duty
+      // Station / Vehicle Reg on a given claim) are dropped rather than
+      // rendered as an empty labelled row — the remaining fields re-pack
+      // into the grid instead of leaving blank cells and wasted rows.
+      fields = fields.filter((f) => (data.scalars[f.fieldKey] || "").trim() !== "");
+      // Nothing left to show at all — skip the section (and its number)
+      // entirely rather than printing a heading over an empty grid.
+      if (fields.length === 0) return;
+      sectionTitle(doc, section.title, section.numbered, nextNumber);
       const columns = section.columns && section.columns >= 1 && section.columns <= 4 ? section.columns : 3;
       const colWidth = contentWidth / columns;
       const cellPad = 8;
@@ -266,10 +274,15 @@ function renderSection(
       } else {
         for (const row of rows) {
           const rowY = doc.y;
+          // A long "From"/"Location" value word-wraps onto 2+ lines — measure
+          // the tallest cell in the row so the next row (and any section
+          // after this table) never overlaps it.
+          const rowHeight = Math.max(...cols.map((c) => doc.heightOfString(row[c.key] ?? "", { width: colWidth })));
           cols.forEach((c, i) => {
             doc.text(row[c.key] ?? "", doc.page.margins.left + i * colWidth, rowY, { width: colWidth });
           });
-          doc.moveDown(0.7);
+          doc.y = rowY + rowHeight + 4;
+          doc.x = doc.page.margins.left;
           hr(doc, contentWidth);
           doc.moveDown(0.2);
         }

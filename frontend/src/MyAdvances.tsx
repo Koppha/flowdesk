@@ -244,7 +244,10 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
                   <tr key={a.id}>
                     <td style={{ fontWeight: 600 }}>{travelTypeLabel(a.type, travelTypes)}</td>
                     <td><strong>{requestNumber(a)}</strong></td>
-                    <td><span className={`status-pill ${statusTone(a.status)}`}>{statusLabel(a.status)}</span></td>
+                    <td>
+                      <span className={`status-pill ${statusTone(a.status)}`}>{statusLabel(a.status)}</span>
+                      {a.is_overdue && <span className="status-pill status-pill-danger" style={{ marginLeft: 6 }}>Overdue</span>}
+                    </td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{advanceStageLabel(a.status)}</td>
                     <td>{formatMoney(a.requested_total, "LSL")}</td>
                     <td>{formatMoney(a.approved_total, "LSL")}</td>

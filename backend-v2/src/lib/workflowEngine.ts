@@ -23,6 +23,17 @@ export interface ChainStep {
   can_reject: boolean;
   can_rollback: boolean;
   approved?: boolean;
+  // ISO timestamp set alongside `approved` when this step is actioned — only
+  // present on steps approved after this field was introduced; older steps
+  // have `approved: true` with no timestamp (see SLA reporting's "no_data" state).
+  approved_at?: string;
+}
+
+// Shared by the advances and claims SLA-report endpoints.
+export function hoursBetween(a: string | null | undefined, b: string | null | undefined): number | null {
+  if (!a || !b) return null;
+  const diff = new Date(b).getTime() - new Date(a).getTime();
+  return Math.round((diff / 3_600_000) * 10) / 10;
 }
 
 // Returns the contiguous "stage" of chain steps starting at stepIdx: the step
