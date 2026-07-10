@@ -55,7 +55,7 @@ async function ensureAttendancePermissions(actorId: string, employeeId: string) 
     throw forbidden("You are not allowed to prepare attendance for other employees");
   }
   if (String(actor.department || "").trim() !== String(employee.department || "").trim()) {
-    throw forbidden("Attendance can only be prepared within the same department");
+    throw forbidden("Attendance can only be prepared within the same division");
   }
   return employee;
 }

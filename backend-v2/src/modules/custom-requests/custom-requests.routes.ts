@@ -188,7 +188,7 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
           continue;
         }
         const email = String(a?.email || "").trim();
-        if (!EMAIL_RE.test(email)) throw badRequest(`"${f.field_label}" has an invalid entry — pick a system user, a team, or enter a valid email`);
+        if (!EMAIL_RE.test(email)) throw badRequest(`"${f.field_label}" has an invalid entry — pick a system user, a section, or enter a valid email`);
         resolved.push({ id: null, name: a?.name ? String(a.name).trim() : null, email, teamId: null, teamName: null, confirmed: false, confirmed_at: null, confirmedBy: null });
       }
       parsed.data.data[f.field_key] = resolved;
@@ -634,7 +634,7 @@ customRequestsRouter.post("/:id/assignees", async (req: AuthedRequest, res, next
     let teamMemberEmails: string[] = [];
     if (parsed.data.team_id) {
       const t = (await query<{ id: string; name: string }>(`SELECT id, name FROM teams WHERE id = $1 AND active = true`, [parsed.data.team_id]))[0];
-      if (!t) throw badRequest("Selected team is invalid");
+      if (!t) throw badRequest("Selected section is invalid");
       entry = { id: null, name: null, email: null, teamId: t.id, teamName: t.name, confirmed: false, confirmed_at: null, confirmedBy: null };
       const members = await query<{ email: string }>(`SELECT email FROM users WHERE team_id = $1 AND is_active = true`, [t.id]);
       teamMemberEmails = members.map((m) => m.email);
@@ -655,7 +655,7 @@ customRequestsRouter.post("/:id/assignees", async (req: AuthedRequest, res, next
       || (entry.id && a.id === entry.id)
       || (!entry.id && !entry.teamId && a.email?.toLowerCase() === entry.email?.toLowerCase())
     );
-    if (alreadyListed) throw badRequest("That person or team is already listed as an assignee");
+    if (alreadyListed) throw badRequest("That person or section is already listed as an assignee");
 
     const updatedData = { ...submission.data, [field.field_key]: [...current, entry] };
     await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updatedData), submission.id]);
@@ -719,7 +719,7 @@ customRequestsRouter.post("/:id/assignees/confirm", async (req: AuthedRequest, r
     const idx = current.findIndex((a) =>
       a.id === req.user!.userId || (a.teamId && req.user!.teamId && a.teamId === req.user!.teamId)
     );
-    if (idx === -1) throw forbidden("You are not listed as an assignee (or a member of an assigned team) on this field");
+    if (idx === -1) throw forbidden("You are not listed as an assignee (or a member of an assigned section) on this field");
 
     current[idx] = { ...current[idx], confirmed: true, confirmed_at: new Date().toISOString(), confirmedBy: current[idx].teamId ? req.user!.fullName ?? req.user!.userId : current[idx].confirmedBy };
     const updatedData = { ...submission.data, [parsed.data.field_key]: current };
@@ -845,7 +845,7 @@ export async function performCustomRequestAction(
       const assignees = (submission.data?.[f.field_key] ?? []) as AssigneeEntry[];
       const unconfirmed = assignees.filter((a) => !a.confirmed);
       if (unconfirmed.length) {
-        throw badRequest(`All assignees for "${f.field_label}" must confirm the implementation plan is ready before this request can be approved (waiting on: ${unconfirmed.map((a) => (a.teamId ? `Team: ${a.teamName}` : a.name || a.email)).join(", ")})`);
+        throw badRequest(`All assignees for "${f.field_label}" must confirm the implementation plan is ready before this request can be approved (waiting on: ${unconfirmed.map((a) => (a.teamId ? `Section: ${a.teamName}` : a.name || a.email)).join(", ")})`);
       }
     }
   }

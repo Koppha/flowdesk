@@ -326,6 +326,62 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     };
 
+    // Surfaces Capture-step items that the main loaders above miss:
+    //  - ADMIN entirely skips loadWorkflowAdvancesForUser (see call site below),
+    //    so without this they'd never see any workflow-driven Capture step, done or not.
+    //  - For everyone else, once a request's Capture step is approved the workflow
+    //    moves on, and loadWorkflowAdvancesForUser's own query excludes APPROVED/PAID
+    //    advances outright — so a request the user already captured would otherwise
+    //    vanish from their view entirely instead of staying visible as done. capture_done
+    //    lets the frontend keep it in the Capture Inbox and swap the action to a plain
+    //    PDF download instead of re-offering the (already-completed) Capture action.
+    const loadCaptureHistoryItems = async () => {
+      const isAdmin = rule === "ALL";
+      const rows = await query<any>(
+        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+          WHERE ar.approval_chain IS NOT NULL
+            AND ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
+          ORDER BY ar.created_at DESC`
+      );
+      for (const a of rows) {
+        if (items.some((i: any) => i.id === a.id)) continue;
+        const chain = a.approval_chain as ChainStep[];
+        const captureStep = chain.find((s) => s.action_type === "CAPTURE");
+        if (!captureStep) continue;
+        // Pending (not-yet-captured) items for non-admin users are already
+        // surfaced by loadWorkflowAdvancesForUser above — only add them here
+        // for ADMIN (whose main loader is skipped) or once already captured.
+        if (!captureStep.approved && !isAdmin) continue;
+        if (!isAdmin) {
+          const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department);
+          if (!eligible) continue;
+        }
+        const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
+        const currentStep = group.steps.find((s) => !s.approved) ?? null;
+        items.push({
+          doc_type: "ADVANCE",
+          id: a.id,
+          status: a.status,
+          advance_type: a.type,
+          requested_total: Number(a.requested_total),
+          approved_total: Number(a.approved_total),
+          purpose: a.purpose,
+          requester_name: a.requester_name,
+          workflow_step_order: a.workflow_step_order,
+          current_step_approver_id: currentStep?.approver_id ?? null,
+          current_step_position_name: currentStep ? group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ") : null,
+          current_step_action_type: currentStep?.action_type ?? null,
+          current_step_can_reject: currentStep?.can_reject,
+          current_step_can_rollback: currentStep?.can_rollback,
+          current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)),
+          capture_done: !!captureStep.approved
+        });
+      }
+    };
+
     // Load workflow-driven clearance claims where it is this user's turn to
     // act. Mirrors loadWorkflowAdvancesForUser, but for clearance_claims.
     const loadWorkflowClaimsForUser = async () => {
@@ -472,6 +528,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       await loadFinalStepApprovedAdvancesForUser(req.user!.userId);
       await loadWorkflowClaimsForUser();
     }
+    await loadCaptureHistoryItems();
     await loadCustomRequestsForUser();
 
     if (!rule) return res.json({ items });

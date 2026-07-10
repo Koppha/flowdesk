@@ -225,11 +225,11 @@ export default function AttendanceModule(props: AttendanceModuleProps) {
             </select>
           </div>
           <div className="form-field">
-            <label>Division</label>
+            <label>Company</label>
             <input value={division} onChange={(e) => setDivision(e.target.value)} placeholder="Auto-filled from org profile" />
           </div>
           <div className="form-field">
-            <label>Section</label>
+            <label>Department</label>
             <input value={sectionName} onChange={(e) => setSectionName(e.target.value)} placeholder="Auto-filled from org profile" />
           </div>
         </div>

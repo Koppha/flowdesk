@@ -79,7 +79,7 @@ async function resolveEmployee(actorId, requestedEmployeeId) {
     const employeeId = requestedEmployeeId || actorId;
     const employee = await getUserAccountState(employeeId);
     if (employee.id !== actor.id && String(employee.department || "").trim() !== String(actor.department || "").trim()) {
-        throw forbidden("Overtime records can only be created within your department");
+        throw forbidden("Overtime records can only be created within your division");
     }
     return employee;
 }

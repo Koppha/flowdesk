@@ -236,8 +236,20 @@ function detailBlock(rows) {
     // "Key    : Value" format — textToHtml detects these and renders them as a table
     return rows.map(([k, v]) => `${k.padEnd(pad)} : ${v || "—"}`).join("\n");
 }
-function fmt(amount) {
-    return `M ${Number(amount).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Mirrors frontend/src/constants.ts's CURRENCIES table so email/Teams amounts
+// use the same symbol as the UI instead of always assuming Loti.
+const CURRENCY_SYMBOLS = {
+    LSL: "M", ZAR: "R", USD: "$", EUR: "€", GBP: "£",
+    BWP: "P", MZN: "MT", ZMW: "K", NAD: "N$", MWK: "MK"
+};
+// A request always sticks with the currency it was requested in — never a
+// hardcoded default — so callers must resolve and pass it through explicitly.
+// Falls back to LSL only when no currency could be resolved (e.g. non-travel
+// advance types that have no associated travel_types row).
+function fmt(amount, currency) {
+    const code = currency || "LSL";
+    const symbol = CURRENCY_SYMBOLS[code] || code;
+    return `${symbol} ${Number(amount).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function statusLabel(status) {
     return status.replace(/_/g, " ");
@@ -273,9 +285,9 @@ export async function notifyAdvanceTask(args) {
         role = "FINANCE";
     const details = detailBlock([
         ["Requester", requester],
-        ["Department", department],
+        ["Division", department],
         ["Type", args.advanceType.replace(/_/g, " ")],
-        ["Amount", fmt(args.requestedTotal)],
+        ["Amount", fmt(args.requestedTotal, args.currency)],
         ["Status", statusLabel(args.status)],
         ...(args.comments ? [["Comments", args.comments]] : [])
     ]);
@@ -321,9 +333,9 @@ export async function notifyAdvanceTask(args) {
                 color: "f59e0b",
                 facts: [
                     { name: "Requester", value: requester },
-                    { name: "Department", value: department || "—" },
+                    { name: "Division", value: department || "—" },
                     { name: "Type", value: args.advanceType.replace(/_/g, " ") },
-                    { name: "Amount", value: fmt(args.requestedTotal) },
+                    { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
                     { name: "Status", value: statusLabel(args.status) },
                     ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
                 ]
@@ -370,9 +382,9 @@ export async function notifyAdvanceTask(args) {
                     color: "f59e0b",
                     facts: [
                         { name: "Requester", value: requester },
-                        { name: "Department", value: department || "—" },
+                        { name: "Division", value: department || "—" },
                         { name: "Type", value: args.advanceType.replace(/_/g, " ") },
-                        { name: "Amount", value: fmt(args.requestedTotal) },
+                        { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
                         { name: "Status", value: statusLabel(args.status) },
                         ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
                     ]
@@ -430,9 +442,9 @@ export async function notifyAdvanceTask(args) {
                 color: statusColor[args.status] || "3b82f6",
                 facts: [
                     { name: "Requester", value: requester },
-                    { name: "Department", value: department || "—" },
+                    { name: "Division", value: department || "—" },
                     { name: "Type", value: args.advanceType.replace(/_/g, " ") },
-                    { name: "Amount", value: fmt(args.requestedTotal) },
+                    { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
                     { name: "Status", value: statusLabel(args.status) },
                     ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
                 ]
@@ -453,9 +465,9 @@ export async function notifyAdvancePaid(args) {
         const requester = args.requesterName || "Requester";
         const details = detailBlock([
             ["Requester", requester],
-            ["Department", args.department],
+            ["Division", args.department],
             ["Type", args.advanceType.replace(/_/g, " ")],
-            ["Amount", fmt(args.approvedTotal)],
+            ["Amount", fmt(args.approvedTotal, args.currency)],
             ["Status", "PAID"],
             ...(args.paidReference ? [["Reference", args.paidReference]] : [])
         ]);
@@ -483,9 +495,9 @@ export async function notifyAdvancePaid(args) {
             color: "16a34a",
             facts: [
                 { name: "Requester", value: requester },
-                { name: "Department", value: args.department || "—" },
+                { name: "Division", value: args.department || "—" },
                 { name: "Type", value: args.advanceType.replace(/_/g, " ") },
-                { name: "Amount", value: fmt(args.approvedTotal) },
+                { name: "Amount", value: fmt(args.approvedTotal, args.currency) },
                 { name: "Status", value: "PAID" },
                 ...(args.paidReference ? [{ name: "Reference", value: args.paidReference }] : [])
             ]
@@ -505,9 +517,9 @@ export async function notifyAdvanceCancelled(args) {
         const requester = args.requesterName || "Requester";
         const details = detailBlock([
             ["Requester", requester],
-            ["Department", args.department],
+            ["Division", args.department],
             ["Type", args.advanceType.replace(/_/g, " ")],
-            ["Amount", fmt(args.requestedTotal)],
+            ["Amount", fmt(args.requestedTotal, args.currency)],
             ["Status", "CANCELLED"]
         ]);
         const body = [
@@ -516,7 +528,7 @@ export async function notifyAdvanceCancelled(args) {
             `Hello ${requester},`,
             ``,
             `Your advance request has been cancelled.`,
-            `If you did not cancel this request, please contact your HR department.`,
+            `If you did not cancel this request, please contact your HR division.`,
             ``,
             details,
             ``,
@@ -534,9 +546,9 @@ export async function notifyAdvanceCancelled(args) {
             color: "6b7280",
             facts: [
                 { name: "Requester", value: requester },
-                { name: "Department", value: args.department || "—" },
+                { name: "Division", value: args.department || "—" },
                 { name: "Type", value: args.advanceType.replace(/_/g, " ") },
-                { name: "Amount", value: fmt(args.requestedTotal) },
+                { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
                 { name: "Status", value: "CANCELLED" }
             ]
         }).catch((e) => logger.warn("teams_advance_cancelled_failed", { error: serializeError(e) }));
@@ -554,8 +566,8 @@ export async function notifyClaimTask(args) {
     const claimTypeLabel = args.claimType ? `${args.claimType.replace(/_/g, " ")} Clearance Claim` : "Clearance Claim";
     const details = detailBlock([
         ["Claimant", claimant],
-        ["Department", department],
-        ["Amount", fmt(args.claimTotal)],
+        ["Division", department],
+        ["Amount", fmt(args.claimTotal, args.currency)],
         ["Status", statusLabel(args.status)]
     ]);
     // ── Settled: notify claimant directly ────────────────────────────────────
@@ -587,8 +599,8 @@ export async function notifyClaimTask(args) {
                 color: "16a34a",
                 facts: [
                     { name: "Claimant", value: claimant },
-                    { name: "Department", value: department || "—" },
-                    { name: "Amount", value: fmt(args.claimTotal) },
+                    { name: "Division", value: department || "—" },
+                    { name: "Amount", value: fmt(args.claimTotal, args.currency) },
                     { name: "Status", value: "SETTLED" }
                 ]
             }).catch((e) => logger.warn("teams_claim_settled_failed", { error: serializeError(e) }));
@@ -642,8 +654,8 @@ export async function notifyClaimTask(args) {
                 color: "f59e0b",
                 facts: [
                     { name: "Claimant", value: claimant },
-                    { name: "Department", value: department || "—" },
-                    { name: "Amount", value: fmt(args.claimTotal) },
+                    { name: "Division", value: department || "—" },
+                    { name: "Amount", value: fmt(args.claimTotal, args.currency) },
                     { name: "Status", value: statusLabel(args.status) }
                 ]
             }).catch((e) => logger.warn("teams_claim_approver_failed", { error: serializeError(e) }));
@@ -708,8 +720,8 @@ export async function notifyClaimTask(args) {
                     color: "f59e0b",
                     facts: [
                         { name: "Claimant", value: claimant },
-                        { name: "Department", value: department || "—" },
-                        { name: "Amount", value: fmt(args.claimTotal) },
+                        { name: "Division", value: department || "—" },
+                        { name: "Amount", value: fmt(args.claimTotal, args.currency) },
                         { name: "Status", value: statusLabel(args.status) }
                     ]
                 }).catch((e) => logger.warn("teams_claim_approver_failed", { error: serializeError(e) }));
@@ -759,8 +771,8 @@ export async function notifyClaimTask(args) {
                 color: "3b82f6",
                 facts: [
                     { name: "Claimant", value: claimant },
-                    { name: "Department", value: department || "—" },
-                    { name: "Amount", value: fmt(args.claimTotal) },
+                    { name: "Division", value: department || "—" },
+                    { name: "Amount", value: fmt(args.claimTotal, args.currency) },
                     { name: "Status", value: statusLabel(args.status) }
                 ]
             }).catch((e) => logger.warn("teams_claim_claimant_failed", { error: serializeError(e) }));
@@ -816,7 +828,7 @@ export async function notifyUserReactivated(args) {
             detailBlock([
                 ["Email", args.email],
                 ["Role", roleLabel],
-                ["Department", args.sectionOrDepartment]
+                ["Division", args.sectionOrDepartment]
             ]),
             ``,
             footer()
@@ -834,7 +846,7 @@ export async function notifyUserReactivated(args) {
             facts: [
                 { name: "Email", value: args.email },
                 { name: "Role", value: roleLabel },
-                { name: "Department", value: args.sectionOrDepartment || "—" }
+                { name: "Division", value: args.sectionOrDepartment || "—" }
             ]
         }).catch((e) => logger.warn("teams_reactivation_failed", { error: serializeError(e) }));
     }
@@ -859,7 +871,7 @@ export async function notifyUserRoleChanged(args) {
             detailBlock([
                 ["Email", args.email],
                 ["New Role", roleLabel],
-                ["Department", args.sectionOrDepartment]
+                ["Division", args.sectionOrDepartment]
             ]),
             ``,
             footer()
@@ -877,7 +889,7 @@ export async function notifyUserRoleChanged(args) {
             facts: [
                 { name: "Email", value: args.email },
                 { name: "New Role", value: roleLabel },
-                { name: "Department", value: args.sectionOrDepartment || "—" }
+                { name: "Division", value: args.sectionOrDepartment || "—" }
             ]
         }).catch((e) => logger.warn("teams_role_change_failed", { error: serializeError(e) }));
     }
@@ -894,7 +906,7 @@ export async function notifyProfileCompleted(args) {
         // Notify the user confirming their profile is complete
         const userDetails = detailBlock([
             ["Name", name],
-            ["Department", args.department],
+            ["Division", args.department],
             ["Employment Type", args.employmentType.replace(/_/g, " ")],
             ["Employee No.", args.employeeNo]
         ]);
@@ -927,7 +939,7 @@ export async function notifyProfileCompleted(args) {
             facts: [
                 { name: "Name", value: name },
                 { name: "Email", value: args.email },
-                { name: "Department", value: args.department || "—" },
+                { name: "Division", value: args.department || "—" },
                 { name: "Employment Type", value: args.employmentType.replace(/_/g, " ") },
                 { name: "Employee No.", value: args.employeeNo || "—" }
             ]
@@ -938,7 +950,7 @@ export async function notifyProfileCompleted(args) {
             const hrDetails = detailBlock([
                 ["Name", name],
                 ["Email", args.email],
-                ["Department", args.department],
+                ["Division", args.department],
                 ["Employment Type", args.employmentType.replace(/_/g, " ")],
                 ["Employee No.", args.employeeNo]
             ]);
@@ -974,7 +986,7 @@ export async function notifyOvertimeSubmitted(args) {
     const typeLabel = args.type === "claim" ? "Overtime Claim" : "Overtime Request";
     const details = detailBlock([
         ["Employee", employee],
-        ["Department", args.department],
+        ["Division", args.department],
         ["Period", periodLabel],
         ["Type", typeLabel]
     ]);
@@ -1007,7 +1019,7 @@ export async function notifyOvertimeSubmitted(args) {
                 color: "f59e0b",
                 facts: [
                     { name: "Employee", value: employee },
-                    { name: "Department", value: args.department || "—" },
+                    { name: "Division", value: args.department || "—" },
                     { name: "Period", value: periodLabel },
                     { name: "Type", value: typeLabel }
                 ]
@@ -1120,11 +1132,11 @@ export async function notifyCustomRequestSectionAssigned(args) {
         if (!args.memberEmails.length)
             return;
         const body = [
-            header(`${args.requestTypeName.toUpperCase()} — YOUR SECTION IS THE IMPLEMENTOR`),
+            header(`${args.requestTypeName.toUpperCase()} — YOUR DEPARTMENT IS THE IMPLEMENTOR`),
             ``,
             `Hello,`,
             ``,
-            `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and listed your section, "${args.sectionName}", as the ${args.fieldLabel}.`,
+            `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and listed your department, "${args.sectionName}", as the ${args.fieldLabel}.`,
             ``,
             footer()
         ].join("\n");
@@ -1176,13 +1188,13 @@ export async function notifyCustomRequestTeamAssigned(args) {
         if (!args.memberEmails.length)
             return;
         const body = [
-            header(`${args.requestTypeName.toUpperCase()} — YOUR TEAM HAS BEEN ASSIGNED`),
+            header(`${args.requestTypeName.toUpperCase()} — YOUR SECTION HAS BEEN ASSIGNED`),
             ``,
             `Hello,`,
             ``,
-            `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and assigned it to your team, "${args.teamName}" (${args.fieldLabel}).`,
+            `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and assigned it to your section, "${args.teamName}" (${args.fieldLabel}).`,
             ``,
-            `Any one member of the team can confirm in FlowDesk once it's ready — approval can't proceed until then.`,
+            `Any one member of the section can confirm in FlowDesk once it's ready — approval can't proceed until then.`,
             ``,
             footer()
         ].join("\n");
@@ -1324,7 +1336,7 @@ export async function notifyDelegationAssigned(args) {
                 ``,
                 detailBlock([
                     ["Delegating Manager", args.managerName],
-                    ["Department", args.department],
+                    ["Division", args.department],
                     ["Period", period]
                 ]),
                 ``,
@@ -1343,7 +1355,7 @@ export async function notifyDelegationAssigned(args) {
                 color: "7c3aed",
                 facts: [
                     { name: "Manager", value: args.managerName || "—" },
-                    { name: "Department", value: args.department || "—" },
+                    { name: "Division", value: args.department || "—" },
                     { name: "Period", value: period }
                 ]
             }).catch((e) => logger.warn("teams_delegation_assigned_failed", { error: serializeError(e) }));
@@ -1366,7 +1378,7 @@ export async function notifyDelegationAssigned(args) {
                 ``,
                 detailBlock([
                     ["Delegate", args.delegateName],
-                    ["Department", args.department],
+                    ["Division", args.department],
                     ["Period", period]
                 ]),
                 ``,
@@ -1430,9 +1442,9 @@ export async function notifyPositionAssigned(args) {
 export async function notifyAdvanceReminder(args) {
     const details = detailBlock([
         ["Requester", args.requesterName],
-        ["Department", args.department],
+        ["Division", args.department],
         ["Type", args.advanceType.replace(/_/g, " ")],
-        ["Amount", fmt(args.requestedTotal)],
+        ["Amount", fmt(args.requestedTotal, args.currency)],
         ["Status", statusLabel(args.status)]
     ]);
     // Email the approver
@@ -1463,8 +1475,8 @@ export async function notifyAdvanceReminder(args) {
                 color: "f59e0b",
                 facts: [
                     { name: "Requester", value: args.requesterName || "—" },
-                    { name: "Department", value: args.department || "—" },
-                    { name: "Amount", value: fmt(args.requestedTotal) },
+                    { name: "Division", value: args.department || "—" },
+                    { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
                     { name: "Sent to", value: args.approverName || "—" }
                 ]
             }).catch((e) => logger.warn("teams_advance_reminder_failed", { error: serializeError(e) }));
@@ -1515,7 +1527,7 @@ export async function notifyDelegationEnded(args) {
                 ``,
                 detailBlock([
                     ["Manager", args.managerName],
-                    ["Department", args.department]
+                    ["Division", args.department]
                 ]),
                 ``,
                 `You will no longer receive approval requests on their behalf.`,
@@ -1534,7 +1546,7 @@ export async function notifyDelegationEnded(args) {
                 facts: [
                     { name: "Manager", value: args.managerName || "—" },
                     { name: "Delegate", value: args.delegateName || "—" },
-                    { name: "Department", value: args.department || "—" },
+                    { name: "Division", value: args.department || "—" },
                     { name: "Ended by", value: args.endedBy || "—" }
                 ]
             }).catch((e) => logger.warn("teams_delegation_ended_failed", { error: serializeError(e) }));

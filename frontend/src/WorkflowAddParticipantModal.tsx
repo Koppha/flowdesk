@@ -50,7 +50,7 @@ type Row =
 
 const BADGE_STYLES: Record<Row["type"], { bg: string; color: string; label: string; iconBg: string; iconColor: string; Icon: any }> = {
   position: { bg: "#ede9fe", color: "#6d28d9", label: "Position", iconBg: "#ede9fe", iconColor: "#6d28d9", Icon: Briefcase },
-  team: { bg: "#dcfce7", color: "#15803d", label: "Team", iconBg: "#dcfce7", iconColor: "#15803d", Icon: Users },
+  team: { bg: "#dcfce7", color: "#15803d", label: "Section", iconBg: "#dcfce7", iconColor: "#15803d", Icon: Users },
   employee: { bg: "#fef3c7", color: "#b45309", label: "Employee", iconBg: "#fef3c7", iconColor: "#b45309", Icon: User }
 };
 
@@ -80,7 +80,7 @@ export default function WorkflowAddParticipantModal({
     }));
     const teamRows: Row[] = teams
       .filter((t) => (!filters.department || t.departmentLabel === filters.department) && (!filters.section || t.sectionLabel === filters.section) && (!filters.team || t.name === filters.team))
-      .map((t) => ({ type: "team", key: `team-${t.id}`, name: t.name, subtitle: [t.departmentLabel, t.sectionLabel].filter(Boolean).join(" • ") || "Team", data: t }));
+      .map((t) => ({ type: "team", key: `team-${t.id}`, name: t.name, subtitle: [t.departmentLabel, t.sectionLabel].filter(Boolean).join(" • ") || "Section", data: t }));
     const employeeRows: Row[] = employees
       .filter((e) => !filters.department || e.department === filters.department)
       .map((e) => ({ type: "employee", key: `employee-${e.id}`, name: e.full_name || e.email, subtitle: [e.department, e.title].filter(Boolean).join(" • "), data: e }));
@@ -137,7 +137,7 @@ export default function WorkflowAddParticipantModal({
             <div>
               <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>Add Workflow Participant</div>
               <div style={{ fontSize: 12, color: "var(--muted, #6b7280)", marginTop: 2 }}>
-                Search and select a position, team or employee to add to this step.
+                Search and select a position, section or employee to add to this step.
               </div>
             </div>
           </div>
@@ -151,7 +151,7 @@ export default function WorkflowAddParticipantModal({
           <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
           <input
             autoFocus
-            placeholder="Search position, team or employee"
+            placeholder="Search position, section or employee"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{ width: "100%", paddingLeft: 36, paddingRight: 10, paddingTop: 10, paddingBottom: 10, border: "1px solid #93c5fd", borderRadius: 8, background: "var(--surface)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
@@ -173,19 +173,19 @@ export default function WorkflowAddParticipantModal({
         {filtersOpen && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
             <select value={filters.division} onChange={(e) => setFilters((f) => ({ ...f, division: e.target.value, department: "", section: "", team: "" }))} style={{ flex: 1, minWidth: 110, fontSize: 13 }}>
-              <option value="">All divisions…</option>
+              <option value="">All companies…</option>
               {divisionOptions.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
             <select value={filters.department} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value, section: "", team: "" }))} style={{ flex: 1, minWidth: 140, fontSize: 13 }}>
-              <option value="">All departments…</option>
+              <option value="">All divisions…</option>
               {departmentOptions.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
             <select value={filters.section} onChange={(e) => setFilters((f) => ({ ...f, section: e.target.value, team: "" }))} disabled={!filters.department} style={{ flex: 1, minWidth: 120, fontSize: 13 }}>
-              <option value="">All sections…</option>
+              <option value="">All departments…</option>
               {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
             <select value={filters.team} onChange={(e) => setFilters((f) => ({ ...f, team: e.target.value }))} disabled={!filters.department} style={{ flex: 1, minWidth: 110, fontSize: 13 }}>
-              <option value="">All teams…</option>
+              <option value="">All sections…</option>
               {teamOptions.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
@@ -219,7 +219,7 @@ export default function WorkflowAddParticipantModal({
                     type="button"
                     onClick={() => handleRowAction(row)}
                     disabled={disabled}
-                    title={disabled ? "Enable \"Any team member\" to add a whole team" : undefined}
+                    title={disabled ? "Enable \"Any section member\" to add a whole section" : undefined}
                     style={{
                       width: 36, height: 36, borderRadius: 8, flexShrink: 0,
                       border: `1px solid ${selected ? "#1d4ed8" : "#93c5fd"}`,
@@ -242,8 +242,8 @@ export default function WorkflowAddParticipantModal({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, flexWrap: "wrap", gap: 10 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text)" }}>
             <input type="checkbox" checked={anyTeamMember} onChange={(e) => setAnyTeamMember(e.target.checked)} />
-            Any team member
-            <Info size={13} style={{ color: "var(--muted)" }} aria-label="When enabled, adding a Team adds it as 'any one of this team may approve'." />
+            Any section member
+            <Info size={13} style={{ color: "var(--muted)" }} aria-label="When enabled, adding a Section adds it as 'any one of this section may approve'." />
           </label>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
@@ -270,7 +270,7 @@ export default function WorkflowAddParticipantModal({
         )}
 
         <div style={{ marginTop: 14, padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, fontSize: 12, color: "#1e40af" }}>
-          You can search by position name, team name, employee name or employee number. Start typing to see results.
+          You can search by position name, section name, employee name or employee number. Start typing to see results.
         </div>
       </div>
     </div>

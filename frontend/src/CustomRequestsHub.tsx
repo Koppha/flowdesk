@@ -324,7 +324,7 @@ function ApproverCombobox({
 }
 
 function assigneeLabel(a: AssigneeEntry) {
-  return a.teamId ? `Team: ${a.teamName}` : a.name || a.email || "—";
+  return a.teamId ? `Section: ${a.teamName}` : a.name || a.email || "—";
 }
 
 type AssigneePick = { kind: "user"; id: string } | { kind: "team"; id: string } | { kind: "email"; value: string };
@@ -397,7 +397,7 @@ function AssigneeCombobox({
 
   const selectedUserForLabel = value?.kind === "user" ? users.find((u) => u.id === value.id) : undefined;
   const selectedLabel =
-    value?.kind === "team" ? `Team: ${teams.find((t) => t.id === value.id)?.name ?? ""}`
+    value?.kind === "team" ? `Section: ${teams.find((t) => t.id === value.id)?.name ?? ""}`
     : selectedUserForLabel ? userLabel(selectedUserForLabel)
     : value?.kind === "email" ? value.value
     : "";
@@ -417,7 +417,7 @@ function AssigneeCombobox({
         <input
           className="ep-form-input"
           style={{ paddingLeft: 26, paddingRight: 26 }}
-          placeholder="Assign a team or individual"
+          placeholder="Assign a section or individual"
           value={open ? query : selectedLabel}
           onFocus={handleOpen}
           onChange={(e) => setQuery(e.target.value)}
@@ -438,7 +438,7 @@ function AssigneeCombobox({
         >
           {matchingTeams.length > 0 && (
             <>
-              <div style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Teams</div>
+              <div style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Sections</div>
               {matchingTeams.map((t) => (
                 <button
                   key={t.id}

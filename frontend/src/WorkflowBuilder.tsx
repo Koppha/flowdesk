@@ -153,8 +153,8 @@ const STATUS_OPTIONS: Array<{ value: WorkflowStatus; label: string }> = [
 
 const POSITION_TYPE_FALLBACKS: PositionType[] = [
   { id: "system-employee", code: "EMPLOYEE", name: "Employee", description: "Request Initiator", applies_to: ALL_REQUEST_TYPES, is_active: true },
-  { id: "pos-hod", code: "HOD", name: "HOD", description: "Department Head", applies_to: ALL_REQUEST_TYPES, is_active: true },
-  { id: "pos-manager", code: "MANAGER", name: "Manager", description: "Department Manager", applies_to: ALL_REQUEST_TYPES, is_active: true },
+  { id: "pos-hod", code: "HOD", name: "HOD", description: "Division Head", applies_to: ALL_REQUEST_TYPES, is_active: true },
+  { id: "pos-manager", code: "MANAGER", name: "Manager", description: "Division Manager", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-exco", code: "EXCO", name: "EXCO Member", description: "Executive Committee Member", applies_to: ALL_REQUEST_TYPES, is_active: true },
   { id: "pos-ceo", code: "CEO", name: "CEO", description: "Chief Executive Officer", applies_to: ALL_REQUEST_TYPES, is_active: true }
 ];
@@ -216,7 +216,7 @@ const EMPTY_METADATA: WorkflowMetadata = {
 const ADVANCE_SUB_TYPES_STATIC = [
   { value: "SALARY", label: "Salary Advance" },
   { value: "LOAN",   label: "Loan" },
-  { value: "TRAVEL", label: "Travel / Per Diem" },
+  { value: "TRAVEL", label: "Travel / Per Diem (Any Type)" },
 ];
 
 
@@ -307,6 +307,14 @@ function workflowCodeLabel(code: string) {
   return known?.name || code.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+// Steps added via "add a team" are stored with a "Team: " position_name/
+// approvalGroupName prefix (see handleAddTeam below) — that stored value must
+// stay as-is so existing saved workflow steps keep matching, but it should
+// read as "Section: " wherever it's shown to a user (Team -> Section rename).
+function displayPositionName(name: string) {
+  return name.startsWith("Team: ") ? `Section: ${name.slice("Team: ".length)}` : name;
+}
+
 function getPositionIcon(code: string) {
   switch (code) {
     case "HOD":
@@ -366,6 +374,7 @@ export default function WorkflowBuilder() {
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [customRequestTypes, setCustomRequestTypes] = useState<Array<{ value: string; label: string }>>([]);
+  const [travelTypes, setTravelTypes] = useState<Array<{ code: string; name: string; active?: boolean }>>([]);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null }>>([]);
@@ -382,31 +391,59 @@ export default function WorkflowBuilder() {
     return [...BUILTIN_REQUEST_TYPES, ...custom];
   }, [customRequestTypes]);
 
-  const advanceSubTypes = ADVANCE_SUB_TYPES_STATIC;
+  // Each travel type gets its own selectable sub-type (in addition to the
+  // generic "Travel / Per Diem (Any Type)" bucket) so international travel,
+  // local travel, etc. can each be routed through a dedicated workflow.
+  // resolveWorkflowChain already matches an exact travel-type code with
+  // higher priority than the generic "TRAVEL" bucket — see workflowEngine.ts.
+  const advanceSubTypes = useMemo(() => {
+    const perTravelType = travelTypes.map((t) => ({ value: t.code, label: `Travel / Per Diem — ${t.name}` }));
+    return [...ADVANCE_SUB_TYPES_STATIC, ...perTravelType];
+  }, [travelTypes]);
 
-  // Splits "Advance Request" into its sub-types (Salary, Loan, Travel) so each can be picked directly.
+  // A clearance is always for a travel advance (no Salary/Loan clearances),
+  // so its sub-types are just the travel types plus a generic "Any Type"
+  // bucket — same underlying advance_sub_type column and matching rules as
+  // ADVANCE_REQUEST, just scoped by request_type='CLEARANCE_REQUEST'.
+  const clearanceSubTypes = useMemo(() => {
+    const perTravelType = travelTypes.map((t) => ({ value: t.code, label: `Clearance — ${t.name}` }));
+    return [{ value: "TRAVEL", label: "Clearance (Any Type)" }, ...perTravelType];
+  }, [travelTypes]);
+
+  const SUB_TYPED_REQUEST_TYPES: Record<string, { value: string; label: string }[]> = {
+    ADVANCE_REQUEST: advanceSubTypes,
+    CLEARANCE_REQUEST: clearanceSubTypes
+  };
+
+  // Splits "Advance Request" and "Clearance Request" into their sub-types
+  // (Salary/Loan/per-travel-type, and per-travel-type respectively) so each
+  // can be picked directly.
   const step1RequestTypeOptions = useMemo(() => {
     const expanded: { value: string; label: string }[] = [];
     for (const type of requestTypeOptions) {
-      if (type.value === "ADVANCE_REQUEST") {
-        for (const sub of advanceSubTypes) {
-          expanded.push({ value: `ADVANCE_REQUEST:${sub.value}`, label: sub.label });
+      const subTypes = SUB_TYPED_REQUEST_TYPES[type.value];
+      if (subTypes) {
+        for (const sub of subTypes) {
+          expanded.push({ value: `${type.value}:${sub.value}`, label: sub.label });
         }
       } else {
         expanded.push(type);
       }
     }
     return expanded;
-  }, [requestTypeOptions, advanceSubTypes]);
+  }, [requestTypeOptions, advanceSubTypes, clearanceSubTypes]);
 
-  const step1RequestTypeValue =
-    metadata.requestType === "ADVANCE_REQUEST"
-      ? `ADVANCE_REQUEST:${metadata.advanceSubType || "SALARY"}`
-      : metadata.requestType;
+  const DEFAULT_SUB_TYPE: Record<string, string> = { ADVANCE_REQUEST: "SALARY", CLEARANCE_REQUEST: "TRAVEL" };
+
+  const step1RequestTypeValue = SUB_TYPED_REQUEST_TYPES[metadata.requestType]
+    ? `${metadata.requestType}:${metadata.advanceSubType || DEFAULT_SUB_TYPE[metadata.requestType]}`
+    : metadata.requestType;
 
   function handleStep1RequestTypeChange(value: string) {
-    if (value.startsWith("ADVANCE_REQUEST:")) {
-      updateMetadata({ requestType: "ADVANCE_REQUEST", advanceSubType: value.split(":")[1] });
+    const colonIdx = value.indexOf(":");
+    const requestType = colonIdx === -1 ? value : value.slice(0, colonIdx);
+    if (SUB_TYPED_REQUEST_TYPES[requestType] && colonIdx !== -1) {
+      updateMetadata({ requestType, advanceSubType: value.slice(colonIdx + 1) });
     } else {
       updateMetadata({ requestType: value, advanceSubType: "" });
     }
@@ -512,7 +549,7 @@ export default function WorkflowBuilder() {
         if (!leader.userId) continue;
         addOption({
           value: assignedRuleTargetValue(leader.userId, leader.code),
-          group: "Department leadership",
+          group: "Division leadership",
           label: `${deptName} - ${leader.title}${leader.name ? ` (${leader.name})` : ""}`,
           code: leader.code,
           positionName: `${deptName} ${leader.title}`,
@@ -537,7 +574,7 @@ export default function WorkflowBuilder() {
       const orgPath = staffOrgPath(user);
       addOption({
         value: assignedRuleTargetValue(user.id, code),
-        group: `People - ${user.department || "No Department"}`,
+        group: `People - ${user.department || "No Division"}`,
         label: `${name || user.email} - ${roleLabel}${orgPath ? ` - ${orgPath}` : ""}`,
         code,
         positionName: roleLabel,
@@ -733,7 +770,7 @@ export default function WorkflowBuilder() {
       return [
         workflow.name,
         requestTypeLabel(workflow.requestType),
-        workflow.department || "All Departments",
+        workflow.department || "All Divisions",
         workflow.approvalFlowPreview,
         workflow.description
       ].some((value) => String(value || "").toLowerCase().includes(query));
@@ -768,7 +805,10 @@ export default function WorkflowBuilder() {
     totalSteps: steps.length,
     requiredSteps: steps.filter((step) => step.isRequired && !step.isSystemStep).length,
     optionalSteps: steps.filter((step) => !step.isRequired && !step.isSystemStep).length,
-    finalApproval: steps.find((step) => step.isFinalApproval)?.positionName || "Not set"
+    finalApproval: (() => {
+      const name = steps.find((step) => step.isFinalApproval)?.positionName;
+      return name ? displayPositionName(name) : "Not set";
+    })()
   }), [steps]);
 
   useEffect(() => {
@@ -778,7 +818,7 @@ export default function WorkflowBuilder() {
   async function loadInitialData() {
     setLoading(true);
     try {
-      const [workflowResult, departmentResult, orgStructureResult, requestTypesResult, usersResult, actionTypesResult, meResult, managerTypesResult] = await Promise.all([
+      const [workflowResult, departmentResult, orgStructureResult, requestTypesResult, usersResult, actionTypesResult, meResult, managerTypesResult, travelTypesResult] = await Promise.all([
         api.workflows(),
         api.departmentsWithSections(),
         api.orgStructure(),
@@ -786,7 +826,8 @@ export default function WorkflowBuilder() {
         api.adminUsers(),
         api.workflowActionTypes(),
         api.me(),
-        api.managerTypes().catch(() => [])
+        api.managerTypes().catch(() => []),
+        api.travelTypes().catch(() => [])
       ]);
       setWorkflows(Array.isArray(workflowResult) ? workflowResult.map(normalizeWorkflow) : []);
       setDepartments(Array.isArray(departmentResult) ? departmentResult : []);
@@ -810,6 +851,9 @@ export default function WorkflowBuilder() {
       if (meResult && typeof meResult === "object") setMyRole((meResult as any).role || "");
       if (Array.isArray(managerTypesResult)) {
         setManagerTypes(managerTypesResult.filter((mt: any) => mt.active !== false));
+      }
+      if (Array.isArray(travelTypesResult)) {
+        setTravelTypes(travelTypesResult.filter((tt: any) => tt.active !== false));
       }
     } catch (error) {
       console.warn(error);
@@ -959,7 +1003,7 @@ export default function WorkflowBuilder() {
   }
 
   function flowPreview(stepList = steps) {
-    return stepList.map((step) => step.positionName).filter(Boolean).join(" → ");
+    return stepList.map((step) => displayPositionName(step.positionName)).filter(Boolean).join(" → ");
   }
 
   function resetDesigner(nextMetadata: Partial<WorkflowMetadata> = {}) {
@@ -1170,7 +1214,7 @@ export default function WorkflowBuilder() {
     return {
       name: metadata.name.trim(),
       request_type: metadata.requestType,
-      advance_sub_type: (metadata.requestType === "ADVANCE_REQUEST" && metadata.advanceSubType) ? metadata.advanceSubType : null,
+      advance_sub_type: (SUB_TYPED_REQUEST_TYPES[metadata.requestType] && metadata.advanceSubType) ? metadata.advanceSubType : null,
       department: metadata.department || null,
       section: metadata.section || null,
       team: metadata.team || null,
@@ -1471,7 +1515,7 @@ export default function WorkflowBuilder() {
             <React.Fragment key={`${step.id}-${index}`}>
               <span className={`workflow-flow-node ${getPositionToneClass(step.positionTypeCode)}`}>
                 <Icon size={compact ? 13 : 16} aria-hidden />
-                <span>{step.positionName}</span>
+                <span>{displayPositionName(step.positionName)}</span>
               </span>
               {index < list.length - 1 ? <span className="workflow-flow-arrow" aria-hidden>→</span> : null}
             </React.Fragment>
@@ -1527,7 +1571,7 @@ export default function WorkflowBuilder() {
               {requestTypeOptions.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
             </select>
             <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}>
-              <option value="">All Departments</option>
+              <option value="">All Divisions</option>
               {departmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
             </select>
             <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -1549,7 +1593,7 @@ export default function WorkflowBuilder() {
                 <tr>
                   <th>Workflow Name</th>
                   <th>Request Type</th>
-                  <th>Department</th>
+                  <th>Division</th>
                   <th>Approval Flow Preview</th>
                   <th>Steps</th>
                   <th>Status</th>
@@ -1571,11 +1615,11 @@ export default function WorkflowBuilder() {
                           <span className="workflow-request-chip">{requestTypeLabel(workflow.requestType)}</span>
                           {workflow.advanceSubType && (
                             <span style={{ display: "block", fontSize: 11, marginTop: 3, color: "var(--muted)", fontWeight: 500 }}>
-                              {advanceSubTypes.find((t) => t.value === workflow.advanceSubType)?.label ?? workflow.advanceSubType}
+                              {(SUB_TYPED_REQUEST_TYPES[workflow.requestType] ?? advanceSubTypes).find((t) => t.value === workflow.advanceSubType)?.label ?? workflow.advanceSubType}
                             </span>
                           )}
                         </td>
-                        <td>{workflow.department || "All Departments"}</td>
+                        <td>{workflow.department || "All Divisions"}</td>
                         <td>{renderFlow(workflow.steps, true)}</td>
                         <td>{workflow.stepCount || workflow.steps.length}</td>
                         <td><span className={getStatusPill(workflow.status)}>{workflow.status[0] + workflow.status.slice(1).toLowerCase()}</span></td>
@@ -1704,7 +1748,7 @@ export default function WorkflowBuilder() {
                     <div style={{ fontSize: 12, marginBottom: 4 }}>Label (shown in dropdown)</div>
                     <input
                       type="text"
-                      placeholder="Department Reviewer"
+                      placeholder="Division Reviewer"
                       value={actionTypeDraft.label}
                       onChange={(e) => setActionTypeDraft((d) => ({ ...d, label: e.target.value }))}
                       style={{ width: "100%", border: "1px solid var(--color-border, #ddd)", borderRadius: 4, padding: "4px 8px" }}
@@ -1765,30 +1809,30 @@ export default function WorkflowBuilder() {
                 </select>
               </label>
               <label>
-                <span>Division</span>
+                <span>Company</span>
                 <select value={metadata.division} onChange={(event) => updateMetadata({ division: event.target.value, department: "", section: "", team: "" })}>
-                  <option value="">All Divisions</option>
+                  <option value="">All Companies</option>
                   {divisionOptionsForPicker.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
               </label>
               <label>
-                <span>Department Scope <sup>*</sup></span>
+                <span>Division Scope <sup>*</sup></span>
                 <select value={metadata.department} onChange={(event) => updateMetadata({ department: event.target.value, section: "", team: "" })}>
-                  <option value="">All Departments</option>
+                  <option value="">All Divisions</option>
                   {departmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
                 </select>
               </label>
               <label>
-                <span>Section</span>
+                <span>Department</span>
                 <select value={metadata.section} onChange={(event) => updateMetadata({ section: event.target.value, team: "" })} disabled={!metadata.department || sectionOptions.length === 0}>
-                  <option value="">All Sections</option>
+                  <option value="">All Departments</option>
                   {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </label>
               <label>
-                <span>Team</span>
+                <span>Section</span>
                 <select value={metadata.team} onChange={(event) => updateMetadata({ team: event.target.value })} disabled={!metadata.section || teamOptions.length === 0}>
-                  <option value="">All Teams</option>
+                  <option value="">All Sections</option>
                   {teamOptions.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </label>
@@ -1928,15 +1972,8 @@ export default function WorkflowBuilder() {
           <label className="workflow-config-field">
             <span>Request Type</span>
             <select
-              value={metadata.requestType === "ADVANCE_REQUEST" && metadata.advanceSubType ? `ADVANCE_REQUEST:${metadata.advanceSubType}` : metadata.requestType}
-              onChange={(event) => {
-                const val = event.target.value;
-                if (val.startsWith("ADVANCE_REQUEST:")) {
-                  updateMetadata({ requestType: "ADVANCE_REQUEST", advanceSubType: val.split(":")[1] });
-                } else {
-                  updateMetadata({ requestType: val, advanceSubType: "" });
-                }
-              }}
+              value={SUB_TYPED_REQUEST_TYPES[metadata.requestType] && metadata.advanceSubType ? `${metadata.requestType}:${metadata.advanceSubType}` : metadata.requestType}
+              onChange={(event) => handleStep1RequestTypeChange(event.target.value)}
               disabled={readOnly}
             >
               <optgroup label="Advance Request">
@@ -1945,36 +1982,41 @@ export default function WorkflowBuilder() {
                   <option key={opt.value} value={`ADVANCE_REQUEST:${opt.value}`}>{opt.label}</option>
                 ))}
               </optgroup>
-              {requestTypeOptions.filter((o) => o.value !== "ADVANCE_REQUEST").map((option) => (
+              <optgroup label="Clearance Request">
+                {clearanceSubTypes.map((opt) => (
+                  <option key={opt.value} value={`CLEARANCE_REQUEST:${opt.value}`}>{opt.label}</option>
+                ))}
+              </optgroup>
+              {requestTypeOptions.filter((o) => !SUB_TYPED_REQUEST_TYPES[o.value]).map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
           </label>
           <label className="workflow-config-field">
-            <span>Division</span>
+            <span>Company</span>
             <select value={metadata.division} onChange={(event) => updateMetadata({ division: event.target.value, department: "", section: "", team: "" })} disabled={readOnly}>
-              <option value="">All Divisions</option>
+              <option value="">All Companies</option>
               {divisionOptionsForPicker.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
           </label>
           <label className="workflow-config-field workflow-config-department">
-            <span>Department</span>
+            <span>Division</span>
             <select value={metadata.department} onChange={(event) => updateMetadata({ department: event.target.value, section: "", team: "" })} disabled={readOnly}>
-              <option value="">All Departments</option>
+              <option value="">All Divisions</option>
               {departmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
             </select>
           </label>
           <label className="workflow-config-field">
-            <span>Section</span>
+            <span>Department</span>
             <select value={metadata.section} onChange={(event) => updateMetadata({ section: event.target.value, team: "" })} disabled={readOnly || !metadata.department || sectionOptions.length === 0}>
-              <option value="">All Sections</option>
+              <option value="">All Departments</option>
               {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <label className="workflow-config-field">
-            <span>Team</span>
+            <span>Section</span>
             <select value={metadata.team} onChange={(event) => updateMetadata({ team: event.target.value })} disabled={readOnly || !metadata.section || teamOptions.length === 0}>
-              <option value="">All Teams</option>
+              <option value="">All Sections</option>
               {teamOptions.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </label>
@@ -2049,7 +2091,7 @@ export default function WorkflowBuilder() {
                       <div className="workflow-step-badge">{index + 1}</div>
                       <div className="workflow-step-icon"><Icon size={18} aria-hidden /></div>
                       <div className="workflow-step-labels">
-                        <strong>{step.positionName}</strong>
+                        <strong>{displayPositionName(step.positionName)}</strong>
                         <span>{step.description}</span>
                       </div>
                       <div className="workflow-step-meta">
@@ -2102,7 +2144,7 @@ export default function WorkflowBuilder() {
 
             {selectedStep ? (
               <div className="workflow-step-details">
-                <div className="workflow-step-detail-title">Step {selectedStep.stepOrder}: {selectedStep.positionName}</div>
+                <div className="workflow-step-detail-title">Step {selectedStep.stepOrder}: {displayPositionName(selectedStep.positionName)}</div>
                 {!selectedStep.isSystemStep && (() => {
                   const pool = usersForStep(selectedStep);
                   const q = (stepUserSearch[selectedStep.id] ?? "").toLowerCase();
@@ -2131,7 +2173,7 @@ export default function WorkflowBuilder() {
                             type="text"
                             value={stepUserSearch[selectedStep.id] ?? ""}
                             onChange={e => setStepUserSearch(p => ({ ...p, [selectedStep.id]: e.target.value }))}
-                            placeholder={pool.length ? `Search ${pool.length} available ${selectedStep.positionName} users…` : "No users available for this role"}
+                            placeholder={pool.length ? `Search ${pool.length} available ${displayPositionName(selectedStep.positionName)} users…` : "No users available for this role"}
                             className="ep-form-input"
                             style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
                             disabled={pool.length === 0}
@@ -2430,7 +2472,7 @@ export default function WorkflowBuilder() {
             <div className="summary-row"><span>Required Steps</span><strong>{workflowSummary.requiredSteps}</strong></div>
             <div className="summary-row"><span>Optional Steps</span><strong>{workflowSummary.optionalSteps}</strong></div>
             <div className="summary-row"><span>Final Approval</span><strong>{workflowSummary.finalApproval}</strong></div>
-            <div className="summary-row"><span>Department</span><strong>{metadata.department || "All Departments"}</strong></div>
+            <div className="summary-row"><span>Division</span><strong>{metadata.department || "All Divisions"}</strong></div>
           </aside>
         </div>
       </div>

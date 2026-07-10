@@ -12,17 +12,19 @@ export async function getAdvanceById(id) {
     const rows = await query(`SELECT ar.id, ar.requester_id, ar.created_by_id, ar.status, ar.requested_total, ar.approved_total, ar.type, ar.purpose, ar.payment_account,
             ar.override_chain, ar.workflow_id, ar.workflow_step_order, ar.approval_chain,
             u.department AS requester_department,
-            s.name AS requester_section
+            s.name AS requester_section,
+            tt.currency
        FROM advance_requests ar
        JOIN users u ON u.id = ar.requester_id
        LEFT JOIN sections s ON s.id = u.section_id
+       LEFT JOIN travel_types tt ON tt.code = ar.type
       WHERE ar.id=$1`, [id]);
     return rows[0] ?? null;
 }
 export async function createAdvance(args) {
     const rows = await query(`INSERT INTO advance_requests
-      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, override_chain)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, override_chain, sequence_no)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, nextval('advance_request_seq'))
      RETURNING id`, [
         args.requesterId,
         args.createdById,

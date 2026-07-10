@@ -42,7 +42,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "requester_name", label: "Traveller Name", group: "Requester" },
     { key: "requester_employee_no", label: "Employee No.", group: "Requester" },
     { key: "traveller_type", label: "Traveller Type", group: "Requester" },
-    { key: "department", label: "Department", group: "Requester" },
+    { key: "department", label: "Division", group: "Requester" },
     { key: "status", label: "Status", group: "Requester" },
     { key: "type_label", label: "Type of Travel", group: "Trip" },
     { key: "destination", label: "Destination", group: "Trip" },
@@ -71,7 +71,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "claim_id", label: "Claim ID", group: "Claimant" },
     { key: "submitted_at", label: "Submitted", group: "Claimant" },
     { key: "claimant_name", label: "Claimant Name", group: "Claimant" },
-    { key: "department", label: "Department", group: "Claimant" },
+    { key: "department", label: "Division", group: "Claimant" },
     { key: "status", label: "Status", group: "Claimant" },
     { key: "month", label: "Month", group: "Trip" },
     { key: "duty_station", label: "Duty Station", group: "Trip" },
@@ -93,7 +93,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "request_id", label: "Request ID", group: "Requester" },
     { key: "created_at", label: "Created", group: "Requester" },
     { key: "requester_name", label: "Requester Name", group: "Requester" },
-    { key: "department", label: "Department", group: "Requester" },
+    { key: "department", label: "Division", group: "Requester" },
     { key: "status", label: "Status", group: "Requester" },
     { key: "location", label: "Location", group: "Accommodation" },
     { key: "provider", label: "Provider", group: "Accommodation" },
@@ -109,7 +109,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "employee_name", label: "Employee Name", group: "Employee" },
     { key: "employee_no", label: "Employee No", group: "Employee" },
     { key: "job_title", label: "Job Title", group: "Employee" },
-    { key: "section_name", label: "Section", group: "Employee" },
+    { key: "section_name", label: "Department", group: "Employee" },
     { key: "year", label: "Year", group: "Employee" },
     { key: "month", label: "Month", group: "Employee" },
     { key: "status", label: "Status", group: "Employee" },
@@ -120,7 +120,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "employee_name", label: "Employee Name", group: "Employee" },
     { key: "employee_no", label: "Employee No", group: "Employee" },
     { key: "job_title", label: "Job Title", group: "Employee" },
-    { key: "division", label: "Division", group: "Employee" },
+    { key: "division", label: "Company", group: "Employee" },
     { key: "year", label: "Year", group: "Employee" },
     { key: "month", label: "Month", group: "Employee" },
     { key: "status", label: "Status", group: "Employee" },
@@ -268,6 +268,8 @@ export async function resolveClaimPdfData(id: string): Promise<ResolvedPdfData> 
   );
   const claim = rows[0];
   if (!claim) throw new Error("Claim not found");
+  // A claim sticks with the currency it was requested in via its linked advance.
+  const currency = claim.currency || "LSL";
 
   const trips = await query<any>(
     `SELECT trip_date, from_place, to_place, km_travelled, breakfast, lunch, dinner, other_expenses, line_total
@@ -291,10 +293,10 @@ export async function resolveClaimPdfData(id: string): Promise<ResolvedPdfData> 
       vehicle_reg: claim.vehicle_reg || "",
       vehicle_type: claim.vehicle_type || "",
       engine_cc: claim.engine_cc || "",
-      vehicle_rate: claim.vehicle_rate != null ? formatMoney(claim.vehicle_rate) : "",
-      claim_total: formatMoney(claim.claim_total),
-      advance_amount: formatMoney(claim.advance_amount),
-      balance_amount: formatMoney(claim.balance_amount),
+      vehicle_rate: claim.vehicle_rate != null ? formatMoney(claim.vehicle_rate, currency) : "",
+      claim_total: formatMoney(claim.claim_total, currency),
+      advance_amount: formatMoney(claim.advance_amount, currency),
+      balance_amount: formatMoney(claim.balance_amount, currency),
       reason_for_overspend: claim.reason_for_overspend || "",
       settled_method: claim.settled_method || "",
       settled_reference: claim.settled_reference || "",
@@ -304,10 +306,10 @@ export async function resolveClaimPdfData(id: string): Promise<ResolvedPdfData> 
     tables: {
       claim_trips: trips.map((t) => ({
         trip_date: formatDate(t.trip_date), from_place: t.from_place || "", to_place: t.to_place || "",
-        km_travelled: String(t.km_travelled ?? "0"), breakfast: formatMoney(t.breakfast), lunch: formatMoney(t.lunch),
-        dinner: formatMoney(t.dinner), other_expenses: formatMoney(t.other_expenses), line_total: formatMoney(t.line_total)
+        km_travelled: String(t.km_travelled ?? "0"), breakfast: formatMoney(t.breakfast, currency), lunch: formatMoney(t.lunch, currency),
+        dinner: formatMoney(t.dinner, currency), other_expenses: formatMoney(t.other_expenses, currency), line_total: formatMoney(t.line_total, currency)
       })),
-      receipts: receipts.map((r) => ({ category: r.category || "", amount: formatMoney(r.amount), notes: r.notes || "" }))
+      receipts: receipts.map((r) => ({ category: r.category || "", amount: formatMoney(r.amount, currency), notes: r.notes || "" }))
     },
     approvalChain: chain.map((s) => ({ title: s.position_name, approverName: s.approver_name || "", decision: s.approved ? "Approved" : "Pending" })),
     meta: { id, requestType: "CLEARANCE_CLAIM", generatedAt: new Date().toISOString() }

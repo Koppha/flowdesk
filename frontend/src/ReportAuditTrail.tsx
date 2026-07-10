@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { formatMoney, travelTypeLabel } from "./constants";
+import { formatMoney, travelTypeLabel, TravelType } from "./constants";
 import { Activity, CheckCircle, Clock, Download, FileText, XCircle } from "lucide-react";
+
+function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
+  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
+}
 
 interface Props {
   advances: any[];
@@ -65,7 +69,7 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
           actor: a.requester_name || "Unknown",
           department: a.department || "—",
           requestType: "Advance · " + travelTypeLabel(a.type, travelTypes),
-          amount: formatMoney(a.approved_total || a.requested_total, "LSL"),
+          amount: formatMoney(a.approved_total || a.requested_total, travelTypeCurrency(a.type, travelTypes)),
           status: action,
           entityId: a.id,
         });
@@ -89,7 +93,7 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
           actor: c.requester_name || c.claimant_name || "Unknown",
           department: c.department || "—",
           requestType: "Clearance",
-          amount: formatMoney(c.claim_total || c.approved_total, "LSL"),
+          amount: formatMoney(c.claim_total || c.approved_total, c.currency ?? "LSL"),
           status: action,
           entityId: c.id,
         });
@@ -137,7 +141,7 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
   }), [entries]);
 
   function exportCsv() {
-    const h = ["Timestamp","Action","Actor","Department","Request Type","Amount"];
+    const h = ["Timestamp","Action","Actor","Division","Request Type","Amount"];
     const rows = filtered.map(e => [fmtDate(e.timestamp), ACTION_CONFIG[e.action]?.label || e.action, e.actor, e.department, e.requestType, e.amount]);
     const csv = [h, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
     const el = document.createElement("a");
@@ -189,14 +193,14 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
       <div className="ep-panel" style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 200px" }}>
-            <input placeholder="Search actor, department, type…" value={search} onChange={e => setSearch(e.target.value)} />
+            <input placeholder="Search actor, division, type…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <select className="ep-form-select" value={filterAction} onChange={e => setFilterAction(e.target.value)}>
             <option value="">All Actions</option>
             {Object.entries(ACTION_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <select className="ep-form-select" value={filterDept} onChange={e => setFilterDept(e.target.value)} style={{ minWidth: 160 }}>
-            <option value="">All Departments</option>
+            <option value="">All Divisions</option>
             {depts.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
           <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted)" }}>{filtered.length} events</span>

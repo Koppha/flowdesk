@@ -34,7 +34,7 @@ function assertRoleAssignmentAllowed(req: AuthedRequest, target: { department: s
   const department = String(req.user!.department || "").trim();
   const targetDepartment = String(target.department || "").trim();
   if (!department || !targetDepartment || department !== targetDepartment) {
-    throw forbidden("Managers and chief officers can only assign roles within their department");
+    throw forbidden("Managers and chief officers can only assign roles within their division");
   }
   if (nextRole === "ADMIN" || target.role === "ADMIN" || nextRole === "CEO" || target.role === "CEO") {
     throw forbidden("Only system administrators can assign or modify the ADMIN or CEO role");
@@ -44,7 +44,7 @@ function assertRoleAssignmentAllowed(req: AuthedRequest, target: { department: s
 const ProfileSchema = z
   .object({
     full_name: z.string().trim().min(1, "Full name is required"),
-    department: z.string().trim().min(1, "Department is required"),
+    department: z.string().trim().min(1, "Division is required"),
     division_id: z.string().uuid().nullable().optional(),
     section_id: z.string().uuid().nullable().optional(),
     team_id: z.string().uuid().nullable().optional(),
@@ -117,7 +117,7 @@ const UpdateUserSchema = z.object({
 });
 
 const UpdateUserDepartmentSchema = z.object({
-  department: z.string().trim().min(1, "Department is required"),
+  department: z.string().trim().min(1, "Division is required"),
   division_id: z.string().uuid().nullable().optional(),
   section_id: z.string().uuid().nullable().optional(),
   team_id: z.string().uuid().nullable().optional()
@@ -131,7 +131,7 @@ const CreateDelegationSchema = z.object({
 });
 
 const CreateDepartmentSchema = z.object({
-  name: z.string().trim().min(2, "Department name is required"),
+  name: z.string().trim().min(2, "Division name is required"),
   section_id: z.string().uuid().nullable().optional(),
   division_id: z.string().uuid().nullable().optional(),
   hod_user_id: z.string().uuid().nullable().optional(),
@@ -146,7 +146,7 @@ const CreateDepartmentSchema = z.object({
 });
 
 const UpdateDepartmentSchema = z.object({
-  name: z.string().trim().min(2, "Department name is required"),
+  name: z.string().trim().min(2, "Division name is required"),
   section_id: z.string().uuid().nullable().optional(),
   division_id: z.string().uuid().nullable().optional(),
   hod_user_id: z.string().uuid().nullable().optional(),
@@ -161,7 +161,7 @@ const UpdateDepartmentSchema = z.object({
 });
 
 const CreateSectionSchema = z.object({
-  name: z.string().trim().min(2, "Section name is required"),
+  name: z.string().trim().min(2, "Department name is required"),
   department_id: z.string().uuid().nullable().optional(),
   exco_user_id: z.string().uuid().nullable().optional(),
   excoUserId: z.string().uuid().nullable().optional(),
@@ -170,7 +170,7 @@ const CreateSectionSchema = z.object({
 });
 
 const UpdateSectionSchema = z.object({
-  name: z.string().trim().min(2, "Section name is required"),
+  name: z.string().trim().min(2, "Department name is required"),
   department_id: z.string().uuid().nullable().optional(),
   exco_user_id: z.string().uuid().nullable().optional(),
   excoUserId: z.string().uuid().nullable().optional(),
@@ -180,24 +180,24 @@ const UpdateSectionSchema = z.object({
 });
 
 const CreateDivisionSchema = z.object({
-  name: z.string().trim().min(2, "Division name is required"),
+  name: z.string().trim().min(2, "Company name is required"),
   description: z.string().trim().optional().nullable()
 });
 
 const UpdateDivisionSchema = z.object({
-  name: z.string().trim().min(2, "Division name is required"),
+  name: z.string().trim().min(2, "Company name is required"),
   description: z.string().trim().optional().nullable(),
   active: z.boolean().optional()
 });
 
 const CreateTeamSchema = z.object({
-  name: z.string().trim().min(2, "Team name is required"),
+  name: z.string().trim().min(2, "Section name is required"),
   section_id: z.string().uuid().nullable().optional(),
   leader_user_id: z.string().uuid().nullable().optional()
 });
 
 const UpdateTeamSchema = z.object({
-  name: z.string().trim().min(2, "Team name is required"),
+  name: z.string().trim().min(2, "Section name is required"),
   section_id: z.string().uuid().nullable().optional(),
   leader_user_id: z.string().uuid().nullable().optional(),
   active: z.boolean().optional()
@@ -503,7 +503,7 @@ authRouter.get(["/departments", "/groups"], async (_req: AuthedRequest, res, nex
 authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CreateDepartmentSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid division payload", parsed.error.flatten());
     return res.status(201).json(await createDepartmentGroup(parsed.data.name, {
       sectionId: parsed.data.section_id,
       divisionId: parsed.data.division_id,
@@ -522,7 +522,7 @@ authRouter.post(["/departments", "/groups"], requireRole(["ADMIN"]), async (req:
 authRouter.put(["/departments/:department", "/groups/:department"], requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateDepartmentSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid division payload", parsed.error.flatten());
     const updated = await updateDepartmentGroup(req.params.department, parsed.data.name, {
       ...(Object.prototype.hasOwnProperty.call(parsed.data, "section_id") ? { sectionId: parsed.data.section_id } : {}),
       ...(Object.prototype.hasOwnProperty.call(parsed.data, "division_id") ? { divisionId: parsed.data.division_id } : {}),
@@ -564,7 +564,7 @@ authRouter.get("/sections", async (_req: AuthedRequest, res, next) => {
 authRouter.post("/sections", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CreateSectionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
     return res.status(201).json(await createSectionGroup(
       parsed.data.name,
       parsed.data.exco_user_id ?? parsed.data.excoUserId,
@@ -580,7 +580,7 @@ authRouter.post("/sections", requireRole(["ADMIN"]), async (req: AuthedRequest, 
 authRouter.put("/sections/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateSectionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
     const excoUserId = Object.prototype.hasOwnProperty.call(parsed.data, "exco_user_id") || Object.prototype.hasOwnProperty.call(parsed.data, "excoUserId")
       ? parsed.data.exco_user_id ?? parsed.data.excoUserId ?? null
       : undefined;
@@ -600,7 +600,7 @@ const SectionOwnerSchema = z.object({
 authRouter.put("/sections/:id/owner", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = SectionOwnerSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid section owner payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid department owner payload", parsed.error.flatten());
     return res.json(await setSectionOwner(req.params.id, parsed.data.role, parsed.data.user_id));
   } catch (err) {
     return next(err);
@@ -646,7 +646,7 @@ authRouter.get("/divisions", async (_req: AuthedRequest, res, next) => {
 authRouter.post("/divisions", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CreateDivisionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid division payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid company payload", parsed.error.flatten());
     return res.status(201).json(await createDivision(parsed.data.name, parsed.data.description));
   } catch (err) {
     return next(err);
@@ -656,7 +656,7 @@ authRouter.post("/divisions", requireRole(["ADMIN"]), async (req: AuthedRequest,
 authRouter.put("/divisions/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateDivisionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid division payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid company payload", parsed.error.flatten());
     return res.json(await updateDivision(req.params.id, parsed.data.name, parsed.data.description, parsed.data.active));
   } catch (err) {
     return next(err);
@@ -687,7 +687,7 @@ authRouter.get("/teams", async (req: AuthedRequest, res, next) => {
 authRouter.post("/teams", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CreateTeamSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid team payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
     return res.status(201).json(await createTeam(parsed.data.name, parsed.data.section_id, parsed.data.leader_user_id));
   } catch (err) {
     return next(err);
@@ -697,7 +697,7 @@ authRouter.post("/teams", requireRole(["ADMIN"]), async (req: AuthedRequest, res
 authRouter.put("/teams/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateTeamSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid team payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid section payload", parsed.error.flatten());
     return res.json(await updateTeam(req.params.id, parsed.data.name, parsed.data.section_id, parsed.data.leader_user_id, parsed.data.active));
   } catch (err) {
     return next(err);
@@ -959,7 +959,7 @@ authRouter.get("/request-directory", async (req: AuthedRequest, res, next) => {
 authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateUserDepartmentSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid department payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid division payload", parsed.error.flatten());
     const department = await resolveDepartmentGroup(parsed.data.department);
     await ensureUserOrgColumns();
 
@@ -1075,7 +1075,7 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"])
     if (manager.role !== "CEO") {
       const delegateDept = String(delegate.department || "").trim();
       if (!managerDept || managerDept !== delegateDept) {
-        throw badRequest("Delegate must be in the same department as the manager");
+        throw badRequest("Delegate must be in the same division as the manager");
       }
     } else {
       managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
@@ -1340,7 +1340,7 @@ authRouter.post("/position-vacancies/:id/fill", requireRole(["ADMIN", "MANAGER",
       assigneeEmail: userEmail,
       positionLabel: vacancy.title || vacancy.role,
       groupLabel: vacancy.department || "the organisation",
-      groupType: "Department"
+      groupType: "Division"
     });
 
     return res.json({ ok: true, user_id: userId });
@@ -1652,7 +1652,7 @@ authRouter.delete("/manager-types/:id", requireRole(["ADMIN"]), async (req: Auth
 authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateUserRoleSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid department role payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Invalid division role payload", parsed.error.flatten());
 
     const department = await resolveDepartmentGroup(String(req.params.department || ""));
     assertRoleAssignmentAllowed(req, { department }, parsed.data.role);

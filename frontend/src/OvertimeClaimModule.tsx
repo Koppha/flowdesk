@@ -281,7 +281,7 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "var(--surface-soft)", borderBottom: "2px solid var(--border)" }}>
-                {["Employee","Division","Month","Year","Total Hrs","Status",""].map((h) => (
+                {["Employee","Company","Month","Year","Total Hrs","Status",""].map((h) => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>{h}</th>
                 ))}
               </tr>
@@ -357,7 +357,7 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
               <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} style={fieldStyle} placeholder="e.g. Backend Developer" />
             </div>
             <div>
-              <label style={labelStyle}>Division</label>
+              <label style={labelStyle}>Company</label>
               <input value={division} onChange={(e) => setDivision(e.target.value)} style={fieldStyle} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>

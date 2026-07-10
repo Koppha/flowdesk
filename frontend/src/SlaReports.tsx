@@ -343,7 +343,7 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
 
   function exportCsv(){
     if (!report) return;
-    const h=["Name","Type","Status","SLA","Department","Created","Submit Hrs","Approval Hrs","Payment Hrs","Total Hrs"];
+    const h=["Name","Type","Status","SLA","Division","Created","Submit Hrs","Approval Hrs","Payment Hrs","Total Hrs"];
     const rows=report.requests.map(r=>[r.requester_name??"",typeLabel(r.type),r.status,r.sla_status,r.department??"",fmtDate(r.created_at),r.submission_hours??"",r.approval_hours??"",r.payment_hours??"",r.total_hours??""]);
     const csv=[h,...rows].map(row=>row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
     const a=document.createElement("a");
@@ -391,7 +391,7 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
           </select>
           <select value={filterDept} onChange={e=>setFilterDept(e.target.value)}
             style={{ background:"white", border:"1px solid #e2e8f0", borderRadius:8, padding:"7px 12px", fontSize:13, color:"#374151", cursor:"pointer", minWidth:130 }}>
-            <option value="">All Departments</option>
+            <option value="">All Divisions</option>
             {Object.keys(report?.by_department||{}).sort().map(d=><option key={d} value={d}>{d}</option>)}
           </select>
           <button onClick={()=>void load()} disabled={loading}
@@ -499,7 +499,7 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
 
             {/* Dept donut */}
             <div style={C}>
-              <div style={{ fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:14 }}>SLA by Department</div>
+              <div style={{ fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:14 }}>SLA by Division</div>
               <div style={{ display:"flex",gap:12,alignItems:"center" }}>
                 <div style={{ flexShrink:0 }}>
                   <DonutChart segments={deptSegs} size={120} thickness={24}/>
@@ -517,7 +517,7 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
               <div style={{ marginTop:12,borderTop:"1px solid #f1f5f9",paddingTop:10 }}>
                 <table style={{ width:"100%",borderCollapse:"collapse",fontSize:12 }}>
                   <thead><tr>
-                    <th style={{...TH,paddingLeft:0,paddingBottom:6}}>Department</th>
+                    <th style={{...TH,paddingLeft:0,paddingBottom:6}}>Division</th>
                     <th style={{...TH,textAlign:"right",paddingBottom:6}}>Reqs</th>
                     <th style={{...TH,textAlign:"right",paddingBottom:6,color:"#059669"}}>Within SLA</th>
                     <th style={{...TH,textAlign:"right",paddingBottom:6,color:"#dc2626"}}>Breached</th>
@@ -556,7 +556,7 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
                   <div style={{ overflowX:"auto" }}>
                     <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
                       <thead style={{ background:"#f8fafc" }}>
-                        <tr>{["Employee","Department","Current Stage","SLA Due","Days Over","Status"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
+                        <tr>{["Employee","Division","Current Stage","SLA Due","Days Over","Status"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
                       </thead>
                       <tbody>
                         {(showAll?breached:breached.slice(0,5)).map(r=>{
@@ -588,13 +588,13 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
             </div>
 
             <div style={C}>
-              <div style={{ fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:14 }}>Department Performance</div>
+              <div style={{ fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:14 }}>Division Performance</div>
               {deptRows.length===0?(
-                <div style={{textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13}}>No department data</div>
+                <div style={{textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13}}>No division data</div>
               ):(
                 <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
                   <thead style={{background:"#f8fafc"}}>
-                    <tr>{["Department","Requests","Avg Time","Compliance"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
+                    <tr>{["Division","Requests","Avg Time","Compliance"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {deptRows.map(d=>(
@@ -620,7 +620,7 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
                 {[
                   {icon:<Shield size={18} style={{color:"#3b82f6"}}/>, bg:"#eff6ff", label:"SLA Compliance Rate",  val:compliance!=null?`${compliance}%`:"—"},
                   {icon:<Clock  size={18} style={{color:"#059669"}}/>, bg:"#d1fae5", label:"Average Approval Time", val:avgDays!=null?`${avgDays} Days`:"—"},
-                  {icon:<Star   size={18} style={{color:"#7c3aed"}}/>, bg:"#ede9fe", label:"Top Performing Dept",   val:topDept?`${topDept.name.split(/[\s,/]/)[0]} (${topDept.compliance}%)`:"—"},
+                  {icon:<Star   size={18} style={{color:"#7c3aed"}}/>, bg:"#ede9fe", label:"Top Performing Division",   val:topDept?`${topDept.name.split(/[\s,/]/)[0]} (${topDept.compliance}%)`:"—"},
                   {icon:<AlertTriangle size={18} style={{color:"#f59e0b"}}/>, bg:"#fef3c7", label:"Highest Breaches", val:worstDept?`${worstDept.name.split(/[\s,/]/)[0]} (${worstDept.breachPct}%)`:"—"},
                   {icon:<XCircle size={18} style={{color:"#dc2626"}}/>, bg:"#fee2e2", label:"Most Delayed Stage",   val:worstStep?worstStep.name:"—"},
                 ].map(({icon,bg,label,val})=>(
@@ -753,7 +753,7 @@ export default function SlaReports({ onBack, canViewClaimsSla = false }: { onBac
                   <div style={{ overflowX:"auto" }}>
                     <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
                       <thead style={{ background:"#f8fafc" }}>
-                        <tr>{["Claimant","Department","Approver","Step","Hours Late","Status"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
+                        <tr>{["Claimant","Division","Approver","Step","Hours Late","Status"].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
                       </thead>
                       <tbody>
                         {claimsReport.late_approvals.map((r,i)=>(

@@ -3,7 +3,7 @@ import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
-import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Clock3, CreditCard, FileText, Flag, Hash, Plane, RefreshCw, ShieldCheck, User, Users } from "lucide-react";
+import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, type LucideIcon, MapPin, Plane, RefreshCw, ShieldCheck, User, Users } from "lucide-react";
 
 type InboxItem =
   | {
@@ -96,11 +96,41 @@ function fmt(n: any) {
   return `M${x.toFixed(2)}`;
 }
 
+function RadioIcon(props: { checked: boolean }) {
+  return props.checked
+    ? <CircleDot size={16} className="review-radio-icon review-radio-icon-checked" aria-hidden />
+    : <Circle size={16} className="review-radio-icon" aria-hidden />;
+}
+
+// Label-over-value field row mirroring the grouped layout used on the
+// generated Travel Advance PDF (renderFieldCell in genericPdfRenderer.ts),
+// so the in-app review popup reads like a preview of that document.
+function ReviewField(props: { icon: LucideIcon; label: string; value: React.ReactNode }) {
+  const Icon = props.icon;
+  return (
+    <div className="review-field-item">
+      <div className="review-field-icon"><Icon size={16} /></div>
+      <div>
+        <div className="review-field-label">{props.label}</div>
+        <div className="review-field-value">{props.value}</div>
+      </div>
+    </div>
+  );
+}
+
+function fmtFileSize(bytes: any) {
+  const n = Number(bytes || 0);
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 // Formats a "user" (single object) or "user_multi" (array of assignee
 // objects, each either a person or a whole team) field value for display —
 // otherwise these render as a bare "[object Object]" via String(value).
 function fmtAssigneeValue(value: any): string {
-  const label = (a: any) => (a?.teamId ? `Team: ${a.teamName}` : a?.name || a?.email || "—");
+  const label = (a: any) => (a?.teamId ? `Section: ${a.teamName}` : a?.name || a?.email || "—");
   if (Array.isArray(value)) return value.map(label).join(", ") || "—";
   if (value && typeof value === "object") return label(value);
   return String(value ?? "—");
@@ -317,9 +347,30 @@ function actionTypeButtonLabel(code: string | null | undefined) {
   }
 }
 
-export default function Inbox(props: { onBack?: () => void }) {
+// Items at a "Capture" workflow step, or already captured by the current
+// user (capture_done) — pulled out into their own dedicated Capture Inbox
+// page instead of showing in the general Approval Inbox. Already-captured
+// items stay visible (rather than disappearing once the workflow moves on)
+// so the capturer can still find and download the form afterwards.
+export function isCaptureItem(item: any) {
+  return item.doc_type === "ADVANCE" && (item.current_step_action_type === "CAPTURE" || item.capture_done === true);
+}
+
+// Items awaiting or already through payment — surfaced in the dedicated
+// Payments page instead of the general Approval Inbox. Checked three ways
+// because advances reach this state via three different inbox code paths
+// (workflow-driven MARK_PAID step, legacy final-step approver, and admin's
+// by-status listing), only one of which sets current_step_action_type.
+export function isPaymentItem(item: any) {
+  return item.doc_type === "ADVANCE" &&
+    (item.current_step_action_type === "MARK_PAID" || item.is_final_step_approver === true ||
+     ["HR_OFFICER", "APPROVED"].includes(item.status));
+}
+
+export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capture" }) {
   const me = getUserFromToken();
   const role = me?.role || "UNKNOWN";
+  const mode = props.mode ?? "all";
 
   const [items, setItems] = useState<InboxItem[]>([]);
   const [myActions, setMyActions] = useState<MyInboxAction[]>([]);
@@ -329,7 +380,8 @@ export default function Inbox(props: { onBack?: () => void }) {
   async function refresh() {
     setError(null);
     const [inboxResp, myActionsResp] = await Promise.all([api.inbox(), api.myInboxActions(30)]);
-    setItems(inboxResp.items || []);
+    const all: InboxItem[] = inboxResp.items || [];
+    setItems(mode === "capture" ? all.filter(isCaptureItem) : all.filter((it) => !isCaptureItem(it) && !isPaymentItem(it)));
     setMyActions(myActionsResp.items || []);
   }
 
@@ -346,11 +398,14 @@ export default function Inbox(props: { onBack?: () => void }) {
     return g;
   }, [items]);
 
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-
-  function toggleGroup(key: string) {
-    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
+  const [activeGroupTab, setActiveGroupTab] = useState<string | null>(null);
+  const groupKeys = useMemo(() => Object.keys(grouped), [grouped]);
+  // Keep the active tab valid as data loads/changes — default to the first
+  // group, and fall back if the previously-active group empties out.
+  useEffect(() => {
+    if (activeGroupTab && groupKeys.includes(activeGroupTab)) return;
+    setActiveGroupTab(groupKeys[0] ?? null);
+  }, [groupKeys, activeGroupTab]);
 
   const metrics = useMemo(
     () => ({
@@ -413,10 +468,12 @@ export default function Inbox(props: { onBack?: () => void }) {
 
       <section className="inbox-hero">
         <div>
-          <div className="inbox-eyebrow">Approval Workflow</div>
-          <h2>Approval Inbox</h2>
+          <div className="inbox-eyebrow">{mode === "capture" ? "Capture Workflow" : "Approval Workflow"}</div>
+          <h2>{mode === "capture" ? "Capture Inbox" : "Approval Inbox"}</h2>
           <p>
-            Review finance requests waiting for {displayRoleLabel(role)} and keep a clear record of your recent decisions.
+            {mode === "capture"
+              ? "Requests waiting for you to capture details before they continue through the workflow."
+              : `Review finance requests waiting for ${displayRoleLabel(role)} and keep a clear record of your recent decisions.`}
           </p>
         </div>
         <div className="inbox-hero-actions">
@@ -436,7 +493,7 @@ export default function Inbox(props: { onBack?: () => void }) {
         <section className="inbox-panel inbox-queue-panel">
           <div className="inbox-panel-header">
             <div>
-              <h3>Approval Queue</h3>
+              <h3>{mode === "capture" ? "Capture Queue" : "Approval Queue"}</h3>
               <p>{items.length === 0 ? "No work is waiting right now." : "Grouped by document type and current stage."}</p>
             </div>
             <span className="inbox-count-chip">{items.length} total</span>
@@ -452,79 +509,91 @@ export default function Inbox(props: { onBack?: () => void }) {
               </button>
             </div>
           ) : (
-            <div className="inbox-group-stack">
-              {Object.entries(grouped).map(([docType, groupItems]) => {
-                const Icon = docTypeIcon(docType);
-                const collapsed = Boolean(collapsedGroups[docType]);
+            <>
+              <div className="ep-tabs">
+                {groupKeys.map((docType) => {
+                  const Icon = docTypeIcon(docType);
+                  return (
+                    <button
+                      key={docType}
+                      type="button"
+                      className={`ep-tab ${activeGroupTab === docType ? "active" : ""}`}
+                      onClick={() => setActiveGroupTab(docType)}
+                    >
+                      <Icon size={15} aria-hidden />
+                      {docTypeLabel(docType)}
+                      <span className="inbox-count-chip">{grouped[docType].length}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {activeGroupTab && grouped[activeGroupTab] && (() => {
+                const groupItems = grouped[activeGroupTab];
                 const totalAmount = groupItems.reduce((sum, it) => sum + itemAmountValue(it), 0);
                 return (
-                  <article key={docType} className={`inbox-group-card ${docTypeTone(docType)}`}>
-                    <button type="button" className="inbox-group-header inbox-group-toggle" onClick={() => toggleGroup(docType)} aria-expanded={!collapsed}>
+                  <article className={`inbox-group-card ${docTypeTone(activeGroupTab)}`}>
+                    <div className="inbox-group-header">
                       <div className="inbox-group-title">
-                        <span className="inbox-group-icon"><Icon size={18} aria-hidden /></span>
-                        <h4>{docTypeLabel(docType)}</h4>
-                        <span className="inbox-count-chip">{groupItems.length}</span>
+                        <h4>{docTypeLabel(activeGroupTab)}</h4>
                       </div>
                       <div className="inbox-group-badges">
                         <span className="inbox-badge inbox-badge-info">Awaiting: {groupItems.length}</span>
                         <span className="inbox-badge inbox-badge-total">Total Amount: {fmt(totalAmount)}</span>
-                        {collapsed ? <ChevronDown size={18} aria-hidden /> : <ChevronUp size={18} aria-hidden />}
                       </div>
-                    </button>
+                    </div>
 
-                    {!collapsed && (
-                      <div className="inbox-table-wrap">
-                        <table className="inbox-table">
-                          <thead>
-                            <tr>
-                              <th>Owner</th>
-                              <th>Status / Stage</th>
-                              <th>Amount</th>
-                              <th>Context</th>
-                              <th className="inbox-actions-header">Actions</th>
+                    <div className="inbox-table-wrap">
+                      <table className="inbox-table">
+                        <thead>
+                          <tr>
+                            <th>Owner</th>
+                            <th>Status / Stage</th>
+                            <th>Amount</th>
+                            <th>Context</th>
+                            <th className="inbox-actions-header">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupItems.map((it) => (
+                            <tr key={it.id}>
+                              <td>
+                                <div className="inbox-person-cell">
+                                  <span className="inbox-avatar-mini">{initials(itemOwner(it))}</span>
+                                  <span>
+                                    <strong>{itemOwner(it)}</strong>
+                                    <small>{docTypeLabel(it.doc_type)}</small>
+                                  </span>
+                                </div>
+                              </td>
+                              <td>
+                                <div className="inbox-stage-cell">
+                                  <span className={`status-pill ${statusTone(it.status)}`}>{itemStatusLabel(it)}</span>
+                                  <small>{itemStageProgress(it)}</small>
+                                </div>
+                              </td>
+                              <td className="inbox-money">{itemAmount(it)}</td>
+                              <td className="inbox-context">{itemContext(it)}</td>
+                              <td className="inbox-actions-cell">
+                                <button
+                                  type="button"
+                                  className="inbox-review-button"
+                                  onClick={() => setSelected(it)}
+                                  aria-label={`Review ${docTypeLabel(it.doc_type)} for ${itemOwner(it)}`}
+                                  title="Review"
+                                >
+                                  <RefreshCw size={15} aria-hidden="true" />
+                                </button>
+                              </td>
                             </tr>
-                          </thead>
-                          <tbody>
-                            {groupItems.map((it) => (
-                              <tr key={it.id}>
-                                <td>
-                                  <div className="inbox-person-cell">
-                                    <span className="inbox-avatar-mini">{initials(itemOwner(it))}</span>
-                                    <span>
-                                      <strong>{itemOwner(it)}</strong>
-                                      <small>{docTypeLabel(it.doc_type)}</small>
-                                    </span>
-                                  </div>
-                                </td>
-                                <td>
-                                  <div className="inbox-stage-cell">
-                                    <span className={`status-pill ${statusTone(it.status)}`}>{itemStatusLabel(it)}</span>
-                                    <small>{itemStageProgress(it)}</small>
-                                  </div>
-                                </td>
-                                <td className="inbox-money">{itemAmount(it)}</td>
-                                <td className="inbox-context">{itemContext(it)}</td>
-                                <td className="inbox-actions-cell">
-                                  <button
-                                    type="button"
-                                    className="inbox-review-button"
-                                    onClick={() => setSelected(it)}
-                                    aria-label={`Review ${docTypeLabel(it.doc_type)} for ${itemOwner(it)}`}
-                                    title="Review"
-                                  >
-                                    <RefreshCw size={15} aria-hidden="true" />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </article>
                 );
-              })}
-            </div>
+              })()}
+            </>
           )}
         </section>
 
@@ -561,6 +630,54 @@ export default function Inbox(props: { onBack?: () => void }) {
   );
 }
 
+function ReceiptRow(props: { claimId: string; receipt: any }) {
+  const { claimId, receipt } = props;
+  const [busy, setBusy] = useState(false);
+
+  async function handleView() {
+    try {
+      await openBlobInNewTab(() => api.claimReceiptFileBlob(claimId, receipt.id));
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to open receipt.");
+    }
+  }
+
+  async function handleDownload() {
+    setBusy(true);
+    try {
+      const blob = await api.claimReceiptFileBlob(claimId, receipt.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = receipt.file_name || "receipt";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to download receipt.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="review-receipt-row">
+      <span className="review-info-icon"><FileText size={16} aria-hidden /></span>
+      <div className="review-receipt-info">
+        <strong>{receipt.file_name || "Receipt"}</strong>
+        <small>{fmtFileSize(receipt.size_bytes)}</small>
+      </div>
+      <div className="review-receipt-actions">
+        <button type="button" className="button small-button button-subtle" onClick={handleView} title="View">
+          <Eye size={14} aria-hidden />
+        </button>
+        <button type="button" className="button small-button button-subtle" onClick={handleDownload} disabled={busy} title="Download">
+          <Download size={14} aria-hidden />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void; onDone: () => Promise<void> }) {
   const { item, role } = props;
   const me = getUserFromToken();
@@ -570,10 +687,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const [comments, setComments] = useState("");
   const [paidRef, setPaidRef] = useState("");
   const [settleRef, setSettleRef] = useState("");
-  const [settleMethod, setSettleMethod] = useState<"ECOCASH" | "BANK">("ECOCASH");
+  const [settleMethod, setSettleMethod] = useState<"PAYROLL" | "ECOCASH" | "BANK">("ECOCASH");
   const [financeDecision, setFinanceDecision] = useState<"ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE" | "">("");
   const [settlementAmount, setSettlementAmount] = useState("");
-  const [assigneeType, setAssigneeType] = useState<"INDIVIDUAL" | "TEAM">("INDIVIDUAL");
+  const [assigneeType, setAssigneeType] = useState<"INDIVIDUAL" | "TEAM">("TEAM");
   const [assigneeUserId, setAssigneeUserId] = useState("");
   const [assigneeGroupName, setAssigneeGroupName] = useState("");
   const [expectedPaymentDate, setExpectedPaymentDate] = useState("");
@@ -657,13 +774,55 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     return ranges;
   }, [isTravelAdvance, detail?.lines]);
 
+  // Mirrors resolveAdvancePdfData's field derivation (backend-v2/src/lib/pdf/pdfFieldCatalog.ts)
+  // so the on-screen summary shows the same fields the generated PDF does.
+  const pdfFormSummary = useMemo(() => {
+    if (item.doc_type !== "ADVANCE" || !detail) return null;
+    const lines: any[] = detail.lines || [];
+    const dates = lines.map((l) => l.line_date).filter(Boolean).sort();
+    const dateFrom = dates[0];
+    const dateTo = dates[dates.length - 1];
+    const durationDays = dateFrom && dateTo
+      ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1)
+      : null;
+    const locations = Array.from(new Set(lines.map((l) => l.location).filter(Boolean))) as string[];
+    const onBehalfOf = detail.created_by_id && detail.requester_id && detail.created_by_id !== detail.requester_id
+      ? detail.created_by_name || ""
+      : "";
+    return {
+      travellerName: detail.requester_name || "—",
+      employeeNo: detail.requester_employee_no || "—",
+      travellerType: detail.traveller_type || "—",
+      division: detail.department || "—",
+      onBehalfOf,
+      typeOfTravel: travelTypeLabel(detail.type, travelTypes),
+      destination: locations.join(", ") || "—",
+      departureDate: dateFrom ? fmtDate(dateFrom) : "—",
+      returnDate: dateTo ? fmtDate(dateTo) : "—",
+      travelDuration: durationDays ? `${durationDays} day${durationDays === 1 ? "" : "s"}` : "—",
+      purpose: detail.purpose || "—",
+      projectNumber: detail.project_number || "—",
+      requestedTotal: formatMoney(detail.requested_total, detail.travel_currency),
+      approvedTotal: formatMoney(detail.approved_total, detail.travel_currency),
+      paymentMethod: detail.payment_method || "—",
+      paymentAccount: detail.payment_account || ""
+    };
+  }, [item.doc_type, detail, travelTypes]);
+
   // Builds the approval-chain progress strip: which stages are done, the
   // currently-pending stage (a "stage" = the current step plus any later
   // steps flagged parallel_with_previous, which become pending together),
   // and everything still waiting.
   const approvalProgressStages = useMemo(() => {
-    const chain: any[] = Array.isArray(detail?.approval_chain) ? detail.approval_chain : [];
-    if (!chain.length) return [];
+    const fullChain: any[] = Array.isArray(detail?.approval_chain) ? detail.approval_chain : [];
+    if (!fullChain.length) return [];
+    // "Approval Progress" tracks approval, not post-approval processing —
+    // stop the strip after the last actual APPROVE step (a COUNTER_SIGN
+    // step doesn't count as the approval itself, only the step that follows
+    // it does). Steps like BOOK_ACC/CAPTURE/MARK_PAID happen after approval
+    // is already complete, so they're left out of this tracker.
+    const lastApproveIdx = fullChain.reduce((last, step, idx) => (step.action_type === "APPROVE" ? idx : last), -1);
+    const chain = lastApproveIdx === -1 ? fullChain : fullChain.slice(0, lastApproveIdx + 1);
     const stepOrder = detail?.workflow_step_order ?? 0;
     let pendingStart = stepOrder;
     while (pendingStart > 0 && chain[pendingStart]?.parallel_with_previous) pendingStart--;
@@ -684,7 +843,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       // Prefer the workflow's own step label (position_name) over the
       // approver's personal job title — the tracker should reflect what's
       // configured in the Workflow Builder, not whoever happens to be assigned.
-      const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.position_name || step.approver_title);
+      // Stored as "Team: X" for backward-compatible matching, but renders
+      // as "Section: X" per the org-hierarchy rename.
+      const label = isTeamGroup ? `Section: ${step.position_name.slice("Team: ".length)}` : (step.position_name || step.approver_title);
       const isDone = Boolean(step.approved) || stepOrder > idx;
       const isActive = !isDone && pendingStage.has(idx);
       return {
@@ -879,7 +1040,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   }
 
   async function handleMarkAdvancePaid() {
-    const ok = await act(() => api.markAdvancePaid(item.id, paidRef.trim()));
+    const ok = await act(() => api.markAdvancePaid(item.id));
     if (!ok) return;
     try {
       await openBlobInNewTab(() => api.advancePdf(item.id));
@@ -993,11 +1154,16 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   return (
     <div className="review-page">
       <div className="review-page-header">
-        <div>
-          <div className="review-page-eyebrow">Request Review</div>
-          <h2>{pageTitle}</h2>
-          <span className="review-page-ref">{referenceCode}</span>
-          <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <span className="review-page-icon">
+            {React.createElement(docTypeIcon(item.doc_type), { size: 20, "aria-hidden": true })}
+          </span>
+          <div>
+            <div className="review-page-eyebrow">Request Review</div>
+            <h2>{pageTitle}</h2>
+            <span className="review-page-ref">{referenceCode}</span>
+            <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {item.doc_type === "ACCOMMODATION" && (
@@ -1012,6 +1178,29 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               }}
             >
               Download PDF
+            </button>
+          )}
+          {item.doc_type === "ADVANCE" && (
+            <button
+              className="button small-button button-subtle"
+              disabled={busy}
+              onClick={async () => {
+                // At the user's own Capture step, "Save as PDF" doubles as the
+                // step's action button — it captures (advances the workflow to
+                // the next stage) and then opens the freshly generated PDF,
+                // same as the "Capture" action button further down the page.
+                if (isCaptureStep && canApproveAdvance) {
+                  handleApproveAdvance();
+                  return;
+                }
+                try {
+                  await openBlobInNewTab(() => api.advancePdf(item.id));
+                } catch (e: any) {
+                  void showNotice(e?.message || "Failed to generate PDF.");
+                }
+              }}
+            >
+              Save as PDF
             </button>
           )}
           <button className="button small-button button-subtle" onClick={props.onClose}>
@@ -1033,7 +1222,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
             </div>
             <div className="review-info-card">
               <span className="review-info-icon"><Building2 size={16} aria-hidden /></span>
-              <div><small>Department</small><strong>{detail.department || detail.requester_department || "—"}</strong></div>
+              <div><small>Division</small><strong>{detail.department || detail.requester_department || "—"}</strong></div>
             </div>
             <div className="review-info-card">
               <span className="review-info-icon"><Hash size={16} aria-hidden /></span>
@@ -1091,8 +1280,8 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                         <tr>
                           <th>Date</th>
                           <th>Location</th>
-                          <th>Petrol</th>
                           <th>Meals</th>
+                          <th>Transport</th>
                           <th>Other</th>
                           <th>Total</th>
                         </tr>
@@ -1102,13 +1291,24 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                           <tr key={t.id}>
                             <td>{fmtDate(t.trip_date)}</td>
                             <td>{t.to_place ? `${t.from_place || "—"} → ${t.to_place}` : (t.from_place || "—")}</td>
-                            <td>{fmt(t.petrol_allowance)}</td>
                             <td>{fmt(Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0))}</td>
+                            <td>{fmt(t.petrol_allowance)}</td>
                             <td>{fmt(t.other_expenses)}</td>
                             <td>{fmt(t.line_total)}</td>
                           </tr>
                         ))}
                       </tbody>
+                      {(detail.trips || []).length > 0 && (
+                        <tfoot>
+                          <tr className="review-table-totals-row">
+                            <td colSpan={2}>Total</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0), 0))}</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.petrol_allowance || 0), 0))}</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.other_expenses || 0), 0))}</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.line_total || 0), 0))}</td>
+                          </tr>
+                        </tfoot>
+                      )}
                     </table>
                   </div>
                 </div>
@@ -1212,8 +1412,18 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
 
               <div className="review-page-sidebar">
                 <div className="review-card">
-                  <div className="review-card-title">Receipts Submitted</div>
-                  <div className="review-empty-note" style={{ padding: 14 }}>No receipts attached to this clearance.</div>
+                  <div className="review-card-title">
+                    Receipts Submitted{(detail.receipts?.length ?? 0) > 0 ? ` (${detail.receipts.length})` : ""}
+                  </div>
+                  {(detail.receipts?.length ?? 0) === 0 ? (
+                    <div className="review-empty-note" style={{ padding: 14 }}>No receipts attached to this clearance.</div>
+                  ) : (
+                    <div className="review-receipt-list">
+                      {detail.receipts.map((r: any) => (
+                        <ReceiptRow key={r.id} claimId={item.id} receipt={r} />
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {canSettle && (
@@ -1232,9 +1442,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                               <input
                                 type="radio"
                                 name="finance-decision"
+                                className="review-radio-native"
                                 checked={financeDecision === value}
                                 onChange={() => setFinanceDecision(value)}
                               />
+                              <RadioIcon checked={financeDecision === value} />
                               {label}
                             </label>
                           ))}
@@ -1246,13 +1458,22 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                           <div className="review-card-title review-card-subtitle">Settlement Details</div>
                           <label>
                             <span>Settlement Method</span>
-                            <select className="review-control" value={settleMethod} onChange={(e) => setSettleMethod(e.target.value as any)}>
-                              <option value="ECOCASH">ECOCASH</option>
-                              <option value="BANK">BANK</option>
-                            </select>
+                            <div className="review-radio-row">
+                              {([
+                                ["PAYROLL", "Payroll"],
+                                ["ECOCASH", "ECOCASH"],
+                                ["BANK", "Bank Transfer"]
+                              ] as const).map(([value, label]) => (
+                                <label key={value} className="review-radio-option">
+                                  <input type="radio" name="settle-method" className="review-radio-native" checked={settleMethod === value} onChange={() => setSettleMethod(value)} />
+                                  <RadioIcon checked={settleMethod === value} />
+                                  {label}
+                                </label>
+                              ))}
+                            </div>
                           </label>
                           <label>
-                            <span>Settlement Reference</span>
+                            <span>Payment Reference</span>
                             <input className="review-control" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} />
                           </label>
                           <label>
@@ -1267,14 +1488,16 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                           </label>
                           <label>
                             <span>Assign To</span>
-                            <div className="review-radio-group">
+                            <div className="review-radio-row">
                               <label className="review-radio-option">
-                                <input type="radio" name="assignee-type" checked={assigneeType === "INDIVIDUAL"} onChange={() => setAssigneeType("INDIVIDUAL")} />
-                                Individual
+                                <input type="radio" name="assignee-type" className="review-radio-native" checked={assigneeType === "TEAM"} onChange={() => setAssigneeType("TEAM")} />
+                                <RadioIcon checked={assigneeType === "TEAM"} />
+                                Team
                               </label>
                               <label className="review-radio-option">
-                                <input type="radio" name="assignee-type" checked={assigneeType === "TEAM"} onChange={() => setAssigneeType("TEAM")} />
-                                Team
+                                <input type="radio" name="assignee-type" className="review-radio-native" checked={assigneeType === "INDIVIDUAL"} onChange={() => setAssigneeType("INDIVIDUAL")} />
+                                <RadioIcon checked={assigneeType === "INDIVIDUAL"} />
+                                Individual
                               </label>
                             </div>
                           </label>
@@ -1310,13 +1533,22 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     <div className="review-settlement-fields" style={{ padding: 14 }}>
                       <label>
                         <span>Settlement Method</span>
-                        <select className="review-control" value={settleMethod} onChange={(e) => setSettleMethod(e.target.value as any)}>
-                          <option value="ECOCASH">ECOCASH</option>
-                          <option value="BANK">BANK</option>
-                        </select>
+                        <div className="review-radio-row">
+                          {([
+                            ["PAYROLL", "Payroll"],
+                            ["ECOCASH", "ECOCASH"],
+                            ["BANK", "Bank Transfer"]
+                          ] as const).map(([value, label]) => (
+                            <label key={value} className="review-radio-option">
+                              <input type="radio" name="settle-method-mark" className="review-radio-native" checked={settleMethod === value} onChange={() => setSettleMethod(value)} />
+                              <RadioIcon checked={settleMethod === value} />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
                       </label>
                       <label>
-                        <span>Settlement Reference</span>
+                        <span>Payment Reference</span>
                         <input className="review-control" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} />
                       </label>
                     </div>
@@ -1330,14 +1562,35 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           >
             <div className="review-card">
               <div className="review-card-title">Summary</div>
-              {item.doc_type === "ADVANCE" ? (
-                <div className="review-detail-list">
-                  <div>Type: {travelTypeLabel(detail.type, travelTypes)}</div>
-                  <div>Purpose: {detail.purpose || "—"}</div>
-                  <div>Requested Total: {formatMoney(detail.requested_total, detail.travel_currency)}</div>
-                  <div>Approved Total: {formatMoney(detail.approved_total, detail.travel_currency)}</div>
-                  <div>Payment: {detail.payment_method} {detail.payment_account || ""}</div>
-                </div>
+              {item.doc_type === "ADVANCE" && pdfFormSummary ? (
+                <>
+                  <div className="review-card-title review-card-subtitle">Requester</div>
+                  <div className="review-field-grid">
+                    <ReviewField icon={User} label="Traveller Name" value={pdfFormSummary.travellerName} />
+                    <ReviewField icon={Hash} label="Employee No." value={pdfFormSummary.employeeNo} />
+                    <ReviewField icon={User} label="Traveller Type" value={pdfFormSummary.travellerType} />
+                    <ReviewField icon={Building2} label="Division" value={pdfFormSummary.division} />
+                    {pdfFormSummary.onBehalfOf && <ReviewField icon={User} label="On Behalf Of" value={pdfFormSummary.onBehalfOf} />}
+                  </div>
+
+                  <div className="review-card-title review-card-subtitle">Trip</div>
+                  <div className="review-field-grid">
+                    <ReviewField icon={Plane} label="Type of Travel" value={pdfFormSummary.typeOfTravel} />
+                    <ReviewField icon={MapPin} label="Destination" value={pdfFormSummary.destination} />
+                    <ReviewField icon={Calendar} label="Departure Date" value={pdfFormSummary.departureDate} />
+                    <ReviewField icon={Calendar} label="Return Date" value={pdfFormSummary.returnDate} />
+                    <ReviewField icon={Clock3} label="Travel Duration" value={pdfFormSummary.travelDuration} />
+                    <ReviewField icon={FileText} label="Purpose" value={pdfFormSummary.purpose} />
+                    <ReviewField icon={Hash} label="Project Number" value={pdfFormSummary.projectNumber} />
+                  </div>
+
+                  <div className="review-card-title review-card-subtitle">Payment</div>
+                  <div className="review-field-grid">
+                    <ReviewField icon={CreditCard} label="Requested Total" value={pdfFormSummary.requestedTotal} />
+                    <ReviewField icon={CreditCard} label="Approved Total" value={pdfFormSummary.approvedTotal} />
+                    <ReviewField icon={CreditCard} label="Payment" value={`${pdfFormSummary.paymentMethod} ${pdfFormSummary.paymentAccount}`} />
+                  </div>
+                </>
               ) : (
                 <div className="review-detail-list">
                   <div>Employee: {detail.requester_name || "—"}</div>
@@ -1562,18 +1815,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 </label>
 
                 <div className="review-secondary-actions">
-                  {item.doc_type === "ADVANCE" && canMarkPaid && (
-                    <label>
-                      <span>Payment Reference</span>
-                      <input
-                        className="review-control"
-                        value={paidRef}
-                        onChange={(e) => setPaidRef(e.target.value)}
-                        placeholder="EcoCash txn / voucher"
-                      />
-                    </label>
-                  )}
-
                   {item.doc_type === "ACCOMMODATION" && canMarkAccommodationPaid && (
                     <label>
                       <span>Payment Reference</span>
@@ -1614,7 +1855,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 )}
 
                 {canMarkPaid && (
-                  <button className="button small-button button-primary" disabled={busy || !paidRef.trim()} onClick={handleMarkAdvancePaid}>
+                  <button className="button small-button button-primary" disabled={busy} onClick={handleMarkAdvancePaid}>
                     Mark Advance Paid
                   </button>
                 )}

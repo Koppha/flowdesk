@@ -374,7 +374,7 @@ export default function UserManagement() {
         </select>
         {divisionNames.length > 1 && (
           <select value={divFilter} onChange={e => setDivFilter(e.target.value)} style={{ ...fieldStyle, width: "auto", minWidth: 150 }}>
-            <option value="ALL">All Divisions</option>
+            <option value="ALL">All Companies</option>
             {divisionNames.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
         )}

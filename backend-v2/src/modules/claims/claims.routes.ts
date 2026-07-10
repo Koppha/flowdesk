@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import fs from "fs";
+import path from "path";
 import multer from "multer";
 import { AuthedRequest, isFinanceDept, requireAuth, requireFinance, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
@@ -45,8 +46,8 @@ const upload = multer({ storage });
 
 export async function getClaimNotificationContext(claimId: string) {
   return (
-    await query<{ full_name: string | null; email: string | null; department: string | null; claim_total: string; status: ClaimStatus; claim_type: string | null }>(
-      `SELECT u.full_name, u.email, u.department, c.claim_total, c.status, ar.type AS claim_type
+    await query<{ full_name: string | null; email: string | null; department: string | null; claim_total: string; status: ClaimStatus; claim_type: string | null; currency: string | null }>(
+      `SELECT u.full_name, u.email, u.department, c.claim_total, c.status, ar.type AS claim_type, c.currency
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
          LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
@@ -57,10 +58,11 @@ export async function getClaimNotificationContext(claimId: string) {
 }
 
 async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string, excludeClaimId?: string) {
-  const adv = (await query<{ id: string; requester_id: string; type: string; status: string; approved_total: string }>(
-    `SELECT id, requester_id, type, status, approved_total
-       FROM advance_requests
-      WHERE id=$1`,
+  const adv = (await query<{ id: string; requester_id: string; type: string; status: string; approved_total: string; currency: string | null }>(
+    `SELECT ar.id, ar.requester_id, ar.type, ar.status, ar.approved_total, tt.currency
+       FROM advance_requests ar
+       LEFT JOIN travel_types tt ON tt.code = ar.type
+      WHERE ar.id=$1`,
     [linkedAdvanceId]
   ))[0];
 
@@ -76,7 +78,9 @@ async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string, exc
   );
   if (existing.length > 0) throw badRequest("A clearance has already been submitted for this advance");
 
-  return { approvedTotal: Number(adv.approved_total) };
+  // A clearance always sticks with the currency the linked advance was
+  // requested in — never a separate/default currency.
+  return { approvedTotal: Number(adv.approved_total), currency: adv.currency || "LSL" };
 }
 
 async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: string) {
@@ -196,15 +200,17 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
 
     let advanceAmount = 0;
     let claimTotal = 0;
+    let currency: string | null = null;
     if (parsed.data.linked_advance_id) {
       const linkedAdvance = await getLinkedAdvance(parsed.data.linked_advance_id, req.user!.userId);
       advanceAmount = linkedAdvance.approvedTotal;
+      currency = linkedAdvance.currency;
     }
 
     const rows = await query<{ id: string }>(
       `INSERT INTO clearance_claims
-        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount, settlement_method_requested, settlement_ecocash_number, settlement_bank_name, settlement_bank_account_number, settlement_bank_branch, reason_for_overspend)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount, currency, settlement_method_requested, settlement_ecocash_number, settlement_bank_name, settlement_bank_account_number, settlement_bank_branch, reason_for_overspend)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING id`,
       [
         req.user!.userId,
@@ -219,6 +225,7 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
         advanceAmount,
         claimTotal,
         Number((advanceAmount - claimTotal).toFixed(2)),
+        currency,
         parsed.data.settlement_method_requested ?? null,
         parsed.data.settlement_ecocash_number ?? null,
         parsed.data.settlement_bank_name ?? null,
@@ -257,10 +264,50 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     }
 
     const trips = await query<any>(`SELECT * FROM claim_trips WHERE clearance_claim_id=$1 ORDER BY trip_date`, [req.params.id]);
-    const receipts = await query<any>(`SELECT * FROM receipts WHERE clearance_claim_id=$1 ORDER BY uploaded_at`, [req.params.id]);
+    const receiptRows = await query<any>(`SELECT * FROM receipts WHERE clearance_claim_id=$1 ORDER BY uploaded_at`, [req.params.id]);
+    const receipts = receiptRows.map((r) => {
+      let size_bytes: number | null = null;
+      try {
+        size_bytes = fs.statSync(r.file_path).size;
+      } catch {
+        size_bytes = null;
+      }
+      return { ...r, file_name: path.basename(r.file_path).replace(/^\d+-/, ""), size_bytes };
+    });
     const isOwner = claim.claimant_id === req.user!.userId;
     const can_view_pdf = await canAccessPdf({ requestType: "CLEARANCE_CLAIM", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" });
     return res.json({ ...claim, trips, receipts, can_view_pdf });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
+    if (!claim) throw notFound();
+    const managerChainIds = await getManagerChainIds(claim.claimant_id);
+    if (!(await canViewClaim({ role: req.user!.role, department: req.user!.department, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+      throw forbidden();
+    }
+    const receipt = (await query<any>(`SELECT * FROM receipts WHERE id=$1 AND clearance_claim_id=$2`, [req.params.receiptId, req.params.id]))[0];
+    if (!receipt) throw notFound();
+    if (!fs.existsSync(receipt.file_path)) throw notFound();
+
+    const ext = path.extname(receipt.file_path).toLowerCase();
+    const contentTypes: Record<string, string> = {
+      ".pdf": "application/pdf",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".doc": "application/msword",
+      ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    };
+    const fileName = path.basename(receipt.file_path).replace(/^\d+-/, "");
+    const disposition = req.query.download === "1" ? "attachment" : "inline";
+    res.setHeader("Content-Type", contentTypes[ext] || "application/octet-stream");
+    res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
+    fs.createReadStream(receipt.file_path).pipe(res);
   } catch (err) {
     return next(err);
   }
@@ -330,9 +377,11 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
 
     let advanceAmount = 0;
     let claimTotal = 0;
+    let currency: string | null = null;
     if (parsed.data.linked_advance_id) {
       const linkedAdvance = await getLinkedAdvance(parsed.data.linked_advance_id, req.user!.userId, req.params.id);
       advanceAmount = linkedAdvance.approvedTotal;
+      currency = linkedAdvance.currency;
       const synced = await syncClaimTripsFromAdvance(req.params.id, parsed.data.linked_advance_id);
       claimTotal = synced.claimTotal;
     } else {
@@ -353,12 +402,13 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
               linked_advance_id=$9,
               advance_amount=$10,
               balance_amount=$11,
-              settlement_method_requested=$12,
-              settlement_ecocash_number=$13,
-              settlement_bank_name=$14,
-              settlement_bank_account_number=$15,
-              settlement_bank_branch=$16,
-              reason_for_overspend=$17,
+              currency=$12,
+              settlement_method_requested=$13,
+              settlement_ecocash_number=$14,
+              settlement_bank_name=$15,
+              settlement_bank_account_number=$16,
+              settlement_bank_branch=$17,
+              reason_for_overspend=$18,
               updated_at=now()
         WHERE id=$1`,
       [
@@ -373,6 +423,7 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         parsed.data.linked_advance_id ?? null,
         advanceAmount,
         balanceAmount,
+        currency,
         parsed.data.settlement_method_requested ?? null,
         parsed.data.settlement_ecocash_number ?? null,
         parsed.data.settlement_bank_name ?? null,
@@ -569,10 +620,20 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     }
 
     // Resolve the workflow for clearance requests in the claimant's department/section.
+    // A clearance always sticks with the linked advance's travel type — passed
+    // through as advanceSubType so a workflow scoped to a specific travel type
+    // (e.g. an "International Clearance" workflow for TRAVEL_TO_EUROPE/USA/etc.)
+    // outranks the generic "TRAVEL" clearance bucket, mirroring how advance
+    // requests themselves are routed.
+    const linkedAdvance = (await query<{ type: string }>(
+      `SELECT type FROM advance_requests WHERE id = $1`,
+      [claim.linked_advance_id]
+    ))[0];
     const workflowResult = await resolveWorkflowChain({
       requestType: "CLEARANCE_REQUEST",
       department: claim.claimant_department || "",
-      section: claim.claimant_section || ""
+      section: claim.claimant_section || "",
+      advanceSubType: linkedAdvance?.type
     });
 
     let status: ClaimStatus = "SUBMITTED";
@@ -599,6 +660,7 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
         claimType: notificationContext.claim_type
       });
     }
@@ -642,6 +704,7 @@ export async function performClaimApprove(
       claimantEmail: notificationContext.email,
       department: notificationContext.department,
       claimTotal: Number(notificationContext.claim_total),
+      currency: notificationContext.currency,
       claimType: notificationContext.claim_type,
       nextApprover: result.nextApprover,
       stepOrder: result.newStepOrder
@@ -698,6 +761,7 @@ export async function performClaimReject(
       claimantEmail: notificationContext.email,
       department: notificationContext.department,
       claimTotal: Number(notificationContext.claim_total),
+      currency: notificationContext.currency,
       claimType: notificationContext.claim_type
     });
   }
@@ -772,6 +836,7 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
         claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
         claimType: notificationContext.claim_type
       });
     }
@@ -785,7 +850,7 @@ const FinanceDecisionSchema = z.object({
   finance_decision: z.enum(["ACCEPTED", "REFUND_FROM_EMPLOYEE", "REIMBURSE_EMPLOYEE"]),
   finance_comments: z.string().trim().min(1, "Finance comments are required"),
   settlement_amount: z.number().optional(),
-  settled_method: z.enum(["ECOCASH", "BANK", "CASH", "OTHER"]).optional(),
+  settled_method: z.enum(["PAYROLL", "ECOCASH", "BANK", "CASH", "OTHER"]).optional(),
   settled_reference: z.string().optional(),
   assignee_user_id: z.string().uuid().optional(),
   assignee_group_name: z.string().optional(),
@@ -834,6 +899,7 @@ claimsRouter.post("/:id/settle", requireFinance, async (req: AuthedRequest, res,
         claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
         claimType: notificationContext.claim_type
       });
     }
@@ -848,7 +914,7 @@ claimsRouter.post("/:id/settle", requireFinance, async (req: AuthedRequest, res,
 claimsRouter.post("/:id/mark-settled", requireFinance, async (req: AuthedRequest, res, next) => {
   try {
     const body = z.object({
-      settled_method: z.enum(["ECOCASH", "BANK", "CASH", "OTHER"]).optional(),
+      settled_method: z.enum(["PAYROLL", "ECOCASH", "BANK", "CASH", "OTHER"]).optional(),
       settled_reference: z.string().optional()
     }).safeParse(req.body);
     if (!body.success) throw badRequest("Invalid payload", body.error.flatten());
@@ -877,6 +943,7 @@ claimsRouter.post("/:id/mark-settled", requireFinance, async (req: AuthedRequest
         claimantEmail: notificationContext.email,
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
         claimType: notificationContext.claim_type
       });
     }

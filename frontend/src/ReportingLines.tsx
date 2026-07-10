@@ -139,7 +139,7 @@ function avatarColor(name: string | null | undefined) {
 function roleLabel(role: string) {
   const map: Record<string, string> = {
     EMPLOYEE: "Employee",
-    HOD: "Head of Department",
+    HOD: "Head of Division",
     MANAGER: "Manager",
     HR_MANAGER: "HR Manager",
     FINANCE: "Finance",
@@ -667,7 +667,7 @@ export default function ReportingLines() {
             <Search size={14} className="rl-tree-search-icon" />
             <input
               type="text"
-              placeholder="Search departments…"
+              placeholder="Search divisions…"
               value={treeSearch}
               onChange={(e) => setTreeSearch(e.target.value)}
               className="rl-tree-search-input"
@@ -682,7 +682,7 @@ export default function ReportingLines() {
                 onChange={(e) => setDivisionFilter(e.target.value)}
                 style={{ width: "100%", fontSize: 12, padding: "4px 6px", border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", color: "var(--text)" }}
               >
-                <option value="ALL">All Divisions</option>
+                <option value="ALL">All Companies</option>
                 {divisionNames.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
             </div>
@@ -697,7 +697,7 @@ export default function ReportingLines() {
 
             {[...filteredDivisionMap.entries()].map(([divKey, depts]) => {
               const divOpen = treeSearch.trim() ? true : expanded.has(`div-${divKey}`);
-              const label = divKey === "__none__" ? "Unassigned Division" : divKey;
+              const label = divKey === "__none__" ? "Unassigned Company" : divKey;
               return (
                 <div key={divKey} className="rl-tree-section">
                   <button
@@ -800,7 +800,7 @@ export default function ReportingLines() {
           <div className="rl-right-head">
             <div className="rl-right-head-left">
               <span className="rl-panel-title">
-                {selectedLabel || "All Departments"}
+                {selectedLabel || "All Divisions"}
               </span>
               {selectedLabel && selectedLabel !== selectedDept && (
                 <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: 4 }}>{selectedDept}</span>
@@ -874,7 +874,7 @@ export default function ReportingLines() {
             ) : filteredEmployees.length === 0 ? (
               <div className="rl-empty">
                 <GitBranch size={32} style={{ opacity: 0.3 }} />
-                <p>{selectedDept ? "No employees found in this department." : "Select a department from the tree or search to view employees."}</p>
+                <p>{selectedDept ? "No employees found in this division." : "Select a division from the tree or search to view employees."}</p>
               </div>
             ) : (
               <table className="rl-table">
@@ -883,7 +883,7 @@ export default function ReportingLines() {
                     <th>Employee</th>
                     <th>Position</th>
                     <th>Reports To</th>
-                    <th>Department</th>
+                    <th>Division</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
@@ -1052,7 +1052,7 @@ export default function ReportingLines() {
                 {treeRoots.length === 0 && (
                   <div className="rl-empty" style={{ padding: "40px 0" }}>
                     <GitBranch size={28} style={{ opacity: 0.25 }} />
-                    <p>No reporting lines configured for {selectedTeamId ? "this team" : selectedSectionId ? "this section" : "this department"} yet.<br />Use <strong>Auto Generate Lines</strong> or assign managers manually.</p>
+                    <p>No reporting lines configured for {selectedTeamId ? "this section" : selectedSectionId ? "this department" : "this division"} yet.<br />Use <strong>Auto Generate Lines</strong> or assign managers manually.</p>
                   </div>
                 )}
               </>
@@ -1142,7 +1142,7 @@ export default function ReportingLines() {
                               </optgroup>
                             )}
                             {teamMembers.length > 0 && (
-                              <optgroup label={`${selectedLabel || editRow.department || "Team"} Members`}>
+                              <optgroup label={`${selectedLabel || editRow.department || "Section"} Members`}>
                                 {teamMembers.map(u => (
                                   <option key={u.id} value={u.id}>
                                     {u.full_name || u.email} ({u.title || roleLabel(u.role)})
@@ -1165,7 +1165,7 @@ export default function ReportingLines() {
                           <strong>{mgr.title || roleLabel(mgr.role)}</strong>
                         </div>
                         <div className="rl-info-row">
-                          <span>Department</span>
+                          <span>Division</span>
                           <strong>{mgr.department || "—"}</strong>
                         </div>
                       </div>

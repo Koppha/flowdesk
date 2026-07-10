@@ -146,7 +146,7 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
         </div>
         <div className="flow-stat-card flow-stat-amber">
           <span className="flow-stat-icon"><Clock3 size={22} aria-hidden /></span>
-          <div className="flow-stat-body"><strong>{stats.awaitingCto}</strong><span>Awaiting CTO</span><small>Pending CTO</small></div>
+          <div className="flow-stat-body"><strong>{stats.awaitingCto}</strong><span>Awaiting Approval</span><small>Pending approval</small></div>
         </div>
         <div className="flow-stat-card flow-stat-rose">
           <span className="flow-stat-icon"><AlertTriangle size={22} aria-hidden /></span>
@@ -214,9 +214,9 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
                     <td><strong>{claimNumber(c)}</strong></td>
                     <td><span className={`status-pill ${statusTone(c.status)}`}>{statusLabel(c.status)}</span></td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{clearanceStageLabel(c)}</td>
-                    <td>{formatMoney(c.claim_total, "LSL")}</td>
-                    <td>{formatMoney(c.advance_amount, "LSL")}</td>
-                    <td>{formatMoney(c.balance_amount, "LSL")}</td>
+                    <td>{formatMoney(c.claim_total, c.currency)}</td>
+                    <td>{formatMoney(c.advance_amount, c.currency)}</td>
+                    <td>{formatMoney(c.balance_amount, c.currency)}</td>
                     <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(c.settled_at)}</td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>

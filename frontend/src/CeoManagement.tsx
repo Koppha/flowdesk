@@ -380,7 +380,7 @@ export default function CeoManagement() {
                     <div style={{ display: "flex", gap: 20, marginTop: 8, flexWrap: "wrap" }}>
                       {[
                         ["Employee No", u.employee_no || "—"],
-                        ["Department", u.department || "—"],
+                        ["Division", u.department || "—"],
                         ["Employment", u.employment_type || "Permanent"],
                       ].map(([k, v]) => (
                         <div key={k}>
@@ -428,10 +428,10 @@ export default function CeoManagement() {
           <div className="ceo-info-grid">
             {[
               { icon: <Crown size={20} />, role: "CEO", desc: "Top of the organization. No manager assigned. All EXCO members report here.", color: "#6d28d9" },
-              { icon: <Star size={20} />, role: "EXCO Member", desc: "Section heads. Report to the CEO. Own one or more departments/sections.", color: "#7c3aed" },
-              { icon: <Shield size={20} />, role: "HOD (Head of Dept)", desc: "Department heads. Report to their EXCO member.", color: "#1d4ed8" },
+              { icon: <Star size={20} />, role: "EXCO Member", desc: "Department heads. Report to the CEO. Own one or more divisions/departments.", color: "#7c3aed" },
+              { icon: <Shield size={20} />, role: "HOD (Head of Div)", desc: "Division heads. Report to their EXCO member.", color: "#1d4ed8" },
               { icon: <UserCheck size={20} />, role: "Manager", desc: "Report to HOD if assigned, otherwise to EXCO.", color: "#166534" },
-              { icon: <Users size={20} />, role: "Employees", desc: "Report to their department manager.", color: "#b45309" },
+              { icon: <Users size={20} />, role: "Employees", desc: "Report to their division manager.", color: "#b45309" },
             ].map((item) => (
               <div key={item.role} className="ceo-info-item">
                 <span className="ceo-info-icon" style={{ background: item.color + "18", color: item.color }}>{item.icon}</span>
@@ -494,7 +494,7 @@ export default function CeoManagement() {
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{u.full_name || u.email}</div>
                         <div style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                          {u.title || u.role} · {u.department || "No department"} · {u.email}
+                          {u.title || u.role} · {u.department || "No division"} · {u.email}
                         </div>
                       </div>
                       <span className={`status-pill ${u.role === "EXCO" ? "status-pill-info" : "status-pill-success"}`}>{u.role}</span>
@@ -614,7 +614,7 @@ export default function CeoManagement() {
                   <select className="ep-form-select" value={reassignToRole} onChange={(e) => setReassignToRole(e.target.value)}>
                     <option value="EXCO">EXCO Member</option>
                     <option value="MANAGER">Manager</option>
-                    <option value="HOD">Head of Department</option>
+                    <option value="HOD">Head of Division</option>
                     <option value="EMPLOYEE">Employee</option>
                   </select>
                 </div>

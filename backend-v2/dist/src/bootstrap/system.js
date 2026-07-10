@@ -20,6 +20,7 @@ export async function bootstrapSystem() {
     await ensurePositionVacanciesSchema();
     await ensurePdfSchema();
     await ensureClearanceSlaSchema();
+    await ensureAdvanceRecoverySchema();
     await ensureAdminAccount();
 }
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;
@@ -68,6 +69,15 @@ async function ensureUserSchema() {
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_account_number text`);
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_branch text`);
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS reason_for_overspend text`);
+    // Claims have no currency of their own — they must stick with the currency
+    // the linked advance was requested in (resolved from travel_types via
+    // advance_requests.type), never a hardcoded default.
+    await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS currency text`);
+    await query(`UPDATE clearance_claims cc
+        SET currency = tt.currency
+       FROM advance_requests ar
+       JOIN travel_types tt ON tt.code = ar.type
+      WHERE cc.linked_advance_id = ar.id AND cc.currency IS NULL`);
     await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
@@ -136,6 +146,14 @@ async function ensureUserSchema() {
     await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES workflows(id)`);
     await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_step_order int`);
     await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS approval_chain jsonb`);
+    // Gap-free counter used only for the "Save as PDF" filename (Employee - Employee No -
+    // Travel Advance Request - 001); starts counting from whenever this shipped rather than
+    // backfilling historical requests, which keep the older uuid-derived reference number.
+    await query(`CREATE SEQUENCE IF NOT EXISTS advance_request_seq`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS sequence_no integer`);
+    // Gap-free counter for auto-generated payment references (PAY-2026-0054);
+    // advance_requests.paid_reference already exists, no new column needed.
+    await query(`CREATE SEQUENCE IF NOT EXISTS payment_ref_seq`);
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES workflows(id)`);
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS workflow_step_order int`);
     await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS approval_chain jsonb`);
@@ -525,7 +543,7 @@ async function seedChangeRequestType() {
     const hasFields = await query(`SELECT id FROM request_type_fields WHERE request_type_id = $1 LIMIT 1`, [typeId]);
     if (!hasFields[0]) {
         const fields = [
-            { key: "department", label: "Department", type: "text", required: true, placeholder: "Requesting department" },
+            { key: "department", label: "Division", type: "text", required: true, placeholder: "Requesting division" },
             { key: "date_requested", label: "Date Requested", type: "date", required: true },
             { key: "change_assignee", label: "Change Assignee", type: "user_multi" },
             { key: "change_type_hardware", label: "Change Type: Hardware", type: "checkbox" },
@@ -690,8 +708,8 @@ async function seedAttendanceRegisterType() {
     // idempotently per field_key so existing installs pick up field changes
     // (e.g. Section/Team replaced by Department) without losing submitted data.
     const fields = [
-        { key: "division", label: "Division", type: "text", required: true },
-        { key: "department", label: "Department", type: "text", required: true },
+        { key: "division", label: "Company", type: "text", required: true },
+        { key: "department", label: "Division", type: "text", required: true },
         { key: "month", label: "Month", type: "date", required: true, placeholder: "Pick any date within the target month" },
         {
             key: "attendance_grid",
@@ -755,7 +773,7 @@ async function seedComputerRequestType() {
         ])]);
     const fields = [
         { key: "position", label: "Position", type: "text", required: true },
-        { key: "department", label: "Department", type: "text", required: true },
+        { key: "department", label: "Division", type: "text", required: true },
         { key: "phone_no", label: "Phone No.", type: "text" },
         { key: "emp_no", label: "Emp No.", type: "text", required: true },
         { key: "computer_type", label: "Type of Computer", type: "select", required: true, options: [
@@ -1175,4 +1193,32 @@ async function ensureClearanceSlaSchema() {
     if (!hasAny[0]) {
         await query(`INSERT INTO clearance_sla_thresholds (position_type_code, sla_days) VALUES ('*', 3)`);
     }
+}
+// Advance clearance recovery policy: a single admin-configurable window
+// (days before a paid, unclaimed advance is flagged "Overdue") and recovery
+// period (months over which an advance confirmed as never-cleared would be
+// recovered, if Finance/HR/Admin choose to act on the calculated figure —
+// this system only calculates and displays the amount, it never touches
+// payroll or auto-deducts anything).
+async function ensureAdvanceRecoverySchema() {
+    await query(`
+    CREATE TABLE IF NOT EXISTS advance_recovery_settings (
+      id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      clearance_duration_days integer   NOT NULL DEFAULT 7,
+      recovery_months       integer     NOT NULL DEFAULT 3,
+      updated_by_id         uuid        REFERENCES users(id),
+      updated_at            timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+    const hasAny = await query(`SELECT id FROM advance_recovery_settings LIMIT 1`);
+    if (!hasAny[0]) {
+        await query(`INSERT INTO advance_recovery_settings (clearance_duration_days, recovery_months) VALUES (7, 3)`);
+    }
+    // Set only once an admin/finance user explicitly confirms a paid advance
+    // will never be cleared — not automatically, and not just because it's
+    // overdue (an employee could still clear it late).
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS not_cleared_confirmed_at timestamptz`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS not_cleared_confirmed_by_id uuid REFERENCES users(id)`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_deduction_amount numeric(12,2)`);
+    await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_months_at_confirmation integer`);
 }

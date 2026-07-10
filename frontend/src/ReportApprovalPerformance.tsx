@@ -1,10 +1,15 @@
 import React, { useMemo, useState } from "react";
-import { formatMoney } from "./constants";
+import { formatMoney, TravelType } from "./constants";
 import { CheckCircle, Clock, TrendingUp, Users, XCircle } from "lucide-react";
 
 interface Props {
   advances: any[];
+  travelTypes: TravelType[];
   onBack: () => void;
+}
+
+function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
+  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
 }
 
 function fmtH(h: number | null): string {
@@ -37,7 +42,7 @@ const STAGE_BG: Record<string, string> = {
   PENDING_PAYMENT: "#fef3c7",
 };
 
-export default function ReportApprovalPerformance({ advances, onBack }: Props) {
+export default function ReportApprovalPerformance({ advances, travelTypes, onBack }: Props) {
   const [filterDept, setFilterDept] = useState("");
 
   const depts = useMemo(() =>
@@ -133,11 +138,11 @@ export default function ReportApprovalPerformance({ advances, onBack }: Props) {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Approval Performance</h1>
-          <p className="ep-subtitle">Advance request approval rates, processing times, and department breakdowns.</p>
+          <p className="ep-subtitle">Advance request approval rates, processing times, and division breakdowns.</p>
         </div>
         <div className="ep-actions">
           <select className="ep-form-select" value={filterDept} onChange={e => setFilterDept(e.target.value)} style={{ minWidth: 160 }}>
-            <option value="">All Departments</option>
+            <option value="">All Divisions</option>
             {depts.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
         </div>
@@ -202,7 +207,7 @@ export default function ReportApprovalPerformance({ advances, onBack }: Props) {
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 14 }}>
 
         <div className="ep-panel">
-          <div className="ep-panel-head"><div className="ep-panel-title">Performance by Department</div></div>
+          <div className="ep-panel-head"><div className="ep-panel-title">Performance by Division</div></div>
           <div className="ep-table-wrap">
             {deptRows.length === 0 ? (
               <div className="ep-empty"><p>No data available.</p></div>
@@ -210,7 +215,7 @@ export default function ReportApprovalPerformance({ advances, onBack }: Props) {
               <table className="ep-table">
                 <thead>
                   <tr>
-                    <th>Department</th>
+                    <th>Division</th>
                     <th>Total</th>
                     <th>Approved</th>
                     <th>Rejected</th>
@@ -257,7 +262,7 @@ export default function ReportApprovalPerformance({ advances, onBack }: Props) {
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
                     <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color }}>{a.status}</span>
-                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{formatMoney(a.approved_total || a.requested_total, "LSL")}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{formatMoney(a.approved_total || a.requested_total, travelTypeCurrency(a.type, travelTypes))}</div>
                   </div>
                 </div>
               );

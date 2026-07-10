@@ -25,7 +25,7 @@ export async function listDivisions() {
 export async function createDivision(name, description) {
     const n = normalizeDepartmentName(name);
     if (n.length < 2)
-        throw badRequest("Division name is required");
+        throw badRequest("Company name is required");
     await ensureDivisionsTable();
     const rows = await query(`INSERT INTO divisions (id, name, description, active)
      VALUES ($1, $2, $3, true)
@@ -36,14 +36,14 @@ export async function createDivision(name, description) {
 export async function updateDivision(id, name, description, active) {
     const n = normalizeDepartmentName(name);
     if (!n)
-        throw badRequest("Division name is required");
+        throw badRequest("Company name is required");
     await ensureDivisionsTable();
     const existing = await query(`SELECT id FROM divisions WHERE id = $1 LIMIT 1`, [id]);
     if (!existing[0])
-        throw badRequest("Division not found");
+        throw badRequest("Company not found");
     const conflict = await query(`SELECT id FROM divisions WHERE lower(trim(name)) = lower($1) AND id != $2 LIMIT 1`, [n, id]);
     if (conflict[0])
-        throw badRequest("Division name already exists");
+        throw badRequest("Company name already exists");
     const rows = await query(`UPDATE divisions SET name = $2, description = COALESCE($3, description), active = COALESCE($4, active) WHERE id = $1 RETURNING id, name, description, active`, [id, n, description ?? null, active ?? null]);
     return rows[0];
 }
@@ -51,10 +51,10 @@ export async function deleteDivision(id) {
     await ensureDivisionsTable();
     const existing = await query(`SELECT id FROM divisions WHERE id = $1 LIMIT 1`, [id]);
     if (!existing[0])
-        throw badRequest("Division not found");
+        throw badRequest("Company not found");
     const hasDepts = await query(`SELECT true AS exists FROM departments WHERE division_id = $1 LIMIT 1`, [id]);
     if (hasDepts[0])
-        throw badRequest("Cannot delete a division with assigned departments");
+        throw badRequest("Cannot delete a company with assigned divisions");
     await query(`DELETE FROM divisions WHERE id = $1`, [id]);
     return { ok: true };
 }
@@ -92,7 +92,7 @@ export async function listTeams(sectionId) {
 export async function createTeam(name, sectionId, leaderUserId) {
     const n = normalizeDepartmentName(name);
     if (n.length < 2)
-        throw badRequest("Team name is required");
+        throw badRequest("Section name is required");
     await ensureTeamsTable();
     const rows = await query(`INSERT INTO teams (id, name, section_id, leader_user_id, active)
      VALUES ($1, $2, $3, $4, true)
@@ -102,11 +102,11 @@ export async function createTeam(name, sectionId, leaderUserId) {
 export async function updateTeam(id, name, sectionId, leaderUserId, active) {
     const n = normalizeDepartmentName(name);
     if (!n)
-        throw badRequest("Team name is required");
+        throw badRequest("Section name is required");
     await ensureTeamsTable();
     const existing = await query(`SELECT id FROM teams WHERE id = $1 LIMIT 1`, [id]);
     if (!existing[0])
-        throw badRequest("Team not found");
+        throw badRequest("Section not found");
     const rows = await query(`UPDATE teams
         SET name = $2,
             section_id = COALESCE($3, section_id),
@@ -120,7 +120,7 @@ export async function deleteTeam(id) {
     await ensureTeamsTable();
     const existing = await query(`SELECT id FROM teams WHERE id = $1 LIMIT 1`, [id]);
     if (!existing[0])
-        throw badRequest("Team not found");
+        throw badRequest("Section not found");
     await query(`DELETE FROM teams WHERE id = $1`, [id]);
     return { ok: true };
 }
@@ -298,7 +298,7 @@ export async function setSectionOwner(sectionId, role, userId) {
     await ensureSectionSchemaWithDeptId();
     const existing = await query(`SELECT id FROM sections WHERE id = $1 LIMIT 1`, [sectionId]);
     if (!existing[0])
-        throw badRequest("Section not found");
+        throw badRequest("Department not found");
     const resolvedUserId = role === "HOD"
         ? await assertEligibleOwner(userId, ["HOD", "MANAGER"], "HOD")
         : await assertEligibleOwner(userId, ["MANAGER"], "Manager");
@@ -372,7 +372,7 @@ const DEPARTMENT_ALIASES = new Map([
 export async function resolveDepartmentGroup(input) {
     const department = normalizeDepartmentName(input);
     if (!department)
-        throw badRequest("Department is required");
+        throw badRequest("Division is required");
     const alias = DEPARTMENT_ALIASES.get(department.toLowerCase()) || department;
     await ensureDepartmentGroups();
     const rows = await query(`SELECT department
@@ -392,13 +392,13 @@ export async function resolveDepartmentGroup(input) {
       ORDER BY department
       LIMIT 1`, [alias]);
     if (!rows[0])
-        throw badRequest("Choose a valid department from the department groups list");
+        throw badRequest("Choose a valid division from the division groups list");
     return rows[0].department;
 }
 export async function resolveSectionGroup(input) {
     const section = normalizeDepartmentName(input);
     if (!section)
-        throw badRequest("Section is required");
+        throw badRequest("Department is required");
     await ensureSectionSchema();
     const rows = await query(`SELECT trim(name) AS section
        FROM sections
@@ -407,14 +407,14 @@ export async function resolveSectionGroup(input) {
       ORDER BY name
       LIMIT 1`, [section]);
     if (!rows[0])
-        throw badRequest("Choose a valid section from the sections list");
+        throw badRequest("Choose a valid department from the departments list");
     return rows[0].section;
 }
 export async function createDepartmentGroup(input, sectionId) {
     const options = typeof sectionId === "object" ? sectionId : { sectionId };
     const department = normalizeDepartmentName(input);
     if (department.length < 2)
-        throw badRequest("Department name is required");
+        throw badRequest("Division name is required");
     await ensureDepartmentsTable();
     const hodUserId = await assertEligibleOwner(options.hodUserId, ["HOD", "MANAGER"], "HOD");
     const managerUserId = await assertEligibleOwner(options.managerUserId, ["MANAGER"], "Manager");
@@ -478,23 +478,23 @@ export async function updateDepartmentGroup(oldName, newName, options = {}) {
     const currentDepartment = normalizeDepartmentName(oldName);
     const updatedDepartment = normalizeDepartmentName(newName);
     if (!currentDepartment)
-        throw badRequest("Current department is required");
+        throw badRequest("Current division is required");
     if (!updatedDepartment)
-        throw badRequest("New department name is required");
+        throw badRequest("New division name is required");
     await ensureDepartmentsTable();
     const existing = await query(`SELECT id, name, section_id, division_id, hod_user_id, manager_user_id, exco_user_id, active
        FROM departments
       WHERE lower(trim(name)) = lower($1)
       LIMIT 1`, [currentDepartment]);
     if (!existing[0])
-        throw badRequest("Department not found");
+        throw badRequest("Division not found");
     const conflict = await query(`SELECT id
        FROM departments
       WHERE lower(trim(name)) = lower($1)
         AND id != $2
       LIMIT 1`, [updatedDepartment, existing[0].id]);
     if (conflict[0])
-        throw badRequest("Department name already exists");
+        throw badRequest("Division name already exists");
     const sectionId = hasOwn(options, "sectionId") ? options.sectionId ?? null : existing[0].section_id;
     const divisionId = hasOwn(options, "divisionId") ? options.divisionId ?? null : existing[0].division_id;
     const hodUserId = hasOwn(options, "hodUserId")
@@ -525,7 +525,7 @@ export async function updateDepartmentGroup(oldName, newName, options = {}) {
     if (hasOwn(options, "divisionIds") && options.divisionIds !== undefined) {
         await syncDepartmentDivisions(existing[0].id, options.divisionIds);
     }
-    await notifyNewPositionAssignees(updatedDepartment, "Department", [
+    await notifyNewPositionAssignees(updatedDepartment, "Division", [
         { label: "HOD", oldId: existing[0].hod_user_id, newId: hodUserId },
         { label: "Manager", oldId: existing[0].manager_user_id, newId: managerUserId },
         { label: "Exco Member", oldId: existing[0].exco_user_id, newId: excoUserId }
@@ -556,9 +556,9 @@ async function notifyNewPositionAssignees(groupLabel, groupType, slots) {
 export async function createSectionGroup(input, excoUserId, departmentId, isBusinessPartner, divisionIds) {
     const section = normalizeDepartmentName(input);
     if (section.length < 2)
-        throw badRequest("Section name is required");
+        throw badRequest("Department name is required");
     await ensureSectionSchemaWithDeptId();
-    const ownerId = await assertEligibleOwner(excoUserId, ["EXCO"], "Section EXCO member");
+    const ownerId = await assertEligibleOwner(excoUserId, ["EXCO"], "Department EXCO member");
     const existing = await query(`SELECT id, name
        FROM sections
       WHERE lower(trim(name)) = lower($1)
@@ -604,22 +604,22 @@ export async function listSectionGroups() {
 export async function updateSectionGroup(id, name, excoUserId, departmentId, active, isBusinessPartner, divisionIds) {
     const section = normalizeDepartmentName(name);
     if (!section)
-        throw badRequest("Section name is required");
+        throw badRequest("Department name is required");
     await ensureSectionSchemaWithDeptId();
     const existing = await query(`SELECT id, exco_user_id
        FROM sections
       WHERE id = $1
       LIMIT 1`, [id]);
     if (!existing[0])
-        throw badRequest("Section not found");
+        throw badRequest("Department not found");
     const conflict = await query(`SELECT id
        FROM sections
       WHERE lower(trim(name)) = lower($1)
         AND id != $2
       LIMIT 1`, [section, id]);
     if (conflict[0])
-        throw badRequest("Section name already exists");
-    const ownerId = excoUserId === undefined ? undefined : await assertEligibleOwner(excoUserId, ["EXCO"], "Section EXCO member");
+        throw badRequest("Department name already exists");
+    const ownerId = excoUserId === undefined ? undefined : await assertEligibleOwner(excoUserId, ["EXCO"], "Department EXCO member");
     const rows = await query(`UPDATE sections
         SET name = $2,
             exco_user_id = CASE WHEN $4::boolean = true THEN exco_user_id ELSE $3::uuid END,
@@ -630,7 +630,7 @@ export async function updateSectionGroup(id, name, excoUserId, departmentId, act
       RETURNING id, name, exco_user_id, department_id, active, is_business_partner`, [id, section, ownerId ?? null, excoUserId === undefined, departmentId ?? null, active ?? null, isBusinessPartner ?? null]);
     if (divisionIds !== undefined)
         await syncSectionDivisions(id, divisionIds);
-    await notifyNewPositionAssignees(section, "Section", [
+    await notifyNewPositionAssignees(section, "Department", [
         { label: "Exco Member", oldId: existing[0].exco_user_id, newId: ownerId ?? (excoUserId === undefined ? existing[0].exco_user_id : null) }
     ]);
     return rows[0];
@@ -642,33 +642,33 @@ export async function deleteSectionGroup(id) {
       WHERE id = $1
       LIMIT 1`, [id]);
     if (!existing[0])
-        throw badRequest("Section not found");
+        throw badRequest("Department not found");
     const assigned = await query(`SELECT true AS exists
        FROM departments
       WHERE section_id = $1
       LIMIT 1`, [id]);
     if (assigned[0])
-        throw badRequest("Cannot delete a section with assigned departments");
+        throw badRequest("Cannot delete a department with assigned divisions");
     await query(`DELETE FROM sections WHERE id = $1`, [id]);
     return { ok: true };
 }
 export async function deleteDepartmentGroup(name) {
     const department = normalizeDepartmentName(name);
     if (!department)
-        throw badRequest("Department name is required");
+        throw badRequest("Division name is required");
     await ensureDepartmentsTable();
     const existing = await query(`SELECT id
        FROM departments
       WHERE lower(trim(name)) = lower($1)
       LIMIT 1`, [department]);
     if (!existing[0])
-        throw badRequest("Department not found");
+        throw badRequest("Division not found");
     const assigned = await query(`SELECT true AS exists
        FROM users
       WHERE lower(trim(department)) = lower($1)
       LIMIT 1`, [department]);
     if (assigned[0])
-        throw badRequest("Cannot delete a department with assigned users");
+        throw badRequest("Cannot delete a division with assigned users");
     await query(`DELETE FROM departments WHERE id = $1`, [existing[0].id]);
     return { ok: true };
 }

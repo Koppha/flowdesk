@@ -178,7 +178,7 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "var(--surface-soft)", borderBottom: "2px solid var(--border)" }}>
-                {["Employee","E/N","Section","Month","Year","Status",""].map((h) => (
+                {["Employee","E/N","Department","Month","Year","Status",""].map((h) => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>{h}</th>
                 ))}
               </tr>
@@ -246,7 +246,7 @@ export default function OvertimeModule({ profile, requestDirectory, onBack }: Ov
               <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} style={fieldStyle} placeholder="e.g. Intern" />
             </div>
             <div>
-              <label style={labelStyle}>Section</label>
+              <label style={labelStyle}>Department</label>
               <input value={section} onChange={(e) => setSection(e.target.value)} style={fieldStyle} placeholder="e.g. Digital Transformation" />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>

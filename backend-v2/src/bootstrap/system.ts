@@ -73,6 +73,17 @@ async function ensureUserSchema() {
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_account_number text`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_branch text`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS reason_for_overspend text`);
+  // Claims have no currency of their own — they must stick with the currency
+  // the linked advance was requested in (resolved from travel_types via
+  // advance_requests.type), never a hardcoded default.
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS currency text`);
+  await query(
+    `UPDATE clearance_claims cc
+        SET currency = tt.currency
+       FROM advance_requests ar
+       JOIN travel_types tt ON tt.code = ar.type
+      WHERE cc.linked_advance_id = ar.id AND cc.currency IS NULL`
+  );
   await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
@@ -141,6 +152,14 @@ async function ensureUserSchema() {
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES workflows(id)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_step_order int`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS approval_chain jsonb`);
+  // Gap-free counter used only for the "Save as PDF" filename (Employee - Employee No -
+  // Travel Advance Request - 001); starts counting from whenever this shipped rather than
+  // backfilling historical requests, which keep the older uuid-derived reference number.
+  await query(`CREATE SEQUENCE IF NOT EXISTS advance_request_seq`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS sequence_no integer`);
+  // Gap-free counter for auto-generated payment references (PAY-2026-0054);
+  // advance_requests.paid_reference already exists, no new column needed.
+  await query(`CREATE SEQUENCE IF NOT EXISTS payment_ref_seq`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES workflows(id)`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS workflow_step_order int`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS approval_chain jsonb`);
@@ -584,7 +603,7 @@ async function seedChangeRequestType() {
   const hasFields = await query<{ id: string }>(`SELECT id FROM request_type_fields WHERE request_type_id = $1 LIMIT 1`, [typeId]);
   if (!hasFields[0]) {
     const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: { label: string; value: string }[] }> = [
-      { key: "department", label: "Department", type: "text", required: true, placeholder: "Requesting department" },
+      { key: "department", label: "Division", type: "text", required: true, placeholder: "Requesting division" },
       { key: "date_requested", label: "Date Requested", type: "date", required: true },
       { key: "change_assignee", label: "Change Assignee", type: "user_multi" },
       { key: "change_type_hardware", label: "Change Type: Hardware", type: "checkbox" },
@@ -793,8 +812,8 @@ async function seedAttendanceRegisterType() {
   // idempotently per field_key so existing installs pick up field changes
   // (e.g. Section/Team replaced by Department) without losing submitted data.
   const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: unknown }> = [
-    { key: "division", label: "Division", type: "text", required: true },
-    { key: "department", label: "Department", type: "text", required: true },
+    { key: "division", label: "Company", type: "text", required: true },
+    { key: "department", label: "Division", type: "text", required: true },
     { key: "month", label: "Month", type: "date", required: true, placeholder: "Pick any date within the target month" },
     {
       key: "attendance_grid",
@@ -884,7 +903,7 @@ async function seedComputerRequestType() {
 
   const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: { label: string; value: string }[] }> = [
     { key: "position", label: "Position", type: "text", required: true },
-    { key: "department", label: "Department", type: "text", required: true },
+    { key: "department", label: "Division", type: "text", required: true },
     { key: "phone_no", label: "Phone No.", type: "text" },
     { key: "emp_no", label: "Emp No.", type: "text", required: true },
     { key: "computer_type", label: "Type of Computer", type: "select", required: true, options: [

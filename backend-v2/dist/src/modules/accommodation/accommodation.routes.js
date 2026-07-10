@@ -409,6 +409,7 @@ accommodationRouter.post("/:id/send-to-finance", async (req, res, next) => {
                     requesterEmail: notificationContext.email,
                     department: notificationContext.department,
                     requestedTotal: Number(notificationContext.requested_total),
+                    currency: notificationContext.currency,
                     nextApprover: result.nextApprover
                 });
             }

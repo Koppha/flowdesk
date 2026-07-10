@@ -75,7 +75,7 @@ function resetForm(setters: Array<(v: string) => void>) {
 }
 
 const ROLE_LABEL: Record<string, string> = {
-  HOD:     "Head of Dept",
+  HOD:     "Head of Div",
   MANAGER: "Manager",
 };
 
@@ -124,7 +124,7 @@ export default function ManagersOnboarding() {
   const [newSurname, setNewSurname] = useState("");
   const [newEmployeeNo, setNewEmployeeNo] = useState("");
   const [newDepartment, setNewDepartment] = useState("");
-  const [newTitle, setNewTitle] = useState("Department Manager");
+  const [newTitle, setNewTitle] = useState("Division Manager");
   const [newRole, setNewRole] = useState<"HOD" | "MANAGER">("MANAGER");
   const [newIsActive, setNewIsActive] = useState(true);
   const [assignAsDepartmentManager, setAssignAsDepartmentManager] = useState(true);
@@ -328,7 +328,7 @@ export default function ManagersOnboarding() {
   const deptsByDivision = useMemo(() => {
     const groups = new Map<string, DepartmentRow[]>();
     for (const d of departmentRows) {
-      const key = d.division_name ?? "Unassigned Division";
+      const key = d.division_name ?? "Unassigned Company";
       const arr = groups.get(key) ?? [];
       arr.push(d);
       groups.set(key, arr);
@@ -420,7 +420,7 @@ export default function ManagersOnboarding() {
   function resetAddForm() {
     resetForm([setNewEmail, setNewFirstName, setNewSurname, setNewEmployeeNo]);
     setNewDepartment("");
-    setNewTitle("Department Manager");
+    setNewTitle("Division Manager");
     setNewRole("MANAGER");
     setNewIsActive(true);
     setAssignAsDepartmentManager(true);
@@ -513,7 +513,7 @@ export default function ManagersOnboarding() {
 
     const effectiveDept = newOrg.department || newDepartment;
     if (!newFirstName.trim() || !newSurname.trim() || !newEmail.trim() || !effectiveDept.trim()) {
-      alert("Please fill first name, surname, email, and department.");
+      alert("Please fill first name, surname, email, and division.");
       return;
     }
     setCreating(true);
@@ -530,7 +530,7 @@ export default function ManagersOnboarding() {
         section_id: newOrg.sectionId ?? null,
         team_id: newOrg.teamId ?? null,
         role: effectiveRole,
-        title: newTitle.trim() || selectedTypeName || "Department Manager",
+        title: newTitle.trim() || selectedTypeName || "Division Manager",
         is_active: newIsActive,
         manager_type_id: selectedNewTypeId || null,
       });
@@ -561,7 +561,7 @@ export default function ManagersOnboarding() {
       await api.updateUser(editingUser.id, {
         full_name: fullName,
         employee_no: editingUser.employee_no || "",
-        title: editingUser.title || "Department Manager",
+        title: editingUser.title || "Division Manager",
         department: effectiveDept,
         division_id: editingOrg.divisionId ?? null,
         section_id: editingOrg.sectionId ?? null,
@@ -621,7 +621,7 @@ export default function ManagersOnboarding() {
   function DeptSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
     return (
       <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Select department</option>
+        <option value="">Select division</option>
         {[...deptsByDivision.entries()].map(([divName, depts]) => (
           <optgroup key={divName} label={`── ${divName}`}>
             {depts.map((d) => (
@@ -726,8 +726,8 @@ export default function ManagersOnboarding() {
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginBottom: 4 }}>Maps To System Role *</label>
                     <select value={typeFormRole} onChange={(e) => setTypeFormRole(e.target.value as "HOD" | "MANAGER")} style={fieldSt}>
-                      <option value="MANAGER">MANAGER — Department Manager</option>
-                      <option value="HOD">HOD — Head of Department</option>
+                      <option value="MANAGER">MANAGER — Division Manager</option>
+                      <option value="HOD">HOD — Head of Division</option>
                     </select>
                   </div>
                   <div>
@@ -763,7 +763,7 @@ export default function ManagersOnboarding() {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Management</h1>
-          <p className="ep-subtitle">Manage Heads of Department (HOD) and Managers and connect them to departments for approval routing.</p>
+          <p className="ep-subtitle">Manage Heads of Division (HOD) and Managers and connect them to divisions for approval routing.</p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" type="button" onClick={() => { resetVacancyForm(); setShowVacancyModal(true); }}>
@@ -851,17 +851,17 @@ export default function ManagersOnboarding() {
                   ) : (
                     <select value={newRole} onChange={(e) => setNewRole(e.target.value as "HOD" | "MANAGER")}>
                       <option value="MANAGER">Manager</option>
-                      <option value="HOD">Head of Department (HOD)</option>
+                      <option value="HOD">Head of Division (HOD)</option>
                     </select>
                   )}
                 </label>
               )}
-              <label><span>Position / Title</span><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Department Manager" /></label>
+              <label><span>Position / Title</span><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Division Manager" /></label>
               <label><span>Username or Email *</span><input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="user@etl.co.ls" /></label>
               {!fillingVacancyId && (
                 <>
                   <label className="onboarding-check"><input type="checkbox" checked={newIsActive} onChange={(e) => setNewIsActive(e.target.checked)} /> Active</label>
-                  <label className="onboarding-check"><input type="checkbox" checked={assignAsDepartmentManager} onChange={(e) => setAssignAsDepartmentManager(e.target.checked)} /> Assign as department {newRole === "HOD" ? "HOD" : "manager"}</label>
+                  <label className="onboarding-check"><input type="checkbox" checked={assignAsDepartmentManager} onChange={(e) => setAssignAsDepartmentManager(e.target.checked)} /> Assign as division {newRole === "HOD" ? "HOD" : "manager"}</label>
                   <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement *</div>
                     <OrgPicker value={newOrg} onChange={(sel) => { setNewOrg(sel); if (sel.department) setNewDepartment(sel.department); }} />
@@ -900,13 +900,13 @@ export default function ManagersOnboarding() {
         <div className="onboarding-toolbar">
           <div className="onboarding-search">
             <Search size={18} aria-hidden />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, email, department…" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, email, division…" />
           </div>
 
           {/* Division filter */}
           {divisionNames.length > 1 && (
             <select value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)} style={{ fontSize: 13, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)" }}>
-              <option value="ALL">All Divisions</option>
+              <option value="ALL">All Companies</option>
               {divisionNames.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
           )}
@@ -990,7 +990,7 @@ export default function ManagersOnboarding() {
                             onChange={(e) => setAddDeptSelection((prev) => ({ ...prev, [mgr.id]: e.target.value }))}
                             style={{ fontSize: 11, padding: "2px 4px", maxWidth: 140 }}
                           >
-                            <option value="">Add department…</option>
+                            <option value="">Add division…</option>
                             {[...deptsByDivision.entries()].map(([divName, depts]) => (
                               <optgroup key={divName} label={divName}>
                                 {depts.filter((d) => !assigned.includes(d.name)).map((d) => (
@@ -1069,14 +1069,14 @@ export default function ManagersOnboarding() {
                 ) : (
                   <select value={editingRole} onChange={(e) => setEditingRole(e.target.value as "HOD" | "MANAGER")}>
                     <option value="MANAGER">Manager</option>
-                    <option value="HOD">Head of Department (HOD)</option>
+                    <option value="HOD">Head of Division (HOD)</option>
                   </select>
                 )}
               </label>
               <label><span>Position / Title</span><input value={editingUser.title || ""} onChange={(e) => setEditingUser({ ...editingUser, title: e.target.value })} /></label>
               <label><span>Username or Email *</span><input value={editingUser.email || ""} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} /></label>
               <label className="onboarding-check"><input type="checkbox" checked={editingUser.is_active !== false} onChange={(e) => setEditingUser({ ...editingUser, is_active: e.target.checked })} /> Active</label>
-              <label className="onboarding-check"><input type="checkbox" checked={editingSetAsDeptManager} onChange={(e) => setEditingSetAsDeptManager(e.target.checked)} /> Update department assignment</label>
+              <label className="onboarding-check"><input type="checkbox" checked={editingSetAsDeptManager} onChange={(e) => setEditingSetAsDeptManager(e.target.checked)} /> Update division assignment</label>
               <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement</div>
                 <OrgPicker value={editingOrg} onChange={(sel) => { setEditingOrg(sel); if (sel.department) setEditingUser({ ...editingUser, department: sel.department }); }} />
@@ -1096,7 +1096,7 @@ export default function ManagersOnboarding() {
           title={fillingVacancyId ? "Fill Vacant Position" : "Assign Existing User as Manager / HOD"}
           subtitle={fillingVacancyId
             ? "Search and select an employee to fill this vacant position. They'll receive an invitation."
-            : "Pick an employee to promote to Manager or HOD and connect them to a department."}
+            : "Pick an employee to promote to Manager or HOD and connect them to a division."}
           users={users}
           excludeRoles={[]}
           onClose={() => { setShowAssignModal(false); setFillingVacancyId(null); }}
@@ -1129,7 +1129,7 @@ export default function ManagersOnboarding() {
                     style={{ width: "100%", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", fontSize: 13 }}
                   >
                     <option value="MANAGER">Manager</option>
-                    <option value="HOD">Head of Department (HOD)</option>
+                    <option value="HOD">Head of Division (HOD)</option>
                   </select>
                 )}
               </div>
@@ -1167,11 +1167,11 @@ export default function ManagersOnboarding() {
                 ) : (
                   <select value={vacancyRole} onChange={(e) => setVacancyRole(e.target.value as "HOD" | "MANAGER")}>
                     <option value="MANAGER">Manager</option>
-                    <option value="HOD">Head of Department (HOD)</option>
+                    <option value="HOD">Head of Division (HOD)</option>
                   </select>
                 )}
               </label>
-              <label><span>Title <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span><input value={vacancyTitle} onChange={(e) => setVacancyTitle(e.target.value)} placeholder="Department Manager" /></label>
+              <label><span>Title <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span><input value={vacancyTitle} onChange={(e) => setVacancyTitle(e.target.value)} placeholder="Division Manager" /></label>
               <div style={{ gridColumn: "1/-1", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Org Placement</div>
                 <OrgPicker value={vacancyOrg} onChange={setVacancyOrg} />

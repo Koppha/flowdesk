@@ -115,13 +115,13 @@ export default function TeamRoster() {
 
     for (const emp of filteredEmployees) {
       const divKey  = emp.division_id  ?? "__none_div__";
-      const divName = emp.division_name ?? "Unassigned Division";
+      const divName = emp.division_name ?? "Unassigned Company";
       const deptKey  = emp.department ?? "__none_dept__";
-      const deptName = emp.department ?? "Unassigned Department";
+      const deptName = emp.department ?? "Unassigned Division";
       const secKey  = emp.section_id  ?? "__none_sec__";
-      const secName = emp.section_name ?? "Unassigned Section";
+      const secName = emp.section_name ?? "Unassigned Department";
       const teamKey  = emp.team_id    ?? "__none_team__";
-      const teamName = emp.team_name  ?? "Unassigned Team";
+      const teamName = emp.team_name  ?? "Unassigned Section";
 
       if (!divMap.has(divKey))  divMap.set(divKey,  { id: emp.division_id, name: divName, departments: new Map() });
       const div = divMap.get(divKey)!;
@@ -219,9 +219,9 @@ export default function TeamRoster() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Users size={22} color="#3b82f6" />
           <div>
-            <div style={{ fontWeight: 700, fontSize: 18, color: "var(--text)" }}>Team Roster</div>
+            <div style={{ fontWeight: 700, fontSize: 18, color: "var(--text)" }}>Section Roster</div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 1 }}>
-              {totalShown} employee{totalShown !== 1 ? "s" : ""} · grouped by Division → Department → Section → Team
+              {totalShown} employee{totalShown !== 1 ? "s" : ""} · grouped by Company → Division → Department → Section
             </div>
           </div>
         </div>
@@ -245,7 +245,7 @@ export default function TeamRoster() {
               onChange={e => setDivisionFilter(e.target.value)}
               style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--text)", fontSize: 13 }}
             >
-              <option value="ALL">All Divisions</option>
+              <option value="ALL">All Companies</option>
               {divisionNames.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           )}

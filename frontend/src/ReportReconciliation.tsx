@@ -12,6 +12,7 @@ interface Row {
   total_paid: number;
   total_settled: number;
   closing_balance: number;
+  currency?: string | null;
 }
 
 interface Props {
@@ -63,7 +64,7 @@ export default function ReportReconciliation({ onBack, meUserId }: Props) {
   const active = tab === "mine" ? mine : others;
 
   function exportCsv() {
-    const headers = ["Requester", "Department", "Opening Balance", "Total Requested", "Total Paid", "Total Settled", "Closing Balance"];
+    const headers = ["Requester", "Division", "Opening Balance", "Total Requested", "Total Paid", "Total Settled", "Closing Balance"];
     const csvRows = active.map(r => [
       r.requester_name ?? "", r.department ?? "",
       r.opening_balance, r.total_requested, r.total_paid, r.total_settled, r.closing_balance,
@@ -138,7 +139,7 @@ export default function ReportReconciliation({ onBack, meUserId }: Props) {
               <thead>
                 <tr>
                   <th>Requester</th>
-                  <th>Department</th>
+                  <th>Division</th>
                   <th>Opening Balance</th>
                   <th>Total Requested</th>
                   <th>Total Paid</th>
@@ -151,11 +152,11 @@ export default function ReportReconciliation({ onBack, meUserId }: Props) {
                   <tr key={r.requester_id}>
                     <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{r.requester_name || "—"}</td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{r.department || "—"}</td>
-                    <td>{formatMoney(r.opening_balance, "LSL")}</td>
-                    <td style={{ fontWeight: 600 }}>{formatMoney(r.total_requested, "LSL")}</td>
-                    <td>{formatMoney(r.total_paid, "LSL")}</td>
-                    <td>{formatMoney(r.total_settled, "LSL")}</td>
-                    <td style={{ fontWeight: 600 }}>{formatMoney(r.closing_balance, "LSL")}</td>
+                    <td>{formatMoney(r.opening_balance, r.currency ?? "LSL")}</td>
+                    <td style={{ fontWeight: 600 }}>{formatMoney(r.total_requested, r.currency ?? "LSL")}</td>
+                    <td>{formatMoney(r.total_paid, r.currency ?? "LSL")}</td>
+                    <td>{formatMoney(r.total_settled, r.currency ?? "LSL")}</td>
+                    <td style={{ fontWeight: 600 }}>{formatMoney(r.closing_balance, r.currency ?? "LSL")}</td>
                   </tr>
                 ))}
               </tbody>

@@ -222,7 +222,7 @@ export default function OrgPicker({
       {/* Division */}
       {hasDivisions && (
         <div>
-          <label style={labelStyle}>Division{requireDivision ? " *" : ""}</label>
+          <label style={labelStyle}>Company{requireDivision ? " *" : ""}</label>
           <select
             className={inputClassName}
             style={sel}
@@ -230,7 +230,7 @@ export default function OrgPicker({
             onChange={e => handleDivisionChange(e.target.value)}
             disabled={disabled}
           >
-            <option value="">— Select Division —</option>
+            <option value="">— Select Company —</option>
             {divisions.map(d => (
               <option key={d.id} value={d.id}>{d.name}</option>
             ))}
@@ -240,7 +240,7 @@ export default function OrgPicker({
 
       {/* Department */}
       <div>
-        <label style={labelStyle}>Department *</label>
+        <label style={labelStyle}>Division *</label>
         <select
           className={inputClassName}
           style={sel}
@@ -250,10 +250,10 @@ export default function OrgPicker({
         >
           <option value="">
             {hasDivisions && !resolved.divisionId
-              ? "Select a division first"
+              ? "Select a company first"
               : filteredDepts.length === 0
-                ? "No departments available"
-                : "— Select Department —"}
+                ? "No divisions available"
+                : "— Select Division —"}
           </option>
           {filteredDepts.map(d => (
             <option key={d.id} value={d.id}>{d.name}</option>
@@ -265,7 +265,7 @@ export default function OrgPicker({
       {(filteredSections.length > 0 || resolved.sectionId) && (
         <div>
           <label style={labelStyle}>
-            Section{requireSection ? " *" : " (optional)"}
+            Department{requireSection ? " *" : " (optional)"}
           </label>
           <select
             className={inputClassName}
@@ -285,7 +285,7 @@ export default function OrgPicker({
       {/* Team — shown when section is chosen AND teams exist for it */}
       {showTeam && (filteredTeams.length > 0 || resolved.teamId) && (
         <div>
-          <label style={labelStyle}>Team (optional)</label>
+          <label style={labelStyle}>Section (optional)</label>
           <select
             className={inputClassName}
             style={sel}

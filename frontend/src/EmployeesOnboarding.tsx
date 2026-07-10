@@ -324,7 +324,7 @@ export default function EmployeesOnboarding() {
             </div>
             {divisionNames.length > 1 && (
               <select className="ep-form-select" value={divFilter} onChange={(e) => setDivFilter(e.target.value)} style={{ minWidth: 140 }}>
-                <option value="ALL">All Divisions</option>
+                <option value="ALL">All Companies</option>
                 {divisionNames.map((d) => <option key={d}>{d}</option>)}
               </select>
             )}

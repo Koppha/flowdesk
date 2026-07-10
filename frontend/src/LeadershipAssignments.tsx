@@ -204,12 +204,12 @@ export default function LeadershipAssignments() {
   }, []);
 
   const divisions = useMemo(() => {
-    return Array.from(new Set(departments.map((d) => d.division_name || "No Division"))).sort((a, b) => a.localeCompare(b));
+    return Array.from(new Set(departments.map((d) => d.division_name || "No Company"))).sort((a, b) => a.localeCompare(b));
   }, [departments]);
 
   const sections = useMemo(() => {
-    const source = divisionFilter === "ALL" ? departments : departments.filter(d => (d.division_name || "No Division") === divisionFilter);
-    return Array.from(new Set(source.map((department) => department.section_name || "Unassigned Section"))).sort((a, b) => a.localeCompare(b));
+    const source = divisionFilter === "ALL" ? departments : departments.filter(d => (d.division_name || "No Company") === divisionFilter);
+    return Array.from(new Set(source.map((department) => department.section_name || "Unassigned Department"))).sort((a, b) => a.localeCompare(b));
   }, [departments, divisionFilter]);
 
   const filtered = useMemo(() => {
@@ -218,8 +218,8 @@ export default function LeadershipAssignments() {
       const manager = getManager(department, managers);
       const hod = getHod(department, hods);
       const exco = getExco(department, excoUsers);
-      const section = department.section_name || "Unassigned Section";
-      const division = department.division_name || "No Division";
+      const section = department.section_name || "Unassigned Department";
+      const division = department.division_name || "No Company";
       const status = statusKey(department);
       if (divisionFilter !== "ALL" && division !== divisionFilter) return false;
       if (sectionFilter !== "ALL" && section !== sectionFilter) return false;
@@ -283,7 +283,7 @@ export default function LeadershipAssignments() {
   async function saveAssignment() {
     const department = departments.find((item) => item.id === draftDepartmentId);
     if (!department) {
-      alert("Choose a department first.");
+      alert("Choose a division first.");
       return;
     }
     setSaving(true);
@@ -312,7 +312,7 @@ export default function LeadershipAssignments() {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Leadership Assignments</h1>
-          <p className="ep-subtitle">Assign HODs, Managers, and EXCO Members to departments. These assignments drive the approval workflow.</p>
+          <p className="ep-subtitle">Assign HODs, Managers, and EXCO Members to divisions. These assignments drive the approval workflow.</p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" type="button" onClick={() => void load()}><RefreshCw size={14} />Refresh</button>
@@ -324,7 +324,7 @@ export default function LeadershipAssignments() {
       <div className="leadership-stat-row">
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("ALL")}>
           <span className="leadership-stat-icon"><UsersRound size={26} aria-hidden /></span>
-          <div><strong>{stats.total}</strong><small>Total Departments</small></div>
+          <div><strong>{stats.total}</strong><small>Total Divisions</small></div>
         </button>
         <button className="leadership-stat" type="button" onClick={() => setStatusFilter("ALL")}>
           <span className="leadership-stat-icon"><UserRound size={26} aria-hidden /></span>
@@ -347,16 +347,16 @@ export default function LeadershipAssignments() {
       <div className="leadership-toolbar">
         <div className="leadership-search">
           <Search size={18} aria-hidden />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search department..." />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search division..." />
         </div>
         {divisions.length > 1 && (
           <select value={divisionFilter} onChange={(event) => { setDivisionFilter(event.target.value); setSectionFilter("ALL"); }}>
-            <option value="ALL">All Divisions</option>
+            <option value="ALL">All Companies</option>
             {divisions.map((div) => <option key={div} value={div}>{div}</option>)}
           </select>
         )}
         <select value={sectionFilter} onChange={(event) => setSectionFilter(event.target.value)}>
-          <option value="ALL">All Sections</option>
+          <option value="ALL">All Departments</option>
           {sections.map((section) => <option key={section} value={section}>{section}</option>)}
         </select>
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -385,12 +385,12 @@ export default function LeadershipAssignments() {
             <table className="leadership-table">
               <thead>
                 <tr>
-	                  <th>Department</th>
-	                  <th>Division › Section</th>
+	                  <th>Division</th>
+	                  <th>Company › Department</th>
 	                  <th>HOD</th>
 	                  <th>Manager</th>
-	                  <th>Division EXCO</th>
-	                  <th>Section Leader</th>
+	                  <th>Company EXCO</th>
+	                  <th>Department Leader</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -399,7 +399,7 @@ export default function LeadershipAssignments() {
                 {loading && !departments.length ? (
 	                  <tr><td colSpan={8} className="leadership-empty">Loading assignments...</td></tr>
 	                ) : pagedDepartments.length === 0 ? (
-	                  <tr><td colSpan={8} className="leadership-empty">No departments match the selected filters.</td></tr>
+	                  <tr><td colSpan={8} className="leadership-empty">No divisions match the selected filters.</td></tr>
                 ) : (
                   pagedDepartments.map((department) => {
 	                    const manager = getManager(department, managers);
@@ -451,7 +451,7 @@ export default function LeadershipAssignments() {
                           {department.section_exco_name ? (
                             <div className="leadership-person">
                               <span className="leadership-avatar">{initials(department.section_exco_name)}</span>
-                              <span><strong>{department.section_exco_name}</strong><small>{department.section_name ?? "Section"}</small></span>
+                              <span><strong>{department.section_exco_name}</strong><small>{department.section_name ?? "Department"}</small></span>
                             </div>
                           ) : (
                             <span style={{ color: "var(--muted)", fontSize: 12 }}>
@@ -478,7 +478,7 @@ export default function LeadershipAssignments() {
             </table>
           </div>
           <div className="leadership-pagination">
-            <span>Showing {filtered.length === 0 ? 0 : (boundedPage - 1) * PAGE_SIZE + 1} to {Math.min(boundedPage * PAGE_SIZE, filtered.length)} of {filtered.length} departments</span>
+            <span>Showing {filtered.length === 0 ? 0 : (boundedPage - 1) * PAGE_SIZE + 1} to {Math.min(boundedPage * PAGE_SIZE, filtered.length)} of {filtered.length} divisions</span>
             <div>
               <button className="icon-button leadership-icon-button" type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={boundedPage === 1} aria-label="Previous page"><ChevronLeft size={16} aria-hidden /></button>
               {Array.from({ length: totalPages }).slice(0, 3).map((_, index) => (
@@ -494,7 +494,7 @@ export default function LeadershipAssignments() {
 
         <aside className="leadership-details">
           <div className="leadership-details-head">
-            <h3>Department Details</h3>
+            <h3>Division Details</h3>
             <button className="icon-button leadership-icon-button" type="button" onClick={() => setSelectedId(null)} aria-label="Close details"><X size={17} aria-hidden /></button>
           </div>
           {selectedDepartment ? (
@@ -510,7 +510,7 @@ export default function LeadershipAssignments() {
                 <span className="status-pill status-pill-success">{selectedDepartment.active ? "Active" : "Inactive"}</span>
               </div>
               <dl className="leadership-detail-list">
-                <dt>Department Code</dt>
+                <dt>Division Code</dt>
                 <dd>{departmentCode(selectedDepartment.name)}</dd>
                 <dt>Description</dt>
                 <dd>{leadershipDescription(selectedDepartment)}</dd>
@@ -546,7 +546,7 @@ export default function LeadershipAssignments() {
                     ) : <p>Not Assigned</p>}
                   </div>
                   <div>
-                    <span>Division EXCO</span>
+                    <span>Company EXCO</span>
                     {selectedExco ? (
                       <div className="leadership-person">
                         <span className="leadership-avatar dark">{initials(selectedExco.name)}</span>
@@ -557,7 +557,7 @@ export default function LeadershipAssignments() {
                   </div>
                   {selectedDepartment?.section_name && (
                     <div>
-                      <span>Section Leader <small style={{ fontWeight: 400 }}>({selectedDepartment.section_name})</small></span>
+                      <span>Department Leader <small style={{ fontWeight: 400 }}>({selectedDepartment.section_name})</small></span>
                       {selectedDepartment.section_exco_name ? (
                         <div className="leadership-person">
                           <span className="leadership-avatar">{initials(selectedDepartment.section_exco_name)}</span>
@@ -572,7 +572,7 @@ export default function LeadershipAssignments() {
               </div>
             </>
           ) : (
-            <div className="leadership-empty">Select a department to view details.</div>
+            <div className="leadership-empty">Select a division to view details.</div>
           )}
         </aside>
       </div>
@@ -586,7 +586,7 @@ export default function LeadershipAssignments() {
             </div>
             <div className="leadership-modal-grid">
               <label>
-                <span>Department <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>(grouped by Division)</span></span>
+                <span>Division <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>(grouped by Company)</span></span>
                 <select value={draftDepartmentId} onChange={(event) => {
 	                  const department = departments.find((item) => item.id === event.target.value);
 	                  setDraftDepartmentId(event.target.value);
@@ -594,10 +594,10 @@ export default function LeadershipAssignments() {
 	                  setDraftManagerId(department?.manager_user_id || "");
                   setDraftExcoId(department?.exco_user_id || "");
                 }}>
-                  <option value="">Select department</option>
+                  <option value="">Select division</option>
                   {Array.from(
                     departments.reduce((map, d) => {
-                      const key = d.division_name ?? "Unassigned Division";
+                      const key = d.division_name ?? "Unassigned Company";
                       return map.set(key, [...(map.get(key) ?? []), d]);
                     }, new Map<string, typeof departments>())
                   ).map(([divName, depts]) => (

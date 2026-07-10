@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
 import AttendanceModule from "./AttendanceModule";
-import Inbox from "./Inbox";
+import Inbox, { isCaptureItem, isPaymentItem } from "./Inbox";
+import Payments from "./Payments";
 import OvertimeModule from "./OvertimeModule";
 import OvertimeClaimModule from "./OvertimeClaimModule";
 import EmployeesOnboarding from "./EmployeesOnboarding";
@@ -31,7 +32,7 @@ import ReportReconciliation from "./ReportReconciliation";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, formatMoney, getCurrencySymbol, isFinanceDeptClient, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import {
@@ -40,6 +41,7 @@ import {
   Bell,
   BriefcaseBusiness,
   Building2,
+  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -278,7 +280,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -372,7 +374,6 @@ export default function App() {
   const [displayAccordionOpen, setDisplayAccordionOpen] = useState(true);
   const [travelSettingsOpen, setTravelSettingsOpen] = useState(true);
   const [sectionManagementOpen, setSectionManagementOpen] = useState(true);
-  const [delegationsOpen, setDelegationsOpen] = useState(false);
   const [adminUsersOpen, setAdminUsersOpen] = useState(false);
   const [recoverySettingsOpen, setRecoverySettingsOpen] = useState(false);
   const [recoveryDurationDraft, setRecoveryDurationDraft] = useState("7");
@@ -409,6 +410,8 @@ export default function App() {
   const [dashboardSearch, setDashboardSearch] = useState("");
   const [inboxCount, setInboxCount] = useState(0);
   const [inboxItems, setInboxItems] = useState<any[]>([]);
+  const [captureCount, setCaptureCount] = useState(0);
+  const [paymentsCount, setPaymentsCount] = useState(0);
   const [page, setRawPage] = useState<AppPage>("HOME");
 
   // The app is a single-page client that switches "pages" via state only, with
@@ -488,7 +491,7 @@ export default function App() {
       case "ADMIN":        return "Administrator";
       case "EXCO":         return "EXCO Member";
       case "HR_MANAGER":   return "HR Manager";
-      case "HOD":          return "Head of Department";
+      case "HOD":          return "Head of Division";
       case "MANAGER":      return "Manager";
       case "FINANCE":      return "Finance";
       case "EMPLOYEE":     return "Employee";
@@ -555,7 +558,7 @@ export default function App() {
             </small>
           </div>
         </td>
-        <td><span className="status-pill status-pill-success">Department</span></td>
+        <td><span className="status-pill status-pill-success">Division</span></td>
         <td>
           {leadershipSelect(leadershipUsers.hods.length ? leadershipUsers.hods : leadershipUsers.managers, department.hod_user_id, "No HOD", (value) =>
             void updateDepartmentLeadership(department, { hod_user_id: value || null })
@@ -572,10 +575,10 @@ export default function App() {
           )}
         </td>
         <td>
-          <button className="icon-button" onClick={() => void editDepartment(department.name)} title="Edit department" aria-label="Edit department" style={{ marginRight: 8 }}>
+          <button className="icon-button" onClick={() => void editDepartment(department.name)} title="Edit division" aria-label="Edit division" style={{ marginRight: 8 }}>
             <Edit3 size={16} aria-hidden />
           </button>
-          <button className="icon-button danger" onClick={() => void deleteDepartment(department.name)} title="Delete department" aria-label="Delete department">
+          <button className="icon-button danger" onClick={() => void deleteDepartment(department.name)} title="Delete division" aria-label="Delete division">
             <Trash2 size={16} aria-hidden />
           </button>
         </td>
@@ -624,7 +627,6 @@ export default function App() {
   const [salaryPaybackDuration, setSalaryPaybackDuration] = useState("");
   const [salaryAmount, setSalaryAmount] = useState("0");
   const [loanPaybackDuration, setLoanPaybackDuration] = useState("");
-  const [travelAmount, setTravelAmount] = useState("");
   const [loanAmount, setLoanAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<"ECOCASH" | "BANK">("ECOCASH");
   const [ecocashNumber, setEcocashNumber] = useState("");
@@ -721,7 +723,9 @@ export default function App() {
     : ["ECOCASH", "BANK"];
   const rowTotals = rows.reduce(
     (acc, r) => {
-      const meals = Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0;
+      let meals = Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0;
+      // For daily-rate requests, a row with no meals should count as 1 day
+      if (selectedTravelType?.rate_kind === "DAILY" && meals === 0) meals = 1;
       return {
         meals: acc.meals + meals,
         amount: acc.amount + meals * selectedTravelRate
@@ -777,7 +781,10 @@ export default function App() {
     const amount = advanceLineAmount(line);
     if (amount <= 0) return 0;
     const lineRate = Number(line.meal_value || 0) || selectedTravelRate || mealValueNumber;
-    return lineRate > 0 ? Number((amount / lineRate).toFixed(2)) : amount;
+    const computed = lineRate > 0 ? Number((amount / lineRate).toFixed(2)) : amount;
+    // For daily-rate requests, if no meals computed, treat the row as 1 day
+    if (selectedTravelType?.rate_kind === "DAILY" && (computed === 0 || computed === 0.0)) return 1;
+    return computed;
   }
 
   function numberToWords(num: number): string {
@@ -825,7 +832,7 @@ export default function App() {
 
   useEffect(() => {
     setAmountInWords(numberToWords(totalRequested()));
-  }, [advanceType, salaryAmount, loanAmount, travelAmount, rows, mealValue, travelTypes]);
+  }, [advanceType, salaryAmount, loanAmount, rows, mealValue, travelTypes]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -836,13 +843,6 @@ export default function App() {
     document.documentElement.style.fontSize = `${uiScale * 16}px`;
     saveUiScale(uiScale);
   }, [uiScale]);
-
-  useEffect(() => {
-    if (isTravelAdvanceSelected) {
-      const total = rowTotals.amount;
-      setTravelAmount(total.toFixed(2));
-    }
-  }, [rows, advanceType, selectedTravelRate, isTravelAdvanceSelected]);
 
   useEffect(() => {
     if (!allowedPaymentMethods.includes(paymentMethod)) {
@@ -862,7 +862,7 @@ export default function App() {
   const role = profile?.role || me?.role || "UNKNOWN";
   const userName = displayUserLabel(profile?.full_name || me?.fullName || me?.username || "User", role);
   const userDepartment = [profile?.division_name, profile?.department, profile?.section_name, profile?.team_name].filter(Boolean).join(" › ")
-    || profile?.department || me?.department || "No Department";
+    || profile?.department || me?.department || "No Division";
   const userInitials = initials(userName);
   const roleName = displayRoleLabel(role);
   const FEATURE_DEFAULTS: Record<string, string[]> = {
@@ -1005,7 +1005,9 @@ export default function App() {
           filtered.map((s: any) => {
             const rawTitle = s.position_name || s.approver_title;
             const isTeamGroup = rawTitle.startsWith("Team: ");
-            const title = isTeamGroup ? rawTitle.slice("Team: ".length) : rawTitle;
+            // Stored as "Team: X" for backward-compatible matching, but
+            // renders as "Section: X" per the org-hierarchy rename.
+            const title = isTeamGroup ? `Section: ${rawTitle.slice("Team: ".length)}` : rawTitle;
             return {
               label: title,
               // "Team: X" steps are approvable by any member of that group, not
@@ -1042,7 +1044,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp, paymentsResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1053,14 +1055,21 @@ export default function App() {
       optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions"),
       optionalStartupData<{ name: string; member_count: string; dynamic?: boolean }[]>(api.permissionGroups(), [], "Permission groups"),
       optionalStartupData<any[]>(api.requestTypes(), [], "Request types"),
+      // Fails silently (403) for anyone outside Finance/Admin via optionalStartupData's
+      // catch-and-fallback, same as every other startup call above — no role check needed here.
+      optionalStartupData<{ total?: number }>(api.payments({ status: "pending" }), { total: 0 }, "Payments"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
     setAdvances(Array.isArray(a) ? a : []);
     setClaims(Array.isArray(c) ? c : []);
-    const inboxItemCount = i.items?.length || 0;
+    const rawInboxItems: any[] = Array.isArray(i.items) ? i.items : [];
+    const nonSplitInboxItems = rawInboxItems.filter((it) => !isCaptureItem(it) && !isPaymentItem(it));
+    const inboxItemCount = nonSplitInboxItems.length;
     setInboxCount(inboxItemCount);
-    setInboxItems(Array.isArray(i.items) ? i.items : []);
+    setInboxItems(nonSplitInboxItems);
+    setCaptureCount(rawInboxItems.filter(isCaptureItem).length);
+    setPaymentsCount(paymentsResp.total || 0);
     knownInboxCount.current = inboxItemCount;
     if (justLoggedIn.current && inboxItemCount > 0) {
       justLoggedIn.current = false;
@@ -1117,13 +1126,16 @@ export default function App() {
     const id = setInterval(async () => {
       try {
         const resp: { items?: any[] } = await api.inbox();
-        const fresh = resp.items?.length || 0;
+        const rawItems: any[] = Array.isArray(resp.items) ? resp.items : [];
+        const nonSplitItems = rawItems.filter((it) => !isCaptureItem(it) && !isPaymentItem(it));
+        const fresh = nonSplitItems.length;
+        setCaptureCount(rawItems.filter(isCaptureItem).length);
         const prev = knownInboxCount.current;
         if (fresh > prev) {
           const added = fresh - prev;
           knownInboxCount.current = fresh;
           setInboxCount(fresh);
-          setInboxItems(Array.isArray(resp.items) ? resp.items : []);
+          setInboxItems(nonSplitItems);
           void Swal.fire({
             icon: "info",
             title: "New Approval Request",
@@ -1138,6 +1150,7 @@ export default function App() {
         } else {
           knownInboxCount.current = fresh;
           setInboxCount(fresh);
+          setInboxItems(nonSplitItems);
         }
       } catch (e) {
         if (isAuthOrTimeoutError(e)) {
@@ -1146,6 +1159,14 @@ export default function App() {
         }
         // non-auth errors (network blip, server restart) are ignored —
         // the next tick will retry without alarming the user
+      }
+      // Separate try/catch: 403s here (anyone outside Finance/Admin) are
+      // expected and must not trigger the inbox poll's auth-error logout above.
+      try {
+        const paymentsResp: { total?: number } = await api.payments({ status: "pending" });
+        setPaymentsCount(paymentsResp.total || 0);
+      } catch {
+        // ignored — non-Finance/Admin users simply won't see a Payments badge
       }
     }, 30_000);
     return () => clearInterval(id);
@@ -1826,9 +1847,9 @@ export default function App() {
       setNewDepartmentExcoId("");
       setNewDepartmentActive(true);
       await loadAdminUsers();
-      alert(`Department group ${created.name} created.`);
+      alert(`Division group ${created.name} created.`);
     } catch (e: any) {
-      alert("Error creating department: " + e.message);
+      alert("Error creating division: " + e.message);
     }
   }
 
@@ -1848,7 +1869,7 @@ export default function App() {
 
   async function deleteDepartment(name: string) {
     const confirmed = await confirmAction({
-      title: "Delete department group?",
+      title: "Delete division group?",
       text: `Delete '${name}'? This cannot be undone.`,
       confirmButtonText: "Delete"
     });
@@ -1857,16 +1878,16 @@ export default function App() {
       await api.deleteDepartment(name);
       setDepartmentOptions((current) => (current || []).filter((d) => d !== name));
       await loadAdminUsers();
-      alert(`Department group ${name} deleted.`);
+      alert(`Division group ${name} deleted.`);
     } catch (e: any) {
-      alert("Error deleting department: " + e.message);
+      alert("Error deleting division: " + e.message);
     }
   }
 
   async function createSection() {
     const name = newSectionName.trim();
     if (!name) {
-      alert("Enter a section name.");
+      alert("Enter a department name.");
       return;
     }
 
@@ -1875,9 +1896,9 @@ export default function App() {
       setNewSectionName("");
       setNewSectionExcoId("");
       await loadAdminUsers();
-      alert(`Section ${created.name} created.`);
+      alert(`Department ${created.name} created.`);
     } catch (e: any) {
-      alert("Error creating section: " + e.message);
+      alert("Error creating department: " + e.message);
     }
   }
 
@@ -1889,7 +1910,7 @@ export default function App() {
 
   async function deleteSection(id: string, name: string) {
     const confirmed = await confirmAction({
-      title: "Delete section?",
+      title: "Delete department?",
       text: `Delete '${name}'? This cannot be undone.`,
       confirmButtonText: "Delete"
     });
@@ -1897,9 +1918,9 @@ export default function App() {
     try {
       await api.deleteSection(id);
       await loadAdminUsers();
-      alert(`Section ${name} deleted.`);
+      alert(`Department ${name} deleted.`);
     } catch (e: any) {
-      alert("Error deleting section: " + e.message);
+      alert("Error deleting department: " + e.message);
     }
   }
 
@@ -1946,14 +1967,14 @@ export default function App() {
       exco_user_id: editingDepartmentObj.exco_user_id || null,
       active: !!editingDepartmentObj.active
     };
-    if (!payload.name) return alert('Enter a department name.');
+    if (!payload.name) return alert('Enter a division name.');
     try {
       const updated: any = await api.updateDepartment(editingDepartmentObj.originalName, payload);
       setEditingDepartmentObj(null);
       await loadAdminUsers();
-      alert(`Department updated: ${updated.name || payload.name}`);
+      alert(`Division updated: ${updated.name || payload.name}`);
     } catch (e: any) {
-      alert('Error updating department: ' + e.message);
+      alert('Error updating division: ' + e.message);
     }
   }
 
@@ -1964,14 +1985,14 @@ export default function App() {
   async function submitEditSection() {
     if (!editingSectionObj) return;
     const payload: any = { name: editingSectionObj.name.trim(), exco_user_id: editingSectionObj.exco_user_id || null };
-    if (!payload.name) return alert('Enter a section name.');
+    if (!payload.name) return alert('Enter a department name.');
     try {
       const updated: any = await api.updateSection(editingSectionObj.id, payload);
       setEditingSectionObj(null);
       await loadAdminUsers();
-      alert(`Section updated: ${updated.name || payload.name}`);
+      alert(`Department updated: ${updated.name || payload.name}`);
     } catch (e: any) {
-      alert('Error updating section: ' + e.message);
+      alert('Error updating department: ' + e.message);
     }
   }
 
@@ -2050,7 +2071,6 @@ export default function App() {
     setSalaryPaybackDuration("");
     setLoanPaybackDuration("");
     setLoanAmount("");
-    setTravelAmount("");
     setPaymentMethod("ECOCASH");
     setEcocashNumber("");
     setBankName("");
@@ -2129,6 +2149,16 @@ export default function App() {
       const up = word.toUpperCase();
       return abbrevs.has(up) ? up : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
     });
+  }
+
+  // clearance_claims.status walks a fixed 5-step legacy progression
+  // (SUBMITTED/MANAGER_APPROVED/CHIEF_OFFICER_APPROVED/HR_OFFICER/HR_MANAGER_REVIEW)
+  // that's kept only so workflow-driven claims of any length still map to a
+  // status column — "Chief Officer" isn't an actual position in this org's
+  // structure, so it must never surface as a literal label.
+  function humanizeClaimStatus(value: any) {
+    if (value === "CHIEF_OFFICER_APPROVED") return "Pending Approval";
+    return humanizeToken(value);
   }
 
   function formatTrackingDate(value: any, includeTime = true) {
@@ -2264,7 +2294,9 @@ export default function App() {
         // Prefer the workflow's own step label (position_name) over the
         // approver's personal job title — the tracker should reflect what's
         // configured in the Workflow Builder, not whoever happens to be assigned.
-        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.position_name || step.approver_title);
+        // Stored as "Team: X" for backward-compatible matching, but renders
+        // as "Section: X" per the org-hierarchy rename.
+        const label = isTeamGroup ? `Section: ${step.position_name.slice("Team: ".length)}` : (step.position_name || step.approver_title);
         const actorName = isTeamGroup ? "" : (approveEvent?.actor_name || step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -2410,7 +2442,9 @@ export default function App() {
         // Prefer the workflow's own step label (position_name) over the
         // approver's personal job title — the tracker should reflect what's
         // configured in the Workflow Builder, not whoever happens to be assigned.
-        const label = isTeamGroup ? step.position_name.slice("Team: ".length) : (step.position_name || step.approver_title);
+        // Stored as "Team: X" for backward-compatible matching, but renders
+        // as "Section: X" per the org-hierarchy rename.
+        const label = isTeamGroup ? `Section: ${step.position_name.slice("Team: ".length)}` : (step.position_name || step.approver_title);
         const actorName = isTeamGroup ? "" : (step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -2491,7 +2525,6 @@ export default function App() {
     setAdvanceType(detail.type || null);
     setSalaryAmount(detail.type === "SALARY" ? String(detail.requested_total || 0) : "0");
     setLoanAmount(detail.type === "LOAN" ? String(detail.requested_total || 0) : "");
-    setTravelAmount(isTravelTypeCode(detail.type, travelTypes) ? String(detail.requested_total || 0) : "");
     setRows(detail.lines ? detail.lines.map((line: any) => travelRowFromLine(line)) : []);
     setMonthField(detail.salary_month || "");
     setSalaryPaybackDuration(
@@ -2894,7 +2927,7 @@ export default function App() {
   });
   const requestSummaryType = advanceType ? (isTravelAdvanceSelected ? selectedTravelType?.name || travelTypeLabel(advanceType, travelTypes) : travelTypeLabel(advanceType, travelTypes)) : "—";
   const requestSummaryPayment = paymentMethod || "—";
-  const requestSummaryAmount = fmtMoney(totalRequested());
+  const requestSummaryAmount = fmtMoney(totalRequested(), selectedTravelType?.currency);
   const requestSummaryDate = requestDate ? new Date(requestDate).toLocaleDateString("en-GB") : "—";
 
   function renderAdvanceTrackingModal() {
@@ -2959,7 +2992,7 @@ export default function App() {
                   <span>Current Stage</span>
                   <strong>{advanceStageLabel(currentStatus, advance.type)}</strong>
                   <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>
-                    {["PAID", "REJECTED", "CANCELLED"].includes(currentStatus) ? humanizeToken(currentStatus) : "In Progress"}
+                    {["PAID", "APPROVED", "REJECTED", "CANCELLED"].includes(currentStatus) ? humanizeToken(currentStatus) : "In Progress"}
                   </em>
                 </div>
                 <div>
@@ -3064,7 +3097,7 @@ export default function App() {
                       <div><dt>Request No.</dt><dd>{requestNumber(advance)}</dd></div>
                       <div><dt>Request Type</dt><dd>{requestType}</dd></div>
                       <div><dt>Business Unit</dt><dd>{businessUnit}</dd></div>
-                      <div><dt>Department</dt><dd>{department}</dd></div>
+                      <div><dt>Division</dt><dd>{department}</dd></div>
                       <div><dt>Amount Requested</dt><dd>{fmtMoney(amount)}</dd></div>
                       <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
                     </dl>
@@ -3160,7 +3193,7 @@ export default function App() {
                   <div>
                     <span>Reference</span>
                     <strong>{claimNumber(claim)}</strong>
-                    <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>{humanizeToken(currentStatus)}</em>
+                    <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>{humanizeClaimStatus(currentStatus)}</em>
                   </div>
                 </div>
                 <div>
@@ -3205,9 +3238,9 @@ export default function App() {
                     <dl className="tracking-detail-list">
                       <div><dt>Reference</dt><dd>{claimNumber(claim)}</dd></div>
                       <div><dt>Month</dt><dd>{claim.month || "—"}</dd></div>
-                      <div><dt>Total Claimed</dt><dd>{formatMoney(claim.claim_total, "LSL")}</dd></div>
-                      <div><dt>Advance</dt><dd>{formatMoney(claim.advance_amount, "LSL")}</dd></div>
-                      <div><dt>Balance</dt><dd>{formatMoney(claim.balance_amount, "LSL")}</dd></div>
+                      <div><dt>Total Claimed</dt><dd>{fmtMoney(claim.claim_total, claim.currency)}</dd></div>
+                      <div><dt>Advance</dt><dd>{fmtMoney(claim.advance_amount, claim.currency)}</dd></div>
+                      <div><dt>Balance</dt><dd>{fmtMoney(claim.balance_amount, claim.currency)}</dd></div>
                     </dl>
                   </section>
                 </div>
@@ -3514,14 +3547,14 @@ export default function App() {
       {editingDepartmentObj && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
           <div className="card" style={{ width: 720, maxWidth: '95%', padding: 20 }}>
-            <h3>Edit Department</h3>
+            <h3>Edit Division</h3>
             <div style={{ display: 'grid', gap: 8 }}>
               <label>Name</label>
               <input value={editingDepartmentObj.name} onChange={(e) => setEditingDepartmentObj({ ...editingDepartmentObj, name: e.target.value })} />
 
-              <label>Section</label>
+              <label>Department</label>
               <select value={editingDepartmentObj.section_id || ''} onChange={(e) => setEditingDepartmentObj({ ...editingDepartmentObj, section_id: e.target.value || null })}>
-                <option value="">(No section)</option>
+                <option value="">(No department)</option>
                 {sectionOptions.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
@@ -3552,7 +3585,7 @@ export default function App() {
       {editingSectionObj && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
           <div className="card" style={{ width: 560, maxWidth: '95%', padding: 20 }}>
-            <h3>Edit Section</h3>
+            <h3>Edit Department</h3>
             <div style={{ display: 'grid', gap: 8 }}>
               <label>Name</label>
               <input value={editingSectionObj.name} onChange={(e) => setEditingSectionObj({ ...editingSectionObj, name: e.target.value })} />
@@ -3583,6 +3616,10 @@ export default function App() {
           <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
           {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Requests</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
+          <a href="#" className={navItemClass(page === "CAPTURE")} onClick={(e) => { e.preventDefault(); setPage("CAPTURE"); }}><span className="sidebar-nav-icon"><Camera size={18} aria-hidden /></span>Capture Inbox <b>{captureCount}</b></a>
+          {(isFinanceDeptClient(profile?.department || me?.department || "") || role === "ADMIN") && (
+            <a href="#" className={navItemClass(page === "PAYMENTS")} onClick={(e) => { e.preventDefault(); setPage("PAYMENTS"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Payments <b>{paymentsCount}</b></a>
+          )}
           <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page) ? "open" : ""}`}>
             <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
@@ -3618,7 +3655,7 @@ export default function App() {
               <a href="#" className={navItemClass(ORG_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setOrgNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong>{orgNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
               <div className="sidebar-subnav">
                 {canAccessFeature("org_structure") && <a href="#" className={navItemClass(page === "ORG_STRUCTURE")} onClick={(e) => { e.preventDefault(); setPage("ORG_STRUCTURE"); }}><Network size={14} aria-hidden />Org Structure</a>}
-                {canAccessFeature("team_roster") && <a href="#" className={navItemClass(page === "TEAM_ROSTER")} onClick={(e) => { e.preventDefault(); setPage("TEAM_ROSTER"); }}><Users size={14} aria-hidden />Team Roster</a>}
+                {canAccessFeature("team_roster") && <a href="#" className={navItemClass(page === "TEAM_ROSTER")} onClick={(e) => { e.preventDefault(); setPage("TEAM_ROSTER"); }}><Users size={14} aria-hidden />Section Roster</a>}
                 {canAccessFeature("ceo_management") && <a href="#" className={navItemClass(page === "CEO_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("CEO_MANAGEMENT"); }}><ShieldCheck size={14} aria-hidden />CEO</a>}
                 {canAccessFeature("employees") && <a href="#" className={navItemClass(page === "EMPLOYEES")} onClick={(e) => { e.preventDefault(); setPage("EMPLOYEES"); }}><Users size={14} aria-hidden />Employees</a>}
                 {canAccessFeature("exco_members") && <a href="#" className={navItemClass(page === "EXCO")} onClick={(e) => { e.preventDefault(); setPage("EXCO"); }}><ShieldCheck size={14} aria-hidden />EXCO Members</a>}
@@ -3648,6 +3685,10 @@ export default function App() {
 
           {page === "INBOX" ? (
             <Inbox onBack={() => setPage("HOME")} />
+          ) : page === "CAPTURE" ? (
+            <Inbox mode="capture" onBack={() => setPage("HOME")} />
+          ) : page === "PAYMENTS" ? (
+            <Payments onBack={() => setPage("HOME")} />
           ) : page === "ATTENDANCE" ? (
             <AttendanceModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME" ? (
@@ -3776,7 +3817,7 @@ export default function App() {
                 <div className="ep-table-wrap">
                   <table className="ep-table">
                     <thead>
-                      <tr><th>Manager</th><th>Delegate</th><th>Department</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
+                      <tr><th>Manager</th><th>Delegate</th><th>Division</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
                     </thead>
                     <tbody>
                       {delegations.map((delegation) => (
@@ -3837,7 +3878,7 @@ export default function App() {
                       { key: "roles_permissions",      label: "Roles & Permissions",      group: "User Management" },
                       { key: "travel_setup",           label: "Travel Setup",             group: "Travel" },
                       { key: "org_structure",          label: "Org Structure",            group: "Org Structure" },
-                      { key: "team_roster",            label: "Team Roster",              group: "Org Structure" },
+                      { key: "team_roster",            label: "Section Roster",           group: "Org Structure" },
                       { key: "ceo_management",         label: "CEO",                      group: "Org Structure" },
                       { key: "employees",              label: "Employees",                group: "Org Structure" },
                       { key: "exco_members",           label: "EXCO Members",             group: "Org Structure" },
@@ -4979,7 +5020,7 @@ export default function App() {
           ) : page === "REPORT_ADVANCES" ? (
             <ReportAdvances advances={advances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_APPROVAL" ? (
-            <ReportApprovalPerformance advances={advances} onBack={() => setPage("REPORTS")} />
+            <ReportApprovalPerformance advances={advances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_WORKFLOW" ? (
             <ReportWorkflowAnalytics advances={advances} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_AUDIT" ? (
@@ -5165,12 +5206,6 @@ export default function App() {
                 </div>
               )}
 
-              {isTravelAdvanceSelected && (
-                <div className="form-field">
-                  <label>{selectedTravelType?.name || "Travel"} Amount</label>
-                  <input type="number" value={travelAmount} readOnly />
-                </div>
-              )}
               {advanceType === "SALARY" && (
                 <div className="form-field">
                   <label>Payback Duration</label>
@@ -5355,7 +5390,7 @@ export default function App() {
                             <td></td>
                             <td></td>
                             <td>{rowTotals.meals}</td>
-                            <td>{fmtMoney(rowTotals.amount)}</td>
+                            <td>{fmtMoney(rowTotals.amount, selectedTravelType?.currency)}</td>
                             <td></td>
                           </tr>
                           <tr>
@@ -5363,7 +5398,7 @@ export default function App() {
                             <td></td>
                             <td></td>
                             <td>{rowTotals.meals}</td>
-                            <td colSpan={2}>{fmtMoney(totalRequested())}</td>
+                            <td colSpan={2}>{fmtMoney(totalRequested(), selectedTravelType?.currency)}</td>
                           </tr>
                         </>
                       )}
@@ -5483,7 +5518,7 @@ export default function App() {
                       const ptSubtitle = pt.code === "COUNTER_SIGNER"
                         ? "Supervisor or Manager to confirm your request details"
                         : pt.code === "APPROVED_BY"
-                          ? "GM or Executive of your Department to approve the request"
+                          ? "GM or Executive of your Division to approve the request"
                           : null;
 
                       return (
@@ -5743,7 +5778,7 @@ export default function App() {
                             travel_meta: selectedTravelType.location_mode === "DISTRICT"
                               ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict }
                               : { location_mode: selectedTravelType.location_mode, country: r.country, province: r.province, city: r.city },
-                            meals_count: r.meals,
+                            meals_count: (selectedTravelType?.rate_kind === "DAILY" && (!r.meals || Number(r.meals) === 0) ? 1 : r.meals),
                             dinner: 0
                           }));
                           await api.updateAdvanceLines(editingAdvanceId, { lines: mappedRows });
@@ -5764,7 +5799,7 @@ export default function App() {
                             travel_meta: selectedTravelType.location_mode === "DISTRICT"
                               ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict }
                               : { location_mode: selectedTravelType.location_mode, country: r.country, province: r.province, city: r.city },
-                            meals_count: r.meals,
+                            meals_count: (selectedTravelType?.rate_kind === "DAILY" && (!r.meals || Number(r.meals) === 0) ? 1 : r.meals),
                             dinner: 0
                           }));
                           await api.updateAdvanceLines(newId, { lines: mappedRows });
@@ -6282,7 +6317,7 @@ export default function App() {
                   onToggle={() => setProfileAccordionOpen((current) => !current)}
                 >
                   <div>Name and Surname: {profile?.full_name || "—"}</div>
-                  <div>Department: {profile?.department || "—"}</div>
+                  <div>Division: {profile?.department || "—"}</div>
                   <div>Employment Type: {fmtEmploymentType(employmentType)}</div>
                   <div>Employment Number: {profile?.employee_no || "—"}</div>
                   <div>Role: {displayRoleLabel(role)}</div>
@@ -6550,7 +6585,7 @@ export default function App() {
                     <div className="dashboard-profile-fields">
                       <div><strong>Name:</strong> {profile?.full_name || me?.fullName || "—"}</div>
                       <div><strong>Employee No:</strong> {profile?.employee_no || me?.employeeNo || "—"}</div>
-                      <div><strong>Department:</strong> {profile?.department || me?.department || "—"}</div>
+                      <div><strong>Division:</strong> {profile?.department || me?.department || "—"}</div>
                     </div>
                     <div className="dashboard-avatar">{dashboardInitials(profile?.full_name || me?.fullName)}</div>
                   </div>

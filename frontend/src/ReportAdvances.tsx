@@ -1,6 +1,10 @@
 import React, { useMemo, useState } from "react";
-import { formatMoney, travelTypeLabel } from "./constants";
+import { formatMoney, travelTypeLabel, TravelType } from "./constants";
 import { Download, FileText, Users, CheckCircle, XCircle } from "lucide-react";
+
+function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
+  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
+}
 
 interface Props {
   advances: any[];
@@ -33,7 +37,7 @@ const PAGE_SIZE = 20;
 
 const ALL_COLUMNS: { key: string; label: string }[] = [
   { key: "employee", label: "Employee" },
-  { key: "department", label: "Department" },
+  { key: "department", label: "Division" },
   { key: "type", label: "Type" },
   { key: "status", label: "Status" },
   { key: "requested", label: "Requested" },
@@ -194,7 +198,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
       <div className="ep-panel" style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 200px" }}>
-            <input placeholder="Search name, department…" value={search}
+            <input placeholder="Search name, division…" value={search}
               onChange={e => { setSearch(e.target.value); setPage(1); }} />
           </div>
           <select className="ep-form-select" value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}>
@@ -208,7 +212,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
             {uniqueTypes.map(t => <option key={t} value={t}>{travelTypeLabel(t, travelTypes)}</option>)}
           </select>
           <select className="ep-form-select" value={filterDept} onChange={e => { setFilterDept(e.target.value); setPage(1); }} style={{ minWidth: 160 }}>
-            <option value="">All Departments</option>
+            <option value="">All Divisions</option>
             {uniqueDepts.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
           <input type="date" className="ep-form-select" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }} title="From date" />
@@ -232,7 +236,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
               <thead>
                 <tr>
                   {visibleCols.employee && <th>Employee</th>}
-                  {visibleCols.department && <th>Department</th>}
+                  {visibleCols.department && <th>Division</th>}
                   {visibleCols.type && <th>Type</th>}
                   {visibleCols.status && <th>Status</th>}
                   {visibleCols.requested && <th>Requested</th>}
@@ -254,8 +258,8 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
                     {visibleCols.department && <td style={{ color: "var(--muted)", fontSize: 13 }}>{a.department || "—"}</td>}
                     {visibleCols.type && <td style={{ fontSize: 13 }}>{travelTypeLabel(a.type, travelTypes)}</td>}
                     {visibleCols.status && <td><StatusBadge status={a.status} /></td>}
-                    {visibleCols.requested && <td style={{ fontWeight: 600 }}>{formatMoney(a.requested_total, "LSL")}</td>}
-                    {visibleCols.approved && <td style={{ color: "var(--muted)" }}>{formatMoney(a.approved_total, "LSL")}</td>}
+                    {visibleCols.requested && <td style={{ fontWeight: 600 }}>{formatMoney(a.requested_total, travelTypeCurrency(a.type, travelTypes))}</td>}
+                    {visibleCols.approved && <td style={{ color: "var(--muted)" }}>{formatMoney(a.approved_total, travelTypeCurrency(a.type, travelTypes))}</td>}
                     {visibleCols.submitted && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.submitted_at || a.created_at)}</td>}
                     {visibleCols.approvedDate && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.approved_at)}</td>}
                     {visibleCols.paidDate && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.paid_at)}</td>}

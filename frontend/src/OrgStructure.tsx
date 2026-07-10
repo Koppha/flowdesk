@@ -93,10 +93,10 @@ const LEVEL_COLORS: Record<ModalMode, { bg: string; badge: string; dot: string }
 };
 
 const LEVEL_LABELS: Record<ModalMode, string> = {
-  division: "Division",
-  department: "Department",
-  section: "Section",
-  team: "Team",
+  division: "Company",
+  department: "Division",
+  section: "Department",
+  team: "Section",
 };
 
 function Badge({ mode }: { mode: ModalMode }) {
@@ -124,7 +124,7 @@ function Badge({ mode }: { mode: ModalMode }) {
 // ─── Import types ─────────────────────────────────────────────────────────────
 
 type ImportRow = {
-  type: "Division" | "Department" | "Section" | "Team";
+  type: "Company" | "Division" | "Department" | "Section";
   name: string;
   division: string;
   department: string;
@@ -195,21 +195,21 @@ export default function OrgStructure() {
   // ─── Export ─────────────────────────────────────────────────────────────────
 
   function exportCSV() {
-    const header = ["Type", "Name", "Division", "Department", "Section", "Description", "Active", "BusinessPartner"];
+    const header = ["Type", "Name", "Company", "Division", "Department", "Description", "Active", "BusinessPartner"];
     const rows: string[][] = [header];
 
     for (const div of data.divisions) {
-      rows.push(["Division", div.name, "", "", "", div.description ?? "", String(div.active), "false"]);
+      rows.push(["Company", div.name, "", "", "", div.description ?? "", String(div.active), "false"]);
     }
     for (const dept of data.departments) {
       const divName = data.divisions.find(d => d.id === dept.division_id)?.name ?? "";
-      rows.push(["Department", dept.name, divName, "", "", "", String(dept.active), String(dept.is_business_partner)]);
+      rows.push(["Division", dept.name, divName, "", "", "", String(dept.active), String(dept.is_business_partner)]);
     }
     for (const sec of data.sections) {
       const dept = data.departments.find(d => d.id === sec.department_id);
       const deptName = dept?.name ?? "";
       const divName = dept ? (data.divisions.find(d => d.id === dept.division_id)?.name ?? "") : "";
-      rows.push(["Section", sec.name, divName, deptName, "", "", String(sec.active), String(sec.is_business_partner)]);
+      rows.push(["Department", sec.name, divName, deptName, "", "", String(sec.active), String(sec.is_business_partner)]);
     }
     for (const team of data.teams) {
       const sec = data.sections.find(s => s.id === team.section_id);
@@ -217,7 +217,7 @@ export default function OrgStructure() {
       const dept = sec ? data.departments.find(d => d.id === sec.department_id) : null;
       const deptName = dept?.name ?? "";
       const divName = dept ? (data.divisions.find(d => d.id === dept.division_id)?.name ?? "") : "";
-      rows.push(["Team", team.name, divName, deptName, secName, "", String(team.active), "false"]);
+      rows.push(["Section", team.name, divName, deptName, secName, "", String(team.active), "false"]);
     }
 
     const csv = rows.map(r => r.map(csvCell).join(",")).join("\r\n");
@@ -247,7 +247,7 @@ export default function OrgStructure() {
         const cells = parseCsvLine(line);
         const type = cells[0]?.trim() as ImportRow["type"];
         const name = cells[1]?.trim() ?? "";
-        if (!name || !["Division", "Department", "Section", "Team"].includes(type)) continue;
+        if (!name || !["Company", "Division", "Department", "Section"].includes(type)) continue;
         parsed.push({
           type,
           name,
@@ -274,26 +274,26 @@ export default function OrgStructure() {
     const errors: string[] = [];
 
     try {
-      // 1. Divisions
-      for (const row of importRows.filter(r => r.type === "Division")) {
+      // 1. Companies
+      for (const row of importRows.filter(r => r.type === "Company")) {
         if (data.divisions.some(d => d.name.toLowerCase() === row.name.toLowerCase())) { skipped++; continue; }
         try { await api.createDivision(row.name, row.description || null); created++; }
-        catch (e: any) { errors.push(`Division "${row.name}": ${e.message}`); }
+        catch (e: any) { errors.push(`Company "${row.name}": ${e.message}`); }
       }
 
       let fresh: OrgData = await api.orgStructure();
 
-      // 2. Departments
-      for (const row of importRows.filter(r => r.type === "Department")) {
+      // 2. Divisions
+      for (const row of importRows.filter(r => r.type === "Division")) {
         if (fresh.departments.some((d: Department) => d.name.toLowerCase() === row.name.toLowerCase())) { skipped++; continue; }
         try { await api.createDepartment(row.name, undefined, undefined, undefined, row.active, undefined); created++; }
-        catch (e: any) { errors.push(`Department "${row.name}": ${e.message}`); }
+        catch (e: any) { errors.push(`Division "${row.name}": ${e.message}`); }
       }
 
       fresh = await api.orgStructure();
 
       // Link departments to divisions
-      for (const row of importRows.filter(r => r.type === "Department" && r.division)) {
+      for (const row of importRows.filter(r => r.type === "Division" && r.division)) {
         const dept = fresh.departments.find((d: Department) => d.name.toLowerCase() === row.name.toLowerCase());
         const div = fresh.divisions.find((d: Division) => d.name.toLowerCase() === row.division.toLowerCase());
         if (dept && div && !dept.division_id) {
@@ -304,22 +304,22 @@ export default function OrgStructure() {
 
       fresh = await api.orgStructure();
 
-      // 3. Sections
-      for (const row of importRows.filter(r => r.type === "Section")) {
+      // 3. Departments
+      for (const row of importRows.filter(r => r.type === "Department")) {
         if (fresh.sections.some((s: Section) => s.name.toLowerCase() === row.name.toLowerCase())) { skipped++; continue; }
         const deptId = fresh.departments.find((d: Department) => d.name.toLowerCase() === row.department.toLowerCase())?.id ?? null;
         try { await api.createSection(row.name, null, deptId, row.isBusinessPartner, []); created++; }
-        catch (e: any) { errors.push(`Section "${row.name}": ${e.message}`); }
+        catch (e: any) { errors.push(`Department "${row.name}": ${e.message}`); }
       }
 
       fresh = await api.orgStructure();
 
-      // 4. Teams
-      for (const row of importRows.filter(r => r.type === "Team")) {
+      // 4. Sections
+      for (const row of importRows.filter(r => r.type === "Section")) {
         if (fresh.teams.some((t: Team) => t.name.toLowerCase() === row.name.toLowerCase())) { skipped++; continue; }
         const secId = fresh.sections.find((s: Section) => s.name.toLowerCase() === row.section.toLowerCase())?.id ?? null;
         try { await api.createTeam(row.name, secId, null); created++; }
-        catch (e: any) { errors.push(`Team "${row.name}": ${e.message}`); }
+        catch (e: any) { errors.push(`Section "${row.name}": ${e.message}`); }
       }
 
       fresh = await api.orgStructure();
@@ -510,7 +510,7 @@ export default function OrgStructure() {
                 onToggle={() => toggleCollapse(`sec-${sec.id}`)}
                 onEdit={() => openEdit("section", { id: sec.id, name: sec.name, active: sec.active, is_business_partner: sec.is_business_partner, division_ids: sec.division_ids }, deptId)}
                 onDelete={() => setDeleteConfirm({ mode: "section", id: sec.id, name: sec.name })}
-                addChildLabel="Add Team"
+                addChildLabel="Add Section"
                 onAddChild={() => openAdd("team", sec.id)}
               />
               {!collapsed.has(`sec-${sec.id}`) && renderTeams(sec.id)}
@@ -527,7 +527,7 @@ export default function OrgStructure() {
     return (
       <div style={{ marginLeft: 24, marginTop: 4 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase" as const, letterSpacing: "0.06em", padding: "2px 0 4px 4px", opacity: 0.7 }}>
-          Business Partner Departments
+          Business Partner Divisions
         </div>
         {items.map(dept => {
           const secCount = data.sections.filter(s => s.department_id === dept.id).length;
@@ -544,7 +544,7 @@ export default function OrgStructure() {
                 onToggle={() => toggleCollapse(`dept-${dept.id}`)}
                 onEdit={() => openEdit("department", { id: dept.id, name: dept.name, active: dept.active, is_business_partner: dept.is_business_partner, division_ids: dept.division_ids, division_id: dept.division_id })}
                 onDelete={() => setDeleteConfirm({ mode: "department", id: dept.id, name: dept.name })}
-                addChildLabel="Add Section"
+                addChildLabel="Add Department"
                 onAddChild={() => openAdd("section", dept.id)}
               />
               {!collapsed.has(`dept-${dept.id}`) && renderSections(dept.id)}
@@ -561,7 +561,7 @@ export default function OrgStructure() {
     return (
       <div style={{ marginLeft: 24, marginTop: 4 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase" as const, letterSpacing: "0.06em", padding: "2px 0 4px 4px", opacity: 0.7 }}>
-          Business Partner Sections
+          Business Partner Departments
         </div>
         {items.map(sec => {
           const teamCount = data.teams.filter(t => t.section_id === sec.id).length;
@@ -578,7 +578,7 @@ export default function OrgStructure() {
                 onToggle={() => toggleCollapse(`sec-${sec.id}`)}
                 onEdit={() => openEdit("section", { id: sec.id, name: sec.name, active: sec.active, is_business_partner: sec.is_business_partner, division_ids: sec.division_ids })}
                 onDelete={() => setDeleteConfirm({ mode: "section", id: sec.id, name: sec.name })}
-                addChildLabel="Add Team"
+                addChildLabel="Add Section"
                 onAddChild={() => openAdd("team", sec.id)}
               />
               {!collapsed.has(`sec-${sec.id}`) && renderTeams(sec.id)}
@@ -612,7 +612,7 @@ export default function OrgStructure() {
                 onToggle={() => toggleCollapse(`dept-${dept.id}`)}
                 onEdit={() => openEdit("department", { id: dept.id, name: dept.name, active: dept.active, is_business_partner: dept.is_business_partner, division_ids: dept.division_ids, division_id: dept.division_id }, divId)}
                 onDelete={() => setDeleteConfirm({ mode: "department", id: dept.id, name: dept.name })}
-                addChildLabel="Add Section"
+                addChildLabel="Add Department"
                 onAddChild={() => openAdd("section", dept.id)}
               />
               {!collapsed.has(`dept-${dept.id}`) && renderSections(dept.id)}
@@ -634,7 +634,7 @@ export default function OrgStructure() {
           <div>
             <div style={{ fontWeight: 700, fontSize: 18, color: "var(--text)" }}>Org Structure</div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 1 }}>
-              {totalNodes} nodes · Divisions → Departments → Sections → Teams
+              {totalNodes} nodes · Companies → Divisions → Departments → Sections
             </div>
           </div>
         </div>
@@ -664,7 +664,7 @@ export default function OrgStructure() {
             <Upload size={13} /> Import
           </button>
           <button onClick={() => openAdd("division")} style={btnPrimary}>
-            <Plus size={14} /> New Division
+            <Plus size={14} /> New Company
           </button>
         </div>
       </div>
@@ -673,19 +673,19 @@ export default function OrgStructure() {
       <div className="stat-grid" style={{ marginBottom: 20 }}>
         <div className="stat-card stat-card-blue">
           <span className="stat-icon"><Building2 size={28} /></span>
-          <div><div className="stat-value">{data.divisions.length}</div><div className="stat-label">Divisions</div></div>
+          <div><div className="stat-value">{data.divisions.length}</div><div className="stat-label">Companies</div></div>
         </div>
         <div className="stat-card stat-card-gold">
           <span className="stat-icon"><Briefcase size={28} /></span>
-          <div><div className="stat-value">{data.departments.length}</div><div className="stat-label">Departments</div></div>
+          <div><div className="stat-value">{data.departments.length}</div><div className="stat-label">Divisions</div></div>
         </div>
         <div className="stat-card stat-card-rose">
           <span className="stat-icon"><Layers size={28} /></span>
-          <div><div className="stat-value">{data.sections.length}</div><div className="stat-label">Sections</div></div>
+          <div><div className="stat-value">{data.sections.length}</div><div className="stat-label">Departments</div></div>
         </div>
         <div className="stat-card stat-card-green">
           <span className="stat-icon"><Users size={28} /></span>
-          <div><div className="stat-value">{data.teams.length}</div><div className="stat-label">Teams</div></div>
+          <div><div className="stat-value">{data.teams.length}</div><div className="stat-label">Sections</div></div>
         </div>
       </div>
 
@@ -700,11 +700,11 @@ export default function OrgStructure() {
       ) : (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "16px 20px" }}>
 
-          {/* Company root */}
+          {/* Organization root */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 12, borderBottom: "1px solid var(--border)", marginBottom: 12 }}>
             <Building2 size={18} color="#64748b" />
-            <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Company</span>
-            <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>{data.divisions.length} divisions</span>
+            <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Organization</span>
+            <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>{data.divisions.length} companies</span>
           </div>
 
           {/* Divisions */}
@@ -723,7 +723,7 @@ export default function OrgStructure() {
                   onToggle={() => toggleCollapse(`div-${div.id}`)}
                   onEdit={() => openEdit("division", { id: div.id, name: div.name, description: div.description, active: div.active })}
                   onDelete={() => setDeleteConfirm({ mode: "division", id: div.id, name: div.name })}
-                  addChildLabel="Add Department"
+                  addChildLabel="Add Division"
                   onAddChild={() => openAdd("department", div.id)}
                 />
                 {!collapsed.has(`div-${div.id}`) && renderDepartments(div.id)}
@@ -822,7 +822,7 @@ export default function OrgStructure() {
                 {/* Division assignment for regular (non-BP) departments */}
                 {form.mode === "department" && !form.isBP && (
                   <label style={labelStyle}>
-                    Parent Division
+                    Parent Company
                     <select
                       value={form.homeDivisionId ?? ""}
                       onChange={e => setForm(f => f ? { ...f, homeDivisionId: e.target.value || null } : f)}
@@ -842,17 +842,17 @@ export default function OrgStructure() {
                     onChange={e => setForm(f => f ? { ...f, isBP: e.target.checked, bpDivisionIds: e.target.checked ? f.bpDivisionIds : [] } : f)}
                   />
                   <div>
-                    <div style={{ fontWeight: 600 }}>Business Partner {form.mode === "section" ? "Section" : "Department"}</div>
-                    <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>This {form.mode} serves multiple divisions</div>
+                    <div style={{ fontWeight: 600 }}>Business Partner {form.mode === "section" ? "Department" : "Division"}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>This {LEVEL_LABELS[form.mode].toLowerCase()} serves multiple companies</div>
                   </div>
                 </label>
                 {form.isBP && (
                   <div style={{ padding: "10px 12px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 7 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>
-                      Choose Divisions
+                      Choose Companies
                     </div>
                     {data.divisions.length === 0 && (
-                      <div style={{ fontSize: 12, color: "var(--muted)" }}>No divisions available.</div>
+                      <div style={{ fontSize: 12, color: "var(--muted)" }}>No companies available.</div>
                     )}
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       {data.divisions.filter(div => div.id !== (form.homeDivisionId ?? form.parentId)).map(div => (
@@ -950,11 +950,11 @@ export default function OrgStructure() {
                   <FileText size={13} /> Expected CSV format
                 </div>
                 <code style={{ fontSize: 11, display: "block", whiteSpace: "pre" }}>
-                  {"Type,Name,Division,Department,Section,Description,Active,BusinessPartner\n"}
-                  {"Division,Higherlife,,,,Company division,true,false\n"}
-                  {"Department,Technical,Higherlife,,,,true,false\n"}
-                  {"Section,Billing & IS,,Technical,,,true,false\n"}
-                  {"Team,Applications,,,Billing & IS,,true,false"}
+                  {"Type,Name,Company,Division,Department,Description,Active,BusinessPartner\n"}
+                  {"Company,Higherlife,,,,Top-level entity,true,false\n"}
+                  {"Division,Technical,Higherlife,,,,true,false\n"}
+                  {"Department,Billing & IS,,Technical,,,true,false\n"}
+                  {"Section,Applications,,,Billing & IS,,true,false"}
                 </code>
               </div>
               <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
@@ -970,12 +970,12 @@ export default function OrgStructure() {
           {importRows && !importResult && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {(["Division", "Department", "Section", "Team"] as ImportRow["type"][]).map(t => {
+                {(["Company", "Division", "Department", "Section"] as ImportRow["type"][]).map(t => {
                   const count = importRows.filter(r => r.type === t).length;
                   return (
                     <div key={t} style={{ padding: "8px 12px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 6, fontSize: 13 }}>
                       <span style={{ fontWeight: 600, color: "var(--text)" }}>{count}</span>
-                      <span style={{ color: "var(--muted)", marginLeft: 6 }}>{t}{count !== 1 ? "s" : ""}</span>
+                      <span style={{ color: "var(--muted)", marginLeft: 6 }}>{LEVEL_LABELS[t.toLowerCase() as ModalMode]}{count !== 1 ? "s" : ""}</span>
                     </div>
                   );
                 })}

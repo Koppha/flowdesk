@@ -17,6 +17,7 @@ import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveAdvancePdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
+import { buildAdvancePdfFilename, formatPaymentReference } from "../../lib/pdf/pdfHelpers.js";
 
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 
@@ -195,7 +196,7 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: stri
   const actorDepartment = String(actor.department || "").trim();
   const requesterDepartment = String(requester.department || "").trim();
   if (!actorDepartment || !requesterDepartment || actorDepartment !== requesterDepartment) {
-    throw forbidden("On-behalf advances must stay within the same department");
+    throw forbidden("On-behalf advances must stay within the same division");
   }
 
   return { actor, requester };
@@ -203,10 +204,11 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: stri
 
 export async function getAdvanceNotificationContext(advanceId: string) {
   return (
-    await query<{ full_name: string | null; email: string | null; department: string | null; requested_total: string; approved_total: string; type: string; status: string; paid_reference: string | null }>(
-      `SELECT u.full_name, u.email, u.department, ar.requested_total, ar.approved_total, ar.type, ar.status, ar.paid_reference
+    await query<{ full_name: string | null; email: string | null; department: string | null; requested_total: string; approved_total: string; type: string; status: string; paid_reference: string | null; currency: string | null }>(
+      `SELECT u.full_name, u.email, u.department, ar.requested_total, ar.approved_total, ar.type, ar.status, ar.paid_reference, tt.currency
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
+         LEFT JOIN travel_types tt ON tt.code = ar.type
         WHERE ar.id = $1`,
       [advanceId]
     )
@@ -443,8 +445,19 @@ advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("
            FROM advance_requests
           GROUP BY requester_id
        ),
+       adv AS (
+         SELECT ar.requester_id AS user_id,
+                MAX(COALESCE(tt.currency, 'LSL')) AS currency,
+                SUM(CASE WHEN status = 'PAID' AND paid_at < $1 THEN approved_total ELSE 0 END) AS paid_before,
+                SUM(CASE WHEN status = 'PAID' AND paid_at >= $1 AND paid_at <= $2 THEN approved_total ELSE 0 END) AS paid_in_period,
+                SUM(CASE WHEN created_at >= $1 AND created_at <= $2 THEN requested_total ELSE 0 END) AS requested_in_period
+           FROM advance_requests ar
+           LEFT JOIN travel_types tt ON tt.code = ar.type
+          GROUP BY ar.requester_id
+       ),
        clm AS (
          SELECT claimant_id AS user_id,
+                MAX(COALESCE(currency, 'LSL')) AS currency,
                 SUM(CASE WHEN status = 'SETTLED' AND settled_at < $1 THEN claim_total ELSE 0 END) AS settled_before,
                 SUM(CASE WHEN status = 'SETTLED' AND settled_at >= $1 AND settled_at <= $2 THEN claim_total ELSE 0 END) AS settled_in_period
            FROM clearance_claims
@@ -456,7 +469,8 @@ advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("
               COALESCE(adv.paid_in_period, 0) AS total_paid,
               COALESCE(clm.settled_in_period, 0) AS total_settled,
               (COALESCE(adv.paid_before, 0) - COALESCE(clm.settled_before, 0))
-                + COALESCE(adv.paid_in_period, 0) - COALESCE(clm.settled_in_period, 0) AS closing_balance
+                + COALESCE(adv.paid_in_period, 0) - COALESCE(clm.settled_in_period, 0) AS closing_balance,
+              COALESCE(clm.currency, adv.currency, 'LSL') AS currency
          FROM users u
          LEFT JOIN adv ON adv.user_id = u.id
          LEFT JOIN clm ON clm.user_id = u.id
@@ -514,6 +528,80 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
   }
 });
 
+// Must be registered before GET /:id, otherwise Express matches "/payments" as id="payments".
+advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
+  try {
+    const role = req.user!.role;
+    if (role !== "ADMIN" && !isFinanceDept(req.user!.department)) throw forbidden();
+
+    const statusParam = String(req.query.status || "all") as "pending" | "paid" | "all";
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const rows = await query<any>(
+      `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+              ar.workflow_step_order, ar.approval_chain, ar.paid_at, ar.paid_reference,
+              ar.created_at, ar.sequence_no,
+              u.full_name AS requester_name, u.employee_no AS requester_employee_no, u.department
+         FROM advance_requests ar
+         JOIN users u ON u.id = ar.requester_id
+        WHERE ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
+        ORDER BY ar.created_at DESC`
+    );
+
+    const classified: any[] = [];
+    for (const a of rows) {
+      let paymentStatus: "PENDING" | "PAID" | null = null;
+      if (a.status === "PAID") {
+        paymentStatus = "PAID";
+      } else {
+        const chain = (a.approval_chain as ChainStep[] | null) || [];
+        if (chain.length) {
+          const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
+          const hasPendingMarkPaid = group.steps.some((s) => !s.approved && s.action_type === "MARK_PAID");
+          const hasMarkPaidStep = chain.some((s) => s.action_type === "MARK_PAID");
+          if (hasPendingMarkPaid || (!hasMarkPaidStep && ["HR_OFFICER", "APPROVED"].includes(a.status))) {
+            paymentStatus = "PENDING";
+          }
+        } else if (["HR_OFFICER", "APPROVED"].includes(a.status)) {
+          paymentStatus = "PENDING";
+        }
+      }
+      if (!paymentStatus) continue;
+
+      let approvedByName: string | null = null;
+      const chain = (a.approval_chain as ChainStep[] | null) || [];
+      for (let i = chain.length - 1; i >= 0; i--) {
+        if (chain[i]?.approved) { approvedByName = chain[i].position_name || null; break; }
+      }
+
+      classified.push({
+        id: a.id,
+        status: a.status,
+        payment_status: paymentStatus,
+        type: a.type,
+        requested_total: Number(a.requested_total),
+        approved_total: Number(a.approved_total),
+        purpose: a.purpose,
+        requester_name: a.requester_name,
+        department: a.department,
+        created_at: a.created_at,
+        paid_at: a.paid_at,
+        paid_reference: a.paid_reference,
+        approved_by_name: approvedByName,
+        pdf_filename: buildAdvancePdfFilename(a.requester_name, a.requester_employee_no, a.sequence_no)
+      });
+    }
+
+    const filtered = statusParam === "all" ? classified : classified.filter((r) => r.payment_status === statusParam.toUpperCase());
+    const total = filtered.length;
+    const items = filtered.slice(offset, offset + limit);
+    return res.json({ items, total, limit, offset });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
     const adv = (
@@ -521,6 +609,9 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
         `SELECT ar.*,
                 u.full_name AS requester_name,
                 u.employee_no AS requester_employee_no,
+                u.department AS department,
+                creator.full_name AS created_by_name,
+                et.name AS traveller_type,
                 tt.id AS travel_type_id,
                 tt.name AS travel_type_name,
                 tt.location_mode AS travel_location_mode,
@@ -533,7 +624,9 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
                 ${OVERDUE_SELECT}
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
+         JOIN users creator ON creator.id = ar.created_by_id
          LEFT JOIN travel_types tt ON tt.code = ar.type
+         LEFT JOIN employment_types et ON et.code = u.employment_type
          CROSS JOIN advance_recovery_settings ars
          WHERE ar.id=$1`,
         [req.params.id]
@@ -599,6 +692,7 @@ advancesRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
       await query<any>(
         `SELECT ar.*,
                 u.full_name AS requester_name,
+                u.employee_no AS requester_employee_no,
                 u.department AS department,
                 creator.full_name AS created_by_name,
                 tt.currency AS currency
@@ -611,6 +705,7 @@ advancesRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
       )
     )[0];
     if (!adv) throw notFound();
+    const pdfFilename = buildAdvancePdfFilename(adv.requester_name, adv.requester_employee_no, adv.sequence_no);
     const managerChainIds = await getManagerChainIds(adv.requester_id);
     const isOwner = adv.requester_id === req.user!.userId || adv.created_by_id === req.user!.userId;
     if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: adv.approval_chain, managerChainIds }))) {
@@ -629,7 +724,7 @@ advancesRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
       };
       const doc = renderPdfTemplate(template, letterhead, data, catalog);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `inline; filename="advance-${req.params.id}.pdf"`);
+      res.setHeader("Content-Disposition", `inline; filename="${pdfFilename}"`);
       doc.pipe(res);
       doc.end();
       return;
@@ -900,6 +995,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         requesterEmail: notificationContext.email,
         department: notificationContext.department,
         requestedTotal: Number(notificationContext.requested_total),
+        currency: notificationContext.currency,
         nextApprover: chain[0]
           ? { id: chain[0].approver_id, name: chain[0].approver_name, email: chain[0].approver_email, title: chain[0].approver_title || chain[0].position_name }
           : null,
@@ -978,7 +1074,8 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
         requesterName: notificationContext.full_name,
         requesterEmail: notificationContext.email,
         department: notificationContext.department,
-        requestedTotal: Number(notificationContext.requested_total)
+        requestedTotal: Number(notificationContext.requested_total),
+        currency: notificationContext.currency
       });
     }
     return res.json({ ok: true, status: "DRAFT" });
@@ -1044,7 +1141,8 @@ export async function performAdvanceReject(
       advanceType: notificationContext.type,
       requesterName: notificationContext.full_name,
       department: notificationContext.department,
-      requestedTotal: Number(notificationContext.requested_total)
+      requestedTotal: Number(notificationContext.requested_total),
+      currency: notificationContext.currency
     });
   }
   return { status };
@@ -1162,6 +1260,7 @@ export async function performAdvanceApprove(
       requesterEmail: notificationContext.email,
       department: notificationContext.department,
       requestedTotal: Number(notificationContext.requested_total),
+      currency: notificationContext.currency,
       nextApprover,
       stepOrder: newStepOrder
     });
@@ -1176,6 +1275,7 @@ export async function performAdvanceApprove(
           department: notificationContext.department,
           stepOrder: newStepOrder,
           requestedTotal: Number(notificationContext.requested_total),
+          currency: notificationContext.currency,
           nextApprover: extra
         });
       }
@@ -1190,6 +1290,7 @@ export async function performAdvanceApprove(
         department: notificationContext.department,
         advanceType: notificationContext.type,
         approvedTotal,
+        currency: notificationContext.currency,
         paidReference: notificationContext.paid_reference
       });
     }
@@ -1197,13 +1298,12 @@ export async function performAdvanceApprove(
   return { status: nextStatus };
 }
 
-const MarkPaidSchema = z.object({ paid_reference: z.string().trim().optional() });
+const MarkPaidSchema = z.object({});
 
 advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = MarkPaidSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
-    const paidReference = parsed.data.paid_reference || null;
 
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
@@ -1227,7 +1327,9 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
     let newWorkflowStepOrder: number | undefined;
 
     if (markPaidStep) {
-      const isAuthorized = role === "ADMIN" || (await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.department));
+      // ADMIN is intentionally excluded here — Admin can view payments but must not
+      // be able to mark them paid, only the workflow's actual assigned payer can.
+      const isAuthorized = await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.department);
       if (!isAuthorized) throw forbidden("You are not the assigned payer for this step");
 
       newChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: true } : s));
@@ -1252,13 +1354,19 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
         const finalStep = chain[chain.length - 1];
         if (finalStep?.approver_id === req.user!.userId) isFinalStepAuthorized = true;
       }
-      if (role !== "ADMIN" && !isFinanceDept(req.user!.department) && !isFinalStepAuthorized) {
+      // ADMIN is intentionally excluded here too — view-only for Admin.
+      if (!isFinanceDept(req.user!.department) && !isFinalStepAuthorized) {
         throw forbidden("Only Finance can mark an advance as paid");
       }
       status = nextStatusOrThrow(adv.status, "MARK_PAID");
     }
 
     const isNowPaid = status === "PAID";
+    let paidReference: string | null = null;
+    if (isNowPaid) {
+      const seqRows = await query<{ seq: string }>(`SELECT nextval('payment_ref_seq') AS seq`);
+      paidReference = formatPaymentReference(Number(seqRows[0].seq));
+    }
     if (newChain) {
       await query(
         `UPDATE advance_requests SET status=$2, workflow_step_order=$3, approval_chain=$4, paid_reference=$5,
@@ -1289,6 +1397,7 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
           department: paidCtx.department,
           advanceType: paidCtx.type,
           approvedTotal: Number(paidCtx.approved_total || paidCtx.requested_total),
+          currency: paidCtx.currency,
           paidReference: paidCtx.paid_reference
         });
       }
@@ -1322,7 +1431,8 @@ advancesRouter.post("/:id/revoke", async (req: AuthedRequest, res, next) => {
         requesterEmail: cancelCtx.email,
         department: cancelCtx.department,
         advanceType: cancelCtx.type,
-        requestedTotal: Number(cancelCtx.requested_total)
+        requestedTotal: Number(cancelCtx.requested_total),
+        currency: cancelCtx.currency
       });
     }
     return res.json({ ok: true, status });
@@ -1408,6 +1518,7 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
       requesterName:  requester?.full_name ?? null,
       department:     adv.requester_department ?? null,
       requestedTotal: Number(adv.requested_total),
+      currency:       adv.currency,
       status:         adv.status,
       approverName,
       approverEmail,

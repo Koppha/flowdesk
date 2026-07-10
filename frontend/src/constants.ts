@@ -87,3 +87,7 @@ export function isTravelTypeCode(code: string | null | undefined, travelTypes: T
   if (!code) return false;
   return travelTypes.some((type) => type.code === code && type.active !== false);
 }
+
+export function isFinanceDeptClient(department: string | null | undefined): boolean {
+  return String(department || "").trim().toLowerCase() === "finance";
+}

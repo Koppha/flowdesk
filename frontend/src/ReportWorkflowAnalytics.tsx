@@ -177,7 +177,7 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
             </div>
 
             <div className="ep-panel">
-              <div className="ep-panel-head"><div className="ep-panel-title">Workflows by Department</div></div>
+              <div className="ep-panel-head"><div className="ep-panel-title">Workflows by Division</div></div>
               <div style={{ padding: "12px 20px", maxHeight: 260, overflowY: "auto" }}>
                 {byDept.length === 0 ? (
                   <div className="ep-empty" style={{ padding: "20px 0" }}><p>No workflows configured.</p></div>
@@ -209,8 +209,8 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
                     <tr>
                       <th>Workflow Name</th>
                       <th>Request Type</th>
+                      <th>Division</th>
                       <th>Department</th>
-                      <th>Section</th>
                       <th>Steps</th>
                       <th>Status</th>
                     </tr>

@@ -574,7 +574,7 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
         ))}
         {noSection.length > 0 && (
           sectionMap.size > 0
-            ? <optgroup label="Other Departments">{noSection.map((d) => <option key={d} value={d}>{d}</option>)}</optgroup>
+            ? <optgroup label="Other Divisions">{noSection.map((d) => <option key={d} value={d}>{d}</option>)}</optgroup>
             : noSection.map((d) => <option key={d} value={d}>{d}</option>)
         )}
       </>
@@ -598,7 +598,7 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Request Types</h1>
-          <p className="ep-subtitle">Define custom request types and design their input forms. Assign users or departments who can submit or design each type.</p>
+          <p className="ep-subtitle">Define custom request types and design their input forms. Assign users or divisions who can submit or design each type.</p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" onClick={() => void load()}><RefreshCw size={14} />Refresh</button>
@@ -999,16 +999,16 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
                               <label>Grant To</label>
                               <select className="ep-form-select" value={newPermType} onChange={(e) => setNewPermType(e.target.value as "ALL" | "DEPARTMENT" | "USER" | "EMPLOYMENT_TYPE")}>
                                 <option value="ALL">All Users</option>
-                                <option value="DEPARTMENT">Department</option>
+                                <option value="DEPARTMENT">Division</option>
                                 <option value="EMPLOYMENT_TYPE">Employment Type</option>
                                 <option value="USER">Specific User</option>
                               </select>
                             </div>
                             {newPermType === "DEPARTMENT" && (
                               <div className="ep-form-group" style={{ marginBottom: 0 }}>
-                                <label>Department</label>
+                                <label>Division</label>
                                 <select className="ep-form-select" value={newPermDept} onChange={(e) => setNewPermDept(e.target.value)}>
-                                  <option value="">Select department</option>
+                                  <option value="">Select division</option>
                                   {allDepts.map((d) => <option key={d}>{d}</option>)}
                                 </select>
                               </div>

@@ -2,6 +2,10 @@ import React, { useMemo, useState } from "react";
 import { formatMoney, travelTypeLabel, isTravelTypeCode, TravelType } from "./constants";
 import { Wallet, Clock3, CheckCircle2, Banknote, XCircle, Edit3, RefreshCw, Plus } from "lucide-react";
 
+function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
+  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
+}
+
 interface Props {
   advances: any[];
   travelTypes: TravelType[];
@@ -249,8 +253,8 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
                       {a.is_overdue && <span className="status-pill status-pill-danger" style={{ marginLeft: 6 }}>Overdue</span>}
                     </td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{advanceStageLabel(a.status)}</td>
-                    <td>{formatMoney(a.requested_total, "LSL")}</td>
-                    <td>{formatMoney(a.approved_total, "LSL")}</td>
+                    <td>{formatMoney(a.requested_total, travelTypeCurrency(a.type, travelTypes))}</td>
+                    <td>{formatMoney(a.approved_total, travelTypeCurrency(a.type, travelTypes))}</td>
                     <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.created_at)}</td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>

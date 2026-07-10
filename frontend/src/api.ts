@@ -236,6 +236,7 @@ export const api = {
   updateClaimTrips: (id: string, data: any) => req(`/claims/${id}/trips`, { method: "PUT", body: JSON.stringify(data) }),
   uploadClaimReceipt: (id: string, form: FormData) => req(`/claims/${id}/upload-receipt`, { method: "POST", body: form }),
   deleteClaimReceipt: (id: string, receiptId: string) => req(`/claims/${id}/receipts/${receiptId}`, { method: "DELETE" }),
+  claimReceiptFileBlob: (id: string, receiptId: string) => fetchBlob(`/claims/${id}/receipts/${receiptId}/file`),
   submitClaim: (id: string) => req(`/claims/${id}/submit`, { method: "POST", body: JSON.stringify({}) }),
 
   inbox: () => req("/inbox"),
@@ -291,7 +292,9 @@ export const api = {
   rejectAdvance: (id: string, comments: string) => req(`/advances/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   approveAdvance: (id: string, approved_total: number, comments?: string) =>
     req(`/advances/${id}/approve`, { method: "POST", body: JSON.stringify({ approved_total, comments }) }),
-  markAdvancePaid: (id: string, paid_reference: string) => req(`/advances/${id}/mark-paid`, { method: "POST", body: JSON.stringify({ paid_reference }) }),
+  markAdvancePaid: (id: string) => req(`/advances/${id}/mark-paid`, { method: "POST", body: JSON.stringify({}) }),
+  payments: (params: { status?: "pending" | "paid" | "all"; limit?: number; offset?: number } = {}) =>
+    req(`/advances/payments?${new URLSearchParams(params as any).toString()}`),
 
   approveClaim: (id: string, comments?: string) => req(`/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
   rejectClaim: (id: string, comments: string) => req(`/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
@@ -300,13 +303,13 @@ export const api = {
     finance_decision: "ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE";
     finance_comments: string;
     settlement_amount?: number;
-    settled_method?: "ECOCASH" | "BANK" | "CASH" | "OTHER";
+    settled_method?: "PAYROLL" | "ECOCASH" | "BANK" | "CASH" | "OTHER";
     settled_reference?: string;
     assignee_user_id?: string;
     assignee_group_name?: string;
     expected_payment_date?: string;
   }) => req(`/claims/${id}/settle`, { method: "POST", body: JSON.stringify(payload) }),
-  markClaimSettled: (id: string, settled_method?: "ECOCASH" | "BANK" | "CASH" | "OTHER", settled_reference?: string) =>
+  markClaimSettled: (id: string, settled_method?: "PAYROLL" | "ECOCASH" | "BANK" | "CASH" | "OTHER", settled_reference?: string) =>
     req(`/claims/${id}/mark-settled`, { method: "POST", body: JSON.stringify({ settled_method, settled_reference }) }),
   // Hotels (accommodation)
   hotels: () => req("/accommodation/hotels"),

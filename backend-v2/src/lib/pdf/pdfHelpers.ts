@@ -32,6 +32,21 @@ export function formatRequestNumber(prefix: string, id: string, createdAt: strin
   return `${prefix}-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
 }
 
+// Builds the downloaded filename for a captured advance's PDF, e.g.
+// "Mampho Mosakeng - EMP1023 - Travel Advance Request - 001.pdf". sequenceNo
+// is the request's persistent, gap-free counter (advance_requests.sequence_no),
+// not the uuid-derived reference shown on screen (formatRequestNumber above).
+export function buildAdvancePdfFilename(employeeName: string | null | undefined, employeeNo: string | null | undefined, sequenceNo: number | null | undefined) {
+  const clean = (s: string | null | undefined) => String(s ?? "").replace(/["\\/:*?<>|]/g, "").trim();
+  const seq = sequenceNo ? String(sequenceNo).padStart(3, "0") : "000";
+  const parts = [clean(employeeName), clean(employeeNo), "Travel Advance Request", seq].filter(Boolean);
+  return `${parts.join(" - ")}.pdf`;
+}
+
+export function formatPaymentReference(seq: number, year = new Date().getFullYear()) {
+  return `PAY-${year}-${String(seq).padStart(4, "0")}`;
+}
+
 export function dottedLine(doc: PDFKit.PDFDocument, label: string, value: string, width: number) {
   const labelWidth = doc.widthOfString(label);
   doc.text(label, { continued: true });
