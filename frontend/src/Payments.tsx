@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { formatMoney } from "./constants";
-import { Clock, CheckCircle, Wallet, FileText } from "lucide-react";
+import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight } from "lucide-react";
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
 interface PaymentItem {
   id: string;
@@ -54,6 +56,9 @@ export default function Payments(props: { onBack?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<PaymentItem | null>(null);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   async function refresh() {
     setError(null);
@@ -76,7 +81,21 @@ export default function Payments(props: { onBack?: () => void }) {
     paidValue: items.filter((i) => i.payment_status === "PAID").reduce((s, i) => s + Number(i.approved_total || i.requested_total || 0), 0)
   }), [items]);
 
-  const filtered = useMemo(() => items.filter((i) => i.payment_status === tab.toUpperCase()), [items, tab]);
+  const filtered = useMemo(() => {
+    const byTab = items.filter((i) => i.payment_status === tab.toUpperCase());
+    if (!search.trim()) return byTab;
+    const q = search.toLowerCase();
+    return byTab.filter((i) =>
+      requestNumber(i).toLowerCase().includes(q) ||
+      (i.requester_name || "").toLowerCase().includes(q) ||
+      (i.department || "").toLowerCase().includes(q) ||
+      (i.paid_reference || "").toLowerCase().includes(q)
+    );
+  }, [items, tab, search]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const paged = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   async function handleMarkPaid(item: PaymentItem) {
     setBusy(true);
@@ -120,14 +139,21 @@ export default function Payments(props: { onBack?: () => void }) {
         </div>
       </div>
 
+      <div className="ep-tabs">
+        <button type="button" className={`ep-tab ${tab === "pending" ? "active" : ""}`} onClick={() => { setTab("pending"); setPage(1); }}>
+          Pending <span className="inbox-count-chip">{stats.pending}</span>
+        </button>
+        <button type="button" className={`ep-tab ${tab === "paid" ? "active" : ""}`} onClick={() => { setTab("paid"); setPage(1); }}>
+          Paid <span className="inbox-count-chip">{stats.paid}</span>
+        </button>
+      </div>
+
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 8, padding: "12px 20px" }}>
-          <button className={`button small-button ${tab === "pending" ? "button-primary" : "button-subtle"}`} onClick={() => setTab("pending")}>
-            Pending <b style={{ marginLeft: 6 }}>{stats.pending}</b>
-          </button>
-          <button className={`button small-button ${tab === "paid" ? "button-primary" : "button-subtle"}`} onClick={() => setTab("paid")}>
-            Paid <b style={{ marginLeft: 6 }}>{stats.paid}</b>
-          </button>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
+          <div className="ep-search" style={{ flex: "1 1 220px" }}>
+            <Search size={14} />
+            <input placeholder="Search by payee, department, reference…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+          </div>
         </div>
       </div>
 
@@ -149,7 +175,7 @@ export default function Payments(props: { onBack?: () => void }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item) => (
+                {paged.map((item) => (
                   <tr key={item.id} style={{ cursor: "pointer" }} onClick={() => setSelected(item)}>
                     <td>{item.paid_reference || "—"}</td>
                     <td>{requestNumber(item)}</td>
@@ -164,6 +190,24 @@ export default function Payments(props: { onBack?: () => void }) {
             </table>
           )}
         </div>
+
+        {filtered.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>
+              Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} entries
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <select className="ep-form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+                {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} per page</option>)}
+              </select>
+              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}><ChevronLeft size={14} /></button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).slice(0, 7).map((n) => (
+                <button key={n} className={`button small-button ${currentPage === n ? "button-primary" : "button-subtle"}`} onClick={() => setPage(n)}>{n}</button>
+              ))}
+              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}><ChevronRight size={14} /></button>
+            </div>
+          </div>
+        )}
       </div>
 
       {selected && (

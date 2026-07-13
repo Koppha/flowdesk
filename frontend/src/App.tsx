@@ -4,6 +4,7 @@ import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, g
 import AttendanceModule from "./AttendanceModule";
 import Inbox, { isCaptureItem, isPaymentItem } from "./Inbox";
 import Payments from "./Payments";
+import Deductions from "./Deductions";
 import OvertimeModule from "./OvertimeModule";
 import OvertimeClaimModule from "./OvertimeClaimModule";
 import EmployeesOnboarding from "./EmployeesOnboarding";
@@ -62,6 +63,7 @@ import {
   Lock,
   LogOut,
   Mail,
+  MinusCircle,
   Moon,
   Network,
   Plane,
@@ -280,7 +282,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -331,6 +333,8 @@ export default function App() {
   const [importHotelResult, setImportHotelResult] = useState<{ created: number; skipped: number; errors: string[] } | null>(null);
   const hotelFileInputRef = useRef<HTMLInputElement>(null);
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
+  const [hasDeductionsAccess, setHasDeductionsAccess] = useState(false);
+  const [deductionsCount, setDeductionsCount] = useState(0);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
   const favoritePagesInitialized = useRef(false);
@@ -1044,7 +1048,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp, paymentsResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp, paymentsResp, deductionsAccessResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1058,6 +1062,7 @@ export default function App() {
       // Fails silently (403) for anyone outside Finance/Admin via optionalStartupData's
       // catch-and-fallback, same as every other startup call above — no role check needed here.
       optionalStartupData<{ total?: number }>(api.payments({ status: "pending" }), { total: 0 }, "Payments"),
+      optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -1092,6 +1097,8 @@ export default function App() {
     setMealValueDraft(String(configuredMealValue));
     setTravelTypes(Array.isArray(travelResp) ? travelResp : []);
     setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
+    setHasDeductionsAccess(Boolean(deductionsAccessResp?.allowed));
+    setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
     if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
       setFeaturePermissions(featPermResp.features as Record<string, string[]>);
     }
@@ -1167,6 +1174,15 @@ export default function App() {
         setPaymentsCount(paymentsResp.total || 0);
       } catch {
         // ignored — non-Finance/Admin users simply won't see a Payments badge
+      }
+      // Separate try/catch: 403s here (anyone without Deductions access) are
+      // expected and must not trigger the inbox poll's auth-error logout above.
+      try {
+        const deductionsResp: { allowed?: boolean; pendingCount?: number } = await api.deductionsAccess();
+        setHasDeductionsAccess(Boolean(deductionsResp?.allowed));
+        setDeductionsCount(deductionsResp?.pendingCount || 0);
+      } catch {
+        // ignored — users without Deductions access simply won't see the nav item
       }
     }, 30_000);
     return () => clearInterval(id);
@@ -3620,6 +3636,9 @@ export default function App() {
           {(isFinanceDeptClient(profile?.department || me?.department || "") || role === "ADMIN") && (
             <a href="#" className={navItemClass(page === "PAYMENTS")} onClick={(e) => { e.preventDefault(); setPage("PAYMENTS"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Payments <b>{paymentsCount}</b></a>
           )}
+          {hasDeductionsAccess && (
+            <a href="#" className={navItemClass(page === "DEDUCTIONS")} onClick={(e) => { e.preventDefault(); setPage("DEDUCTIONS"); }}><span className="sidebar-nav-icon"><MinusCircle size={18} aria-hidden /></span>Deductions <b>{deductionsCount}</b></a>
+          )}
           <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page) ? "open" : ""}`}>
             <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
@@ -3689,6 +3708,8 @@ export default function App() {
             <Inbox mode="capture" onBack={() => setPage("HOME")} />
           ) : page === "PAYMENTS" ? (
             <Payments onBack={() => setPage("HOME")} />
+          ) : page === "DEDUCTIONS" ? (
+            <Deductions />
           ) : page === "ATTENDANCE" ? (
             <AttendanceModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME" ? (

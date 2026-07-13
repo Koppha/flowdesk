@@ -427,5 +427,17 @@ export const api = {
   updateTravelType: (id: string, data: any) => req(`/travel/types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteTravelType: (id: string) => req(`/travel/types/${id}`, { method: "DELETE" }),
   createTravelLocation: (data: any) => req("/travel/locations", { method: "POST", body: JSON.stringify(data) }),
-  updateTravelLocation: (id: string, data: any) => req(`/travel/locations/${id}`, { method: "PUT", body: JSON.stringify(data) })
+  updateTravelLocation: (id: string, data: any) => req(`/travel/locations/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+
+  deductionsAccess: () => req("/deductions/access"),
+  deductions: () => req("/deductions"),
+  createDeduction: (data: { employee_id: string; deduction_type: string; amount: number; deduction_date: string; reason?: string }) =>
+    req("/deductions", { method: "POST", body: JSON.stringify(data) }),
+  updateDeduction: (id: string, data: { employee_id: string; deduction_type: string; amount: number; deduction_date: string; reason?: string }) =>
+    req(`/deductions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  updateDeductionStatus: (id: string, status: "PENDING" | "PROCESSING" | "PROCESSED") =>
+    req(`/deductions/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  deleteDeduction: (id: string) => req(`/deductions/${id}`, { method: "DELETE" }),
+  deductionAccessGroups: () => req("/deductions/access-groups"),
+  setDeductionAccessGroups: (groups: string[]) => req("/deductions/access-groups", { method: "PUT", body: JSON.stringify({ groups }) })
 };

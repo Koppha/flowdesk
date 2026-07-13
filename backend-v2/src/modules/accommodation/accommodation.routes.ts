@@ -7,6 +7,7 @@ import { AuthedRequest, isFinanceDept, requireAuth, requireFinance, requireRole 
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { advanceWorkflowStep, getAdvanceById } from "../advances/advances.service.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
@@ -82,11 +83,15 @@ const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
     const suffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${suffix}-${file.originalname}`);
+    cb(null, `${suffix}-${sanitizeUploadFilename(file.originalname)}`);
   }
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: fileExtensionFilter(["pdf", "jpg", "jpeg", "png", "doc", "docx"])
+});
 
 export const accommodationRouter = Router();
 accommodationRouter.use(requireAuth);

@@ -3,7 +3,9 @@ import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
-import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, type LucideIcon, MapPin, Plane, RefreshCw, ShieldCheck, User, Users } from "lucide-react";
+import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
 type InboxItem =
   | {
@@ -386,8 +388,14 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
   }
 
   useEffect(() => {
+    // App.tsx renders <Inbox> for both "all" and "capture" modes at the same
+    // JSX position (INBOX vs CAPTURE page branches), so React reuses the same
+    // component instance across a mode switch rather than remounting it —
+    // re-run the fetch/filter whenever `mode` changes, not just once at mount.
+    setItems([]);
+    setSelected(null);
     refresh().catch((e) => setError(String(e.message)));
-  }, []);
+  }, [mode]);
 
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
@@ -406,6 +414,11 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
     if (activeGroupTab && groupKeys.includes(activeGroupTab)) return;
     setActiveGroupTab(groupKeys[0] ?? null);
   }, [groupKeys, activeGroupTab]);
+
+  const [queueSearch, setQueueSearch] = useState("");
+  const [queuePage, setQueuePage] = useState(1);
+  const [queuePageSize, setQueuePageSize] = useState(10);
+  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch]);
 
   const metrics = useMemo(
     () => ({
@@ -531,6 +544,17 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
               {activeGroupTab && grouped[activeGroupTab] && (() => {
                 const groupItems = grouped[activeGroupTab];
                 const totalAmount = groupItems.reduce((sum, it) => sum + itemAmountValue(it), 0);
+                const q = queueSearch.trim().toLowerCase();
+                const searched = q
+                  ? groupItems.filter((it) =>
+                      itemOwner(it).toLowerCase().includes(q) ||
+                      itemContext(it).toLowerCase().includes(q) ||
+                      itemStatusLabel(it).toLowerCase().includes(q)
+                    )
+                  : groupItems;
+                const totalPages = Math.max(1, Math.ceil(searched.length / queuePageSize));
+                const currentPage = Math.min(queuePage, totalPages);
+                const pagedItems = searched.slice((currentPage - 1) * queuePageSize, currentPage * queuePageSize);
                 return (
                   <article className={`inbox-group-card ${docTypeTone(activeGroupTab)}`}>
                     <div className="inbox-group-header">
@@ -543,7 +567,17 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
                       </div>
                     </div>
 
+                    <div style={{ padding: "0 20px 14px" }}>
+                      <div className="ep-search" style={{ maxWidth: 320 }}>
+                        <Search size={14} />
+                        <input placeholder="Search by owner, context, status…" value={queueSearch} onChange={(e) => setQueueSearch(e.target.value)} />
+                      </div>
+                    </div>
+
                     <div className="inbox-table-wrap">
+                      {searched.length === 0 ? (
+                        <div className="ep-empty"><p>No items match your search.</p></div>
+                      ) : (
                       <table className="inbox-table">
                         <thead>
                           <tr>
@@ -555,7 +589,7 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
                           </tr>
                         </thead>
                         <tbody>
-                          {groupItems.map((it) => (
+                          {pagedItems.map((it) => (
                             <tr key={it.id}>
                               <td>
                                 <div className="inbox-person-cell">
@@ -589,7 +623,26 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
                           ))}
                         </tbody>
                       </table>
+                      )}
                     </div>
+
+                    {searched.length > 0 && (
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
+                        <span style={{ fontSize: 13, color: "var(--muted)" }}>
+                          Showing {(currentPage - 1) * queuePageSize + 1} to {Math.min(currentPage * queuePageSize, searched.length)} of {searched.length} entries
+                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <select className="ep-form-select" value={queuePageSize} onChange={(e) => { setQueuePageSize(Number(e.target.value)); setQueuePage(1); }}>
+                            {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} per page</option>)}
+                          </select>
+                          <button className="ep-btn-outline" onClick={() => setQueuePage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}><ChevronLeft size={14} /></button>
+                          {Array.from({ length: totalPages }, (_, i) => i + 1).slice(0, 7).map((n) => (
+                            <button key={n} className={`button small-button ${currentPage === n ? "button-primary" : "button-subtle"}`} onClick={() => setQueuePage(n)}>{n}</button>
+                          ))}
+                          <button className="ep-btn-outline" onClick={() => setQueuePage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}><ChevronRight size={14} /></button>
+                        </div>
+                      </div>
+                    )}
                   </article>
                 );
               })()}

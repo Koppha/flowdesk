@@ -8,6 +8,7 @@ import { query } from "../../lib/db.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { getFieldCatalogFor, resolvePdfData, pickSampleRecordId, buildDummyPdfData, PDF_REQUEST_TYPES, type PdfRequestType } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead, type PdfTemplateRow } from "../../lib/pdf/genericPdfRenderer.js";
+import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 
 export const pdfTemplatesRouter = Router();
 pdfTemplatesRouter.use(requireAuth);
@@ -16,9 +17,13 @@ const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const logoStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replaceAll(" ", "_")}`)
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });
-const uploadLogo = multer({ storage: logoStorage, limits: { fileSize: 5 * 1024 * 1024 } });
+const uploadLogo = multer({
+  storage: logoStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: fileExtensionFilter(["jpg", "jpeg", "png", "gif", "webp", "svg"])
+});
 
 // ── Zod Schemas ───────────────────────────────────────────────────────────────
 

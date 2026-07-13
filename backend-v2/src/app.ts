@@ -1,6 +1,7 @@
 import compression from "compression";
 import cors from "cors";
 import express from "express";
+import helmet from "helmet";
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
@@ -21,10 +22,12 @@ import { requestTypesRouter } from "./modules/request-types/request-types.routes
 import { customRequestsRouter } from "./modules/custom-requests/custom-requests.routes.js";
 import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
+import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
 
 export function createApp() {
   const app = express();
 
+  app.use(helmet());
   app.use(compression());
   app.use(
     cors({
@@ -67,6 +70,7 @@ export function createApp() {
   app.use("/custom-requests", customRequestsRouter);
   app.use("/email-actions", emailActionsRouter);
   app.use("/pdf-templates", pdfTemplatesRouter);
+  app.use("/deductions", deductionsRouter);
   app.use("/ai", aiRouter);
 
   app.use(errorHandler);

@@ -30,6 +30,8 @@ type Props = {
   onClose: () => void;
   saving?: boolean;
   saveLabel?: string;
+  /** Text shown under the selected user (e.g. "will be assigned a new role"). Pass false to hide it. */
+  selectedNote?: string | false;
   /** Extra content rendered below the selected-user info (e.g. dept picker) */
   extra?: React.ReactNode;
 };
@@ -53,6 +55,7 @@ export default function UserPicker({
   onClose,
   saving = false,
   saveLabel = "Assign",
+  selectedNote = "will be assigned a new role.",
   extra,
 }: Props) {
   const [search, setSearch] = useState("");
@@ -183,9 +186,9 @@ export default function UserPicker({
         </div>
 
         {/* Selected user summary */}
-        {selected && (
+        {selected && selectedNote !== false && (
           <div style={{ marginTop: 12, padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, fontSize: 13, color: "#1e40af" }}>
-            <strong>{selected.full_name || selected.email}</strong> will be assigned a new role.
+            <strong>{selected.full_name || selected.email}</strong> {selectedNote}
             {selected.role && selected.role !== "EMPLOYEE" && (
               <span style={{ marginLeft: 6, opacity: 0.75 }}>(currently: {ROLE_LABELS[selected.role] ?? selected.role})</span>
             )}

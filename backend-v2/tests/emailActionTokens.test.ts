@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 describe('buildEmailActionUrl', () => {
-  it('appends the token directly to EMAIL_ACTION_PUBLIC_URL with no /email-actions segment', async () => {
+  it('uses EMAIL_ACTION_PUBLIC_URL without duplicating /email-actions', async () => {
     vi.resetModules();
     process.env.NODE_ENV = 'test';
     process.env.DATABASE_URL = 'postgres://user@localhost/testdb';
@@ -11,10 +11,10 @@ describe('buildEmailActionUrl', () => {
     const { buildEmailActionUrl } = await import('../src/lib/emailActionTokens');
     const token = 'token/with/slash';
     const url = buildEmailActionUrl(token);
-    expect(url).toBe(`http://dt-internalproxy-1.etl.co.ls/flowdesk/uat/${encodeURIComponent(token)}`);
+    expect(url).toBe(`http://dt-internalproxy-1.etl.co.ls/flowdesk/uat/email-actions/${encodeURIComponent(token)}`);
   });
 
-  it('strips a base that already ends in /email-actions before appending the token', async () => {
+  it('handles base already containing /email-actions', async () => {
     vi.resetModules();
     process.env.NODE_ENV = 'test';
     process.env.DATABASE_URL = 'postgres://user@localhost/testdb';
@@ -24,7 +24,7 @@ describe('buildEmailActionUrl', () => {
     const { buildEmailActionUrl } = await import('../src/lib/emailActionTokens');
     const token = 'tok';
     const url = buildEmailActionUrl(token);
-    expect(url).toBe(`http://dt-internalproxy-1.etl.co.ls/flowdesk/uat/${encodeURIComponent(token)}`);
+    expect(url).toBe(`http://dt-internalproxy-1.etl.co.ls/flowdesk/uat/email-actions/${encodeURIComponent(token)}`);
   });
 
   it('falls back to APP_URL when EMAIL_ACTION_PUBLIC_URL unset', async () => {

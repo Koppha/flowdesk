@@ -29,17 +29,18 @@ export async function createEmailActionToken(args: {
 }
 
 export function buildEmailActionUrl(token: string) {
-  // EMAIL_ACTION_PUBLIC_URL points at a restricted proxy that already
-  // rewrites its path prefix straight to this backend's /email-actions
-  // route (see email-actions.routes.ts, which renders a self-contained
-  // HTML page for browser requests) - the proxy adds the /email-actions
-  // segment itself when forwarding upstream, so the public link must be
-  // just "<base>/<token>", not "<base>/email-actions/<token>" (confirmed
-  // against a working link: http://dt-internalproxy-1.etl.co.ls/flowdesk/uat/<token>).
+  // EMAIL_ACTION_PUBLIC_URL points at a restricted proxy that forwards
+  // straight to this backend's /email-actions route (see
+  // email-actions.routes.ts, which renders a self-contained HTML page for
+  // browser requests) - no frontend involved, so it works behind any path
+  // prefix the proxy adds. The proxy's location block only matches
+  // /email-actions/ (see deploy/nginx-email-action-proxy.conf.example), so
+  // the segment must be included here; strip it first in case the base
+  // already ends in /email-actions, to avoid doubling it up.
   // Falls back to the frontend SPA flow (APP_URL, internal-only) when unset.
   if (env.EMAIL_ACTION_PUBLIC_URL) {
     const base = env.EMAIL_ACTION_PUBLIC_URL.replace(/\/+$/, "").replace(/\/email-actions$/, "");
-    return `${base}/${encodeURIComponent(token)}`;
+    return `${base}/email-actions/${encodeURIComponent(token)}`;
   }
   return `${env.APP_URL}/?email_action=${encodeURIComponent(token)}`;
 }

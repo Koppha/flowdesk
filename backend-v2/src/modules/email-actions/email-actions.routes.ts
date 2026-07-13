@@ -8,8 +8,24 @@ import { EMAIL_ACTION_PURPOSE, type EmailActionDocType } from "../../lib/emailAc
 import { performAdvanceApprove, performAdvanceReject, getAdvanceNotificationContext } from "../advances/advances.routes.js";
 import { performClaimApprove, performClaimReject, getClaimNotificationContext } from "../claims/claims.routes.js";
 import { performCustomRequestAction } from "../custom-requests/custom-requests.routes.js";
+import { emailActionLimiter } from "../../middleware/rateLimit.js";
 
 export const emailActionsRouter = Router();
+emailActionsRouter.use(emailActionLimiter);
+
+// This router renders a self-contained HTML page with an inline <script>/
+// <style> (see renderPage below) instead of loading external assets, so it
+// works behind any proxy path prefix. Helmet's default CSP (applied
+// app-wide in app.ts) would block that inline script/style, so relax it
+// only for this router - the rest of the API only returns JSON, where CSP
+// has no effect anyway.
+emailActionsRouter.use((_req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'"
+  );
+  next();
+});
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>"']/g, (c) =>

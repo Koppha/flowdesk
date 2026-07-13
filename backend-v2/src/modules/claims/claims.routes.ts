@@ -8,6 +8,7 @@ import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
+import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { getActiveManagerDelegation } from "../../lib/delegations.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { canApproveStep, getPendingGroup, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
@@ -40,9 +41,13 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replaceAll(" ", "_")}`)
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: fileExtensionFilter(["pdf", "jpg", "jpeg", "png"])
+});
 
 export async function getClaimNotificationContext(claimId: string) {
   return (

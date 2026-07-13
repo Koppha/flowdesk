@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { comparePassword, hashPassword, signToken, type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
+import { loginLimiter } from "../../middleware/rateLimit.js";
 import { env } from "../../config/env.js";
 import { badRequest, forbidden, notFound, unauthorized } from "../../lib/errors.js";
 import { query, pool } from "../../lib/db.js";
@@ -283,7 +284,7 @@ function toAuthResponse(user: {
   };
 }
 
-authRouter.post("/login", async (req, res, next) => {
+authRouter.post("/login", loginLimiter, async (req, res, next) => {
   try {
     const parsed = LoginSchema.safeParse(req.body);
     if (!parsed.success) {

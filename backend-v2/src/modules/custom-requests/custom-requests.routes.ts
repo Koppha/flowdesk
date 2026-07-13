@@ -7,6 +7,7 @@ import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { notifyCustomRequestStep, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned } from "../../lib/notifications.js";
 import { logger, serializeError } from "../../lib/logger.js";
+import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
@@ -20,9 +21,13 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const attachmentStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replaceAll(" ", "_")}`)
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });
-const uploadAttachments = multer({ storage: attachmentStorage, limits: { fileSize: 25 * 1024 * 1024 } });
+const uploadAttachments = multer({
+  storage: attachmentStorage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: fileExtensionFilter(["pdf", "doc", "docx", "jpg", "jpeg", "png", "gif", "webp"])
+});
 
 type FixedApprovalStep = { title: string; source: "AUTO_MANAGER" | "ROLE_PICKER"; role?: string };
 // An assignee entry is either a person (id and/or email set) or a whole

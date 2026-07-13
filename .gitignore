@@ -1,0 +1,18 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# logs
+*.log
+logs/
+
+# user-submitted files (runtime data, not source)
+backend-v2/uploads/
+
+# environment secrets
+.env
+.env.*
+!.env.example

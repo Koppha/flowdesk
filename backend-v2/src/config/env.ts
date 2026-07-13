@@ -60,3 +60,21 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+// Guard against two easy-to-miss prod misconfigurations that don't fit the
+// per-field zod schema above: an unset CORS_ORIGIN makes app.ts fall back to
+// reflecting any origin while still allowing credentials (any site could
+// make authenticated requests), and the default admin seed password is
+// public (this repo's own .env.example).
+if (env.NODE_ENV === "production") {
+  const problems: string[] = [];
+  if (!env.CORS_ORIGIN) {
+    problems.push("CORS_ORIGIN must be set in production (reflecting all origins with credentials enabled is unsafe)");
+  }
+  if (env.ADMIN_SEED_PASSWORD === "pass123") {
+    problems.push("ADMIN_SEED_PASSWORD must be overridden in production (the default is public in .env.example)");
+  }
+  if (problems.length > 0) {
+    throw new Error(`Invalid production environment: ${problems.join("; ")}`);
+  }
+}

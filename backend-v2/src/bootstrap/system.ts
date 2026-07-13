@@ -23,6 +23,7 @@ export async function bootstrapSystem() {
   await ensurePdfSchema();
   await ensureClearanceSlaSchema();
   await ensureAdvanceRecoverySchema();
+  await ensureDeductionsSchema();
   await ensureAdminAccount();
 }
 
@@ -1421,4 +1422,36 @@ async function ensureAdvanceRecoverySchema() {
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS not_cleared_confirmed_by_id uuid REFERENCES users(id)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_deduction_amount numeric(12,2)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_months_at_confirmation integer`);
+}
+
+// Payroll-style deductions raised against an employee who owes the company
+// (tax/pension/UIF/etc. or a recovery like a loan or garnishee order).
+// Visibility is a single module-wide gate, not a per-row permission: ADMIN
+// always has access, and admin additionally grants access to whole groups
+// (roles, divisions, departments, sections, teams - see permissionGroups.ts)
+// via deduction_access_groups. Anyone with access can both create and
+// process deductions; there's no separate multi-step approval chain here,
+// unlike claims/custom-requests.
+async function ensureDeductionsSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS deductions (
+      id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      deduction_type text        NOT NULL,
+      employee_id    uuid        NOT NULL REFERENCES users(id),
+      amount         numeric(12,2) NOT NULL,
+      deduction_date date        NOT NULL,
+      reason         text,
+      status         text        NOT NULL DEFAULT 'PENDING',
+      requested_by_id uuid       NOT NULL REFERENCES users(id),
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      updated_at     timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS deduction_access_groups (
+      group_name    text        PRIMARY KEY,
+      granted_by_id uuid        REFERENCES users(id),
+      granted_at    timestamptz NOT NULL DEFAULT now()
+    )
+  `);
 }
