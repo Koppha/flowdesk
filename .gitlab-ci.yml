@@ -57,7 +57,7 @@ package_release:
   needs:
     - package_release
   before_script:
-    - which ssh-agent || apt-get update -y && apt-get install -y openssh-client
+    - which ssh-agent || yum install -y openssh-clients
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
     - mkdir -p ~/.ssh
