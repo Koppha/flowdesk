@@ -78,6 +78,10 @@ async function ensureUserSchema() {
   // the linked advance was requested in (resolved from travel_types via
   // advance_requests.type), never a hardcoded default.
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS currency text`);
+  // travel_types.currency is normally added by ensureTravelSchema(), which runs
+  // later in bootstrapSystem() — ensure it here too since this backfill needs
+  // it on a fresh database, before that later step has had a chance to run.
+  await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'LSL'`);
   await query(
     `UPDATE clearance_claims cc
         SET currency = tt.currency
