@@ -17,6 +17,7 @@ import PdfDesigner from "./PdfDesigner";
 import RequestTypes from "./RequestTypes";
 import CustomRequestsHub from "./CustomRequestsHub";
 import EmailActionConfirm from "./EmailActionConfirm";
+import GuidedTour, { type TourStep } from "./GuidedTour";
 import CeoManagement from "./CeoManagement";
 import OrgStructure from "./OrgStructure";
 import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
@@ -638,6 +639,10 @@ export default function App() {
   const [bankAccountNumber, setBankAccountNumber] = useState("");
   const [bankBranch, setBankBranch] = useState("");
   const [purpose, setPurpose] = useState("");
+  const advanceTypeFieldRef = useRef<HTMLDivElement>(null);
+  const paymentMethodFieldRef = useRef<HTMLDivElement>(null);
+  const purposeFieldRef = useRef<HTMLDivElement>(null);
+  const advanceSubmitButtonRef = useRef<HTMLButtonElement>(null);
   const [requestDate, setRequestDate] = useState(new Date().toISOString().slice(0, 10));
   const districts = LESOTHO_DISTRICTS;
   const [rows, setRows] = useState<TravelRow[]>([]);
@@ -5074,6 +5079,32 @@ export default function App() {
               </div>
             ) : (
             <div className="request-page">
+              <GuidedTour
+                active={!editingAdvanceId}
+                storageKey="fd_advance_form_tour_seen_v1"
+                steps={[
+                  {
+                    target: paymentMethodFieldRef as any,
+                    title: "How you'll receive the money",
+                    body: "Pick EcoCash or Bank Transfer. Some advance types only allow one of the two — you'll be told if so."
+                  },
+                  {
+                    target: purposeFieldRef as any,
+                    title: "Explain the purpose",
+                    body: "A short, clear reason for the request. Approvers see this first, so be specific (at least 5 characters)."
+                  },
+                  {
+                    target: advanceTypeFieldRef as any,
+                    title: "Choose the advance type",
+                    body: "Pick what this advance is for — a travel type, salary, or loan. This determines which fields and rates apply below."
+                  },
+                  {
+                    target: advanceSubmitButtonRef as any,
+                    title: "Submit for approval",
+                    body: "Once everything looks right, submit here. You can track its approval progress from My Advances afterwards."
+                  }
+                ] as TourStep[]}
+              />
               <div className="request-header">
                 <div>
                   <h2>{editingAdvanceId ? "Edit Advance Request" : "Create Advance Request"}</h2>
@@ -5127,7 +5158,7 @@ export default function App() {
                   <label>Date</label>
                   <input type="date" value={requestDate} onChange={(e) => setRequestDate(e.target.value)} />
                 </div>
-                <div className="form-field">
+                <div className="form-field" ref={paymentMethodFieldRef}>
                   <label>Receive Via</label>
                   <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as "ECOCASH" | "BANK")}>
                     {allowedPaymentMethods.includes("ECOCASH") && <option value="ECOCASH">ECOCASH</option>}
@@ -5163,7 +5194,7 @@ export default function App() {
                 </div>
               )}
 
-              <div className="form-field">
+              <div className="form-field" ref={purposeFieldRef}>
                 <label>Purpose</label>
                 <textarea
                   value={purpose}
@@ -5185,7 +5216,7 @@ export default function App() {
                   <label>Date:</label><span>__________</span>
                 </div>
               )}
-              <div className="form-field">
+              <div className="form-field" ref={advanceTypeFieldRef}>
                 <label>Advance Type</label>
                 <select
                   value={advanceType || ""}
@@ -5606,7 +5637,7 @@ export default function App() {
                       } catch (e: any) { alert("Error: " + e.message); }
                     }}>Revoke</button>
                 )}
-                <button className="button" disabled={submittingAdvance} onClick={async () => {
+                <button className="button" ref={advanceSubmitButtonRef} disabled={submittingAdvance} onClick={async () => {
                     setSubmittingAdvance(true);
                     try {
                       const trimmedEmpNumber = empNumber.trim();

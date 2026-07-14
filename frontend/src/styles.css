@@ -3815,6 +3815,77 @@ html[data-theme="dark"] .advance-form .breakdown-table th {
   z-index: 100;
 }
 
+/* Guided tour (one-time first-time-user walkthrough, see GuidedTour.tsx) */
+.tour-highlight {
+  position: fixed;
+  border-radius: 8px;
+  border: 2px solid #0f56e8;
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.55), 0 0 0 4px rgba(15, 86, 232, 0.25);
+  pointer-events: none;
+  z-index: 1000;
+  transition: top 0.25s ease, left 0.25s ease, width 0.25s ease, height 0.25s ease;
+}
+.tour-callout {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md, 0 12px 30px rgba(0,0,0,0.25));
+  padding: 16px;
+  z-index: 1001;
+  transition: top 0.25s ease, bottom 0.25s ease, left 0.25s ease;
+}
+.tour-callout-step {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.tour-callout-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.tour-callout-body {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+.tour-callout-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tour-skip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 6px 4px;
+  text-decoration: underline;
+}
+.tour-prev, .tour-next {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.tour-next {
+  background: #0f56e8;
+  border-color: #0f56e8;
+  color: #ffffff;
+}
+
 .summary-note {
   margin-top: 18px;
   border: 1px solid rgba(13, 86, 232, 0.25);

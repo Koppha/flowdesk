@@ -142,16 +142,3 @@ curl -X POST http://localhost:4000/test-mail/send \
   -H "Content-Type: application/json" \
   -d '{"to":"youraddress@yourdomain.com"}'
 ```
-
-## Demo users
-- employee@example.com
-- countersign@example.com
-- manager@example.com
-- auth@example.com
-- chief@example.com
-- finance@example.com
-
-Password for all: `pass123`
-
-> Replace demo emails in the database with real addresses to receive notifications.
->>>>>>> 2388154 (Add admin group assignment support and group route aliases)
