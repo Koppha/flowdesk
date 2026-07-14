@@ -16,7 +16,7 @@ module.exports = {
       name: "advance-frontend",
       cwd: "/opt/advance-clearance/current/frontend",
       script: "serve",
-      args: "-s dist -l 5174",
+      args: ["-s", "dist", "-l", "5174"],
       env: {
         NODE_ENV: "production"
       }
