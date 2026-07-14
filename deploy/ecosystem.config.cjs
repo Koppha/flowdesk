@@ -7,7 +7,7 @@ module.exports = {
     {
       name: "advance-backend-v2",
       cwd: "/opt/advance-clearance/current/backend",
-      script: "dist/index.js",
+      script: "dist/src/index.js",
       env: {
         NODE_ENV: "production"
       }
