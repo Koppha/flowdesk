@@ -58,6 +58,21 @@ DO $$ BEGIN
   CREATE TYPE workflow_request_type AS ENUM ('ADVANCE_REQUEST','CLAIM_REQUEST','OVERTIME_REQUEST','CLEARANCE_REQUEST');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+CREATE TABLE IF NOT EXISTS users (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_no text UNIQUE NOT NULL,
+  full_name text NOT NULL,
+  title text,
+  department text,
+  duty_station text,
+  email text UNIQUE NOT NULL,
+  password_hash text NOT NULL,
+  role role_type NOT NULL DEFAULT 'EMPLOYEE',
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS workflows (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   name text NOT NULL,
@@ -108,21 +123,6 @@ CREATE INDEX IF NOT EXISTS idx_workflow_rules_workflow ON workflow_rules(workflo
 
 CREATE INDEX IF NOT EXISTS idx_workflows_request_type ON workflows(request_type);
 CREATE INDEX IF NOT EXISTS idx_workflows_department ON workflows(department);
-
-CREATE TABLE IF NOT EXISTS users (
-  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_no text UNIQUE NOT NULL,
-  full_name text NOT NULL,
-  title text,
-  department text,
-  duty_station text,
-  email text UNIQUE NOT NULL,
-  password_hash text NOT NULL,
-  role role_type NOT NULL DEFAULT 'EMPLOYEE',
-  is_active boolean NOT NULL DEFAULT true,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
 
 CREATE TABLE IF NOT EXISTS sections (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
