@@ -6091,6 +6091,74 @@ html[data-theme="dark"] .summary-note {
   height: 22px;
 }
 
+/* ── Dark mode: the login/profile-completion card was hardcoded to a
+   light palette regardless of theme — make it theme-aware. The dark
+   navy showcase panel on the left is a fixed brand accent, not a
+   theme-dependent surface, so it's untouched here. ── */
+html[data-theme="dark"] .login-page {
+  background:
+    radial-gradient(circle at 92% -12%, rgba(30, 58, 95, 0.45) 0 22%, transparent 23%),
+    radial-gradient(circle at 100% 23%, rgba(28, 54, 87, 0.45) 0 16%, transparent 17%),
+    radial-gradient(circle at 0 53%, rgba(28, 54, 87, 0.45) 0 14%, transparent 15%),
+    linear-gradient(135deg, #0b1220 0%, #0e1a2e 100%);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .login-card {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+}
+
+html[data-theme="dark"] .login-card h1,
+html[data-theme="dark"] .login-card h2 {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .login-card .subtitle {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .login-form-group label,
+html[data-theme="dark"] .login-card .form-group label {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .login-input {
+  background: var(--surface-soft);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .login-input:focus {
+  background: var(--surface);
+  border-color: #4c8dff;
+  box-shadow: 0 0 0 3px rgba(76, 141, 255, 0.22);
+}
+
+html[data-theme="dark"] .login-input::placeholder {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .login-field-icon,
+html[data-theme="dark"] .login-password-toggle {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .login-password-toggle:hover {
+  background: rgba(96, 165, 250, 0.12);
+  color: #7cb1ff;
+}
+
+html[data-theme="dark"] .login-security-note {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .login-security-banner {
+  background: rgba(59, 130, 246, 0.16);
+  color: #8fc2ff;
+}
+
 @media (max-width: 1200px) {
   .stat-grid,
   .admin-overview-grid {
