@@ -3438,14 +3438,6 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <div className="login-options">
-                <label>
-                  <input type="checkbox" />
-                  <span>Remember me</span>
-                </label>
-                <a href="#forgot">Forgot password?</a>
-              </div>
-
               <button className="button button-primary login-button" type="submit" disabled={loginLoading} aria-busy={loginLoading}>
                 {loginLoading ? (
                   <span className="login-button-content" aria-live="polite">
