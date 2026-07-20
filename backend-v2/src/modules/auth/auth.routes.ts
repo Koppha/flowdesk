@@ -211,15 +211,6 @@ function maskEmail(email: string) {
   return `${head}***@${domain}`;
 }
 
-function fallbackNameFromEmail(email: string) {
-  const local = email.split("@")[0] || "User";
-  return local
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-    .join(" ");
-}
-
 function toSyntheticEmail(loginId: string) {
   const local = loginId
     .toLowerCase()
@@ -344,7 +335,7 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
               RETURNING id, role, email`,
               [
                 adProfile?.employee_no ?? null,
-                adProfile?.full_name ?? fallbackNameFromEmail(adProfile?.email || loginUser),
+                adProfile?.full_name ?? null,
                 emailFromAdOrLogin,
                 syntheticHash
               ]

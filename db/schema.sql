@@ -60,8 +60,8 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_no text UNIQUE NOT NULL,
-  full_name text NOT NULL,
+  employee_no text UNIQUE,
+  full_name text,
   title text,
   department text,
   duty_station text,
