@@ -9607,6 +9607,7 @@ button.ep-kpi { cursor: pointer; }
 .ep-kpi-icon   { opacity: 0.9; flex-shrink: 0; }
 .ep-kpi-value  { font-size: 2.1rem; font-weight: 800; line-height: 1; letter-spacing: -0.5px; }
 .ep-kpi-label  { font-size: 0.8rem; font-weight: 500; opacity: 0.9; margin-top: 2px; }
+.ep-kpi-subvalue { font-size: 0.78rem; font-weight: 600; opacity: 0.8; margin-top: 4px; }
 
 /* ── Shared card panel ── */
 .ep-panel {
@@ -10468,6 +10469,28 @@ html[data-theme="dark"] .tracking-empty {
   cursor: pointer;
 }
 .ep-select:focus { outline: none; border-color: #2563eb; }
+
+/* ── Deductions page: richer empty state ── */
+.deductions-page .ded-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: color-mix(in srgb, #2563eb 12%, transparent);
+  color: #2563eb;
+  margin-bottom: 4px;
+}
+.deductions-page .ded-empty-hint { color: var(--muted); font-size: 0.82rem; }
+
+/* ── Deductions page: filter bar controls should size to content/flex-basis,
+   not stretch to the global input/select 100% width, so they sit inline. ── */
+.ded-filter-bar select.ep-form-select,
+.ded-filter-bar input.ep-form-select {
+  width: auto;
+  flex: 0 0 auto;
+}
 
 /* ── Empty / loading ── */
 .ep-empty, .ep-loading {

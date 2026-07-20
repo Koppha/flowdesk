@@ -4,7 +4,7 @@ import { formatMoney } from "./constants";
 import UserPicker, { type PickableUser } from "./UserPicker";
 import {
   Clock, Hourglass, CheckCircle, Wallet, Search, Plus, X, MoreHorizontal,
-  Shield, ChevronLeft, ChevronRight, Download, ArrowUpDown
+  Shield, ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch
 } from "lucide-react";
 
 const DEDUCTION_TYPES = ["Late Clearance", "No Clearance"] as const;
@@ -333,7 +333,7 @@ export default function Deductions() {
   if (loading) return <div className="ep-page"><p>Loading deductions…</p></div>;
 
   return (
-    <div className="ep-page">
+    <div className="ep-page deductions-page">
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Deductions</h1>
@@ -357,36 +357,36 @@ export default function Deductions() {
       {error && <pre className="inbox-error">{error}</pre>}
 
       <div className="ep-kpi-row">
-        <div className="stat-card stat-card-blue">
-          <span className="stat-icon"><Clock size={28} /></span>
+        <div className="ep-kpi ep-kpi-blue">
+          <div className="ep-kpi-icon"><Clock size={26} /></div>
           <div>
-            <div className="stat-value">{stats.pendingCount}</div>
-            <div className="stat-label">Total Pending Deductions</div>
-            <small>{formatMoney(stats.pendingValue)}</small>
+            <div className="ep-kpi-value">{stats.pendingCount}</div>
+            <div className="ep-kpi-label">Total Pending Deductions</div>
+            <div className="ep-kpi-subvalue">{formatMoney(stats.pendingValue)}</div>
           </div>
         </div>
-        <div className="stat-card stat-card-gold">
-          <span className="stat-icon"><Hourglass size={28} /></span>
+        <div className="ep-kpi ep-kpi-gold">
+          <div className="ep-kpi-icon"><Hourglass size={26} /></div>
           <div>
-            <div className="stat-value">{stats.processingCount}</div>
-            <div className="stat-label">Processing Deductions</div>
-            <small>{formatMoney(stats.processingValue)}</small>
+            <div className="ep-kpi-value">{stats.processingCount}</div>
+            <div className="ep-kpi-label">Processing Deductions</div>
+            <div className="ep-kpi-subvalue">{formatMoney(stats.processingValue)}</div>
           </div>
         </div>
-        <div className="stat-card stat-card-green">
-          <span className="stat-icon"><CheckCircle size={28} /></span>
+        <div className="ep-kpi ep-kpi-green">
+          <div className="ep-kpi-icon"><CheckCircle size={26} /></div>
           <div>
-            <div className="stat-value">{stats.processedCount}</div>
-            <div className="stat-label">Processed (This Month)</div>
-            <small>{formatMoney(stats.processedValue)}</small>
+            <div className="ep-kpi-value">{stats.processedCount}</div>
+            <div className="ep-kpi-label">Processed (This Month)</div>
+            <div className="ep-kpi-subvalue">{formatMoney(stats.processedValue)}</div>
           </div>
         </div>
-        <div className="stat-card stat-card-purple">
-          <span className="stat-icon"><Wallet size={28} /></span>
+        <div className="ep-kpi ep-kpi-purple">
+          <div className="ep-kpi-icon"><Wallet size={26} /></div>
           <div>
-            <div className="stat-value">{formatMoney(stats.totalDeductedValue)}</div>
-            <div className="stat-label">Total Deducted (This Month)</div>
-            <small>Across {stats.processedCount} deductions</small>
+            <div className="ep-kpi-value">{formatMoney(stats.totalDeductedValue)}</div>
+            <div className="ep-kpi-label">Total Deducted (This Month)</div>
+            <div className="ep-kpi-subvalue">Across {stats.processedCount} deductions</div>
           </div>
         </div>
       </div>
@@ -406,7 +406,7 @@ export default function Deductions() {
       </div>
 
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
+        <div className="ded-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 220px" }}>
             <Search size={14} />
             <input placeholder="Search deductions…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
@@ -432,7 +432,11 @@ export default function Deductions() {
       <div className="ep-panel">
         <div className="ep-table-wrap">
           {sorted.length === 0 ? (
-            <div className="ep-empty"><p>No deductions match your filters.</p></div>
+            <div className="ep-empty ded-empty">
+              <span className="ded-empty-icon"><FolderSearch size={26} /></span>
+              <p><strong>No deductions match your filters.</strong></p>
+              <p className="ded-empty-hint">Try adjusting your search criteria or filters.</p>
+            </div>
           ) : (
             <table className="ep-table">
               <thead>
