@@ -12209,3 +12209,20 @@ html[data-theme="dark"] .custom-request-note-neutral {
     flex-direction: column-reverse;
   }
 }
+
+/* ── Dashboard hero: stack on narrow viewports.
+   Several unconditional .dashboard-hero rules earlier in this file
+   (same specificity, later source order) were overriding the intended
+   max-width: 900px stacking media query, so the two-column grid never
+   actually collapsed — the title/search card just got squeezed and
+   clipped instead of wrapping to a single column. This block is kept
+   last in the file specifically so it always wins. ── */
+@media (max-width: 900px) {
+  .dashboard-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-actions {
+    flex-direction: column;
+  }
+}

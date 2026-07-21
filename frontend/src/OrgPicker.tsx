@@ -240,7 +240,7 @@ export default function OrgPicker({
 
       {/* Department */}
       <div>
-        <label style={labelStyle}>Division *</label>
+        <label style={labelStyle}>Division (optional)</label>
         <select
           className={inputClassName}
           style={sel}
