@@ -3,7 +3,7 @@
  * as a new step on a workflow being designed in WorkflowBuilder.
  */
 import React, { useMemo, useState } from "react";
-import { Briefcase, Info, Layers, Search, Trash2, User, Users, X } from "lucide-react";
+import { Briefcase, Building2, Info, Layers, Search, Trash2, User, Users, X } from "lucide-react";
 
 export type ParticipantPosition = {
   id: string;
@@ -39,17 +39,20 @@ type Props = {
   teamOptions: string[];
   onAddPosition: (position: ParticipantPosition, filters: Filters) => void;
   onAddTeam: (team: ParticipantTeam, anyTeamMember: boolean) => void;
+  onAddDepartment: (name: string, anyDepartmentMember: boolean) => void;
   onAddEmployee: (employee: ParticipantEmployee) => void;
   onClose: () => void;
 };
 
 type Row =
   | { type: "position"; key: string; name: string; subtitle: string; data: ParticipantPosition }
+  | { type: "department"; key: string; name: string; subtitle: string; data: string }
   | { type: "team"; key: string; name: string; subtitle: string; data: ParticipantTeam }
   | { type: "employee"; key: string; name: string; subtitle: string; data: ParticipantEmployee };
 
 const BADGE_STYLES: Record<Row["type"], { bg: string; color: string; label: string; iconBg: string; iconColor: string; Icon: any }> = {
   position: { bg: "#ede9fe", color: "#6d28d9", label: "Position", iconBg: "#ede9fe", iconColor: "#6d28d9", Icon: Briefcase },
+  department: { bg: "#fce7f3", color: "#be185d", label: "Department", iconBg: "#fce7f3", iconColor: "#be185d", Icon: Building2 },
   team: { bg: "#dcfce7", color: "#15803d", label: "Section", iconBg: "#dcfce7", iconColor: "#15803d", Icon: Users },
   employee: { bg: "#fef3c7", color: "#b45309", label: "Employee", iconBg: "#fef3c7", iconColor: "#b45309", Icon: User }
 };
@@ -64,6 +67,7 @@ export default function WorkflowAddParticipantModal({
   teamOptions,
   onAddPosition,
   onAddTeam,
+  onAddDepartment,
   onAddEmployee,
   onClose
 }: Props) {
@@ -78,6 +82,9 @@ export default function WorkflowAddParticipantModal({
     const positionRows: Row[] = positions.map((p) => ({
       type: "position", key: `position-${p.id}`, name: p.name, subtitle: p.description, data: p
     }));
+    const departmentRows: Row[] = departmentOptions
+      .filter((d) => !filters.department || d === filters.department)
+      .map((d) => ({ type: "department", key: `department-${d}`, name: d, subtitle: "Department", data: d }));
     const teamRows: Row[] = teams
       .filter((t) => (!filters.department || t.departmentLabel === filters.department) && (!filters.section || t.sectionLabel === filters.section) && (!filters.team || t.name === filters.team))
       .map((t) => ({ type: "team", key: `team-${t.id}`, name: t.name, subtitle: [t.departmentLabel, t.sectionLabel].filter(Boolean).join(" • ") || "Section", data: t }));
@@ -85,11 +92,11 @@ export default function WorkflowAddParticipantModal({
       .filter((e) => !filters.department || e.department === filters.department)
       .map((e) => ({ type: "employee", key: `employee-${e.id}`, name: e.full_name || e.email, subtitle: [e.department, e.title].filter(Boolean).join(" • "), data: e }));
 
-    const all = [...positionRows, ...teamRows, ...employeeRows];
+    const all = [...positionRows, ...departmentRows, ...teamRows, ...employeeRows];
     const q = query.trim().toLowerCase();
     if (!q) return all;
     return all.filter((r) => r.name.toLowerCase().includes(q) || r.subtitle.toLowerCase().includes(q));
-  }, [positions, teams, employees, query, filters]);
+  }, [positions, departmentOptions, teams, employees, query, filters]);
 
   function isPicked(row: Row) {
     return picked.some((p) => p.key === row.key);
@@ -98,6 +105,7 @@ export default function WorkflowAddParticipantModal({
   function commitRow(row: Row) {
     if (row.type === "position") onAddPosition(row.data, filters);
     else if (row.type === "team") onAddTeam(row.data, anyTeamMember);
+    else if (row.type === "department") onAddDepartment(row.data, anyTeamMember);
     else onAddEmployee(row.data);
   }
 
@@ -137,7 +145,7 @@ export default function WorkflowAddParticipantModal({
             <div>
               <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>Add Workflow Participant</div>
               <div style={{ fontSize: 12, color: "var(--muted, #6b7280)", marginTop: 2 }}>
-                Search and select a position, section or employee to add to this step.
+                Search and select a position, department, section or employee to add to this step.
               </div>
             </div>
           </div>
@@ -151,7 +159,7 @@ export default function WorkflowAddParticipantModal({
           <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
           <input
             autoFocus
-            placeholder="Search position, section or employee"
+            placeholder="Search position, department, section or employee"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{ width: "100%", paddingLeft: 36, paddingRight: 10, paddingTop: 10, paddingBottom: 10, border: "1px solid #93c5fd", borderRadius: 8, background: "var(--surface)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
@@ -202,7 +210,7 @@ export default function WorkflowAddParticipantModal({
               const badge = BADGE_STYLES[row.type];
               const Icon = badge.Icon;
               const selected = isPicked(row);
-              const disabled = row.type === "team" && !anyTeamMember;
+              const disabled = (row.type === "team" || row.type === "department") && !anyTeamMember;
               return (
                 <div key={row.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
                   <div style={{ width: 38, height: 38, borderRadius: 9, background: badge.iconBg, color: badge.iconColor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -219,7 +227,7 @@ export default function WorkflowAddParticipantModal({
                     type="button"
                     onClick={() => handleRowAction(row)}
                     disabled={disabled}
-                    title={disabled ? "Enable \"Any section member\" to add a whole section" : undefined}
+                    title={disabled ? "Enable \"Any section/department member\" to add a whole section or department" : undefined}
                     style={{
                       width: 36, height: 36, borderRadius: 8, flexShrink: 0,
                       border: `1px solid ${selected ? "#1d4ed8" : "#93c5fd"}`,
@@ -242,8 +250,8 @@ export default function WorkflowAddParticipantModal({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, flexWrap: "wrap", gap: 10 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text)" }}>
             <input type="checkbox" checked={anyTeamMember} onChange={(e) => setAnyTeamMember(e.target.checked)} />
-            Any section member
-            <Info size={13} style={{ color: "var(--muted)" }} aria-label="When enabled, adding a Section adds it as 'any one of this section may approve'." />
+            Any section/department member
+            <Info size={13} style={{ color: "var(--muted)" }} aria-label="When enabled, adding a Section or Department adds it as 'any one member of this group may approve'." />
           </label>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
@@ -270,7 +278,7 @@ export default function WorkflowAddParticipantModal({
         )}
 
         <div style={{ marginTop: 14, padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, fontSize: 12, color: "#1e40af" }}>
-          You can search by position name, section name, employee name or employee number. Start typing to see results.
+          You can search by position name, department name, section name, employee name or employee number. Start typing to see results.
         </div>
       </div>
     </div>

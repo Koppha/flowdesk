@@ -283,16 +283,17 @@ export async function canApproveStep(
   delegatedManagerId?: string | null,
   userDepartment?: string | null
 ): Promise<boolean> {
-  // ANY_ONE steps (e.g. "Team: X") can be actioned by any member of the named
-  // permission group, regardless of who the step's approver_id is. "Team: X"
-  // groups are scoped to officers — HOD/Manager already have their own
-  // dedicated steps, so they don't double-dip on the team's ANY_ONE step.
+  // ANY_ONE steps (e.g. "Team: X" or "Department: X") can be actioned by any
+  // member of the named permission group, regardless of who the step's
+  // approver_id is. These org-unit groups are scoped to officers — HOD/
+  // Manager already have their own dedicated steps, so they don't double-dip
+  // on the group's ANY_ONE step.
   if (step.approval_mode === "ANY_ONE" && step.approval_group_name) {
-    const isTeamGroup = step.approval_group_name.startsWith("Team: ");
+    const isOrgUnitGroup = step.approval_group_name.startsWith("Team: ") || step.approval_group_name.startsWith("Department: ");
     const isManagementRole = userRole === "HOD" || userRole === "MANAGER";
-    // HOD/Manager never act on "Team: X" steps, even if they also happen to
-    // be the step's approver_id via department-leadership lookup.
-    if (isTeamGroup && isManagementRole) return false;
+    // HOD/Manager never act on "Team: X"/"Department: X" steps, even if they
+    // also happen to be the step's approver_id via department-leadership lookup.
+    if (isOrgUnitGroup && isManagementRole) return false;
     const groups = await getUserGroups(userId);
     if (groups.includes(step.approval_group_name)) return true;
   }
