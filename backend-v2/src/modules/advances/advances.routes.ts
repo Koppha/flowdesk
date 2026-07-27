@@ -106,6 +106,7 @@ const LinesSchema = z.object({
         travel_meta: z.record(z.unknown()).optional(),
         meals_count: z.coerce.number().int().nonnegative().optional(),
         meal_value: z.coerce.number().nonnegative().optional(),
+        breakfast: z.coerce.number().nonnegative().default(0),
         lunch: z.coerce.number().nonnegative().default(0),
         dinner: z.coerce.number().nonnegative().default(0)
       })
@@ -843,12 +844,27 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
         throw badRequest("HR must set a rate for this travel type before requests can be submitted");
       }
       const mealValue = hasMealCount ? configuredMealValue : Number(line.meal_value || 0);
-      const lunchAmount = hasMealCount ? toMoney(mealsCount * configuredMealValue) : Number(line.lunch || 0);
-      const dinnerAmount = hasMealCount ? 0 : Number(line.dinner || 0);
-      const total = toMoney(lunchAmount + dinnerAmount);
+      // 1 meal/day = lunch only, 2 = lunch+dinner, 3 = breakfast+lunch+dinner.
+      // Each applicable slot costs the full configured rate, so the sum still
+      // equals mealsCount * configuredMealValue exactly as before. Only
+      // applies to MEAL-rate-kind types (capped at 3/day by the frontend) —
+      // for DAILY-rate-kind types, meals_count is actually a day count (can
+      // exceed 3) multiplying a flat per-diem rate, not a meal tally, so keep
+      // dumping the whole amount into "lunch" as before.
+      const isMealBased = hasMealCount && travelType.rate_kind === "MEAL";
+      const breakfastAmount = isMealBased
+        ? (mealsCount >= 3 ? toMoney(configuredMealValue) : 0)
+        : hasMealCount ? 0 : Number(line.breakfast || 0);
+      const lunchAmount = isMealBased
+        ? (mealsCount >= 1 ? toMoney(configuredMealValue) : 0)
+        : hasMealCount ? toMoney(mealsCount * configuredMealValue) : Number(line.lunch || 0);
+      const dinnerAmount = isMealBased
+        ? (mealsCount >= 2 ? toMoney(configuredMealValue) : 0)
+        : hasMealCount ? 0 : Number(line.dinner || 0);
+      const total = toMoney(breakfastAmount + lunchAmount + dinnerAmount);
       await query(
-        `INSERT INTO advance_lines (advance_request_id, line_date, location, travel_meta, meals_count, meal_value, lunch, dinner, line_total)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        `INSERT INTO advance_lines (advance_request_id, line_date, location, travel_meta, meals_count, meal_value, breakfast, lunch, dinner, line_total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [
           req.params.id,
           line.line_date,
@@ -856,6 +872,7 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
           JSON.stringify(line.travel_meta || {}),
           mealsCount,
           mealValue,
+          breakfastAmount,
           lunchAmount,
           dinnerAmount,
           total
@@ -867,7 +884,7 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
       if (line.meals_count !== undefined) {
         return acc + Number(line.meals_count) * configuredMealValue;
       }
-      return acc + (line.lunch || 0) + (line.dinner || 0);
+      return acc + (line.breakfast || 0) + (line.lunch || 0) + (line.dinner || 0);
     }, 0);
     await query(`UPDATE advance_requests SET requested_total=$2, updated_at=now() WHERE id=$1`, [req.params.id, requestedTotal]);
     await writeAdvanceAudit({
@@ -896,10 +913,10 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       if (!row || Number(row.count) < 1) throw badRequest("At least one travel table entry is required");
       // More than one travel day implies an overnight stay requiring accommodation.
       needsAccommodation = Number(row.count) > 1;
-      const lines = await query<{ lunch: string; dinner: string; line_total: string }>(`SELECT lunch, dinner, line_total FROM advance_lines WHERE advance_request_id=$1`, [adv.id]);
+      const lines = await query<{ breakfast: string; lunch: string; dinner: string; line_total: string }>(`SELECT breakfast, lunch, dinner, line_total FROM advance_lines WHERE advance_request_id=$1`, [adv.id]);
       const total = lines.reduce((sum, line) => {
         const storedTotal = Number(line.line_total || 0);
-        return sum + (storedTotal > 0 ? storedTotal : Number(line.lunch || 0) + Number(line.dinner || 0));
+        return sum + (storedTotal > 0 ? storedTotal : Number(line.breakfast || 0) + Number(line.lunch || 0) + Number(line.dinner || 0));
       }, 0);
       await query(`UPDATE advance_requests SET requested_total=$2 WHERE id=$1`, [adv.id, total]);
       if (total <= 0) throw badRequest("Total must be > 0");

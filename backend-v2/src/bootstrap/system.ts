@@ -100,6 +100,27 @@ async function ensureUserSchema() {
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS location text`);
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS meals_count integer NOT NULL DEFAULT 0`);
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS meal_value numeric(12,2) NOT NULL DEFAULT 0`);
+  // 1 meal/day = lunch only, 2 = lunch+dinner, 3 = breakfast+lunch+dinner (see
+  // advances.routes.ts PUT /:id/lines) — breakfast wasn't tracked at all
+  // before, so the whole day's amount was misclassified as "lunch".
+  await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS breakfast numeric(12,2) NOT NULL DEFAULT 0`);
+  // One-time backfill: re-split existing MEAL-rate-kind lines (DAILY-rate
+  // lines never had per-meal semantics — meals_count there is a day count,
+  // not a meal tally, so they're left untouched). Idempotent: meal_value is
+  // fixed per row at submission time, so re-running always yields the same
+  // result, and the sum (line_total) is unchanged either way.
+  await query(`
+    UPDATE advance_lines al
+       SET breakfast = CASE WHEN al.meals_count >= 3 THEN al.meal_value ELSE 0 END,
+           lunch     = CASE WHEN al.meals_count >= 1 THEN al.meal_value ELSE 0 END,
+           dinner    = CASE WHEN al.meals_count >= 2 THEN al.meal_value ELSE 0 END
+      FROM advance_requests ar
+      LEFT JOIN travel_types tt ON tt.code = ar.type
+     WHERE al.advance_request_id = ar.id
+       AND tt.rate_kind = 'MEAL'
+       AND al.meals_count > 0
+       AND al.meal_value > 0
+  `);
   await query(`
     CREATE TABLE IF NOT EXISTS accommodation_requests (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1438,24 +1459,17 @@ async function ensureAdvanceRecoverySchema() {
 // unlike claims/custom-requests.
 async function ensureDeductionsSchema() {
   await query(`
-    CREATE TABLE IF NOT EXISTS deductions (
-      id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-      deduction_type text        NOT NULL,
-      employee_id    uuid        NOT NULL REFERENCES users(id),
-      amount         numeric(12,2) NOT NULL,
-      deduction_date date        NOT NULL,
-      reason         text,
-      status         text        NOT NULL DEFAULT 'PENDING',
-      requested_by_id uuid       NOT NULL REFERENCES users(id),
-      created_at     timestamptz NOT NULL DEFAULT now(),
-      updated_at     timestamptz NOT NULL DEFAULT now()
-    )
-  `);
-  await query(`
     CREATE TABLE IF NOT EXISTS deduction_access_groups (
       group_name    text        PRIMARY KEY,
       granted_by_id uuid        REFERENCES users(id),
       granted_at    timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // Deductions page reports directly off closed clearance claims (see
+  // deductions.routes.ts) rather than a separate manually-entered table.
+  // These columns track Finance's payroll voucher reference and the
+  // one-step "actioned" confirmation per claim.
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS vr_date date`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_at timestamptz`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_by_id uuid REFERENCES users(id)`);
 }

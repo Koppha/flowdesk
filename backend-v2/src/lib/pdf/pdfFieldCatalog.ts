@@ -166,7 +166,8 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   const rows = await query<any>(
     `SELECT ar.*, u.full_name AS requester_name, u.department AS department, u.employee_no AS requester_employee_no,
             u.employment_type AS requester_employment_type,
-            creator.full_name AS created_by_name, tt.name AS travel_type_name, tt.currency AS currency
+            creator.full_name AS created_by_name, tt.name AS travel_type_name, tt.currency AS currency,
+            tt.rate_kind AS travel_rate_kind
        FROM advance_requests ar
        JOIN users u ON u.id = ar.requester_id
        JOIN users creator ON creator.id = ar.created_by_id
@@ -179,7 +180,7 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   const currency = adv.currency || "LSL";
 
   const lines = await query<any>(
-    `SELECT line_date, location, lunch, dinner, line_total FROM advance_lines WHERE advance_request_id=$1 ORDER BY line_date`,
+    `SELECT line_date, location, breakfast, lunch, dinner, line_total FROM advance_lines WHERE advance_request_id=$1 ORDER BY line_date`,
     [id]
   );
   const accommodation = await query<{ check_in: string; check_out: string }>(
@@ -198,6 +199,7 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   const dateTo = dates[dates.length - 1];
   const durationDays = dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1) : null;
   const locations = Array.from(new Set(lines.map((l) => l.location).filter(Boolean))) as string[];
+  const breakfastCount = lines.filter((l) => Number(l.breakfast) > 0).length;
   const lunchCount = lines.filter((l) => Number(l.lunch) > 0).length;
   const dinnerCount = lines.filter((l) => Number(l.dinner) > 0).length;
 
@@ -230,7 +232,10 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
       return_date: formatDateTime(dateTo),
       travel_duration: durationDays ? `${durationDays} day${durationDays === 1 ? "" : "s"}` : "",
       accommodation_summary: nights != null ? `${nights} night${nights === 1 ? "" : "s"}` : "",
-      meals_summary: `Breakfast x 0 | Lunch x ${lunchCount} | Dinner x ${dinnerCount}`,
+      // DAILY-rate travel types (per diem, e.g. international travel) pay a
+      // flat daily rate, not per-meal amounts, so there's no meal breakdown
+      // to show — leave this blank and the renderer drops the row entirely.
+      meals_summary: adv.travel_rate_kind === "DAILY" ? "" : `Breakfast x ${breakfastCount} | Lunch x ${lunchCount} | Dinner x ${dinnerCount}`,
       purpose: adv.purpose || "",
       project_number: adv.project_number || "",
       requested_total: formatMoney(adv.requested_total, currency),
@@ -250,7 +255,8 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
     tables: {
       advance_lines: lines.map((l) => ({
         line_date: formatDate(l.line_date), location: l.location || "",
-        lunch: formatMoney(l.lunch, currency), dinner: formatMoney(l.dinner, currency), line_total: formatMoney(l.line_total, currency)
+        breakfast: formatMoney(l.breakfast, currency), lunch: formatMoney(l.lunch, currency), dinner: formatMoney(l.dinner, currency),
+        line_total: formatMoney(l.line_total, currency)
       }))
     },
     approvalChain: chain.map((s) => ({ title: s.position_name, approverName: s.approver_name || "", decision: s.approved ? "Approved" : "Pending" })),

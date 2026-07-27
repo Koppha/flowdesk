@@ -9,18 +9,12 @@ import { listPermissionGroups } from "../../lib/permissionGroups.js";
 export const deductionsRouter = Router();
 deductionsRouter.use(requireAuth);
 
-export const DEDUCTION_TYPES = ["Late Clearance", "No Clearance"] as const;
-
-const DeductionSchema = z.object({
-  employee_id: z.string().uuid(),
-  deduction_type: z.enum(DEDUCTION_TYPES),
-  amount: z.number().positive(),
-  deduction_date: z.string().min(1),
-  reason: z.string().trim().optional()
+const VrDateSchema = z.object({
+  vr_date: z.string().min(1).nullable()
 });
 
-const StatusSchema = z.object({
-  status: z.enum(["PENDING", "PROCESSING", "PROCESSED"])
+const DeductedSchema = z.object({
+  deducted: z.boolean()
 });
 
 const AccessGroupsSchema = z.object({
@@ -29,19 +23,48 @@ const AccessGroupsSchema = z.object({
 
 type DeductionRow = {
   id: string;
-  deduction_type: string;
   employee_id: string;
   employee_name: string | null;
-  department: string | null;
-  amount: string;
-  deduction_date: string;
-  reason: string | null;
-  status: string;
-  requested_by_id: string;
-  requested_by_name: string | null;
-  created_at: string;
-  updated_at: string;
+  employee_no: string | null;
+  division_name: string | null;
+  destination: string | null;
+  month: string | null;
+  vr_date: string | null;
+  has_receipts: boolean;
+  advance_amount: string;
+  cleared_amount: string;
+  amount_to_be_expensed: string;
+  salary_deduction: string;
+  payable: string;
+  deducted_at: string | null;
+  deducted_by_name: string | null;
+  closed_at: string | null;
 };
+
+const LIST_QUERY = `
+  SELECT c.id,
+         c.claimant_id AS employee_id,
+         u.full_name AS employee_name,
+         u.employee_no,
+         dv.name AS division_name,
+         c.duty_station AS destination,
+         c.month,
+         c.vr_date,
+         EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
+         c.advance_amount,
+         c.claim_total AS cleared_amount,
+         abs(c.balance_amount) AS amount_to_be_expensed,
+         CASE WHEN c.balance_amount > 0 THEN c.balance_amount ELSE 0 END AS salary_deduction,
+         CASE WHEN c.balance_amount < 0 THEN -c.balance_amount ELSE 0 END AS payable,
+         c.deducted_at,
+         db.full_name AS deducted_by_name,
+         c.closed_at
+    FROM clearance_claims c
+    JOIN users u ON u.id = c.claimant_id
+    LEFT JOIN divisions dv ON dv.id = u.division_id
+    LEFT JOIN users db ON db.id = c.deducted_by_id
+   WHERE c.status = 'CLOSED'
+`;
 
 // Lightweight, always-200 check the frontend uses to decide whether to show
 // the Deductions nav item (and its pending-count badge) at all - the real
@@ -50,7 +73,10 @@ deductionsRouter.get("/access", async (req: AuthedRequest, res, next) => {
   try {
     const allowed = await canAccessDeductions(req.user!.userId, req.user!.role);
     if (!allowed) return res.json({ allowed });
-    const pending = await query<{ count: string }>(`SELECT count(*)::text AS count FROM deductions WHERE status='PENDING'`);
+    const pending = await query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM clearance_claims
+        WHERE status='CLOSED' AND balance_amount <> 0 AND deducted_at IS NULL`
+    );
     return res.json({ allowed, pendingCount: Number(pending[0]?.count || 0) });
   } catch (err) {
     return next(err);
@@ -102,90 +128,41 @@ deductionsRouter.use(async (req: AuthedRequest, res, next) => {
 
 deductionsRouter.get("/", async (_req: AuthedRequest, res, next) => {
   try {
-    const rows = await query<DeductionRow>(
-      `SELECT d.id, d.deduction_type, d.employee_id, e.full_name AS employee_name, e.department,
-              d.amount, d.deduction_date, d.reason, d.status,
-              d.requested_by_id, r.full_name AS requested_by_name,
-              d.created_at, d.updated_at
-         FROM deductions d
-         JOIN users e ON e.id = d.employee_id
-         JOIN users r ON r.id = d.requested_by_id
-        ORDER BY d.created_at DESC`
-    );
+    const rows = await query<DeductionRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
     return res.json({ items: rows });
   } catch (err) {
     return next(err);
   }
 });
 
-deductionsRouter.post("/", async (req: AuthedRequest, res, next) => {
+deductionsRouter.patch("/:id/vr-date", async (req: AuthedRequest, res, next) => {
   try {
-    const parsed = DeductionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid deduction payload", parsed.error.flatten());
-    const { employee_id, deduction_type, amount, deduction_date, reason } = parsed.data;
+    const existing = (await query<{ id: string }>(`SELECT id FROM clearance_claims WHERE id=$1 AND status='CLOSED'`, [req.params.id]))[0];
+    if (!existing) throw notFound("Clearance claim not found");
 
-    const employee = (await query<{ id: string }>(`SELECT id FROM users WHERE id=$1 AND is_active=true`, [employee_id]))[0];
-    if (!employee) throw notFound("Employee not found");
+    const parsed = VrDateSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid VR date payload", parsed.error.flatten());
 
-    const row = (await query<{ id: string }>(
-      `INSERT INTO deductions (deduction_type, employee_id, amount, deduction_date, reason, requested_by_id)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [deduction_type, employee_id, amount, deduction_date, reason ?? null, req.user!.userId]
-    ))[0];
-
-    return res.status(201).json({ id: row.id });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-deductionsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
-  try {
-    const existing = (await query<{ status: string }>(`SELECT status FROM deductions WHERE id=$1`, [req.params.id]))[0];
-    if (!existing) throw notFound("Deduction not found");
-    if (existing.status !== "PENDING") throw badRequest("Only pending deductions can be edited");
-
-    const parsed = DeductionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid deduction payload", parsed.error.flatten());
-    const { employee_id, deduction_type, amount, deduction_date, reason } = parsed.data;
-
-    const employee = (await query<{ id: string }>(`SELECT id FROM users WHERE id=$1 AND is_active=true`, [employee_id]))[0];
-    if (!employee) throw notFound("Employee not found");
-
-    await query(
-      `UPDATE deductions
-          SET deduction_type=$2, employee_id=$3, amount=$4, deduction_date=$5, reason=$6, updated_at=now()
-        WHERE id=$1`,
-      [req.params.id, deduction_type, employee_id, amount, deduction_date, reason ?? null]
-    );
+    await query(`UPDATE clearance_claims SET vr_date=$2 WHERE id=$1`, [req.params.id, parsed.data.vr_date]);
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }
 });
 
-deductionsRouter.patch("/:id/status", async (req: AuthedRequest, res, next) => {
+deductionsRouter.patch("/:id/deducted", async (req: AuthedRequest, res, next) => {
   try {
-    const existing = (await query<{ status: string }>(`SELECT status FROM deductions WHERE id=$1`, [req.params.id]))[0];
-    if (!existing) throw notFound("Deduction not found");
+    const existing = (await query<{ id: string }>(`SELECT id FROM clearance_claims WHERE id=$1 AND status='CLOSED'`, [req.params.id]))[0];
+    if (!existing) throw notFound("Clearance claim not found");
 
-    const parsed = StatusSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid status payload", parsed.error.flatten());
+    const parsed = DeductedSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid deducted payload", parsed.error.flatten());
 
-    await query(`UPDATE deductions SET status=$2, updated_at=now() WHERE id=$1`, [req.params.id, parsed.data.status]);
-    return res.json({ ok: true });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-deductionsRouter.delete("/:id", async (req: AuthedRequest, res, next) => {
-  try {
-    const existing = (await query<{ status: string }>(`SELECT status FROM deductions WHERE id=$1`, [req.params.id]))[0];
-    if (!existing) throw notFound("Deduction not found");
-    if (existing.status !== "PENDING") throw badRequest("Only pending deductions can be deleted");
-
-    await query(`DELETE FROM deductions WHERE id=$1`, [req.params.id]);
+    if (parsed.data.deducted) {
+      await query(`UPDATE clearance_claims SET deducted_at=now(), deducted_by_id=$2 WHERE id=$1`, [req.params.id, req.user!.userId]);
+    } else {
+      await query(`UPDATE clearance_claims SET deducted_at=NULL, deducted_by_id=NULL WHERE id=$1`, [req.params.id]);
+    }
     return res.json({ ok: true });
   } catch (err) {
     return next(err);

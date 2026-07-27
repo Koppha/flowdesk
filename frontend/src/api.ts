@@ -431,13 +431,10 @@ export const api = {
 
   deductionsAccess: () => req("/deductions/access"),
   deductions: () => req("/deductions"),
-  createDeduction: (data: { employee_id: string; deduction_type: string; amount: number; deduction_date: string; reason?: string }) =>
-    req("/deductions", { method: "POST", body: JSON.stringify(data) }),
-  updateDeduction: (id: string, data: { employee_id: string; deduction_type: string; amount: number; deduction_date: string; reason?: string }) =>
-    req(`/deductions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  updateDeductionStatus: (id: string, status: "PENDING" | "PROCESSING" | "PROCESSED") =>
-    req(`/deductions/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
-  deleteDeduction: (id: string) => req(`/deductions/${id}`, { method: "DELETE" }),
+  setDeductionVrDate: (id: string, vr_date: string | null) =>
+    req(`/deductions/${id}/vr-date`, { method: "PATCH", body: JSON.stringify({ vr_date }) }),
+  setDeductionActioned: (id: string, deducted: boolean) =>
+    req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) }),
   deductionAccessGroups: () => req("/deductions/access-groups"),
   setDeductionAccessGroups: (groups: string[]) => req("/deductions/access-groups", { method: "PUT", body: JSON.stringify({ groups }) })
 };

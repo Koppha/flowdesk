@@ -1,53 +1,51 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken } from "./api";
 import { formatMoney } from "./constants";
-import UserPicker, { type PickableUser } from "./UserPicker";
 import {
-  Clock, Hourglass, CheckCircle, Wallet, Search, Plus, X, MoreHorizontal,
-  Shield, ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch
+  Clock, Wallet, HandCoins, CheckCircle2, Search, MoreHorizontal,
+  Shield, ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, X, Check
 } from "lucide-react";
 
-const DEDUCTION_TYPES = ["Late Clearance", "No Clearance"] as const;
-type DeductionType = typeof DEDUCTION_TYPES[number];
-
-const TYPE_STYLE: Record<string, [string, string]> = {
-  "Late Clearance": ["#ffedd5", "#c2410c"],
-  "No Clearance":   ["#fee2e2", "#dc2626"]
+const STATUS_STYLE: Record<string, [string, string]> = {
+  DEDUCTED:  ["#d1fae5", "#065f46"],
+  PENDING:   ["#fef3c7", "#92400e"],
+  NO_ACTION: ["#f1f5f9", "#64748b"]
 };
 
-const STATUS_STYLE: Record<string, [string, string]> = {
-  PENDING:    ["#fef3c7", "#92400e"],
-  PROCESSING: ["#dbeafe", "#1d4ed8"],
-  PROCESSED:  ["#d1fae5", "#065f46"]
+const STATUS_LABEL: Record<string, string> = {
+  DEDUCTED: "Deducted",
+  PENDING: "Pending",
+  NO_ACTION: "No action needed"
 };
 
 interface DeductionItem {
   id: string;
-  deduction_type: DeductionType;
   employee_id: string;
   employee_name: string | null;
-  department: string | null;
-  amount: string | number;
-  deduction_date: string;
-  reason: string | null;
-  status: "PENDING" | "PROCESSING" | "PROCESSED";
-  requested_by_id: string;
-  requested_by_name: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-function referenceNumber(item: DeductionItem) {
-  const created = new Date(item.created_at || Date.now());
-  const year = Number.isNaN(created.getTime()) ? new Date().getFullYear() : created.getFullYear();
-  const digits = String(item.id || "").replace(/\D/g, "").slice(-4);
-  const fallback = String(item.id || "0000").replace(/-/g, "").slice(0, 4).toUpperCase();
-  return `DED-${year}-${(digits || fallback || "0000").padStart(4, "0")}`;
+  employee_no: string | null;
+  division_name: string | null;
+  destination: string | null;
+  month: string | null;
+  vr_date: string | null;
+  has_receipts: boolean;
+  advance_amount: string | number;
+  cleared_amount: string | number;
+  amount_to_be_expensed: string | number;
+  salary_deduction: string | number;
+  payable: string | number;
+  deducted_at: string | null;
+  deducted_by_name: string | null;
+  closed_at: string | null;
 }
 
 function fmtDate(s: string | null | undefined) {
   if (!s) return "—";
   return new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function toInputDate(s: string | null | undefined) {
+  if (!s) return "";
+  return String(s).slice(0, 10);
 }
 
 function isThisMonth(s: string | null | undefined) {
@@ -57,58 +55,46 @@ function isThisMonth(s: string | null | undefined) {
   return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
 }
 
-function TypeBadge({ type }: { type: string }) {
-  const [bg, color] = TYPE_STYLE[type] || ["#f1f5f9", "#64748b"];
-  return <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>{type}</span>;
+function rowStatus(item: DeductionItem): "DEDUCTED" | "PENDING" | "NO_ACTION" {
+  if (item.deducted_at) return "DEDUCTED";
+  const owed = Number(item.salary_deduction || 0) > 0 || Number(item.payable || 0) > 0;
+  return owed ? "PENDING" : "NO_ACTION";
 }
 
 function StatusBadge({ status }: { status: string }) {
   const [bg, color] = STATUS_STYLE[status] || ["#f1f5f9", "#64748b"];
-  const label = status.charAt(0) + status.slice(1).toLowerCase();
-  return <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>{label}</span>;
+  return <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>{STATUS_LABEL[status] || status}</span>;
 }
 
-type SortKey = "reference" | "type" | "employee" | "department" | "amount" | "date" | "status" | "requestedBy";
+type SortKey = "name" | "empNo" | "division" | "destination" | "vrDate" | "advAmount" | "clearedAmount" | "toBeExpensed" | "salaryDeduction" | "payable" | "status";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
 export default function Deductions() {
-  const me = getUserFromToken();
-  const isAdmin = me?.role === "ADMIN";
-
   const [items, setItems] = useState<DeductionItem[]>([]);
-  const [directory, setDirectory] = useState<PickableUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<"pending" | "processing" | "processed" | "all">("pending");
+  const [tab, setTab] = useState<"pending" | "deducted" | "all">("pending");
   const [search, setSearch] = useState("");
-  const [filterType, setFilterType] = useState("");
-  const [filterDept, setFilterDept] = useState("");
+  const [filterDivision, setFilterDivision] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortKey, setSortKey] = useState<SortKey>("vrDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  const [editing, setEditing] = useState<DeductionItem | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [showUserPicker, setShowUserPicker] = useState(false);
-  const [formEmployee, setFormEmployee] = useState<PickableUser | null>(null);
-  const [formType, setFormType] = useState<DeductionType>("Late Clearance");
-  const [formAmount, setFormAmount] = useState("");
-  const [formDate, setFormDate] = useState("");
-  const [formReason, setFormReason] = useState("");
-
   const [showAccessModal, setShowAccessModal] = useState(false);
   const [accessGroups, setAccessGroups] = useState<{ name: string; member_count: string; hidden: boolean; dynamic: boolean }[]>([]);
   const [grantedGroups, setGrantedGroups] = useState<string[]>([]);
   const [savingAccess, setSavingAccess] = useState(false);
+  const me = getUserFromToken();
+  const isAdmin = me?.role === "ADMIN";
 
   async function refresh() {
     setError(null);
@@ -124,7 +110,6 @@ export default function Deductions() {
 
   useEffect(() => {
     refresh();
-    api.companyDirectory().then(setDirectory).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -134,61 +119,67 @@ export default function Deductions() {
   }, []);
 
   const stats = useMemo(() => {
-    const pending = items.filter((i) => i.status === "PENDING");
-    const processing = items.filter((i) => i.status === "PROCESSING");
-    const processedThisMonth = items.filter((i) => i.status === "PROCESSED" && isThisMonth(i.updated_at));
-    const sum = (arr: DeductionItem[]) => arr.reduce((s, i) => s + Number(i.amount || 0), 0);
+    const pendingDeduction = items.filter((i) => !i.deducted_at && Number(i.salary_deduction || 0) > 0);
+    const pendingPayable = items.filter((i) => !i.deducted_at && Number(i.payable || 0) > 0);
+    const deductedThisMonth = items.filter((i) => i.deducted_at && isThisMonth(i.deducted_at));
+    const sum = (arr: DeductionItem[], key: "salary_deduction" | "payable") => arr.reduce((s, i) => s + Number(i[key] || 0), 0);
     return {
-      pendingCount: pending.length,
-      pendingValue: sum(pending),
-      processingCount: processing.length,
-      processingValue: sum(processing),
-      processedCount: processedThisMonth.length,
-      processedValue: sum(processedThisMonth),
-      totalDeductedValue: sum(processedThisMonth)
+      pendingDeductionCount: pendingDeduction.length,
+      pendingDeductionValue: sum(pendingDeduction, "salary_deduction"),
+      pendingPayableCount: pendingPayable.length,
+      pendingPayableValue: sum(pendingPayable, "payable"),
+      deductedCount: deductedThisMonth.length,
+      deductedValue: sum(deductedThisMonth, "salary_deduction") + sum(deductedThisMonth, "payable")
     };
   }, [items]);
 
-  const uniqueDepts = useMemo(() => Array.from(new Set(items.map((i) => i.department).filter(Boolean))).sort() as string[], [items]);
+  const uniqueDivisions = useMemo(() => Array.from(new Set(items.map((i) => i.division_name).filter(Boolean))).sort() as string[], [items]);
 
   const tabFiltered = useMemo(() => {
     if (tab === "all") return items;
-    return items.filter((i) => i.status === tab.toUpperCase());
+    if (tab === "deducted") return items.filter((i) => rowStatus(i) === "DEDUCTED");
+    return items.filter((i) => rowStatus(i) === "PENDING");
   }, [items, tab]);
 
   const filtered = useMemo(() => {
     return tabFiltered.filter((i) => {
-      if (filterType && i.deduction_type !== filterType) return false;
-      if (filterDept && i.department !== filterDept) return false;
-      if (dateFrom && i.deduction_date < dateFrom) return false;
-      if (dateTo && i.deduction_date > dateTo) return false;
+      if (filterDivision && i.division_name !== filterDivision) return false;
+      if (dateFrom && (!i.closed_at || i.closed_at < dateFrom)) return false;
+      if (dateTo && (!i.closed_at || i.closed_at > dateTo)) return false;
       if (search) {
         const q = search.toLowerCase();
         return (
-          referenceNumber(i).toLowerCase().includes(q) ||
           (i.employee_name || "").toLowerCase().includes(q) ||
-          (i.department || "").toLowerCase().includes(q) ||
-          (i.requested_by_name || "").toLowerCase().includes(q)
+          (i.employee_no || "").toLowerCase().includes(q) ||
+          (i.division_name || "").toLowerCase().includes(q) ||
+          (i.destination || "").toLowerCase().includes(q)
         );
       }
       return true;
     });
-  }, [tabFiltered, filterType, filterDept, dateFrom, dateTo, search]);
+  }, [tabFiltered, filterDivision, dateFrom, dateTo, search]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
     const dir = sortDir === "asc" ? 1 : -1;
     copy.sort((a, b) => {
       switch (sortKey) {
-        case "reference": return referenceNumber(a).localeCompare(referenceNumber(b)) * dir;
-        case "type": return a.deduction_type.localeCompare(b.deduction_type) * dir;
-        case "employee": return (a.employee_name || "").localeCompare(b.employee_name || "") * dir;
-        case "department": return (a.department || "").localeCompare(b.department || "") * dir;
-        case "amount": return (Number(a.amount) - Number(b.amount)) * dir;
-        case "status": return a.status.localeCompare(b.status) * dir;
-        case "requestedBy": return (a.requested_by_name || "").localeCompare(b.requested_by_name || "") * dir;
-        case "date":
-        default: return (new Date(a.deduction_date).getTime() - new Date(b.deduction_date).getTime()) * dir;
+        case "name": return (a.employee_name || "").localeCompare(b.employee_name || "") * dir;
+        case "empNo": return (a.employee_no || "").localeCompare(b.employee_no || "") * dir;
+        case "division": return (a.division_name || "").localeCompare(b.division_name || "") * dir;
+        case "destination": return (a.destination || "").localeCompare(b.destination || "") * dir;
+        case "advAmount": return (Number(a.advance_amount) - Number(b.advance_amount)) * dir;
+        case "clearedAmount": return (Number(a.cleared_amount) - Number(b.cleared_amount)) * dir;
+        case "toBeExpensed": return (Number(a.amount_to_be_expensed) - Number(b.amount_to_be_expensed)) * dir;
+        case "salaryDeduction": return (Number(a.salary_deduction) - Number(b.salary_deduction)) * dir;
+        case "payable": return (Number(a.payable) - Number(b.payable)) * dir;
+        case "status": return rowStatus(a).localeCompare(rowStatus(b)) * dir;
+        case "vrDate":
+        default: {
+          const av = a.vr_date ? new Date(a.vr_date).getTime() : 0;
+          const bv = b.vr_date ? new Date(b.vr_date).getTime() : 0;
+          return (av - bv) * dir;
+        }
       }
     });
     return copy;
@@ -203,84 +194,27 @@ export default function Deductions() {
     else { setSortKey(key); setSortDir("asc"); }
   }
 
-  function resetForm() {
-    setEditing(null);
-    setFormEmployee(null);
-    setFormType("Late Clearance");
-    setFormAmount("");
-    setFormDate("");
-    setFormReason("");
-  }
-
-  function openCreate() {
-    resetForm();
-    setShowForm(true);
-  }
-
-  function openEdit(item: DeductionItem) {
-    setEditing(item);
-    const emp = directory.find((u) => u.id === item.employee_id) || null;
-    setFormEmployee(emp || { id: item.employee_id, full_name: item.employee_name, email: "", department: item.department });
-    setFormType(item.deduction_type);
-    setFormAmount(String(item.amount));
-    setFormDate(item.deduction_date ? item.deduction_date.slice(0, 10) : "");
-    setFormReason(item.reason || "");
-    setShowForm(true);
-    setOpenMenuId(null);
-  }
-
-  async function saveForm() {
-    if (!formEmployee || !formAmount || !formDate) {
-      setError("Employee, amount, and deduction date are required.");
-      return;
+  async function saveVrDate(item: DeductionItem, value: string) {
+    const prev = item.vr_date;
+    setItems((list) => list.map((i) => (i.id === item.id ? { ...i, vr_date: value || null } : i)));
+    try {
+      await api.setDeductionVrDate(item.id, value || null);
+    } catch (e: any) {
+      setError(String(e.message));
+      setItems((list) => list.map((i) => (i.id === item.id ? { ...i, vr_date: prev } : i)));
     }
-    setBusy(true);
+  }
+
+  async function toggleDeducted(item: DeductionItem, deducted: boolean) {
+    setBusyId(item.id);
     setError(null);
     try {
-      const payload = {
-        employee_id: formEmployee.id,
-        deduction_type: formType,
-        amount: Number(formAmount),
-        deduction_date: formDate,
-        reason: formReason.trim() || undefined
-      };
-      if (editing) await api.updateDeduction(editing.id, payload);
-      else await api.createDeduction(payload);
-      setShowForm(false);
-      resetForm();
+      await api.setDeductionActioned(item.id, deducted);
       await refresh();
     } catch (e: any) {
       setError(String(e.message));
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function advanceStatus(item: DeductionItem, status: "PENDING" | "PROCESSING" | "PROCESSED") {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.updateDeductionStatus(item.id, status);
-      await refresh();
-    } catch (e: any) {
-      setError(String(e.message));
-    } finally {
-      setBusy(false);
-      setOpenMenuId(null);
-    }
-  }
-
-  async function removeDeduction(item: DeductionItem) {
-    if (!window.confirm(`Delete deduction ${referenceNumber(item)} for ${item.employee_name}?`)) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.deleteDeduction(item.id);
-      await refresh();
-    } catch (e: any) {
-      setError(String(e.message));
-    } finally {
-      setBusy(false);
+      setBusyId(null);
       setOpenMenuId(null);
     }
   }
@@ -310,10 +244,13 @@ export default function Deductions() {
   }
 
   function exportCsv() {
-    const headers = ["Deduction Reference", "Deduction Type", "Employee", "Department", "Amount (LSL)", "Deduction Date", "Status", "Requested By"];
+    const headers = ["Name", "Emp No", "Division", "Destination", "VR Date", "Receipts", "Adv Amount", "Cleared Amount", "Amount To Be Expensed", "Salary Deduction", "Payable", "Status"];
     const rows = sorted.map((i) => [
-      referenceNumber(i), i.deduction_type, i.employee_name || "", i.department || "",
-      Number(i.amount || 0).toFixed(2), fmtDate(i.deduction_date), i.status, i.requested_by_name || ""
+      i.employee_name || "", i.employee_no || "", i.division_name || "", i.destination || "",
+      fmtDate(i.vr_date), i.has_receipts ? "Yes" : "No",
+      Number(i.advance_amount || 0).toFixed(2), Number(i.cleared_amount || 0).toFixed(2),
+      Number(i.amount_to_be_expensed || 0).toFixed(2), Number(i.salary_deduction || 0).toFixed(2),
+      Number(i.payable || 0).toFixed(2), STATUS_LABEL[rowStatus(i)]
     ]);
     const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const el = document.createElement("a");
@@ -337,7 +274,7 @@ export default function Deductions() {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Deductions</h1>
-          <p className="ep-subtitle">Payroll deductions raised against employees who owe the company.</p>
+          <p className="ep-subtitle">Subsistence clearance settlements requiring a salary deduction or payable amount.</p>
         </div>
         <div className="ep-actions">
           {isAdmin && (
@@ -348,9 +285,6 @@ export default function Deductions() {
           <button className="ep-btn-outline" onClick={exportCsv} disabled={!sorted.length}>
             <Download size={14} /> Export
           </button>
-          <button className="button button-primary" onClick={openCreate}>
-            <Plus size={14} /> New Deduction
-          </button>
         </div>
       </div>
 
@@ -360,43 +294,42 @@ export default function Deductions() {
         <div className="ep-kpi ep-kpi-blue">
           <div className="ep-kpi-icon"><Clock size={26} /></div>
           <div>
-            <div className="ep-kpi-value">{stats.pendingCount}</div>
-            <div className="ep-kpi-label">Total Pending Deductions</div>
-            <div className="ep-kpi-subvalue">{formatMoney(stats.pendingValue)}</div>
+            <div className="ep-kpi-value">{stats.pendingDeductionCount}</div>
+            <div className="ep-kpi-label">Pending Salary Deductions</div>
+            <div className="ep-kpi-subvalue">{formatMoney(stats.pendingDeductionValue)}</div>
           </div>
         </div>
         <div className="ep-kpi ep-kpi-gold">
-          <div className="ep-kpi-icon"><Hourglass size={26} /></div>
+          <div className="ep-kpi-icon"><HandCoins size={26} /></div>
           <div>
-            <div className="ep-kpi-value">{stats.processingCount}</div>
-            <div className="ep-kpi-label">Processing Deductions</div>
-            <div className="ep-kpi-subvalue">{formatMoney(stats.processingValue)}</div>
+            <div className="ep-kpi-value">{stats.pendingPayableCount}</div>
+            <div className="ep-kpi-label">Pending Payables</div>
+            <div className="ep-kpi-subvalue">{formatMoney(stats.pendingPayableValue)}</div>
           </div>
         </div>
         <div className="ep-kpi ep-kpi-green">
-          <div className="ep-kpi-icon"><CheckCircle size={26} /></div>
+          <div className="ep-kpi-icon"><CheckCircle2 size={26} /></div>
           <div>
-            <div className="ep-kpi-value">{stats.processedCount}</div>
-            <div className="ep-kpi-label">Processed (This Month)</div>
-            <div className="ep-kpi-subvalue">{formatMoney(stats.processedValue)}</div>
+            <div className="ep-kpi-value">{stats.deductedCount}</div>
+            <div className="ep-kpi-label">Deducted (This Month)</div>
+            <div className="ep-kpi-subvalue">{formatMoney(stats.deductedValue)}</div>
           </div>
         </div>
         <div className="ep-kpi ep-kpi-purple">
           <div className="ep-kpi-icon"><Wallet size={26} /></div>
           <div>
-            <div className="ep-kpi-value">{formatMoney(stats.totalDeductedValue)}</div>
-            <div className="ep-kpi-label">Total Deducted (This Month)</div>
-            <div className="ep-kpi-subvalue">Across {stats.processedCount} deductions</div>
+            <div className="ep-kpi-value">{formatMoney(stats.pendingDeductionValue + stats.pendingPayableValue)}</div>
+            <div className="ep-kpi-label">Total Outstanding</div>
+            <div className="ep-kpi-subvalue">Across {stats.pendingDeductionCount + stats.pendingPayableCount} claims</div>
           </div>
         </div>
       </div>
 
       <div className="ep-tabs">
         {([
-          { key: "pending", label: "Pending", count: items.filter((i) => i.status === "PENDING").length },
-          { key: "processing", label: "Processing", count: items.filter((i) => i.status === "PROCESSING").length },
-          { key: "processed", label: "Processed", count: items.filter((i) => i.status === "PROCESSED").length },
-          { key: "all", label: "All Deductions", count: items.length }
+          { key: "pending", label: "Pending", count: items.filter((i) => rowStatus(i) === "PENDING").length },
+          { key: "deducted", label: "Deducted", count: items.filter((i) => rowStatus(i) === "DEDUCTED").length },
+          { key: "all", label: "All Claims", count: items.length }
         ] as const).map((t) => (
           <button key={t.key} type="button" className={`ep-tab ${tab === t.key ? "active" : ""}`}
             onClick={() => { setTab(t.key); setPage(1); }}>
@@ -409,20 +342,16 @@ export default function Deductions() {
         <div className="ded-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 220px" }}>
             <Search size={14} />
-            <input placeholder="Search deductions…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+            <input placeholder="Search name, emp no, division, destination…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
           </div>
-          <select className="ep-form-select" value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1); }}>
-            <option value="">All Types</option>
-            {DEDUCTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          <select className="ep-form-select" value={filterDivision} onChange={(e) => { setFilterDivision(e.target.value); setPage(1); }} style={{ minWidth: 160 }}>
+            <option value="">All Divisions</option>
+            {uniqueDivisions.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
-          <select className="ep-form-select" value={filterDept} onChange={(e) => { setFilterDept(e.target.value); setPage(1); }} style={{ minWidth: 160 }}>
-            <option value="">All Departments</option>
-            {uniqueDepts.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
-          <input type="date" className="ep-form-select" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} title="From date" />
-          <input type="date" className="ep-form-select" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} title="To date" />
-          {(search || filterType || filterDept || dateFrom || dateTo) && (
-            <button className="ep-btn-outline" onClick={() => { setSearch(""); setFilterType(""); setFilterDept(""); setDateFrom(""); setDateTo(""); setPage(1); }}>
+          <input type="date" className="ep-form-select" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} title="Closed from" />
+          <input type="date" className="ep-form-select" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} title="Closed to" />
+          {(search || filterDivision || dateFrom || dateTo) && (
+            <button className="ep-btn-outline" onClick={() => { setSearch(""); setFilterDivision(""); setDateFrom(""); setDateTo(""); setPage(1); }}>
               Clear
             </button>
           )}
@@ -434,66 +363,89 @@ export default function Deductions() {
           {sorted.length === 0 ? (
             <div className="ep-empty ded-empty">
               <span className="ded-empty-icon"><FolderSearch size={26} /></span>
-              <p><strong>No deductions match your filters.</strong></p>
+              <p><strong>No settled clearances match your filters.</strong></p>
               <p className="ded-empty-hint">Try adjusting your search criteria or filters.</p>
             </div>
           ) : (
             <table className="ep-table">
               <thead>
                 <tr>
-                  <SortableHeader label="Deduction Reference" sortKeyName="reference" />
-                  <SortableHeader label="Deduction Type" sortKeyName="type" />
-                  <SortableHeader label="Employee" sortKeyName="employee" />
-                  <SortableHeader label="Department" sortKeyName="department" />
-                  <SortableHeader label="Amount (LSL)" sortKeyName="amount" />
-                  <SortableHeader label="Deduction Date" sortKeyName="date" />
+                  <SortableHeader label="Name" sortKeyName="name" />
+                  <SortableHeader label="Emp. No" sortKeyName="empNo" />
+                  <SortableHeader label="Division" sortKeyName="division" />
+                  <SortableHeader label="Destination" sortKeyName="destination" />
+                  <SortableHeader label="VR Date" sortKeyName="vrDate" />
+                  <th>Receipts</th>
+                  <SortableHeader label="Adv Amount" sortKeyName="advAmount" />
+                  <SortableHeader label="Cleared Amount" sortKeyName="clearedAmount" />
+                  <SortableHeader label="Amount To Be Expnsd" sortKeyName="toBeExpensed" />
+                  <SortableHeader label="Salary Deduction" sortKeyName="salaryDeduction" />
+                  <SortableHeader label="Payable" sortKeyName="payable" />
                   <SortableHeader label="Status" sortKeyName="status" />
-                  <SortableHeader label="Requested By" sortKeyName="requestedBy" />
                   <th style={{ width: 40 }} />
                 </tr>
               </thead>
               <tbody>
-                {paged.map((item) => (
-                  <tr key={item.id}>
-                    <td><strong>{referenceNumber(item)}</strong></td>
-                    <td><TypeBadge type={item.deduction_type} /></td>
-                    <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.employee_name || "—"}</td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.department || "—"}</td>
-                    <td style={{ fontWeight: 600 }}>{Number(item.amount || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(item.deduction_date)}</td>
-                    <td><StatusBadge status={item.status} /></td>
-                    <td style={{ fontSize: 13 }}>{item.requested_by_name || "—"}</td>
-                    <td className="ep-dropdown-wrap">
-                      <button
-                        className="ep-icon-btn"
-                        onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === item.id ? null : item.id); }}
-                        aria-label="Row actions"
-                      >
-                        <MoreHorizontal size={16} />
-                      </button>
-                      {openMenuId === item.id && (
-                        <div className="ep-dropdown" onClick={(e) => e.stopPropagation()}>
-                          {item.status === "PENDING" && (
-                            <>
-                              <button className="ep-dropdown-item" onClick={() => openEdit(item)}>Edit</button>
-                              <button className="ep-dropdown-item" onClick={() => advanceStatus(item, "PROCESSING")} disabled={busy}>Move to Processing</button>
-                              <button className="ep-dropdown-item danger" onClick={() => removeDeduction(item)} disabled={busy}>Delete</button>
-                            </>
-                          )}
-                          {item.status === "PROCESSING" && (
-                            <>
-                              <button className="ep-dropdown-item" onClick={() => advanceStatus(item, "PENDING")} disabled={busy}>Move back to Pending</button>
-                              <button className="ep-dropdown-item" onClick={() => advanceStatus(item, "PROCESSED")} disabled={busy}>Mark Processed</button>
-                            </>
-                          )}
-                          {item.status === "PROCESSED" && (
-                            <button className="ep-dropdown-item" onClick={() => advanceStatus(item, "PROCESSING")} disabled={busy}>Move back to Processing</button>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {paged.map((item) => {
+                  const status = rowStatus(item);
+                  const actionable = status !== "NO_ACTION";
+                  return (
+                    <tr key={item.id}>
+                      <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.employee_name || "—"}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.employee_no || "—"}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.division_name || "—"}</td>
+                      <td style={{ fontSize: 13 }}>{item.destination || "—"}</td>
+                      <td>
+                        <input
+                          type="date"
+                          className="ep-form-select"
+                          style={{ fontSize: 12, padding: "4px 6px" }}
+                          value={toInputDate(item.vr_date)}
+                          onChange={(e) => saveVrDate(item, e.target.value)}
+                        />
+                      </td>
+                      <td>{item.has_receipts
+                        ? <span style={{ color: "#065f46", fontWeight: 600, fontSize: 12 }}>Yes</span>
+                        : <span style={{ color: "var(--muted)", fontSize: 12 }}>No</span>}
+                      </td>
+                      <td style={{ fontWeight: 600 }}>{Number(item.advance_amount || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ fontWeight: 600 }}>{Number(item.cleared_amount || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td>{Number(item.amount_to_be_expensed || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ color: Number(item.salary_deduction) > 0 ? "#dc2626" : "var(--muted)", fontWeight: 600 }}>
+                        {Number(item.salary_deduction || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td style={{ color: Number(item.payable) > 0 ? "#059669" : "var(--muted)", fontWeight: 600 }}>
+                        {Number(item.payable || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td><StatusBadge status={status} /></td>
+                      <td className="ep-dropdown-wrap">
+                        {actionable && (
+                          <button
+                            className="ep-icon-btn"
+                            onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === item.id ? null : item.id); }}
+                            aria-label="Row actions"
+                          >
+                            <MoreHorizontal size={16} />
+                          </button>
+                        )}
+                        {openMenuId === item.id && (
+                          <div className="ep-dropdown" onClick={(e) => e.stopPropagation()}>
+                            {status === "PENDING" && (
+                              <button className="ep-dropdown-item" onClick={() => toggleDeducted(item, true)} disabled={busyId === item.id}>
+                                <Check size={14} style={{ marginRight: 6 }} /> Mark as Deducted
+                              </button>
+                            )}
+                            {status === "DEDUCTED" && (
+                              <button className="ep-dropdown-item" onClick={() => toggleDeducted(item, false)} disabled={busyId === item.id}>
+                                <X size={14} style={{ marginRight: 6 }} /> Undo
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -517,66 +469,6 @@ export default function Deductions() {
           </div>
         )}
       </div>
-
-      {showForm && (
-        <div className="ep-modal-overlay" onClick={() => !busy && setShowForm(false)}>
-          <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="ep-modal-head">
-              <div>
-                <h2 className="ep-modal-title">{editing ? "Edit Deduction" : "New Deduction"}</h2>
-                <p className="ep-modal-sub">{editing ? "Only pending deductions can be edited." : "Record a deduction against an employee who owes the company."}</p>
-              </div>
-              <button className="ep-icon-btn" onClick={() => setShowForm(false)} disabled={busy}><X size={18} /></button>
-            </div>
-            <div className="ep-modal-body">
-              <div className="ep-form-group">
-                <label>Employee <span className="ep-required">*</span></label>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <input className="ep-form-input" readOnly value={formEmployee?.full_name || ""} placeholder="Select an employee…" style={{ flex: 1 }} />
-                  <button type="button" className="button small-button button-subtle" onClick={() => setShowUserPicker(true)}>Choose</button>
-                </div>
-              </div>
-              <div className="ep-form-row">
-                <div className="ep-form-group">
-                  <label>Deduction Type <span className="ep-required">*</span></label>
-                  <select className="ep-form-select" value={formType} onChange={(e) => setFormType(e.target.value as DeductionType)}>
-                    {DEDUCTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div className="ep-form-group">
-                  <label>Amount (LSL) <span className="ep-required">*</span></label>
-                  <input className="ep-form-input" type="number" min="0" step="0.01" value={formAmount} onChange={(e) => setFormAmount(e.target.value)} placeholder="0.00" />
-                </div>
-              </div>
-              <div className="ep-form-group">
-                <label>Deduction Date <span className="ep-required">*</span></label>
-                <input className="ep-form-input" type="date" value={formDate} onChange={(e) => setFormDate(e.target.value)} />
-              </div>
-              <div className="ep-form-group">
-                <label>Reason</label>
-                <textarea className="ep-form-textarea" value={formReason} onChange={(e) => setFormReason(e.target.value)} placeholder="Why this employee owes the company…" rows={3} />
-              </div>
-            </div>
-            <div className="ep-modal-footer">
-              <button className="button small-button button-subtle" onClick={() => setShowForm(false)} disabled={busy}>Cancel</button>
-              <button className="button button-primary" onClick={() => void saveForm()} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showUserPicker && (
-        <UserPicker
-          title="Select Employee"
-          subtitle="Search and select the employee this deduction applies to."
-          users={directory}
-          excludeRoles={[]}
-          saveLabel="Select"
-          selectedNote="will be selected for this deduction."
-          onClose={() => setShowUserPicker(false)}
-          onSelect={(u) => { setFormEmployee(u); setShowUserPicker(false); }}
-        />
-      )}
 
       {showAccessModal && (
         <div className="ep-modal-overlay" onClick={() => !savingAccess && setShowAccessModal(false)}>

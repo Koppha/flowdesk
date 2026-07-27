@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { api, openBlobInNewTab } from "./api";
 import { formatMoney, travelTypeLabel, TravelType } from "./constants";
-import { Download, FileText, Users, CheckCircle, XCircle } from "lucide-react";
+import { Download, FileText, Users, CheckCircle, XCircle, MoreHorizontal, ChevronLeft, ChevronRight } from "lucide-react";
 
 function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
   return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
@@ -69,6 +70,20 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
   const [page, setPage] = useState(1);
   const [visibleCols, setVisibleCols] = useState<Record<string, boolean>>(loadVisibleColumns);
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function closeMenu() { setOpenMenuId(null); }
+    window.addEventListener("click", closeMenu);
+    return () => window.removeEventListener("click", closeMenu);
+  }, []);
+
+  function viewPdf(a: any) {
+    setPdfError(null);
+    setOpenMenuId(null);
+    openBlobInNewTab(() => api.advancePdf(a.id)).catch((e: any) => setPdfError(e?.message || "Failed to open PDF."));
+  }
 
   function toggleColumn(key: string) {
     setVisibleCols(prev => {
@@ -194,6 +209,8 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
         </div>
       </div>
 
+      {pdfError && <pre className="inbox-error">{pdfError}</pre>}
+
       {/* Filters */}
       <div className="ep-panel" style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
@@ -244,6 +261,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
                   {visibleCols.submitted && <th>Submitted</th>}
                   {visibleCols.approvedDate && <th>Approved Date</th>}
                   {visibleCols.paidDate && <th>Paid Date</th>}
+                  <th style={{ width: 40 }} />
                 </tr>
               </thead>
               <tbody>
@@ -263,6 +281,20 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
                     {visibleCols.submitted && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.submitted_at || a.created_at)}</td>}
                     {visibleCols.approvedDate && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.approved_at)}</td>}
                     {visibleCols.paidDate && <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.paid_at)}</td>}
+                    <td className="ep-dropdown-wrap">
+                      <button
+                        className="ep-icon-btn"
+                        onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === a.id ? null : a.id); }}
+                        aria-label="Row actions"
+                      >
+                        <MoreHorizontal size={16} />
+                      </button>
+                      {openMenuId === a.id && (
+                        <div className="ep-dropdown" onClick={(e) => e.stopPropagation()}>
+                          <button className="ep-dropdown-item" onClick={() => viewPdf(a)}>View PDF</button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -271,14 +303,17 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
         </div>
 
         {/* Pagination */}
-        {totalPages > 1 && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)" }}>
+        {filtered.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
             <span style={{ fontSize: 13, color: "var(--muted)" }}>
-              Page {page} of {totalPages} · {filtered.length} records
+              Showing {(page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} results
             </span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="ep-btn-outline" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>← Prev</button>
-              <button className="ep-btn-outline" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>Next →</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button className="ep-btn-outline" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}><ChevronLeft size={14} /></button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).slice(0, 7).map(n => (
+                <button key={n} className={`button small-button ${page === n ? "button-primary" : "button-subtle"}`} onClick={() => setPage(n)}>{n}</button>
+              ))}
+              <button className="ep-btn-outline" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}><ChevronRight size={14} /></button>
             </div>
           </div>
         )}

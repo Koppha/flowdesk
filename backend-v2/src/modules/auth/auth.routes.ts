@@ -473,9 +473,23 @@ authRouter.post("/verify-password", async (req: AuthedRequest, res, next) => {
   try {
     const { password } = VerifyPasswordSchema.parse(req.body);
     const user = (
-      await query<{ password_hash: string }>(`SELECT password_hash FROM users WHERE id=$1`, [req.user!.userId])
+      await query<{ email: string; password_hash: string }>(`SELECT email, password_hash FROM users WHERE id=$1`, [req.user!.userId])
     )[0];
     if (!user) throw notFound();
+
+    // AD-authenticated users have a synthetic, unknowable local password_hash
+    // (see the login route above) — their real password is whatever they log
+    // in with via AD, so verify against AD first, same as login does.
+    if (env.AD_AUTH_ENABLED) {
+      try {
+        const ad = await authenticateAgainstAd({ email: user.email.split("@")[0], password });
+        if (ad.authenticated) return res.json({ verified: true });
+      } catch (adErr) {
+        logger.warn("verify_password_ad_error_fallback", { user_id: req.user!.userId, error: serializeError(adErr) });
+        if (!env.AD_FALLBACK_LOCAL) throw unauthorized("AD authentication unavailable");
+      }
+    }
+
     const ok = await comparePassword(password, user.password_hash);
     if (!ok) throw unauthorized("Invalid password");
     return res.json({ verified: true });
