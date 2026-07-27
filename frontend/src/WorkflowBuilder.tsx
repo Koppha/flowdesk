@@ -742,6 +742,18 @@ export default function WorkflowBuilder() {
     setShowAddPosition(false);
   }
 
+  function handleAddParticipantSection(name: string, anySectionMember: boolean) {
+    if (!anySectionMember) return;
+    addStep("MANAGER", steps.length, {
+      positionName: `Section: ${name}`,
+      description: `Anyone in ${name}`,
+      approvalMode: "ANY_ONE",
+      approvalGroupName: `Section: ${name}`,
+      assignedUserId: null
+    });
+    setShowAddPosition(false);
+  }
+
   function handleAddParticipantEmployee(employee: { id: string; full_name: string | null; email: string; department?: string | null }) {
     addStep("MANAGER", steps.length, {
       positionName: employee.full_name || employee.email,
@@ -2371,6 +2383,7 @@ export default function WorkflowBuilder() {
               onAddPosition={handleAddParticipantPosition}
               onAddTeam={handleAddParticipantTeam}
               onAddDepartment={handleAddParticipantDepartment}
+              onAddSection={handleAddParticipantSection}
               onAddEmployee={handleAddParticipantEmployee}
               onClose={() => setShowAddPosition(false)}
             />
