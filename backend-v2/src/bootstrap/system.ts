@@ -90,6 +90,13 @@ async function ensureUserSchema() {
       WHERE cc.linked_advance_id = ar.id AND cc.currency IS NULL`
   );
   await query(`ALTER TABLE users ALTER COLUMN employee_no DROP NOT NULL`);
+  // Newly-created accounts (admin-created without a name yet, or auto-
+  // provisioned on first AD login before AD returns a display name) are
+  // expected to have a null full_name until the user completes their
+  // profile - see ProfileSchema/isProfileComplete. The live DB had drifted
+  // to NOT NULL on this column (unlike db/schema.sql), which made every one
+  // of those insert paths throw on first login / user creation.
+  await query(`ALTER TABLE users ALTER COLUMN full_name DROP NOT NULL`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS title text`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type text`);
   await query(`ALTER TABLE users ALTER COLUMN employment_type SET DEFAULT 'PERMANENT'`);
