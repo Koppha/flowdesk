@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { formatMoney, travelTypeLabel, isTravelTypeCode, TravelType } from "./constants";
-import { Wallet, Clock3, CheckCircle2, Banknote, XCircle, Edit3, RefreshCw, Plus } from "lucide-react";
+import { FileText, Clock3, CheckCircle2, XCircle, Edit3, RefreshCw, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 
 function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
   return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
@@ -110,8 +110,7 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
   const stats = useMemo(() => ({
     total: advances.length,
     pending: advances.filter((a) => PENDING_STATUSES.includes(a.status)).length,
-    approved: advances.filter((a) => a.status === "APPROVED").length,
-    paid: advances.filter((a) => a.status === "PAID").length,
+    approvedOrPaid: advances.filter((a) => a.status === "APPROVED" || a.status === "PAID").length,
     cancelled: advances.filter((a) => CANCELLED_STATUSES.includes(a.status)).length,
   }), [advances]);
 
@@ -164,31 +163,40 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
         </div>
       </div>
 
-      <div className="flow-stat-row">
-        <div className="flow-stat-card flow-stat-blue">
-          <span className="flow-stat-icon"><Wallet size={22} aria-hidden /></span>
-          <div className="flow-stat-body"><strong>{stats.total}</strong><span>Total Advances</span><small>All time</small></div>
+      <div className="ep-kpi-row">
+        <div className="stat-card stat-card-blue">
+          <span className="stat-icon"><FileText size={28} /></span>
+          <div><div className="stat-value">{stats.total}</div><div className="stat-label">Total Advances</div></div>
         </div>
-        <div className="flow-stat-card flow-stat-amber">
-          <span className="flow-stat-icon"><Clock3 size={22} aria-hidden /></span>
-          <div className="flow-stat-body"><strong>{stats.pending}</strong><span>Pending</span><small>Awaiting approval</small></div>
+        <div className="stat-card stat-card-gold">
+          <span className="stat-icon"><Clock3 size={28} /></span>
+          <div><div className="stat-value">{stats.pending}</div><div className="stat-label">Pending</div></div>
         </div>
-        <div className="flow-stat-card flow-stat-purple">
-          <span className="flow-stat-icon"><CheckCircle2 size={22} aria-hidden /></span>
-          <div className="flow-stat-body"><strong>{stats.approved}</strong><span>Approved</span><small>Approved requests</small></div>
+        <div className="stat-card stat-card-green">
+          <span className="stat-icon"><CheckCircle2 size={28} /></span>
+          <div><div className="stat-value">{stats.approvedOrPaid}</div><div className="stat-label">Approved / Paid</div></div>
         </div>
-        <div className="flow-stat-card flow-stat-green">
-          <span className="flow-stat-icon"><Banknote size={22} aria-hidden /></span>
-          <div className="flow-stat-body"><strong>{stats.paid}</strong><span>Paid</span><small>Paid and settled</small></div>
-        </div>
-        <div className="flow-stat-card flow-stat-rose">
-          <span className="flow-stat-icon"><XCircle size={22} aria-hidden /></span>
-          <div className="flow-stat-body"><strong>{stats.cancelled}</strong><span>Cancelled</span><small>Cancelled requests</small></div>
+        <div className="stat-card stat-card-rose">
+          <span className="stat-icon"><XCircle size={28} /></span>
+          <div><div className="stat-value">{stats.cancelled}</div><div className="stat-label">Cancelled</div></div>
         </div>
       </div>
 
-      <div className="ep-panel">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 18px", alignItems: "center" }}>
+      <div className="ep-tabs">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={`ep-tab ${tab === t.key ? "active" : ""}`}
+            onClick={() => { setTab(t.key); setPage(1); }}
+          >
+            {t.label} <span className="inbox-count-chip">{tabCounts[t.key]}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="ep-panel" style={{ marginBottom: 14 }}>
+        <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 220px" }}>
             <input
               placeholder="Search by type or reference…"
@@ -196,13 +204,13 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             />
           </div>
-          <select className="ep-form-select" value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1); }}>
-            <option value="">All Types</option>
-            {uniqueTypes.map((t) => <option key={t} value={t}>{travelTypeLabel(t, travelTypes)}</option>)}
-          </select>
           <select className="ep-form-select" value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}>
             <option value="">All Statuses</option>
             {uniqueStatuses.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+          </select>
+          <select className="ep-form-select" value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1); }}>
+            <option value="">All Types</option>
+            {uniqueTypes.map((t) => <option key={t} value={t}>{travelTypeLabel(t, travelTypes)}</option>)}
           </select>
           <input type="date" className="ep-form-select" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} title="From date" />
           <input type="date" className="ep-form-select" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} title="To date" />
@@ -211,21 +219,11 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
               Clear
             </button>
           )}
+          <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted)" }}>{filtered.length} results</span>
         </div>
+      </div>
 
-        <div className="flow-tabs">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              className={`flow-tab ${tab === t.key ? "active" : ""}`}
-              onClick={() => { setTab(t.key); setPage(1); }}
-            >
-              {t.label} ({tabCounts[t.key]})
-            </button>
-          ))}
-        </div>
-
+      <div className="ep-panel">
         <div className="ep-table-wrap">
           {filtered.length === 0 ? (
             <div className="ep-empty"><p>No advance requests match your filters.</p></div>
@@ -289,14 +287,17 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
           )}
         </div>
 
-        {totalPages > 1 && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 18px", borderTop: "1px solid var(--border)" }}>
+        {filtered.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
             <span style={{ fontSize: 13, color: "var(--muted)" }}>
-              Showing {(currentPage - 1) * PAGE_SIZE + 1} to {Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length} entries
+              Showing {(currentPage - 1) * PAGE_SIZE + 1} to {Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length} results
             </span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}>← Prev</button>
-              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>Next →</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}><ChevronLeft size={14} /></button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).slice(0, 7).map((n) => (
+                <button key={n} className={`button small-button ${currentPage === n ? "button-primary" : "button-subtle"}`} onClick={() => setPage(n)}>{n}</button>
+              ))}
+              <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}><ChevronRight size={14} /></button>
             </div>
           </div>
         )}
