@@ -43,11 +43,6 @@ function fmtDate(s: string | null | undefined) {
   return new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function toInputDate(s: string | null | undefined) {
-  if (!s) return "";
-  return String(s).slice(0, 10);
-}
-
 function isThisMonth(s: string | null | undefined) {
   if (!s) return false;
   const d = new Date(s);
@@ -192,17 +187,6 @@ export default function Deductions() {
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir("asc"); }
-  }
-
-  async function saveVrDate(item: DeductionItem, value: string) {
-    const prev = item.vr_date;
-    setItems((list) => list.map((i) => (i.id === item.id ? { ...i, vr_date: value || null } : i)));
-    try {
-      await api.setDeductionVrDate(item.id, value || null);
-    } catch (e: any) {
-      setError(String(e.message));
-      setItems((list) => list.map((i) => (i.id === item.id ? { ...i, vr_date: prev } : i)));
-    }
   }
 
   async function toggleDeducted(item: DeductionItem, deducted: boolean) {
@@ -395,15 +379,7 @@ export default function Deductions() {
                       <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.employee_no || "—"}</td>
                       <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.division_name || "—"}</td>
                       <td style={{ fontSize: 13 }}>{item.destination || "—"}</td>
-                      <td>
-                        <input
-                          type="date"
-                          className="ep-form-select"
-                          style={{ fontSize: 12, padding: "4px 6px" }}
-                          value={toInputDate(item.vr_date)}
-                          onChange={(e) => saveVrDate(item, e.target.value)}
-                        />
-                      </td>
+                      <td style={{ fontSize: 13 }}>{fmtDate(item.vr_date)}</td>
                       <td>{item.has_receipts
                         ? <span style={{ color: "#065f46", fontWeight: 600, fontSize: 12 }}>Yes</span>
                         : <span style={{ color: "var(--muted)", fontSize: 12 }}>No</span>}

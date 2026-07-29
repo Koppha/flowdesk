@@ -1467,9 +1467,9 @@ async function ensureDeductionsSchema() {
   `);
   // Deductions page reports directly off closed clearance claims (see
   // deductions.routes.ts) rather than a separate manually-entered table.
-  // These columns track Finance's payroll voucher reference and the
-  // one-step "actioned" confirmation per claim.
-  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS vr_date date`);
+  // VR Date is the linked advance's final approval date (advance_requests.
+  // approved_at) - derived at query time, not stored here. This column
+  // tracks the one-step "actioned" confirmation per claim.
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_at timestamptz`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_by_id uuid REFERENCES users(id)`);
 }

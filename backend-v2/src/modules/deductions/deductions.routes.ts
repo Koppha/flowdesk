@@ -9,10 +9,6 @@ import { listPermissionGroups } from "../../lib/permissionGroups.js";
 export const deductionsRouter = Router();
 deductionsRouter.use(requireAuth);
 
-const VrDateSchema = z.object({
-  vr_date: z.string().min(1).nullable()
-});
-
 const DeductedSchema = z.object({
   deducted: z.boolean()
 });
@@ -49,7 +45,7 @@ const LIST_QUERY = `
          dv.name AS division_name,
          c.duty_station AS destination,
          c.month,
-         c.vr_date,
+         ar.approved_at AS vr_date,
          EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
          c.advance_amount,
          c.claim_total AS cleared_amount,
@@ -63,6 +59,7 @@ const LIST_QUERY = `
     JOIN users u ON u.id = c.claimant_id
     LEFT JOIN divisions dv ON dv.id = u.division_id
     LEFT JOIN users db ON db.id = c.deducted_by_id
+    LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
    WHERE c.status = 'CLOSED'
 `;
 
@@ -130,21 +127,6 @@ deductionsRouter.get("/", async (_req: AuthedRequest, res, next) => {
   try {
     const rows = await query<DeductionRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
     return res.json({ items: rows });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-deductionsRouter.patch("/:id/vr-date", async (req: AuthedRequest, res, next) => {
-  try {
-    const existing = (await query<{ id: string }>(`SELECT id FROM clearance_claims WHERE id=$1 AND status='CLOSED'`, [req.params.id]))[0];
-    if (!existing) throw notFound("Clearance claim not found");
-
-    const parsed = VrDateSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid VR date payload", parsed.error.flatten());
-
-    await query(`UPDATE clearance_claims SET vr_date=$2 WHERE id=$1`, [req.params.id, parsed.data.vr_date]);
-    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }

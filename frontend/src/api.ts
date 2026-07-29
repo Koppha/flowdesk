@@ -431,8 +431,6 @@ export const api = {
 
   deductionsAccess: () => req("/deductions/access"),
   deductions: () => req("/deductions"),
-  setDeductionVrDate: (id: string, vr_date: string | null) =>
-    req(`/deductions/${id}/vr-date`, { method: "PATCH", body: JSON.stringify({ vr_date }) }),
   setDeductionActioned: (id: string, deducted: boolean) =>
     req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) }),
   deductionAccessGroups: () => req("/deductions/access-groups"),
