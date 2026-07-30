@@ -165,6 +165,38 @@ export async function writeAdvanceAudit(args: {
   );
 }
 
+// Interns/temporary staff may request for themselves (unlike before), but
+// since they don't go through the same recovery/deduction process as
+// permanent employees, they're capped on how many advances they can have
+// outstanding (not yet cleared) at once - clear one to free up a slot.
+const MAX_OUTSTANDING_NON_PERMANENT_ADVANCES = 3;
+
+async function countOutstandingAdvances(requesterId: string): Promise<number> {
+  const rows = await query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM advance_requests ar
+      WHERE ar.requester_id = $1
+        AND ar.status NOT IN ('REJECTED','CANCELLED')
+        AND NOT EXISTS (
+          SELECT 1 FROM clearance_claims cc
+           WHERE cc.linked_advance_id = ar.id AND cc.status = 'CLOSED'
+        )`,
+    [requesterId]
+  );
+  return Number(rows[0]?.count || 0);
+}
+
+async function assertNonPermanentAdvanceCap(requester: { id: string; employment_type: string | null }) {
+  const employmentType = String(requester.employment_type || "").trim().toUpperCase();
+  if (!["INTERN", "TEMPORARY"].includes(employmentType)) return;
+  const outstanding = await countOutstandingAdvances(requester.id);
+  if (outstanding >= MAX_OUTSTANDING_NON_PERMANENT_ADVANCES) {
+    throw badRequest(
+      `Interns and temporary employees can have at most ${MAX_OUTSTANDING_NON_PERMANENT_ADVANCES} outstanding advances - clear an existing one before requesting another`
+    );
+  }
+}
+
 async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: string) {
   const actor = await getUserAccountState(actorId);
   if (!isProfileComplete(actor)) {
@@ -173,9 +205,10 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: stri
 
   const beneficiaryId = String(beneficiaryUserId || "").trim();
   if (!beneficiaryId || beneficiaryId === actor.id) {
-    if (!isPermanentEmployee(actor)) {
-      throw forbidden("Only permanent employees can request advances for themselves");
+    if (!isPermanentEmployee(actor) && !["INTERN", "TEMPORARY"].includes(String(actor.employment_type || "").trim().toUpperCase())) {
+      throw forbidden("Only permanent employees, interns, and temporary employees can request advances for themselves");
     }
+    await assertNonPermanentAdvanceCap(actor);
     return { actor, requester: actor };
   }
 
@@ -200,6 +233,7 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: stri
     throw forbidden("On-behalf advances must stay within the same division");
   }
 
+  await assertNonPermanentAdvanceCap(requester);
   return { actor, requester };
 }
 

@@ -956,7 +956,7 @@ export default function App() {
     document.addEventListener("mousedown", onOutside);
     return () => document.removeEventListener("mousedown", onOutside);
   }, [shortcutPickerOpen]);
-  const canRequestForSelf = profileCompleted && employmentType === "PERMANENT";
+  const canRequestForSelf = profileCompleted && ["PERMANENT", "INTERN", "TEMPORARY"].includes(employmentType);
   const canCreateForOthers = profileCompleted && (employmentType === "PERMANENT" || isApproverRole(role));
   const canOpenAdvanceForm = canRequestForSelf || canCreateForOthers;
   const eligibleBeneficiaries = requestDirectory.filter(
@@ -1659,9 +1659,9 @@ export default function App() {
       setRequesterName(result.user?.full_name || "");
       setEmpNumber(result.user?.employee_no || "");
       alert(
-        profileEmploymentType === "PERMANENT"
+        ["PERMANENT", "INTERN", "TEMPORARY"].includes(profileEmploymentType)
           ? "Profile saved. You can now request advances."
-          : "Profile saved. Interns and temporary employees cannot create their own advances, but permanent staff can create on their behalf."
+          : "Profile saved."
       );
     } catch (e: any) {
       alert("Error saving profile: " + e.message);
@@ -3526,9 +3526,9 @@ export default function App() {
               placeholder={profileEmploymentType === "PERMANENT" ? "Employment number" : "Employment number (optional)"}
             />
           </div>
-          {profileEmploymentType !== "PERMANENT" && (
+          {!["PERMANENT", "INTERN", "TEMPORARY"].includes(profileEmploymentType) && (
             <p className="subtitle" style={{ marginTop: 8 }}>
-              Interns and temporary employees cannot request advances.
+              This employment type cannot request advances.
             </p>
           )}
 
@@ -5799,7 +5799,7 @@ export default function App() {
                         return;
                       }
                       if (!isOnBehalfRequest && !canRequestForSelf) {
-                        alert("Only permanent employees can create their own advance requests.");
+                        alert("Your employment type is not allowed to create advance requests for yourself.");
                         return;
                       }
                       if (!advanceType) {
