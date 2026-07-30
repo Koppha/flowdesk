@@ -70,6 +70,7 @@ import {
   Plane,
   Plus,
   RefreshCw,
+  Search,
   Settings as SettingsIcon,
   ShieldCheck,
   Star,
@@ -262,6 +263,76 @@ function SettingsAccordion(props: { title: string; subtitle?: string; open: bool
   );
 }
 
+// Type-to-filter user picker: shows the current selection as a chip (with a
+// clear button) and, while empty, a search box whose matches appear in a
+// dropdown below — same interaction as the step-assignment picker in
+// WorkflowBuilder, just generalized to any list of candidate users.
+function UserSearchSelect(props: {
+  value: string;
+  onChange: (userId: string) => void;
+  users: Array<{ id: string; full_name: string | null; email: string; department?: string | null }>;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [query, setQueryText] = useState("");
+  const selected = props.users.find((u) => u.id === props.value);
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? props.users.filter((u) => (u.full_name || u.email).toLowerCase().includes(q) || (u.department || "").toLowerCase().includes(q))
+    : props.users;
+
+  if (selected) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13 }}>
+        <User size={13} style={{ color: "var(--muted, #6b7280)", flexShrink: 0 }} aria-hidden />
+        <span style={{ flex: 1, fontWeight: 500 }}>{selected.full_name || selected.email}</span>
+        {selected.department ? <span style={{ color: "var(--muted, #6b7280)", fontSize: 11 }}>{selected.department}</span> : null}
+        {!props.disabled && (
+          <button type="button" onClick={() => { props.onChange(""); setQueryText(""); }} className="ep-icon-btn" style={{ width: 22, height: 22 }} aria-label="Clear selection">
+            <X size={13} aria-hidden />
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted, #9ca3af)", pointerEvents: "none" }} aria-hidden />
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQueryText(e.target.value)}
+        placeholder={props.placeholder || "Search by name…"}
+        className="ep-form-input"
+        style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
+        disabled={props.disabled}
+      />
+      {q && filtered.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, maxHeight: 220, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
+          {filtered.map((u) => (
+            <div
+              key={u.id}
+              onMouseDown={(e) => { e.preventDefault(); props.onChange(u.id); setQueryText(""); }}
+              style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = ""; }}
+            >
+              <span>{u.full_name || u.email}</span>
+              {u.department ? <span style={{ color: "var(--muted, #6b7280)", fontSize: 11 }}>{u.department}</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+      {q && filtered.length === 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, padding: "8px 12px", fontSize: 13, color: "var(--muted, #6b7280)" }}>
+          No matches
+        </div>
+      )}
+    </div>
+  );
+}
+
 async function optionalStartupData<T>(promise: Promise<T>, fallback: T, label: string): Promise<T> {
   try {
     return await withStartupTimeout(promise, label);
@@ -416,6 +487,10 @@ export default function App() {
   const [delegationDelegateId, setDelegationDelegateId] = useState("");
   const [delegationFromDate, setDelegationFromDate] = useState("");
   const [delegationToDate, setDelegationToDate] = useState("");
+  const [delegationReason, setDelegationReason] = useState("");
+  const [delegationComments, setDelegationComments] = useState("");
+  // Empty = applies to all request types (the original, unscoped behavior).
+  const [delegationRequestTypes, setDelegationRequestTypes] = useState<string[]>([]);
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
   const [dashboardSearch, setDashboardSearch] = useState("");
@@ -1758,7 +1833,10 @@ export default function App() {
       const payload: any = {
         delegate_id: delegateId,
         from_date: delegationFromDate || undefined,
-        to_date: delegationToDate || undefined
+        to_date: delegationToDate || undefined,
+        reason: delegationReason.trim() || undefined,
+        comments: delegationComments.trim() || undefined,
+        request_types: delegationRequestTypes.length ? delegationRequestTypes : undefined
       };
       if (role === "ADMIN") {
         if (!delegationManagerId) {
@@ -1773,6 +1851,9 @@ export default function App() {
       setDelegationDelegateId("");
       setDelegationFromDate("");
       setDelegationToDate("");
+      setDelegationReason("");
+      setDelegationComments("");
+      setDelegationRequestTypes([]);
       await loadDelegations();
     } catch (e: any) {
       alert("Error creating delegation: " + e.message);
@@ -3796,51 +3877,48 @@ export default function App() {
                       <>
                         <div className="ep-form-group">
                           <label>Manager <span className="ep-required">*</span></label>
-                          <select className="ep-form-select" value={delegationManagerId} onChange={(e) => setDelegationManagerId(e.target.value)}>
-                            <option value="">Select manager</option>
-                            {adminUsers.filter((user) => ["MANAGER", "HOD", "EXCO", "CEO"].includes(user.role)).map((user) => (
-                              <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
-                            ))}
-                          </select>
+                          <UserSearchSelect
+                            value={delegationManagerId}
+                            onChange={(id) => { setDelegationManagerId(id); setDelegationDelegateId(""); }}
+                            users={adminUsers.filter((user) => user.is_active !== false && ["MANAGER", "HOD", "EXCO", "CEO"].includes(user.role))}
+                            placeholder="Search by name…"
+                          />
                         </div>
                         <div className="ep-form-group">
                           <label>Delegate <span className="ep-required">*</span></label>
-                          <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)} disabled={!delegationManagerId}>
-                            <option value="">Select delegate</option>
-                            {adminUsers
-                              .filter((user) => {
-                                if (user.is_active === false || user.id === delegationManagerId) return false;
-                                const manager = adminUsers.find((u) => u.id === delegationManagerId);
-                                if (!manager || manager.role === "CEO") return true;
-                                const sameDept = Boolean(manager.department) && manager.department === user.department;
-                                const sameSection = Boolean(manager.section_id) && manager.section_id === user.section_id;
-                                return sameDept || sameSection;
-                              })
-                              .map((user) => (
-                                <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
-                              ))}
-                          </select>
+                          <UserSearchSelect
+                            value={delegationDelegateId}
+                            onChange={setDelegationDelegateId}
+                            disabled={!delegationManagerId}
+                            placeholder={delegationManagerId ? "Search by name…" : "Select a manager first"}
+                            users={adminUsers.filter((user) => {
+                              if (user.is_active === false || user.id === delegationManagerId) return false;
+                              const manager = adminUsers.find((u) => u.id === delegationManagerId);
+                              if (!manager || manager.role === "CEO") return true;
+                              const sameDept = Boolean(manager.department) && manager.department === user.department;
+                              const sameSection = Boolean(manager.section_id) && manager.section_id === user.section_id;
+                              return sameDept || sameSection;
+                            })}
+                          />
                         </div>
                       </>
                     ) : (
                       <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
                         <label>Delegate <span className="ep-required">*</span></label>
-                        <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)}>
-                          <option value="">Select delegate</option>
-                          {adminUsers
-                            .filter((user) => {
-                              const selfId = profile?.id || me?.userId;
-                              if (user.is_active === false || user.id === selfId) return false;
-                              if (role === "CEO") return true;
-                              const selfInfo = adminUsers.find((u) => u.id === selfId);
-                              const sameDept = Boolean(selfInfo?.department) && selfInfo?.department === user.department;
-                              const sameSection = Boolean(selfInfo?.section_id) && selfInfo?.section_id === user.section_id;
-                              return sameDept || sameSection;
-                            })
-                            .map((user) => (
-                              <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
-                            ))}
-                        </select>
+                        <UserSearchSelect
+                          value={delegationDelegateId}
+                          onChange={setDelegationDelegateId}
+                          placeholder="Search by name…"
+                          users={adminUsers.filter((user) => {
+                            const selfId = profile?.id || me?.userId;
+                            if (user.is_active === false || user.id === selfId) return false;
+                            if (role === "CEO") return true;
+                            const selfInfo = adminUsers.find((u) => u.id === selfId);
+                            const sameDept = Boolean(selfInfo?.department) && selfInfo?.department === user.department;
+                            const sameSection = Boolean(selfInfo?.section_id) && selfInfo?.section_id === user.section_id;
+                            return sameDept || sameSection;
+                          })}
+                        />
                       </div>
                     )}
                     <div className="ep-form-group">
@@ -3850,6 +3928,37 @@ export default function App() {
                     <div className="ep-form-group">
                       <label>To Date <span className="ep-optional">(Optional)</span></label>
                       <input type="date" className="ep-form-input" value={delegationToDate} onChange={(e) => setDelegationToDate(e.target.value)} />
+                    </div>
+                    <div className="ep-form-group">
+                      <label>Reason <span className="ep-optional">(Optional)</span></label>
+                      <input type="text" className="ep-form-input" placeholder="e.g. Annual leave" value={delegationReason} onChange={(e) => setDelegationReason(e.target.value)} />
+                    </div>
+                    <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
+                      <label>Comments <span className="ep-optional">(Optional)</span></label>
+                      <input type="text" className="ep-form-input" placeholder="Add a note for the audit trail" value={delegationComments} onChange={(e) => setDelegationComments(e.target.value)} />
+                    </div>
+                    <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
+                      <label>Request Types <span className="ep-optional">(Optional)</span></label>
+                      <p style={{ margin: "0 0 6px", fontSize: 12, color: "var(--muted, #6b7280)" }}>
+                        Leave unchecked to delegate every approval type. Check specific types to limit this delegation to only those.
+                      </p>
+                      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                        {[
+                          { value: "ADVANCE_REQUEST", label: "Advance Requests (Salary / Loan / Travel)" },
+                          { value: "CLEARANCE_REQUEST", label: "Travel Clearances" }
+                        ].map((opt) => (
+                          <label key={opt.value} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                            <input
+                              type="checkbox"
+                              checked={delegationRequestTypes.includes(opt.value)}
+                              onChange={() => setDelegationRequestTypes((current) =>
+                                current.includes(opt.value) ? current.filter((v) => v !== opt.value) : [...current, opt.value]
+                              )}
+                            />
+                            {opt.label}
+                          </label>
+                        ))}
+                      </div>
                     </div>
                   </div>
                   <button className="ep-btn" style={{ marginTop: 8 }} onClick={() => void createDelegation()}>Create Delegation</button>
@@ -3865,14 +3974,23 @@ export default function App() {
                 <div className="ep-table-wrap">
                   <table className="ep-table">
                     <thead>
-                      <tr><th>Manager</th><th>Delegate</th><th>Division</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
+                      <tr><th>Reference</th><th>Manager</th><th>Delegate</th><th>Division</th><th>Request Types</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
                     </thead>
                     <tbody>
                       {delegations.map((delegation) => (
                         <tr key={delegation.id}>
-                          <td style={{ fontWeight: 600 }}>{delegation.manager_name || "—"}</td>
+                          <td style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{delegation.reference || "—"}</td>
+                          <td style={{ fontWeight: 600 }}>
+                            {delegation.manager_name || "—"}
+                            {delegation.reason ? <div style={{ fontWeight: 400, fontSize: "0.75rem", color: "var(--muted)" }}>{delegation.reason}</div> : null}
+                          </td>
                           <td>{delegation.delegate_name || "—"}</td>
                           <td style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{delegation.department || "—"}</td>
+                          <td style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
+                            {delegation.request_types?.length
+                              ? delegation.request_types.map((t: string) => (t === "ADVANCE_REQUEST" ? "Advance" : t === "CLEARANCE_REQUEST" ? "Clearance" : t)).join(", ")
+                              : "All types"}
+                          </td>
                           <td style={{ fontSize: "0.85rem" }}>{delegation.from_date || "—"}</td>
                           <td style={{ fontSize: "0.85rem" }}>{delegation.to_date || "—"}</td>
                           <td>

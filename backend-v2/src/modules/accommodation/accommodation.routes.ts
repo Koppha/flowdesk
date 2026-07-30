@@ -296,7 +296,7 @@ accommodationRouter.post("/", async (req: AuthedRequest, res, next) => {
       const chain = advance.approval_chain as ChainStep[];
       const group = getPendingGroup(chain, advance.workflow_step_order ?? 0);
       if (!group.indices.length) throw badRequest("All workflow steps have been completed");
-      const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId);
+      const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "ADVANCE_REQUEST");
       let currentStep: ChainStep | undefined;
       for (const idx of group.indices) {
         if (await canApproveStep(chain[idx], req.user!.userId, role, delegatedManagerIds, req.user!.department)) { currentStep = chain[idx]; break; }
@@ -431,7 +431,7 @@ accommodationRouter.post("/:id/send-to-finance", async (req: AuthedRequest, res,
     const adv = await getAdvanceById(row.advance_request_id);
     let advanceStatus: string | null = null;
     if (adv) {
-      const delegatedManagerIds = await getDelegatedManagerIds(userId);
+      const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
       const result = await advanceWorkflowStep({ adv, userId, role, delegatedManagerIds });
       advanceStatus = result.nextStatus;
       await writeAdvanceAudit({

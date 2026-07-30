@@ -362,6 +362,41 @@ async function ensureFeatureSchema() {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // Human-readable reference (DLG-<year>-<seq>), reason/comments captured at
+  // creation, and who/why it ended — added after the table's initial release,
+  // so existing rows get backfilled with a generated reference below.
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS reference text`);
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS reason text`);
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS comments text`);
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS created_by uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS created_source text NOT NULL DEFAULT 'MANAGER_SELF_SERVICE'`);
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS ended_by uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS ended_at timestamptz`);
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS end_reason text`);
+  await query(`
+    UPDATE manager_delegations md
+       SET reference = 'DLG-' || numbered.year || '-' || lpad(numbered.seq::text, 6, '0')
+      FROM (
+        SELECT id, to_char(created_at, 'YYYY') AS year,
+               row_number() OVER (PARTITION BY to_char(created_at, 'YYYY') ORDER BY created_at) AS seq
+          FROM manager_delegations
+         WHERE reference IS NULL
+      ) numbered
+     WHERE md.id = numbered.id
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_delegations_reference ON manager_delegations(reference)`);
+
+  // Optional per-delegation request-type scope. No rows for a delegation means
+  // "all request types" — the original, unscoped behavior — so this is purely
+  // additive and never narrows an existing delegation that predates it.
+  await query(`
+    CREATE TABLE IF NOT EXISTS delegation_request_types (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      delegation_id uuid NOT NULL REFERENCES manager_delegations(id) ON DELETE CASCADE,
+      request_type_code text NOT NULL,
+      UNIQUE (delegation_id, request_type_code)
+    )
+  `);
 
   await query(`
     CREATE TABLE IF NOT EXISTS overtime_requests (

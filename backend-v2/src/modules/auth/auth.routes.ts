@@ -12,6 +12,7 @@ import { isProfileComplete } from "../../lib/userProfile.js";
 import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
 import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
 import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
+import { generateDelegationReference, getDelegationRequestTypes, setDelegationRequestTypes, writeDelegationAudit } from "../../lib/delegations.js";
 
 const LoginSchema = z
   .object({
@@ -128,8 +129,14 @@ const CreateDelegationSchema = z.object({
   manager_id: z.string().uuid().optional(),
   delegate_id: z.string().uuid(),
   from_date: z.string().optional(),
-  to_date: z.string().optional()
+  to_date: z.string().optional(),
+  reason: z.string().trim().max(200).optional(),
+  comments: z.string().trim().max(2000).optional(),
+  // Empty/omitted means "all request types" — the original, unscoped behavior.
+  request_types: z.array(z.string()).optional()
 });
+
+const EndDelegationSchema = z.object({ reason: z.string().trim().max(1000).optional() });
 
 const CreateDepartmentSchema = z.object({
   name: z.string().trim().min(2, "Division name is required"),
@@ -1030,7 +1037,7 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "
     const isAdmin = req.user!.role === "ADMIN";
     const condition = isAdmin ? `` : `WHERE md.manager_id = $1`;
     const params = isAdmin ? [] : [req.user!.userId];
-    const rows = await query(
+    const rows = await query<any>(
       `SELECT md.id,
               md.manager_id,
               manager.full_name AS manager_name,
@@ -1040,8 +1047,15 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "
               md.from_date,
               md.to_date,
               md.active,
+              md.reference,
+              md.reason,
+              md.comments,
               md.created_at,
-              md.updated_at
+              md.updated_at,
+              COALESCE(
+                (SELECT array_agg(drt.request_type_code ORDER BY drt.request_type_code) FROM delegation_request_types drt WHERE drt.delegation_id = md.id),
+                '{}'
+              ) AS request_types
          FROM manager_delegations md
          JOIN users manager ON manager.id = md.manager_id
          JOIN users delegate ON delegate.id = md.delegate_id
@@ -1090,13 +1104,25 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
       managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
     }
 
+    const reference = await generateDelegationReference();
+    const createdSource = req.user!.role === "ADMIN" && managerId !== req.user!.userId ? "ADMIN" : "MANAGER_SELF_SERVICE";
     const rows = await query(
-      `INSERT INTO manager_delegations (id, manager_id, delegate_id, department, from_date, to_date)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at`,
-      [randomUUID(), manager.id, delegate.id, managerDept, parsed.data.from_date ?? null, parsed.data.to_date ?? null]
+      `INSERT INTO manager_delegations (id, manager_id, delegate_id, department, from_date, to_date, reference, reason, comments, created_by, created_source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, reference, reason, comments, created_by, created_source, created_at, updated_at`,
+      [randomUUID(), manager.id, delegate.id, managerDept, parsed.data.from_date ?? null, parsed.data.to_date ?? null,
+       reference, parsed.data.reason ?? null, parsed.data.comments ?? null, req.user!.userId, createdSource]
     );
     const delegation = rows[0] as any;
+    if (parsed.data.request_types?.length) {
+      await setDelegationRequestTypes(delegation.id, parsed.data.request_types);
+    }
+    void writeDelegationAudit({
+      actorId: req.user!.userId,
+      delegationId: delegation.id,
+      action: "CREATED",
+      after: { ...delegation, request_types: parsed.data.request_types ?? [] }
+    });
     void notifyDelegationAssigned({
       delegationId: delegation.id,
       managerName:  manager.full_name,
@@ -1107,7 +1133,7 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
       fromDate:     delegation.from_date ?? null,
       toDate:       delegation.to_date ?? null
     });
-    return res.status(201).json(delegation);
+    return res.status(201).json({ ...delegation, request_types: parsed.data.request_types ?? [] });
   } catch (err) {
     return next(err);
   }
@@ -1115,6 +1141,7 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
 
 authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
   try {
+    const endParsed = EndDelegationSchema.safeParse(req.body ?? {});
     const delegation = (await query<{ id: string; manager_id: string; delegate_id: string; department: string }>(
       `SELECT id, manager_id, delegate_id, department FROM manager_delegations WHERE id=$1`,
       [req.params.id]
@@ -1128,16 +1155,26 @@ authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "HOD", 
       query(
         `UPDATE manager_delegations
             SET active=false,
-                updated_at=now()
+                updated_at=now(),
+                ended_by=$2,
+                ended_at=now(),
+                end_reason=$3
           WHERE id=$1
-          RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at`,
-        [req.params.id]
+          RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, reference, reason, comments, ended_by, ended_at, end_reason, created_at, updated_at`,
+        [req.params.id, req.user!.userId, endParsed.success ? endParsed.data.reason ?? null : null]
       ),
       query<{ id: string; full_name: string | null; email: string }>(
         `SELECT id, full_name, email FROM users WHERE id IN ($1, $2)`,
         [delegation.manager_id, delegation.delegate_id]
       )
     ]);
+
+    void writeDelegationAudit({
+      actorId: req.user!.userId,
+      delegationId: delegation.id,
+      action: "ENDED",
+      after: rows[0]
+    });
 
     const mgr = users.find((u) => u.id === delegation.manager_id);
     const dlg = users.find((u) => u.id === delegation.delegate_id);
@@ -1154,6 +1191,26 @@ authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "HOD", 
     }
 
     return res.json(rows[0]);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.get("/delegations/:id/audit", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const delegation = (await query<{ manager_id: string }>(`SELECT manager_id FROM manager_delegations WHERE id=$1`, [req.params.id]))[0];
+    if (!delegation) throw notFound();
+    if (req.user!.role !== "ADMIN" && delegation.manager_id !== req.user!.userId) throw forbidden();
+
+    const rows = await query<any>(
+      `SELECT al.id, al.action, al.before_json, al.after_json, al.created_at, u.full_name AS actor_name, u.role AS actor_role
+         FROM audit_log al
+         LEFT JOIN users u ON u.id = al.actor_id
+        WHERE al.entity_type='manager_delegations' AND al.entity_id=$1
+        ORDER BY al.created_at ASC`,
+      [req.params.id]
+    );
+    return res.json(rows);
   } catch (err) {
     return next(err);
   }

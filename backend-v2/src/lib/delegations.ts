@@ -8,35 +8,56 @@ export type ManagerDelegation = {
   from_date: string | null;
   to_date: string | null;
   active: boolean;
+  reference: string | null;
+  reason: string | null;
+  comments: string | null;
+  created_by: string | null;
+  created_source: string;
+  ended_by: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
   created_at: string;
   updated_at: string;
 };
 
+const DELEGATION_COLUMNS = `id, manager_id, delegate_id, department, from_date, to_date, active,
+       reference, reason, comments, created_by, created_source, ended_by, ended_at, end_reason,
+       created_at, updated_at`;
+
 // A delegate can hold more than one active delegation at once (e.g. covering
 // for two different managers simultaneously) - return all of them, not just
 // one, so none are silently dropped.
-export async function getActiveManagerDelegations(delegateId: string): Promise<ManagerDelegation[]> {
+//
+// requestType is optional: a delegation with no rows in delegation_request_types
+// applies to every request type (the original, unscoped behavior). A delegation
+// with rows there only matches the request types it explicitly lists.
+export async function getActiveManagerDelegations(delegateId: string, requestType?: string): Promise<ManagerDelegation[]> {
   return query<ManagerDelegation>(
-    `SELECT id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at
-       FROM manager_delegations
+    `SELECT ${DELEGATION_COLUMNS}
+       FROM manager_delegations md
       WHERE delegate_id = $1
         AND active = true
         AND (from_date IS NULL OR from_date <= current_date)
         AND (to_date IS NULL OR to_date >= current_date)
+        AND (
+          $2::text IS NULL
+          OR NOT EXISTS (SELECT 1 FROM delegation_request_types drt WHERE drt.delegation_id = md.id)
+          OR EXISTS (SELECT 1 FROM delegation_request_types drt WHERE drt.delegation_id = md.id AND drt.request_type_code = $2)
+        )
       ORDER BY created_at DESC`,
-    [delegateId]
+    [delegateId, requestType ?? null]
   );
 }
 
-export async function getDelegatedManagerIds(delegateId: string): Promise<string[]> {
-  const delegations = await getActiveManagerDelegations(delegateId);
+export async function getDelegatedManagerIds(delegateId: string, requestType?: string): Promise<string[]> {
+  const delegations = await getActiveManagerDelegations(delegateId, requestType);
   return delegations.map((d) => d.manager_id);
 }
 
 export async function getDelegationsForManager(managerId: string) {
   return query<ManagerDelegation>(
-    `SELECT id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at
-       FROM manager_delegations
+    `SELECT ${DELEGATION_COLUMNS}
+       FROM manager_delegations md
       WHERE manager_id = $1
       ORDER BY created_at DESC`,
     [managerId]
@@ -45,10 +66,56 @@ export async function getDelegationsForManager(managerId: string) {
 
 export async function getDelegationById(id: string) {
   const rows = await query<ManagerDelegation>(
-    `SELECT id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at
-       FROM manager_delegations
+    `SELECT ${DELEGATION_COLUMNS}
+       FROM manager_delegations md
       WHERE id = $1`,
     [id]
   );
   return rows[0] ?? null;
+}
+
+export async function getDelegationRequestTypes(delegationId: string): Promise<string[]> {
+  const rows = await query<{ request_type_code: string }>(
+    `SELECT request_type_code FROM delegation_request_types WHERE delegation_id = $1 ORDER BY request_type_code`,
+    [delegationId]
+  );
+  return rows.map((r) => r.request_type_code);
+}
+
+export async function setDelegationRequestTypes(delegationId: string, requestTypes: string[]) {
+  await query(`DELETE FROM delegation_request_types WHERE delegation_id = $1`, [delegationId]);
+  for (const code of requestTypes) {
+    await query(
+      `INSERT INTO delegation_request_types (delegation_id, request_type_code) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [delegationId, code]
+    );
+  }
+}
+
+export async function generateDelegationReference(): Promise<string> {
+  const year = new Date().getFullYear();
+  const rows = await query<{ next_seq: string }>(
+    `SELECT COALESCE(MAX(NULLIF(regexp_replace(reference, '^DLG-\\d{4}-', ''), '')), '0')::int + 1 AS next_seq
+       FROM manager_delegations
+      WHERE reference LIKE $1`,
+    [`DLG-${year}-%`]
+  );
+  const seq = Number(rows[0]?.next_seq ?? 1);
+  return `DLG-${year}-${String(seq).padStart(6, "0")}`;
+}
+
+// Mirrors writeAdvanceAudit (advances.routes.ts) - same shared audit_log
+// table, just scoped to entity_type='manager_delegations'.
+export async function writeDelegationAudit(args: {
+  actorId: string | null;
+  delegationId: string;
+  action: string;
+  before?: unknown;
+  after?: unknown;
+}) {
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
+     VALUES ($1,$2,'manager_delegations',$3,$4,$5)`,
+    [args.actorId, args.action, args.delegationId, args.before ? JSON.stringify(args.before) : null, args.after ? JSON.stringify(args.after) : null]
+  );
 }

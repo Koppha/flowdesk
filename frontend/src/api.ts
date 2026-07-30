@@ -209,7 +209,8 @@ export const api = {
   deleteWorkflowActionType: (id: number) =>
     req(`/workflows/action-types/${id}`, { method: "DELETE" }),
   createDelegation: (data: any) => req("/auth/delegations", { method: "POST", body: JSON.stringify(data) }),
-  endDelegation: (id: string) => req(`/auth/delegations/${id}/end`, { method: "POST", body: JSON.stringify({}) }),
+  endDelegation: (id: string, reason?: string) => req(`/auth/delegations/${id}/end`, { method: "POST", body: JSON.stringify({ reason }) }),
+  delegationAudit: (id: string) => req(`/auth/delegations/${id}/audit`),
   adminFeaturePermissions: () => req("/auth/admin-feature-permissions"),
   updateAdminFeaturePermissions: (features: Record<string, string[]>) =>
     req("/auth/admin-feature-permissions", { method: "PUT", body: JSON.stringify({ features }) }),

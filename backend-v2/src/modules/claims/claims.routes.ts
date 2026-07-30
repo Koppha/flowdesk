@@ -690,7 +690,7 @@ export async function performClaimApprove(
   }
 
   const { role, userId, department } = actor;
-  const delegatedManagerIds = await getDelegatedManagerIds(userId);
+  const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
 
   const result = await advanceClaimWorkflowStep({
     claim,
@@ -747,7 +747,7 @@ export async function performClaimReject(
   if (!group.indices.length) throw badRequest("No active workflow step to reject");
 
   const { role, userId, department } = actor;
-  const delegatedManagerIds = await getDelegatedManagerIds(userId);
+  const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
   if (role !== "ADMIN") {
     let currentStep: ChainStep | undefined;
     for (const idx of group.indices) {
@@ -815,7 +815,7 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
       const group = getPendingGroup(chain, stepIdx);
       if (!group.indices.length) throw badRequest("No active workflow step to roll back");
 
-      const delegatedManagerIds = await getDelegatedManagerIds(userId);
+      const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
       if (role !== "ADMIN") {
         let currentStep: ChainStep | undefined;
         for (const idx of group.indices) {

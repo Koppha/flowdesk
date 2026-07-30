@@ -1076,7 +1076,7 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
       const stepIdx = adv.workflow_step_order ?? 0;
       const group = getPendingGroup(chain, stepIdx);
       if (!group.indices.length) throw badRequest("No active workflow step to roll back");
-      const delegatedManagerIds = await getDelegatedManagerIds(userId);
+      const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
       let currentStep: ChainStep | undefined = chain[group.indices[0]];
       if (role !== "ADMIN") {
         currentStep = undefined;
@@ -1154,7 +1154,7 @@ export async function performAdvanceReject(
     const stepIdx = adv.workflow_step_order ?? 0;
     const group = getPendingGroup(chain, stepIdx);
     if (!group.indices.length) throw badRequest("No active workflow step to reject");
-    const delegatedManagerIds = await getDelegatedManagerIds(userId);
+    const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
     let currentStep: ChainStep | undefined = chain[group.indices[0]];
     if (role !== "ADMIN") {
       currentStep = undefined;
@@ -1244,7 +1244,7 @@ export async function performAdvanceApprove(
   }
 
   const { role, userId, department } = actor;
-  const delegatedManagerIds = await getDelegatedManagerIds(userId);
+  const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
 
   let nextStatus: AdvanceStatus;
   let auditAfter: Record<string, unknown>;
