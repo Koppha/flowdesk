@@ -91,3 +91,32 @@ export function isTravelTypeCode(code: string | null | undefined, travelTypes: T
 export function isFinanceDeptClient(department: string | null | undefined): boolean {
   return String(department || "").trim().toLowerCase() === "finance";
 }
+
+const TERMINAL_ADVANCE_STATUSES = ["DRAFT", "PAID", "APPROVED", "REJECTED", "CANCELLED"];
+
+// The step actually waiting on approval, per this request's own configured
+// workflow (approval_chain) - independent of advance_requests.status, which
+// is a fixed legacy bucket (SUBMITTED/COUNTERSIGNED/HR_MANAGER_REVIEW/...)
+// that can't represent every position type a workflow might use (e.g. EXCO,
+// CEO, or a custom position land in the same bucket as HOD), so it doesn't
+// reliably reflect what's actually configured in the Workflow Builder.
+// Returns null when there's no chain to derive from (draft/legacy/terminal),
+// so callers can fall back to the status-based label.
+export function currentApprovalStepLabel(advance: any): string | null {
+  const chain = Array.isArray(advance?.approval_chain) ? advance.approval_chain : [];
+  if (!chain.length) return null;
+  if (TERMINAL_ADVANCE_STATUSES.includes(String(advance?.status || "").toUpperCase())) return null;
+
+  let idx = typeof advance?.workflow_step_order === "number" ? advance.workflow_step_order : 0;
+  while (idx > 0 && chain[idx]?.parallel_with_previous) idx--;
+  const step = chain[idx];
+  if (!step) return null;
+
+  // "Team: X" steps are approvable by any member of that group, and render
+  // as "Section: X" per the org-hierarchy rename - matches buildTrackingStages.
+  const positionName: string | undefined = step.position_name;
+  if (typeof positionName === "string" && positionName.startsWith("Team: ")) {
+    return `Section: ${positionName.slice("Team: ".length)}`;
+  }
+  return positionName || step.approver_title || null;
+}

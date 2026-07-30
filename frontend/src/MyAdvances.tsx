@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { formatMoney, travelTypeLabel, isTravelTypeCode, TravelType } from "./constants";
+import { formatMoney, travelTypeLabel, isTravelTypeCode, TravelType, currentApprovalStepLabel } from "./constants";
 import { FileText, Clock3, CheckCircle2, XCircle, Edit3, RefreshCw, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 
 function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
@@ -247,10 +247,12 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
                     <td style={{ fontWeight: 600 }}>{travelTypeLabel(a.type, travelTypes)}</td>
                     <td><strong>{requestNumber(a)}</strong></td>
                     <td>
-                      <span className={`status-pill ${statusTone(a.status)}`}>{statusLabel(a.status)}</span>
+                      <span className={`status-pill ${statusTone(a.status)}`}>{currentApprovalStepLabel(a) || statusLabel(a.status)}</span>
                       {a.is_overdue && <span className="status-pill status-pill-danger" style={{ marginLeft: 6 }}>Overdue</span>}
                     </td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{advanceStageLabel(a.status)}</td>
+                    <td style={{ color: "var(--muted)", fontSize: 13 }}>
+                      {currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a.status)}
+                    </td>
                     <td>{formatMoney(a.requested_total, travelTypeCurrency(a.type, travelTypes))}</td>
                     <td>{formatMoney(a.approved_total, travelTypeCurrency(a.type, travelTypes))}</td>
                     <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.created_at)}</td>
