@@ -664,10 +664,14 @@ export default function WorkflowBuilder() {
 
   // Any active staff member can be named individually as a step's approver,
   // regardless of role — matches the old addExtraMember picker, which never
-  // restricted by role.
+  // restricted by role. Doesn't require profile_completed either: HOD/Manager/
+  // EXCO accounts are routinely provisioned by an admin (role, division, etc.
+  // already set via the Managers/Leadership screens) before that person has
+  // ever logged in to complete their own profile, and they still need to be
+  // assignable as a workflow approver in the meantime.
   const participantEmployeePool = useMemo(() => {
     return staff
-      .filter((u) => isActiveStaff(u) && u.profile_completed && u.role !== "ADMIN")
+      .filter((u) => isActiveStaff(u) && u.role !== "ADMIN")
       .map((u) => ({ id: u.id, full_name: u.full_name, email: u.email, title: u.title, department: u.department }));
   }, [staff]);
 
