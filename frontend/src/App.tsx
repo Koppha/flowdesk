@@ -3808,7 +3808,14 @@ export default function App() {
                           <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)} disabled={!delegationManagerId}>
                             <option value="">Select delegate</option>
                             {adminUsers
-                              .filter((user) => user.is_active !== false && user.id !== delegationManagerId)
+                              .filter((user) => {
+                                if (user.is_active === false || user.id === delegationManagerId) return false;
+                                const manager = adminUsers.find((u) => u.id === delegationManagerId);
+                                if (!manager || manager.role === "CEO") return true;
+                                const sameDept = Boolean(manager.department) && manager.department === user.department;
+                                const sameSection = Boolean(manager.section_id) && manager.section_id === user.section_id;
+                                return sameDept || sameSection;
+                              })
                               .map((user) => (
                                 <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                               ))}
@@ -3821,7 +3828,15 @@ export default function App() {
                         <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)}>
                           <option value="">Select delegate</option>
                           {adminUsers
-                            .filter((user) => user.is_active !== false && user.id !== (profile?.id || me?.userId))
+                            .filter((user) => {
+                              const selfId = profile?.id || me?.userId;
+                              if (user.is_active === false || user.id === selfId) return false;
+                              if (role === "CEO") return true;
+                              const selfInfo = adminUsers.find((u) => u.id === selfId);
+                              const sameDept = Boolean(selfInfo?.department) && selfInfo?.department === user.department;
+                              const sameSection = Boolean(selfInfo?.section_id) && selfInfo?.section_id === user.section_id;
+                              return sameDept || sameSection;
+                            })
                             .map((user) => (
                               <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                             ))}

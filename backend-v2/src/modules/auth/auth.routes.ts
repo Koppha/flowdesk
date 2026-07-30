@@ -1063,8 +1063,8 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
     const managerId = req.user!.role !== "ADMIN" ? req.user!.userId : parsed.data.manager_id;
     if (!managerId) throw badRequest("Manager is required for delegation");
 
-    const users = await query<{ id: string; role: string; department: string | null; full_name: string | null; email: string }>(
-      `SELECT id, role, department, full_name, email FROM users WHERE id IN ($1, $2)`,
+    const users = await query<{ id: string; role: string; department: string | null; section_id: string | null; full_name: string | null; email: string }>(
+      `SELECT id, role, department, section_id, full_name, email FROM users WHERE id IN ($1, $2)`,
       [managerId, parsed.data.delegate_id]
     );
     const manager = users.find((user) => user.id === managerId);
@@ -1075,9 +1075,20 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
     if (!delegate) throw badRequest("Delegate user not found");
     if (delegate.id === manager.id) throw badRequest("Delegate cannot be the same user");
 
-    // Delegates can be anyone active, regardless of department - the manager's
-    // own department is only kept as the delegation's recorded scope/label.
-    const managerDept = String(manager.department || "").trim() || String(delegate.department || "").trim() || "ORG-WIDE";
+    // CEO is an org-wide role with no single department, so any active delegate
+    // is acceptable; everyone else's delegate must share the manager's
+    // department or section.
+    let managerDept = String(manager.department || "").trim();
+    if (manager.role !== "CEO") {
+      const delegateDept = String(delegate.department || "").trim();
+      const sameDept = Boolean(managerDept) && managerDept === delegateDept;
+      const sameSection = Boolean(manager.section_id) && manager.section_id === delegate.section_id;
+      if (!sameDept && !sameSection) {
+        throw badRequest("Delegate must be in the same department or section as the manager");
+      }
+    } else {
+      managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
+    }
 
     const rows = await query(
       `INSERT INTO manager_delegations (id, manager_id, delegate_id, department, from_date, to_date)
