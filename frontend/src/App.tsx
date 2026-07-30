@@ -31,6 +31,7 @@ import ReportApprovalPerformance from "./ReportApprovalPerformance";
 import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
 import ReportAuditTrail from "./ReportAuditTrail";
 import ReportReconciliation from "./ReportReconciliation";
+import ReportTourEngagement from "./ReportTourEngagement";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
@@ -68,6 +69,7 @@ import {
   Moon,
   Network,
   Plane,
+  PlayCircle,
   Plus,
   RefreshCw,
   Search,
@@ -398,7 +400,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -3956,8 +3958,8 @@ export default function App() {
           {hasDeductionsAccess && (
             <a href="#" className={navItemClass(page === "DEDUCTIONS")} onClick={(e) => { e.preventDefault(); setPage("DEDUCTIONS"); }}><span className="sidebar-nav-icon"><MinusCircle size={18} aria-hidden /></span>Deductions <b>{deductionsCount}</b></a>
           )}
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
               <a href="#" className={navItemClass(page === "REPORT_APPROVAL")} onClick={(e) => { e.preventDefault(); setPage("REPORT_APPROVAL"); }}><Users size={14} aria-hidden />Approval Performance</a>
@@ -3966,6 +3968,9 @@ export default function App() {
               <a href="#" className={navItemClass(page === "REPORT_AUDIT")} onClick={(e) => { e.preventDefault(); setPage("REPORT_AUDIT"); }}><ShieldCheck size={14} aria-hidden />Audit Trail</a>
               {canAccessFeature("report_reconciliation") && (
                 <a href="#" className={navItemClass(page === "REPORT_RECONCILIATION")} onClick={(e) => { e.preventDefault(); setPage("REPORT_RECONCILIATION"); }}><BarChart3 size={14} aria-hidden />Reconciliation</a>
+              )}
+              {role === "ADMIN" && (
+                <a href="#" className={navItemClass(page === "REPORT_TOUR_ENGAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("REPORT_TOUR_ENGAGEMENT"); }}><PlayCircle size={14} aria-hidden />Tooltip Engagement</a>
               )}
             </div>
           </div>
@@ -5437,6 +5442,9 @@ export default function App() {
                   ...(canAccessFeature("report_reconciliation") ? [
                     { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Reconciliation", desc: "Opening/closing balances, requested, paid, and settled per requester for a period.", action: () => setPage("REPORT_RECONCILIATION"), live: true },
                   ] : []),
+                  ...(role === "ADMIN" ? [
+                    { icon: <PlayCircle size={26} />, color: "#4f46e5", bg: "#e0e7ff", title: "Tooltip Engagement", desc: "How far users get through each in-app guided tour before completing or skipping it.", action: () => setPage("REPORT_TOUR_ENGAGEMENT"), live: true },
+                  ] : []),
                 ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}
                     onClick={() => action?.()}
@@ -5718,6 +5726,8 @@ export default function App() {
             <ReportAuditTrail advances={advances} claims={claims} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_RECONCILIATION" ? (
             <ReportReconciliation onBack={() => setPage("REPORTS")} meUserId={profile?.id || me?.userId} />
+          ) : page === "REPORT_TOUR_ENGAGEMENT" ? (
+            <ReportTourEngagement onBack={() => setPage("REPORTS")} />
           ) : page === "ADVANCE" ? (
             !canOpenAdvanceForm ? (
               <div className="card" style={{ padding: 24 }}>

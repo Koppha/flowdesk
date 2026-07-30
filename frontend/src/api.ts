@@ -284,6 +284,9 @@ export const api = {
   sessionSettings: () => req("/auth/session-settings"),
   updateSessionSettings: (data: { idle_timeout_minutes: number; warning_seconds: number }) =>
     req("/auth/session-settings", { method: "PUT", body: JSON.stringify(data) }),
+  reportTourProgress: (data: { tour_key: string; step_index: number; total_steps: number; completed?: boolean }) =>
+    req("/auth/tour-progress", { method: "POST", body: JSON.stringify(data) }),
+  tourProgressReport: () => req("/auth/tour-progress/report"),
   confirmAdvanceNotCleared: (id: string) => req(`/advances/${id}/confirm-not-cleared`, { method: "POST" }),
   createAccommodationRequest: (data: any) => req("/accommodation-requests", { method: "POST", body: JSON.stringify(data) }),
   uploadAccommodationQuotation: (id: string, form: FormData) => req(`/accommodation-requests/${id}/upload-quotation`, { method: "POST", body: form }),

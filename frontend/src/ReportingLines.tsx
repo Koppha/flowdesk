@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Building2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Download,
   Edit3,
@@ -271,6 +272,7 @@ export default function ReportingLines() {
   const [tableSearch, setTableSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [employeePage, setEmployeePage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -441,6 +443,15 @@ export default function ReportingLines() {
     if (statusFilter === "unassigned") rows = rows.filter((r) => !r.manager_id);
     return rows;
   }, [employees, tableSearch, roleFilter, statusFilter]);
+
+  const EMPLOYEE_PAGE_SIZE = 10;
+  const employeeTotalPages = Math.max(1, Math.ceil(filteredEmployees.length / EMPLOYEE_PAGE_SIZE));
+  const employeeCurrentPage = Math.min(employeePage, employeeTotalPages);
+  const paginatedEmployees = useMemo(
+    () => filteredEmployees.slice((employeeCurrentPage - 1) * EMPLOYEE_PAGE_SIZE, employeeCurrentPage * EMPLOYEE_PAGE_SIZE),
+    [filteredEmployees, employeeCurrentPage]
+  );
+  useEffect(() => { setEmployeePage(1); }, [tableSearch, roleFilter, statusFilter, employees]);
 
   // ─── Edit Modal ─────────────────────────────────────────────────────────────
 
@@ -889,7 +900,7 @@ export default function ReportingLines() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredEmployees.map((row) => (
+                  {paginatedEmployees.map((row) => (
                     <tr key={row.id}>
                       {/* Employee */}
                       <td>
@@ -979,6 +990,22 @@ export default function ReportingLines() {
               </table>
             )}
           </div>
+          {filteredEmployees.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--muted, #6b7280)" }}>
+              <span>
+                Showing {(employeeCurrentPage - 1) * EMPLOYEE_PAGE_SIZE + 1}–{Math.min(employeeCurrentPage * EMPLOYEE_PAGE_SIZE, filteredEmployees.length)} of {filteredEmployees.length}
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button className="rl-btn-outline" type="button" disabled={employeeCurrentPage <= 1} onClick={() => setEmployeePage((p) => Math.max(1, p - 1))}>
+                  <ChevronLeft size={14} /> Prev
+                </button>
+                <span>Page {employeeCurrentPage} of {employeeTotalPages}</span>
+                <button className="rl-btn-outline" type="button" disabled={employeeCurrentPage >= employeeTotalPages} onClick={() => setEmployeePage((p) => Math.min(employeeTotalPages, p + 1))}>
+                  Next <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

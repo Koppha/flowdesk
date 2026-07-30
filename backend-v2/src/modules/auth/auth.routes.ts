@@ -2038,3 +2038,51 @@ authRouter.put("/session-settings", requireRole(["ADMIN"]), async (req: AuthedRe
     return next(err);
   }
 });
+
+// Server-side tour/tooltip progress tracking, so completion can be reported
+// on instead of only living in each browser's localStorage. Any authenticated
+// user can report their OWN progress (upserted, keeping the furthest step
+// reached and "completed" sticky once true); only ADMIN can see the report.
+const TourProgressSchema = z.object({
+  tour_key: z.string().min(1),
+  step_index: z.coerce.number().int().min(0),
+  total_steps: z.coerce.number().int().min(1),
+  completed: z.boolean().optional()
+});
+
+authRouter.post("/tour-progress", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = TourProgressSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid tour progress payload", parsed.error.flatten());
+    const { tour_key, step_index, total_steps, completed } = parsed.data;
+    await query(
+      `INSERT INTO tour_progress (user_id, tour_key, last_step_seen, total_steps, completed, completed_at)
+       VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 THEN now() ELSE NULL END)
+       ON CONFLICT (user_id, tour_key) DO UPDATE
+         SET last_step_seen = GREATEST(tour_progress.last_step_seen, EXCLUDED.last_step_seen),
+             total_steps    = EXCLUDED.total_steps,
+             completed      = tour_progress.completed OR EXCLUDED.completed,
+             completed_at   = COALESCE(tour_progress.completed_at, EXCLUDED.completed_at),
+             updated_at     = now()`,
+      [req.user!.userId, tour_key, step_index, total_steps, completed === true]
+    );
+    return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.get("/tour-progress/report", requireRole(["ADMIN"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query<any>(
+      `SELECT tp.tour_key, tp.last_step_seen, tp.total_steps, tp.completed, tp.completed_at, tp.updated_at,
+              u.id AS user_id, u.full_name, u.email, u.department, u.role
+         FROM tour_progress tp
+         JOIN users u ON u.id = tp.user_id
+        ORDER BY tp.tour_key, tp.updated_at DESC`
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});

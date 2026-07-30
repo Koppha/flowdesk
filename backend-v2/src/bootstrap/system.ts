@@ -24,6 +24,7 @@ export async function bootstrapSystem() {
   await ensureClearanceSlaSchema();
   await ensureAdvanceRecoverySchema();
   await ensureSessionSettingsSchema();
+  await ensureTourProgressSchema();
   await ensureDeductionsSchema();
   await ensureAdminAccount();
 }
@@ -1510,6 +1511,26 @@ async function ensureSessionSettingsSchema() {
   if (!hasAny[0]) {
     await query(`INSERT INTO session_settings (idle_timeout_minutes, warning_seconds) VALUES (30, 60)`);
   }
+}
+
+// Server-side record of how far each user has gotten through a given
+// GuidedTour (identified by its storageKey), so completion can be reported
+// on rather than only living in that browser's localStorage.
+async function ensureTourProgressSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS tour_progress (
+      id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id        uuid        NOT NULL REFERENCES users(id),
+      tour_key       text        NOT NULL,
+      last_step_seen integer     NOT NULL DEFAULT 0,
+      total_steps    integer     NOT NULL DEFAULT 0,
+      completed      boolean     NOT NULL DEFAULT false,
+      completed_at   timestamptz,
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      updated_at     timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (user_id, tour_key)
+    )
+  `);
 }
 
 // Payroll-style deductions raised against an employee who owes the company
