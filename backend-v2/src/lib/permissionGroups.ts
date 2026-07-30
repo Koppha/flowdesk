@@ -73,11 +73,25 @@ export async function listOrgStructureGroups() {
       ORDER BY d.name`,
     []
   );
+  // Union the formal departments catalog with departments actually in use on
+  // users (free-text department field) - mirrors resolveDepartmentGroup()'s
+  // pattern in departments.ts, since many departments only ever exist as
+  // values on users and never get a formal `departments` row.
   const departments = await query<{ name: string; member_count: string }>(
     `SELECT 'Department: ' || dep.name AS name, count(u.id)::text AS member_count
-       FROM departments dep
-       LEFT JOIN users u ON u.department = dep.name
-      WHERE dep.active
+       FROM (
+         SELECT trim(name) AS name
+           FROM departments
+          WHERE trim(name) <> ''
+            AND active = true
+          UNION
+         SELECT DISTINCT trim(department) AS name
+           FROM users
+          WHERE department IS NOT NULL
+            AND trim(department) <> ''
+            AND lower(trim(department)) NOT IN ('administration', 'administrator')
+       ) dep
+       LEFT JOIN users u ON trim(u.department) = dep.name
       GROUP BY dep.name
       ORDER BY dep.name`,
     []
@@ -183,6 +197,14 @@ export async function getUserGroups(userId: string): Promise<string[]> {
   return Array.from(new Set([...custom.map((r) => r.group_name), ...dynamic]));
 }
 
+// Org-structure groups (roles, Division/Department/Section/Team) are derived
+// automatically from live org data and can't be assigned manually - only
+// admin-created custom groups can have members added/removed directly.
+export async function isOrgStructureGroupName(name: string): Promise<boolean> {
+  const org = await listOrgStructureGroups();
+  return org.some((g) => g.name === name);
+}
+
 export async function setUserGroups(userId: string, groups: string[]) {
   await ensurePermissionGroupTables();
   const org = await listOrgStructureGroups();
@@ -194,4 +216,29 @@ export async function setUserGroups(userId: string, groups: string[]) {
     await query(`INSERT INTO permission_groups (name) VALUES ($1) ON CONFLICT DO NOTHING`, [name]);
     await query(`INSERT INTO user_permission_groups (user_id, group_name) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [userId, name]);
   }
+}
+
+// Individual membership management for one custom group at a time - used by
+// the Roles & Permissions "Manage Columns" member picker, so an admin can
+// grant a feature to specific people without editing a user's whole group set.
+export async function listGroupMembers(groupName: string) {
+  await ensurePermissionGroupTables();
+  return query<{ id: string; full_name: string | null; email: string }>(
+    `SELECT u.id, u.full_name, u.email
+       FROM user_permission_groups upg
+       JOIN users u ON u.id = upg.user_id
+      WHERE upg.group_name = $1
+      ORDER BY u.full_name NULLS LAST, u.email`,
+    [groupName]
+  );
+}
+
+export async function addGroupMember(groupName: string, userId: string) {
+  await ensurePermissionGroupTables();
+  await query(`INSERT INTO user_permission_groups (user_id, group_name) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [userId, groupName]);
+}
+
+export async function removeGroupMember(groupName: string, userId: string) {
+  await ensurePermissionGroupTables();
+  await query(`DELETE FROM user_permission_groups WHERE user_id=$1 AND group_name=$2`, [userId, groupName]);
 }

@@ -133,7 +133,7 @@ export const api = {
   verifyPassword: (password: string) => req("/auth/verify-password", { method: "POST", body: JSON.stringify({ password }) }),
   departments: () => req("/auth/departments"),
   groups: () => req("/auth/groups"),
-  requestDirectory: () => req("/auth/request-directory"),
+  requestDirectory: (scope?: "company") => req(`/auth/request-directory${scope ? `?scope=${scope}` : ""}`),
   companyDirectory: () => req("/auth/request-directory?scope=company"),
   createDepartment: (name: string, sectionId?: string | null, managerUserId?: string | null, excoUserId?: string | null, active = true, hodUserId?: string | null) =>
     req("/auth/departments", { method: "POST", body: JSON.stringify({ name, section_id: sectionId, hod_user_id: hodUserId, manager_user_id: managerUserId, exco_user_id: excoUserId, active }) }),
@@ -218,6 +218,11 @@ export const api = {
   deletePermissionGroup: (name: string) => req(`/auth/permission-groups/${encodeURIComponent(name)}`, { method: "DELETE" }),
   setGroupVisibility: (name: string, hidden: boolean) =>
     req(`/auth/permission-groups/${encodeURIComponent(name)}/visibility`, { method: "PUT", body: JSON.stringify({ hidden }) }),
+  groupMembers: (name: string) => req(`/auth/permission-groups/${encodeURIComponent(name)}/members`),
+  addGroupMember: (name: string, userId: string) =>
+    req(`/auth/permission-groups/${encodeURIComponent(name)}/members`, { method: "POST", body: JSON.stringify({ user_id: userId }) }),
+  removeGroupMember: (name: string, userId: string) =>
+    req(`/auth/permission-groups/${encodeURIComponent(name)}/members/${userId}`, { method: "DELETE" }),
 
   advances: () => req("/advances?mine=true"),
   reconciliationReport: (from: string, to: string) =>
@@ -432,7 +437,5 @@ export const api = {
   deductionsAccess: () => req("/deductions/access"),
   deductions: () => req("/deductions"),
   setDeductionActioned: (id: string, deducted: boolean) =>
-    req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) }),
-  deductionAccessGroups: () => req("/deductions/access-groups"),
-  setDeductionAccessGroups: (groups: string[]) => req("/deductions/access-groups", { method: "PUT", body: JSON.stringify({ groups }) })
+    req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) })
 };

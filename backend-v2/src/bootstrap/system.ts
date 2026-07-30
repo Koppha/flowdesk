@@ -1459,19 +1459,12 @@ async function ensureAdvanceRecoverySchema() {
 // Payroll-style deductions raised against an employee who owes the company
 // (tax/pension/UIF/etc. or a recovery like a loan or garnishee order).
 // Visibility is a single module-wide gate, not a per-row permission: ADMIN
-// always has access, and admin additionally grants access to whole groups
-// (roles, divisions, departments, sections, teams - see permissionGroups.ts)
-// via deduction_access_groups. Anyone with access can both create and
-// process deductions; there's no separate multi-step approval chain here,
-// unlike claims/custom-requests.
+// always has access, everyone else needs their role or one of their
+// permission groups (roles, divisions, departments, sections, teams, or
+// admin-created custom groups - see permissionGroups.ts) in the "deductions"
+// feature's allow-list, managed from the Roles & Permissions screen the same
+// way as every other admin feature (see canAccessDeductions, deductionsPermissions.ts).
 async function ensureDeductionsSchema() {
-  await query(`
-    CREATE TABLE IF NOT EXISTS deduction_access_groups (
-      group_name    text        PRIMARY KEY,
-      granted_by_id uuid        REFERENCES users(id),
-      granted_at    timestamptz NOT NULL DEFAULT now()
-    )
-  `);
   // Deductions page reports directly off closed clearance claims (see
   // deductions.routes.ts) rather than a separate manually-entered table.
   // VR Date is the linked advance's final approval date (advance_requests.

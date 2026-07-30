@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api, getUserFromToken } from "./api";
+import { api } from "./api";
 import { formatMoney } from "./constants";
 import {
   Clock, Wallet, HandCoins, CheckCircle2, Search, MoreHorizontal,
-  Shield, ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, X, Check
+  ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, X, Check
 } from "lucide-react";
 
 const STATUS_STYLE: Record<string, [string, string]> = {
@@ -83,13 +83,6 @@ export default function Deductions() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-
-  const [showAccessModal, setShowAccessModal] = useState(false);
-  const [accessGroups, setAccessGroups] = useState<{ name: string; member_count: string; hidden: boolean; dynamic: boolean }[]>([]);
-  const [grantedGroups, setGrantedGroups] = useState<string[]>([]);
-  const [savingAccess, setSavingAccess] = useState(false);
-  const me = getUserFromToken();
-  const isAdmin = me?.role === "ADMIN";
 
   async function refresh() {
     setError(null);
@@ -203,30 +196,6 @@ export default function Deductions() {
     }
   }
 
-  async function openAccessModal() {
-    setShowAccessModal(true);
-    try {
-      const resp = await api.deductionAccessGroups();
-      setAccessGroups((resp.available || []).filter((g: any) => g.name !== "ADMIN"));
-      setGrantedGroups(resp.granted || []);
-    } catch (e: any) {
-      setError(String(e.message));
-    }
-  }
-
-  async function saveAccessGroups() {
-    setSavingAccess(true);
-    setError(null);
-    try {
-      await api.setDeductionAccessGroups(grantedGroups);
-      setShowAccessModal(false);
-    } catch (e: any) {
-      setError(String(e.message));
-    } finally {
-      setSavingAccess(false);
-    }
-  }
-
   function exportCsv() {
     const headers = ["Name", "Emp No", "Division", "Destination", "VR Date", "Receipts", "Adv Amount", "Cleared Amount", "Amount To Be Expensed", "Salary Deduction", "Payable", "Status"];
     const rows = sorted.map((i) => [
@@ -261,11 +230,6 @@ export default function Deductions() {
           <p className="ep-subtitle">Subsistence clearance settlements requiring a salary deduction or payable amount.</p>
         </div>
         <div className="ep-actions">
-          {isAdmin && (
-            <button className="ep-btn-outline" onClick={openAccessModal}>
-              <Shield size={14} /> Manage Access
-            </button>
-          )}
           <button className="ep-btn-outline" onClick={exportCsv} disabled={!sorted.length}>
             <Download size={14} /> Export
           </button>
@@ -445,36 +409,6 @@ export default function Deductions() {
           </div>
         )}
       </div>
-
-      {showAccessModal && (
-        <div className="ep-modal-overlay" onClick={() => !savingAccess && setShowAccessModal(false)}>
-          <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="ep-modal-head">
-              <div>
-                <h2 className="ep-modal-title">Manage Deductions Access</h2>
-                <p className="ep-modal-sub">Admins always have access. Choose which additional roles, divisions, departments, sections, or teams can view and manage Deductions.</p>
-              </div>
-              <button className="ep-icon-btn" onClick={() => setShowAccessModal(false)} disabled={savingAccess}><X size={18} /></button>
-            </div>
-            <div className="ep-modal-body" style={{ display: "grid", gap: 4 }}>
-              {accessGroups.map((g) => (
-                <label key={g.name} className="ep-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={grantedGroups.includes(g.name)}
-                    onChange={(e) => setGrantedGroups((prev) => e.target.checked ? [...prev, g.name] : prev.filter((n) => n !== g.name))}
-                  />
-                  {g.name} <span style={{ color: "var(--muted)", fontSize: 11 }}>({g.member_count} members)</span>
-                </label>
-              ))}
-            </div>
-            <div className="ep-modal-footer">
-              <button className="button small-button button-subtle" onClick={() => setShowAccessModal(false)} disabled={savingAccess}>Cancel</button>
-              <button className="button button-primary" onClick={() => void saveAccessGroups()} disabled={savingAccess}>{savingAccess ? "Saving…" : "Save"}</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

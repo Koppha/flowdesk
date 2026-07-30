@@ -560,7 +560,7 @@ export default function ManagersOnboarding() {
       const effectiveDept = editingOrg.department || editingUser.department;
       await api.updateUser(editingUser.id, {
         full_name: fullName,
-        employee_no: editingUser.employee_no || "",
+        employee_no: editingUser.employee_no?.trim() || null,
         title: editingUser.title || "Division Manager",
         department: effectiveDept,
         division_id: editingOrg.divisionId ?? null,

@@ -11,7 +11,7 @@ import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
 import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
 import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
-import { createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, listPermissionGroups, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
+import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
 
 const LoginSchema = z
   .object({
@@ -1438,7 +1438,10 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     let idx = 1;
     if (parsed.data.full_name !== undefined) { fields.push(`full_name=$${idx++}`); values.push(parsed.data.full_name); }
     if (parsed.data.email !== undefined) { fields.push(`email=$${idx++}`); values.push(normalizeEmailForStorage(parsed.data.email)); }
-    if (parsed.data.employee_no !== undefined) { fields.push(`employee_no=$${idx++}`); values.push(parsed.data.employee_no); }
+    // employee_no is UNIQUE - an empty string (rather than null) collides
+    // with every other blank-employee_no user on the second such save, so
+    // normalize blank to null the same way user creation already does.
+    if (parsed.data.employee_no !== undefined) { fields.push(`employee_no=$${idx++}`); values.push(parsed.data.employee_no?.trim() || null); }
     if (parsed.data.title !== undefined) { fields.push(`title=$${idx++}`); values.push(parsed.data.title); }
     if (parsed.data.department !== undefined) {
       const organization = parsed.data.department.trim();
@@ -1752,7 +1755,7 @@ const FEATURE_KEYS = [
   "team_roster", "ceo_management", "employees",
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
   "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer",
-  "claims_sla_report", "advance_recovery_settings", "manager_delegations"
+  "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions"
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
@@ -1774,7 +1777,8 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   pdf_designer:          ["ADMIN"],
   claims_sla_report:     ["ADMIN", "FINANCE", "HR_MANAGER"],
   advance_recovery_settings: ["ADMIN", "FINANCE"],
-  manager_delegations:   ["ADMIN"]
+  manager_delegations:   ["ADMIN"],
+  deductions:            ["ADMIN"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {
@@ -1880,6 +1884,48 @@ authRouter.put("/permission-groups/:name/visibility", requireRole(["ADMIN"]), as
     if (!parsed.success) throw badRequest("Invalid visibility payload", parsed.error.flatten());
     await setGroupVisibility(req.params.name, parsed.data.hidden);
     return res.json(await listPermissionGroups());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Individual membership for a custom group - lets an admin grant a feature to
+// specific people rather than only whole roles/departments/etc. Org-derived
+// groups (roles, Division/Department/Section/Team) reject direct membership
+// edits since their membership is computed live from org structure.
+authRouter.get("/permission-groups/:name/members", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await listGroupMembers(req.params.name));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const AddGroupMemberSchema = z.object({ user_id: z.string().uuid() });
+
+authRouter.post("/permission-groups/:name/members", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    if (await isOrgStructureGroupName(req.params.name)) {
+      throw badRequest("Membership for this group is derived automatically and can't be edited directly");
+    }
+    const exists = await query(`SELECT 1 FROM permission_groups WHERE name=$1`, [req.params.name]);
+    if (!exists[0]) throw notFound("Group not found");
+    const parsed = AddGroupMemberSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid member payload", parsed.error.flatten());
+    await addGroupMember(req.params.name, parsed.data.user_id);
+    return res.status(201).json(await listGroupMembers(req.params.name));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+authRouter.delete("/permission-groups/:name/members/:userId", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    if (await isOrgStructureGroupName(req.params.name)) {
+      throw badRequest("Membership for this group is derived automatically and can't be edited directly");
+    }
+    await removeGroupMember(req.params.name, req.params.userId);
+    return res.json(await listGroupMembers(req.params.name));
   } catch (err) {
     return next(err);
   }

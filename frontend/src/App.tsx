@@ -393,6 +393,12 @@ export default function App() {
   const [newGroupName, setNewGroupName] = useState("");
   const [manageColumnsOpen, setManageColumnsOpen] = useState(false);
   const [groupSaving, setGroupSaving] = useState(false);
+  const [expandedGroupName, setExpandedGroupName] = useState<string | null>(null);
+  const [groupMembers, setGroupMembers] = useState<{ id: string; full_name: string | null; email: string }[]>([]);
+  const [groupMembersLoading, setGroupMembersLoading] = useState(false);
+  const [memberDirectory, setMemberDirectory] = useState<RequestDirectoryUser[]>([]);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [memberSaving, setMemberSaving] = useState(false);
   const [featurePermSaving, setFeaturePermSaving] = useState(false);
   const [featureAccessSearch, setFeatureAccessSearch] = useState("");
   const [featureAccessModuleFilter, setFeatureAccessModuleFilter] = useState("ALL");
@@ -3911,6 +3917,7 @@ export default function App() {
                       { key: "claims_sla_report",      label: "Clearance SLA Report",     group: "Reports" },
                       { key: "advance_recovery_settings", label: "Advance Recovery Settings", group: "Advances" },
                       { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
+                      { key: "deductions",             label: "Deductions",               group: "Deductions" },
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
@@ -3934,6 +3941,7 @@ export default function App() {
                       claims_sla_report:      ["ADMIN","FINANCE","HR_MANAGER"],
                       advance_recovery_settings: ["ADMIN","FINANCE"],
                       manager_delegations:    ["ADMIN"],
+                      deductions:             ["ADMIN"],
                     };
                     function toggleRole(featureKey: string, roleKey: string) {
                       if (roleKey === "ADMIN") return;
@@ -3980,6 +3988,57 @@ export default function App() {
                         alert(err?.message || "Failed to update column visibility.");
                       } finally {
                         setGroupSaving(false);
+                      }
+                    }
+                    async function handleToggleMembers(name: string) {
+                      if (expandedGroupName === name) {
+                        setExpandedGroupName(null);
+                        return;
+                      }
+                      setExpandedGroupName(name);
+                      setMemberSearch("");
+                      setGroupMembersLoading(true);
+                      try {
+                        const [members] = await Promise.all([
+                          api.groupMembers(name),
+                          memberDirectory.length ? Promise.resolve(memberDirectory) : api.requestDirectory("company").then((rows: RequestDirectoryUser[]) => {
+                            setMemberDirectory(Array.isArray(rows) ? rows : []);
+                            return rows;
+                          })
+                        ]);
+                        setGroupMembers(Array.isArray(members) ? members : []);
+                      } catch (err: any) {
+                        alert(err?.message || "Failed to load group members.");
+                        setExpandedGroupName(null);
+                      } finally {
+                        setGroupMembersLoading(false);
+                      }
+                    }
+                    async function handleAddMember(name: string, userId: string) {
+                      setMemberSaving(true);
+                      try {
+                        const updated = await api.addGroupMember(name, userId);
+                        setGroupMembers(Array.isArray(updated) ? updated : []);
+                        setMemberSearch("");
+                        const groupsResp = await api.permissionGroups();
+                        setPermissionGroups(Array.isArray(groupsResp) ? groupsResp : []);
+                      } catch (err: any) {
+                        alert(err?.message || "Failed to add member.");
+                      } finally {
+                        setMemberSaving(false);
+                      }
+                    }
+                    async function handleRemoveMember(name: string, userId: string) {
+                      setMemberSaving(true);
+                      try {
+                        const updated = await api.removeGroupMember(name, userId);
+                        setGroupMembers(Array.isArray(updated) ? updated : []);
+                        const groupsResp = await api.permissionGroups();
+                        setPermissionGroups(Array.isArray(groupsResp) ? groupsResp : []);
+                      } catch (err: any) {
+                        alert(err?.message || "Failed to remove member.");
+                      } finally {
+                        setMemberSaving(false);
                       }
                     }
                     const groups = Array.from(new Set(FEATURES_LIST.map((f) => f.group)));
@@ -4173,27 +4232,87 @@ export default function App() {
                             <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--text-muted,#6b7280)" }}>
                               Choose which roles/departments/divisions appear as columns in the table above. Hiding a column doesn't remove the group or anyone's access — it just declutters the view.
                             </p>
-                            {[...permissionGroups].sort((a, b) => a.name.localeCompare(b.name)).map((g) => (
-                              <div key={g.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--border,#f1f5f9)" }}>
-                                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: g.name === "ADMIN" ? "not-allowed" : "pointer" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={!g.hidden}
-                                    disabled={g.name === "ADMIN" || groupSaving}
-                                    onChange={(e) => void handleToggleGroupVisibility(g.name, !e.target.checked)}
-                                    style={{ accentColor: "var(--primary,#2563eb)" }}
-                                  />
-                                  <span>{g.name}</span>
-                                  <span style={{ color: "var(--text-muted,#6b7280)" }}>({g.member_count})</span>
-                                </label>
-                                {!g.dynamic && g.name !== "ADMIN" && (
-                                  <button type="button" onClick={() => void handleRemoveGroup(g.name)} disabled={groupSaving}
-                                    style={{ border: "none", background: "none", cursor: groupSaving ? "not-allowed" : "pointer", color: "var(--text-muted,#6b7280)", fontSize: 12 }}>
-                                    Delete
-                                  </button>
+                            {[...permissionGroups].sort((a, b) => a.name.localeCompare(b.name)).map((g) => {
+                              const memberFilter = memberSearch.trim().toLowerCase();
+                              const memberResults = !memberFilter ? [] : memberDirectory.filter((u) =>
+                                !groupMembers.some((m) => m.id === u.id) &&
+                                ((u.full_name || "").toLowerCase().includes(memberFilter) || u.email.toLowerCase().includes(memberFilter))
+                              ).slice(0, 8);
+                              return (
+                              <div key={g.name} style={{ padding: "5px 0", borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: g.name === "ADMIN" ? "not-allowed" : "pointer" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={!g.hidden}
+                                      disabled={g.name === "ADMIN" || groupSaving}
+                                      onChange={(e) => void handleToggleGroupVisibility(g.name, !e.target.checked)}
+                                      style={{ accentColor: "var(--primary,#2563eb)" }}
+                                    />
+                                    <span>{g.name}</span>
+                                    <span style={{ color: "var(--text-muted,#6b7280)" }}>({g.member_count})</span>
+                                  </label>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                    {!g.dynamic && (
+                                      <button type="button" onClick={() => void handleToggleMembers(g.name)}
+                                        style={{ border: "none", background: "none", cursor: "pointer", color: "var(--primary,#2563eb)", fontSize: 12 }}>
+                                        {expandedGroupName === g.name ? "Hide Members" : "Members"}
+                                      </button>
+                                    )}
+                                    {!g.dynamic && g.name !== "ADMIN" && (
+                                      <button type="button" onClick={() => void handleRemoveGroup(g.name)} disabled={groupSaving}
+                                        style={{ border: "none", background: "none", cursor: groupSaving ? "not-allowed" : "pointer", color: "var(--text-muted,#6b7280)", fontSize: 12 }}>
+                                        Delete
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                                {!g.dynamic && expandedGroupName === g.name && (
+                                  <div style={{ marginTop: 8, marginLeft: 24, padding: "8px 10px", background: "var(--bg-secondary,#f8fafc)", borderRadius: 6 }}>
+                                    {groupMembersLoading ? (
+                                      <p style={{ fontSize: 12, color: "var(--text-muted,#6b7280)", margin: 0 }}>Loading members…</p>
+                                    ) : (
+                                      <>
+                                        {groupMembers.length === 0 && (
+                                          <p style={{ fontSize: 12, color: "var(--text-muted,#6b7280)", margin: "0 0 6px" }}>No individual members yet.</p>
+                                        )}
+                                        {groupMembers.map((m) => (
+                                          <div key={m.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "3px 0" }}>
+                                            <span style={{ fontSize: 13 }}>{m.full_name || m.email} <span style={{ color: "var(--text-muted,#6b7280)", fontSize: 11 }}>({m.email})</span></span>
+                                            <button type="button" onClick={() => void handleRemoveMember(g.name, m.id)} disabled={memberSaving}
+                                              style={{ border: "none", background: "none", cursor: memberSaving ? "not-allowed" : "pointer", color: "var(--text-muted,#6b7280)", fontSize: 12 }}>
+                                              Remove
+                                            </button>
+                                          </div>
+                                        ))}
+                                        <div style={{ position: "relative", marginTop: 6 }}>
+                                          <input
+                                            type="text"
+                                            placeholder="Search a person by name or email…"
+                                            value={memberSearch}
+                                            onChange={(e) => setMemberSearch(e.target.value)}
+                                            style={{ width: "100%", padding: "5px 8px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 12 }}
+                                          />
+                                          {memberResults.length > 0 && (
+                                            <div style={{ border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, marginTop: 4, background: "var(--bg,#fff)" }}>
+                                              {memberResults.map((u) => (
+                                                <div key={u.id}
+                                                  onClick={() => !memberSaving && void handleAddMember(g.name, u.id)}
+                                                  style={{ padding: "5px 8px", fontSize: 12, cursor: memberSaving ? "not-allowed" : "pointer" }}
+                                                >
+                                                  {u.full_name || u.email} <span style={{ color: "var(--text-muted,#6b7280)" }}>({u.email})</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
                                 )}
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, gap: 8 }}>

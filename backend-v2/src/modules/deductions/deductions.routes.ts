@@ -1,20 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
-import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
+import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canAccessDeductions } from "../../lib/deductionsPermissions.js";
-import { listPermissionGroups } from "../../lib/permissionGroups.js";
 
 export const deductionsRouter = Router();
 deductionsRouter.use(requireAuth);
 
 const DeductedSchema = z.object({
   deducted: z.boolean()
-});
-
-const AccessGroupsSchema = z.object({
-  groups: z.array(z.string().trim().min(1))
 });
 
 type DeductionRow = {
@@ -75,38 +70,6 @@ deductionsRouter.get("/access", async (req: AuthedRequest, res, next) => {
         WHERE status='CLOSED' AND balance_amount <> 0 AND deducted_at IS NULL`
     );
     return res.json({ allowed, pendingCount: Number(pending[0]?.count || 0) });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-// Admin-only management of which groups (roles/divisions/departments/
-// sections/teams - see permissionGroups.ts) have module-wide access.
-deductionsRouter.get("/access-groups", requireRole(["ADMIN"]), async (_req: AuthedRequest, res, next) => {
-  try {
-    const [granted, available] = await Promise.all([
-      query<{ group_name: string }>(`SELECT group_name FROM deduction_access_groups ORDER BY group_name`),
-      listPermissionGroups()
-    ]);
-    return res.json({ granted: granted.map((g) => g.group_name), available });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-deductionsRouter.put("/access-groups", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
-  try {
-    const parsed = AccessGroupsSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid access groups payload", parsed.error.flatten());
-    const groups = Array.from(new Set(parsed.data.groups.filter(Boolean)));
-    await query(`DELETE FROM deduction_access_groups`);
-    for (const name of groups) {
-      await query(
-        `INSERT INTO deduction_access_groups (group_name, granted_by_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-        [name, req.user!.userId]
-      );
-    }
-    return res.json({ granted: groups });
   } catch (err) {
     return next(err);
   }
