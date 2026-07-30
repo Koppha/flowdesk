@@ -7,7 +7,7 @@ import { advanceWorkflowStep, createAdvance, getAdvanceById, nextStatusOrThrow, 
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
 import type { AdvanceStatus } from "./advances.types.js";
 import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
-import { getActiveManagerDelegation } from "../../lib/delegations.js";
+import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
 import { canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
@@ -1076,12 +1076,12 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
       const stepIdx = adv.workflow_step_order ?? 0;
       const group = getPendingGroup(chain, stepIdx);
       if (!group.indices.length) throw badRequest("No active workflow step to roll back");
-      const delegated = await getActiveManagerDelegation(userId);
+      const delegatedManagerIds = await getDelegatedManagerIds(userId);
       let currentStep: ChainStep | undefined = chain[group.indices[0]];
       if (role !== "ADMIN") {
         currentStep = undefined;
         for (const idx of group.indices) {
-          if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
+          if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, req.user!.department)) { currentStep = chain[idx]; break; }
         }
         if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
         if (currentStep.can_rollback === false) throw forbidden("This step does not allow rolling back to draft");
@@ -1154,12 +1154,12 @@ export async function performAdvanceReject(
     const stepIdx = adv.workflow_step_order ?? 0;
     const group = getPendingGroup(chain, stepIdx);
     if (!group.indices.length) throw badRequest("No active workflow step to reject");
-    const delegated = await getActiveManagerDelegation(userId);
+    const delegatedManagerIds = await getDelegatedManagerIds(userId);
     let currentStep: ChainStep | undefined = chain[group.indices[0]];
     if (role !== "ADMIN") {
       currentStep = undefined;
       for (const idx of group.indices) {
-        if (await canApproveStep(chain[idx], userId, role, delegated?.manager_id, department)) { currentStep = chain[idx]; break; }
+        if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, department)) { currentStep = chain[idx]; break; }
       }
       if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
       if (currentStep.can_reject === false) throw forbidden("This step does not allow rejection");
@@ -1244,7 +1244,7 @@ export async function performAdvanceApprove(
   }
 
   const { role, userId, department } = actor;
-  const delegated = await getActiveManagerDelegation(userId);
+  const delegatedManagerIds = await getDelegatedManagerIds(userId);
 
   let nextStatus: AdvanceStatus;
   let auditAfter: Record<string, unknown>;
@@ -1258,7 +1258,7 @@ export async function performAdvanceApprove(
       adv,
       userId,
       role,
-      delegatedManagerId: delegated?.manager_id,
+      delegatedManagerIds,
       userDepartment: department,
       approvedTotal
     });

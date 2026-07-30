@@ -82,7 +82,7 @@ export async function advanceWorkflowStep(args: {
   adv: NonNullable<Awaited<ReturnType<typeof getAdvanceById>>>;
   userId: string;
   role: string;
-  delegatedManagerId?: string | null;
+  delegatedManagerIds?: string[] | null;
   userDepartment?: string | null;
   approvedTotal?: number;
 }): Promise<{
@@ -94,7 +94,7 @@ export async function advanceWorkflowStep(args: {
   nextApprover: { id: string | null; name: string | null; email: string | null; title: string | null } | null;
   nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }>;
 }> {
-  const { adv, userId, role, delegatedManagerId, userDepartment, approvedTotal } = args;
+  const { adv, userId, role, delegatedManagerIds, userDepartment, approvedTotal } = args;
   if (!adv.approval_chain?.length) throw badRequest("This advance does not have an active approval workflow.");
 
   const chain = adv.approval_chain as ChainStep[];
@@ -111,7 +111,7 @@ export async function advanceWorkflowStep(args: {
   } else {
     for (const idx of group.indices) {
       if (chain[idx].approved) continue;
-      if (await canApproveStep(chain[idx], userId, role, delegatedManagerId, userDepartment)) { actedIdx = idx; break; }
+      if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, userDepartment)) { actedIdx = idx; break; }
     }
   }
   if (actedIdx == null) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);

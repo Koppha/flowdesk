@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { AuthedRequest, Role, isFinanceDept, requireAuth } from "../../lib/auth.js";
 import { query } from "../../lib/db.js";
-import { getActiveManagerDelegation } from "../../lib/delegations.js";
+import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 
@@ -160,8 +160,8 @@ inboxRouter.get("/my-actions", async (req: AuthedRequest, res, next) => {
 inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const role = req.user!.role;
-    const delegation = await getActiveManagerDelegation(req.user!.userId);
-    const effectiveRole = delegation && role !== "MANAGER" ? "MANAGER" : role;
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId);
+    const effectiveRole = delegatedManagerIds.length > 0 && role !== "MANAGER" ? "MANAGER" : role;
     const rule = allowedInboxForUser(effectiveRole, req.user!.department);
 
     const items: any[] = [];
@@ -188,7 +188,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let matched: ChainStep | undefined;
         for (const step of group.steps) {
           if (step.approved) continue;
-          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { matched = step; break; }
+          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { matched = step; break; }
         }
         if (matched) {
           items.push({
@@ -219,7 +219,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let isChainParticipant = false;
         const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
         for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
-          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { isChainParticipant = true; break; }
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { isChainParticipant = true; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -356,7 +356,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // for ADMIN (whose main loader is skipped) or once already captured.
         if (!captureStep.approved && !isAdmin) continue;
         if (!isAdmin) {
-          const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department);
+          const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department);
           if (!eligible) continue;
         }
         const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
@@ -376,7 +376,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_action_type: currentStep?.action_type ?? null,
           current_step_can_reject: currentStep?.can_reject,
           current_step_can_rollback: currentStep?.can_rollback,
-          current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)),
+          current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)),
           capture_done: !!captureStep.approved
         });
       }
@@ -401,7 +401,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let matched: ChainStep | undefined;
         for (const step of group.steps) {
           if (step.approved) continue;
-          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { matched = step; break; }
+          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { matched = step; break; }
         }
         if (matched) {
           items.push({
@@ -427,7 +427,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let isChainParticipant = false;
         const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
         for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
-          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegation?.manager_id, req.user!.department)) { isChainParticipant = true; break; }
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { isChainParticipant = true; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -550,8 +550,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       // mark them paid, so include workflow-driven advances for that status.
       let ownershipFilter = status === "APPROVED" ? "" : " AND ar.approval_chain IS NULL";
       if (effectiveRole === "MANAGER" && status === "SUBMITTED") {
-        params.push(delegation?.manager_id || req.user!.userId);
-        ownershipFilter += ` AND d.manager_user_id = $${params.length}`;
+        params.push([req.user!.userId, ...delegatedManagerIds]);
+        ownershipFilter += ` AND d.manager_user_id = ANY($${params.length}::uuid[])`;
       }
       if (role === "HOD" && status === "COUNTERSIGNED") {
         params.push(req.user!.userId);
@@ -593,8 +593,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       const params: unknown[] = [status];
       let ownershipFilter = "";
       if (effectiveRole === "MANAGER" && status === "SUBMITTED") {
-        params.push(delegation?.manager_id || req.user!.userId);
-        ownershipFilter = ` AND d.manager_user_id = $${params.length}`;
+        params.push([req.user!.userId, ...delegatedManagerIds]);
+        ownershipFilter = ` AND d.manager_user_id = ANY($${params.length}::uuid[])`;
       }
       // Exclude workflow-driven claims — those are handled by loadWorkflowClaimsForUser.
       // FINANCE_VERIFIED/PAYMENT_PROCESSING are the exception: workflow-driven

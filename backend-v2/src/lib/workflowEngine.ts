@@ -275,12 +275,13 @@ export function chainStepToStatus(chain: ChainStep[], stepIndex: number): Advanc
 }
 
 // Returns true if userId/userRole is permitted to act on the given workflow step.
-// delegatedManagerId is the manager_id the current user is acting on behalf of (from delegation).
+// delegatedManagerIds are the manager_ids the current user is acting on behalf
+// of - a delegate can hold more than one active delegation at once.
 export async function canApproveStep(
   step: ChainStep,
   userId: string,
   userRole: string,
-  delegatedManagerId?: string | null,
+  delegatedManagerIds?: string[] | null,
   userDepartment?: string | null
 ): Promise<boolean> {
   // ANY_ONE steps (e.g. "Team: X", "Section: X", or "Department: X") can be
@@ -300,10 +301,11 @@ export async function canApproveStep(
   }
   if (step.approver_id) {
     if (step.approver_id === userId) return true;
-    // Delegation: allow if acting on behalf of the assigned approver, whatever
-    // their position type - delegation eligibility (Manager/HOD/Exco/CEO) is
-    // already enforced when the delegation itself is created.
-    if (delegatedManagerId && step.approver_id === delegatedManagerId) return true;
+    // Delegation: allow if acting on behalf of any of the assigned approvers
+    // delegating to this user, whatever their position type - delegation
+    // eligibility (Manager/HOD/Exco/CEO) is already enforced when the
+    // delegation itself is created.
+    if (delegatedManagerIds?.includes(step.approver_id)) return true;
     return false;
   }
   // No specific approver resolved via org structure — FINANCE is based on

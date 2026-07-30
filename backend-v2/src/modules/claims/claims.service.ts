@@ -107,7 +107,7 @@ export async function advanceClaimWorkflowStep(args: {
   claim: NonNullable<Awaited<ReturnType<typeof getClaimById>>>;
   userId: string;
   role: string;
-  delegatedManagerId?: string | null;
+  delegatedManagerIds?: string[] | null;
   userDepartment?: string | null;
 }): Promise<{
   nextStatus: ClaimStatus;
@@ -118,7 +118,7 @@ export async function advanceClaimWorkflowStep(args: {
   nextApprover: { id: string | null; name: string | null; email: string | null; title: string | null } | null;
   nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }>;
 }> {
-  const { claim, userId, role, delegatedManagerId, userDepartment } = args;
+  const { claim, userId, role, delegatedManagerIds, userDepartment } = args;
   if (!claim.approval_chain?.length) throw badRequest("This clearance does not have an active approval workflow.");
 
   const chain = claim.approval_chain as ChainStep[];
@@ -133,7 +133,7 @@ export async function advanceClaimWorkflowStep(args: {
   } else {
     for (const idx of group.indices) {
       if (chain[idx].approved) continue;
-      if (await canApproveStep(chain[idx], userId, role, delegatedManagerId, userDepartment)) { actedIdx = idx; break; }
+      if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, userDepartment)) { actedIdx = idx; break; }
     }
   }
   if (actedIdx == null) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);

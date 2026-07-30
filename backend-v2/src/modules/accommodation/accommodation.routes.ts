@@ -11,7 +11,7 @@ import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.j
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { advanceWorkflowStep, getAdvanceById } from "../advances/advances.service.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
-import { getActiveManagerDelegation } from "../../lib/delegations.js";
+import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { notifyAdvanceTask } from "../../lib/notifications.js";
 import { getAdvanceNotificationContext, writeAdvanceAudit } from "../advances/advances.routes.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
@@ -296,10 +296,10 @@ accommodationRouter.post("/", async (req: AuthedRequest, res, next) => {
       const chain = advance.approval_chain as ChainStep[];
       const group = getPendingGroup(chain, advance.workflow_step_order ?? 0);
       if (!group.indices.length) throw badRequest("All workflow steps have been completed");
-      const delegated = await getActiveManagerDelegation(req.user!.userId);
+      const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId);
       let currentStep: ChainStep | undefined;
       for (const idx of group.indices) {
-        if (await canApproveStep(chain[idx], req.user!.userId, role, delegated?.manager_id, req.user!.department)) { currentStep = chain[idx]; break; }
+        if (await canApproveStep(chain[idx], req.user!.userId, role, delegatedManagerIds, req.user!.department)) { currentStep = chain[idx]; break; }
       }
       if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
     }
@@ -431,8 +431,8 @@ accommodationRouter.post("/:id/send-to-finance", async (req: AuthedRequest, res,
     const adv = await getAdvanceById(row.advance_request_id);
     let advanceStatus: string | null = null;
     if (adv) {
-      const delegated = await getActiveManagerDelegation(userId);
-      const result = await advanceWorkflowStep({ adv, userId, role, delegatedManagerId: delegated?.manager_id });
+      const delegatedManagerIds = await getDelegatedManagerIds(userId);
+      const result = await advanceWorkflowStep({ adv, userId, role, delegatedManagerIds });
       advanceStatus = result.nextStatus;
       await writeAdvanceAudit({
         actorId: userId,

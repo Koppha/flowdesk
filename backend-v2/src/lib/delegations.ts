@@ -12,18 +12,25 @@ export type ManagerDelegation = {
   updated_at: string;
 };
 
-export async function getActiveManagerDelegation(delegateId: string) {
-  const rows = await query<ManagerDelegation>(
+// A delegate can hold more than one active delegation at once (e.g. covering
+// for two different managers simultaneously) - return all of them, not just
+// one, so none are silently dropped.
+export async function getActiveManagerDelegations(delegateId: string): Promise<ManagerDelegation[]> {
+  return query<ManagerDelegation>(
     `SELECT id, manager_id, delegate_id, department, from_date, to_date, active, created_at, updated_at
        FROM manager_delegations
       WHERE delegate_id = $1
         AND active = true
         AND (from_date IS NULL OR from_date <= current_date)
         AND (to_date IS NULL OR to_date >= current_date)
-      LIMIT 1`,
+      ORDER BY created_at DESC`,
     [delegateId]
   );
-  return rows[0] ?? null;
+}
+
+export async function getDelegatedManagerIds(delegateId: string): Promise<string[]> {
+  const delegations = await getActiveManagerDelegations(delegateId);
+  return delegations.map((d) => d.manager_id);
 }
 
 export async function getDelegationsForManager(managerId: string) {
