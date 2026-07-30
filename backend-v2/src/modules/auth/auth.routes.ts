@@ -1005,7 +1005,7 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
 
 // Whether the current user is assigned to at least one active workflow step
 // with "Allow Delegation" enabled — gates self-service delegation visibility.
-authRouter.get("/delegations/eligibility", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.get("/delegations/eligibility", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query<{ eligible: boolean }>(
       `SELECT EXISTS (
@@ -1025,7 +1025,7 @@ authRouter.get("/delegations/eligibility", requireRole(["ADMIN", "MANAGER", "EXC
   }
 });
 
-authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
   try {
     const isAdmin = req.user!.role === "ADMIN";
     const condition = isAdmin ? `` : `WHERE md.manager_id = $1`;
@@ -1055,7 +1055,7 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]),
   }
 });
 
-authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CreateDelegationSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid delegation payload", parsed.error.flatten());
@@ -1069,7 +1069,7 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"])
     );
     const manager = users.find((user) => user.id === managerId);
     const delegate = users.find((user) => user.id === parsed.data.delegate_id);
-    if (!manager || !["MANAGER", "EXCO", "CEO"].includes(manager.role)) {
+    if (!manager || !["MANAGER", "HOD", "EXCO", "CEO"].includes(manager.role)) {
       throw badRequest("User must be a Manager, Exco member, or CEO to delegate");
     }
     if (!delegate) throw badRequest("Delegate user not found");
@@ -1110,7 +1110,7 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"])
   }
 });
 
-authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
   try {
     const delegation = (await query<{ id: string; manager_id: string; delegate_id: string; department: string }>(
       `SELECT id, manager_id, delegate_id, department FROM manager_delegations WHERE id=$1`,

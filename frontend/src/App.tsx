@@ -3798,7 +3798,7 @@ export default function App() {
                           <label>Manager <span className="ep-required">*</span></label>
                           <select className="ep-form-select" value={delegationManagerId} onChange={(e) => setDelegationManagerId(e.target.value)}>
                             <option value="">Select manager</option>
-                            {adminUsers.filter((user) => ["MANAGER", "EXCO", "CEO"].includes(user.role)).map((user) => (
+                            {adminUsers.filter((user) => ["MANAGER", "HOD", "EXCO", "CEO"].includes(user.role)).map((user) => (
                               <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                             ))}
                           </select>
