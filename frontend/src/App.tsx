@@ -1839,7 +1839,10 @@ export default function App() {
       const rows: any[] = await api.requestTypes();
       setCustomRequestTypeOptions(
         (Array.isArray(rows) ? rows : [])
-          .filter((rt) => rt.is_active !== false)
+          // is_active only tracks soft-delete; a type also needs status='ACTIVE'
+          // (not DRAFT) before anyone can actually submit against it - drafts
+          // have no business showing up as a delegation-scopable type.
+          .filter((rt) => rt.is_active !== false && rt.status === "ACTIVE")
           .map((rt) => ({ code: rt.code as string, name: rt.name as string }))
       );
     } catch {
