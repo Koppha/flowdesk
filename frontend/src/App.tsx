@@ -500,6 +500,19 @@ export default function App() {
   const [recoveryMonthsDraft, setRecoveryMonthsDraft] = useState("3");
   const [recoverySettingsLoading, setRecoverySettingsLoading] = useState(false);
   const [recoverySettingsSaving, setRecoverySettingsSaving] = useState(false);
+  const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
+  const [idleTimeoutDraft, setIdleTimeoutDraft] = useState("30");
+  const [warningSecondsDraft, setWarningSecondsDraft] = useState("60");
+  const [sessionSettingsLoading, setSessionSettingsLoading] = useState(false);
+  const [sessionSettingsSaving, setSessionSettingsSaving] = useState(false);
+  // The values actually enforced by the idle-logout timer, as opposed to the
+  // admin settings form's own draft state above - fetched once per session
+  // and updated immediately if the admin saves new values.
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(30);
+  const [warningSeconds, setWarningSeconds] = useState(60);
+  const [showIdleWarning, setShowIdleWarning] = useState(false);
+  const [idleSecondsLeft, setIdleSecondsLeft] = useState(0);
+  const lastActivityRef = useRef(Date.now());
   const [orgNavOpen, setOrgNavOpen] = useState(false);
   const [featurePermissions, setFeaturePermissions] = useState<Record<string, string[]>>({});
   const [featurePermOpen, setFeaturePermOpen] = useState(false);
@@ -1086,6 +1099,45 @@ export default function App() {
     document.addEventListener("mousedown", onOutside);
     return () => document.removeEventListener("mousedown", onOutside);
   }, [shortcutPickerOpen]);
+
+  // Idle-session logout: fetch the admin-configured timeout once per login.
+  useEffect(() => {
+    if (!token) return;
+    void loadActiveSessionSettings();
+  }, [token]);
+
+  // Track activity and enforce the timeout - re-created whenever the
+  // enforced values change (e.g. an admin just saved new settings) so a
+  // stale closure never keeps running the old timeout/warning window.
+  useEffect(() => {
+    if (!token) return;
+    function markActivity() {
+      lastActivityRef.current = Date.now();
+      setShowIdleWarning(false);
+    }
+    const events: Array<"mousedown" | "mousemove" | "keydown" | "scroll" | "touchstart"> = ["mousedown", "mousemove", "keydown", "scroll", "touchstart"];
+    events.forEach((evt) => window.addEventListener(evt, markActivity, { passive: true }));
+
+    const timeoutMs = idleTimeoutMinutes * 60000;
+    const warningMs = Math.min(warningSeconds * 1000, timeoutMs - 1000);
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastActivityRef.current;
+      if (elapsed >= timeoutMs) {
+        setShowIdleWarning(false);
+        void doLogout();
+        return;
+      }
+      if (elapsed >= timeoutMs - warningMs) {
+        setShowIdleWarning(true);
+        setIdleSecondsLeft(Math.max(0, Math.ceil((timeoutMs - elapsed) / 1000)));
+      }
+    }, 1000);
+
+    return () => {
+      events.forEach((evt) => window.removeEventListener(evt, markActivity));
+      clearInterval(interval);
+    };
+  }, [token, idleTimeoutMinutes, warningSeconds]);
   const canRequestForSelf = profileCompleted && ["PERMANENT", "INTERN", "TEMPORARY"].includes(employmentType);
   const canCreateForOthers = profileCompleted && (employmentType === "PERMANENT" || isApproverRole(role));
   const canOpenAdvanceForm = canRequestForSelf || canCreateForOthers;
@@ -1751,6 +1803,11 @@ export default function App() {
     setPage("HOME");
   }
 
+  function stayLoggedIn() {
+    lastActivityRef.current = Date.now();
+    setShowIdleWarning(false);
+  }
+
   async function submitProfile() {
     if (!profileFirstName.trim() || !profileLastName.trim()) {
       alert("Enter your first name and last name.");
@@ -2014,6 +2071,57 @@ export default function App() {
       alert("Error saving recovery settings: " + e.message);
     } finally {
       setRecoverySettingsSaving(false);
+    }
+  }
+
+  // Fetches the values actually enforced by the idle-logout timer - separate
+  // from loadSessionSettingsDraft below, which only feeds the admin edit form.
+  async function loadActiveSessionSettings() {
+    try {
+      const data: any = await api.sessionSettings();
+      if (data) {
+        setIdleTimeoutMinutes(Number(data.idle_timeout_minutes) || 30);
+        setWarningSeconds(Number(data.warning_seconds) || 60);
+      }
+    } catch {
+      // Idle-logout is a convenience, not a security boundary - if this
+      // fails, just keep the built-in 30-minute default rather than blocking anything.
+    }
+  }
+
+  async function loadSessionSettingsDraft() {
+    setSessionSettingsLoading(true);
+    try {
+      const data: any = await api.sessionSettings();
+      if (data) {
+        setIdleTimeoutDraft(String(data.idle_timeout_minutes ?? 30));
+        setWarningSecondsDraft(String(data.warning_seconds ?? 60));
+      }
+    } catch (e: any) {
+      alert("Error loading session settings: " + e.message);
+    } finally {
+      setSessionSettingsLoading(false);
+    }
+  }
+
+  async function saveSessionSettings() {
+    const minutes = Number(idleTimeoutDraft);
+    const seconds = Number(warningSecondsDraft);
+    if (!Number.isFinite(minutes) || minutes < 1) { alert("Idle timeout must be at least 1 minute."); return; }
+    if (!Number.isFinite(seconds) || seconds < 10) { alert("Warning period must be at least 10 seconds."); return; }
+    if (seconds >= minutes * 60) { alert("Warning period must be shorter than the idle timeout."); return; }
+    setSessionSettingsSaving(true);
+    try {
+      await api.updateSessionSettings({ idle_timeout_minutes: minutes, warning_seconds: seconds });
+      setIdleTimeoutMinutes(minutes);
+      setWarningSeconds(seconds);
+      lastActivityRef.current = Date.now();
+      setShowIdleWarning(false);
+      alert("Session timeout settings saved.");
+    } catch (e: any) {
+      alert("Error saving session settings: " + e.message);
+    } finally {
+      setSessionSettingsSaving(false);
     }
   }
 
@@ -3711,6 +3819,28 @@ export default function App() {
 
   return (
     <div className={`app-shell page-${page.toLowerCase().replace(/_/g, "-")}`}>
+      {showIdleWarning && (
+        <div className="ep-modal-overlay" style={{ zIndex: 2000 }}>
+          <div className="ep-modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <div className="ep-modal-head">
+              <div>
+                <h2 className="ep-modal-title">Still there?</h2>
+                <p className="ep-modal-sub">You've been inactive for a while. For security, you'll be logged out automatically.</p>
+              </div>
+            </div>
+            <div className="ep-modal-body">
+              <p style={{ fontSize: 28, fontWeight: 700, textAlign: "center", margin: "8px 0" }}>
+                {Math.floor(idleSecondsLeft / 60)}:{String(idleSecondsLeft % 60).padStart(2, "0")}
+              </p>
+              <p style={{ textAlign: "center", color: "var(--muted, #6b7280)", fontSize: 13 }}>until you're signed out</p>
+            </div>
+            <div className="ep-modal-footer" style={{ justifyContent: "center" }}>
+              <button className="ep-btn-outline" onClick={() => void doLogout()}>Log Out Now</button>
+              <button className="ep-btn" onClick={stayLoggedIn}>Stay Logged In</button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="header app-header">
         <div className="user header-user">
           <div className="avatar">{userInitials}</div>
@@ -4743,6 +4873,39 @@ export default function App() {
                       <div style={{ marginTop: 16 }}>
                         <button className="button" onClick={() => void saveRecoverySettings()} disabled={recoverySettingsSaving}>
                           {recoverySettingsSaving ? "Saving…" : "Save Settings"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </SettingsAccordion>
+              )}
+
+              {role === "ADMIN" && (
+                <SettingsAccordion
+                  title="Session Timeout"
+                  subtitle="How long a user can be inactive before they're warned, then automatically logged out."
+                  open={sessionSettingsOpen}
+                  onToggle={() => { const next = !sessionSettingsOpen; setSessionSettingsOpen(next); if (next) void loadSessionSettingsDraft(); }}
+                >
+                  {sessionSettingsLoading ? (
+                    <div style={{ color: "var(--muted)" }}>Loading…</div>
+                  ) : (
+                    <div>
+                      <div className="form-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 520 }}>
+                        <div className="form-field">
+                          <label>Idle Timeout (minutes)</label>
+                          <input type="number" min={1} value={idleTimeoutDraft} onChange={(e) => setIdleTimeoutDraft(e.target.value)} />
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Minutes of no activity before a user is logged out.</div>
+                        </div>
+                        <div className="form-field">
+                          <label>Warning Period (seconds)</label>
+                          <input type="number" min={10} value={warningSecondsDraft} onChange={(e) => setWarningSecondsDraft(e.target.value)} />
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>How long the "Still there?" prompt shows before logging out.</div>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 16 }}>
+                        <button className="button" onClick={() => void saveSessionSettings()} disabled={sessionSettingsSaving}>
+                          {sessionSettingsSaving ? "Saving…" : "Save Settings"}
                         </button>
                       </div>
                     </div>

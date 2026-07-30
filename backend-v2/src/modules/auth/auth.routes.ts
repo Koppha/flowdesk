@@ -2003,3 +2003,38 @@ authRouter.delete("/permission-groups/:name/members/:userId", requireRole(["ADMI
     return next(err);
   }
 });
+
+// Idle-session timeout: how long a user can go without activity before the
+// frontend warns them, then logs them out. GET is open to any authenticated
+// user (everyone's client needs to know the current values to enforce
+// them); only ADMIN can change them.
+authRouter.get("/session-settings", requireAuth, async (_req: AuthedRequest, res, next) => {
+  try {
+    const row = (await query<any>(`SELECT idle_timeout_minutes, warning_seconds, updated_at FROM session_settings LIMIT 1`))[0];
+    return res.json(row || { idle_timeout_minutes: 30, warning_seconds: 60 });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const SessionSettingsSchema = z.object({
+  idle_timeout_minutes: z.coerce.number().int().min(1).max(1440),
+  warning_seconds: z.coerce.number().int().min(10).max(600)
+});
+
+authRouter.put("/session-settings", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = SessionSettingsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid session settings payload", parsed.error.flatten());
+    if (parsed.data.warning_seconds >= parsed.data.idle_timeout_minutes * 60) {
+      throw badRequest("Warning period must be shorter than the idle timeout");
+    }
+    await query(
+      `UPDATE session_settings SET idle_timeout_minutes=$1, warning_seconds=$2, updated_by_id=$3, updated_at=now()`,
+      [parsed.data.idle_timeout_minutes, parsed.data.warning_seconds, req.user!.userId]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});

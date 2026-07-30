@@ -281,6 +281,9 @@ export const api = {
   advanceRecoverySettings: () => req("/advances/recovery-settings"),
   updateAdvanceRecoverySettings: (data: { clearance_duration_days: number; recovery_months: number }) =>
     req("/advances/recovery-settings", { method: "PUT", body: JSON.stringify(data) }),
+  sessionSettings: () => req("/auth/session-settings"),
+  updateSessionSettings: (data: { idle_timeout_minutes: number; warning_seconds: number }) =>
+    req("/auth/session-settings", { method: "PUT", body: JSON.stringify(data) }),
   confirmAdvanceNotCleared: (id: string) => req(`/advances/${id}/confirm-not-cleared`, { method: "POST" }),
   createAccommodationRequest: (data: any) => req("/accommodation-requests", { method: "POST", body: JSON.stringify(data) }),
   uploadAccommodationQuotation: (id: string, form: FormData) => req(`/accommodation-requests/${id}/upload-quotation`, { method: "POST", body: form }),

@@ -23,6 +23,7 @@ export async function bootstrapSystem() {
   await ensurePdfSchema();
   await ensureClearanceSlaSchema();
   await ensureAdvanceRecoverySchema();
+  await ensureSessionSettingsSchema();
   await ensureDeductionsSchema();
   await ensureAdminAccount();
 }
@@ -1489,6 +1490,26 @@ async function ensureAdvanceRecoverySchema() {
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS not_cleared_confirmed_by_id uuid REFERENCES users(id)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_deduction_amount numeric(12,2)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_months_at_confirmation integer`);
+}
+
+// Admin-configurable idle-session timeout: how long a user can go without
+// any activity before being warned, then logged out. warning_seconds is how
+// long the "are you still there?" prompt stays up before the logout itself
+// fires - both purely client-side timers, no server-side session to expire.
+async function ensureSessionSettingsSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS session_settings (
+      id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      idle_timeout_minutes  integer     NOT NULL DEFAULT 30,
+      warning_seconds       integer     NOT NULL DEFAULT 60,
+      updated_by_id         uuid        REFERENCES users(id),
+      updated_at            timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const hasAny = await query<{ id: string }>(`SELECT id FROM session_settings LIMIT 1`);
+  if (!hasAny[0]) {
+    await query(`INSERT INTO session_settings (idle_timeout_minutes, warning_seconds) VALUES (30, 60)`);
+  }
 }
 
 // Payroll-style deductions raised against an employee who owes the company
