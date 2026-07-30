@@ -154,6 +154,23 @@ export async function resolveWorkflowChain(params: {
   const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
   const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
 
+  // A plain (non-ANY_ONE-group) EXCO step with no fixed assigned_user_id
+  // routes to whichever EXCO member's own users.department matches the
+  // REQUESTER's department (e.g. an HOD's request goes to their own
+  // department's EXCO/GM) - one workflow covers every department instead of
+  // needing a hand-built copy per department. Resolves to no approver if
+  // that department has no EXCO member set up yet.
+  const hasDeptExcoStep = steps.some((step) => {
+    const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
+    return stepCode === "EXCO" && !step.assigned_user_id && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+  });
+  const deptExco = hasDeptExcoStep && department.trim()
+    ? (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+        `SELECT id, full_name, title, email FROM users WHERE role = 'EXCO' AND is_active = true AND lower(trim(department)) = lower(trim($1)) LIMIT 1`,
+        [department]
+      ))[0] ?? null
+    : null;
+
   // Requester-chosen overrides (e.g. a CEO/EXCO/MANAGER picking their own
   // countersigner/approver for a travel advance) replace the position's
   // template-driven approver. Matched by the step's action_type, not its
@@ -195,31 +212,37 @@ export async function resolveWorkflowChain(params: {
     // HOD/MANAGER no longer dynamically resolve to the requester's department
     // leadership — every step must carry an explicit assigned_user_id (a
     // specific person) or be a group/ANY_ONE step. HR_* steps still route to
-    // the Human Resource department's leadership.
+    // the Human Resource department's leadership; plain EXCO steps route to
+    // the requester's own department's EXCO member (see deptExco above).
     const isHrCode = code.startsWith("HR_");
+    const isDeptExcoCode = code === "EXCO" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
 
     const approverId =
       override               ? override.id :
       step.assigned_user_id ? step.assigned_user_id :
       isHrCode              ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null) :
+      isDeptExcoCode         ? (deptExco?.id ?? null) :
                               null;
 
     const approverName =
       override               ? override.full_name :
       step.assigned_user_id ? step.assigned_user_name :
       isHrCode              ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
+      isDeptExcoCode         ? (deptExco?.full_name ?? null) :
                               null;
 
     const approverTitle =
       override               ? override.title :
       step.assigned_user_id ? step.assigned_user_title :
       isHrCode              ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
+      isDeptExcoCode         ? (deptExco?.title ?? null) :
                               null;
 
     const approverEmail =
       override               ? override.email :
       step.assigned_user_id ? step.assigned_user_email :
       isHrCode              ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
+      isDeptExcoCode         ? (deptExco?.email ?? null) :
                               null;
 
     // Group steps (ANY_ONE with approval_group_name) are never "unassigned" —
