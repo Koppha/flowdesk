@@ -161,6 +161,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const role = req.user!.role;
     const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId);
+    const customRequestDelegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CUSTOM_WORKFLOW");
     const effectiveRole = delegatedManagerIds.length > 0 && role !== "MANAGER" ? "MANAGER" : role;
     const rule = allowedInboxForUser(effectiveRole, req.user!.department);
 
@@ -493,7 +494,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // approval task — a later-step approver shouldn't see (or be able to
         // act on) this until every earlier step has actually been approved,
         // and no approver should see it until the assignee has signed off.
-        const actionable = !!step && step.approver_id === req.user!.userId && !hasUnconfirmedAssignees;
+        const isStepApprover = !!step && (step.approver_id === req.user!.userId || customRequestDelegatedManagerIds.includes(step.approver_id));
+        const actionable = isStepApprover && !hasUnconfirmedAssignees;
 
         const isAssigneeTask = myFieldKeys.some((key) => {
           const arr = r.data?.[key];

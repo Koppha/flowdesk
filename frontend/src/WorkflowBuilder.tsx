@@ -3,6 +3,7 @@ import Swal from "sweetalert2";
 import { api } from "./api";
 import { useStaffDirectory, isActiveStaff, type StaffMember } from "./useStaffDirectory";
 import WorkflowAddParticipantModal from "./WorkflowAddParticipantModal";
+import { isFinanceDeptClient } from "./constants";
 import {
   AlertTriangle,
   Check,
@@ -1230,20 +1231,29 @@ export default function WorkflowBuilder() {
     return resolveRuleTarget(rule).label;
   }
 
+  // "Finance" and "HR Manager" aren't actual user roles in this system (the
+  // only roles are EMPLOYEE/MANAGER/HOD/EXCO/CEO/ADMIN) - real approval-time
+  // authorization for these resolves by department instead (see
+  // canApproveStep/isFinanceDept and resolveWorkflowChain's HR leadership
+  // lookup on the backend). Mirror that here so this "optionally assign a
+  // specific person" picker actually has candidates, instead of always
+  // matching zero users against a role that doesn't exist.
   function usersForStep(step: WorkflowStep) {
     const nameLower = step.positionName.toLowerCase();
-    let roles: string[];
     switch (step.positionTypeCode) {
-      case "MANAGER":     roles = ["MANAGER", "HOD"]; break;
-      case "HOD":         roles = ["HOD"]; break;
-      case "FINANCE":     roles = ["FINANCE"]; break;
-      case "CEO":         roles = ["CEO"]; break;
-      case "HR_REVIEW":
-        roles = (nameLower.includes("manager")) ? ["HR_MANAGER"] : ["MANAGER", "HR_MANAGER"];
-        break;
-      default:            roles = allUsers.map(u => u.role);
+      case "MANAGER": return allUsers.filter(u => u.role === "MANAGER" || u.role === "HOD");
+      case "HOD":     return allUsers.filter(u => u.role === "HOD");
+      case "EXCO":    return allUsers.filter(u => u.role === "EXCO");
+      case "CEO":     return allUsers.filter(u => u.role === "CEO");
+      case "FINANCE": return allUsers.filter(u => isFinanceDeptClient(u.department));
+      case "HR_REVIEW": {
+        const isHrDept = (u: { department: string | null }) => /human resources?/i.test(u.department || "");
+        return nameLower.includes("manager")
+          ? allUsers.filter(u => isHrDept(u) && u.role === "MANAGER")
+          : allUsers.filter(u => isHrDept(u) && (u.role === "MANAGER" || u.role === "HOD"));
+      }
+      default: return allUsers;
     }
-    return allUsers.filter(u => roles.includes(u.role));
   }
 
   function describeRuleCondition(rule: WorkflowRule) {

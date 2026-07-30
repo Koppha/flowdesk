@@ -1041,6 +1041,7 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "
       `SELECT md.id,
               md.manager_id,
               manager.full_name AS manager_name,
+              manager.department AS manager_department,
               md.delegate_id,
               delegate.full_name AS delegate_name,
               md.department,
@@ -1050,6 +1051,13 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "
               md.reference,
               md.reason,
               md.comments,
+              md.created_by,
+              creator.full_name AS created_by_name,
+              md.created_source,
+              md.ended_by,
+              ender.full_name AS ended_by_name,
+              md.ended_at,
+              md.end_reason,
               md.created_at,
               md.updated_at,
               COALESCE(
@@ -1059,6 +1067,8 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "
          FROM manager_delegations md
          JOIN users manager ON manager.id = md.manager_id
          JOIN users delegate ON delegate.id = md.delegate_id
+         LEFT JOIN users creator ON creator.id = md.created_by
+         LEFT JOIN users ender ON ender.id = md.ended_by
          ${condition}
         ORDER BY md.created_at DESC`,
       params

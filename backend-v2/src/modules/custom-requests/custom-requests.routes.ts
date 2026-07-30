@@ -9,6 +9,7 @@ import { notifyCustomRequestStep, notifyCustomRequestDecision, notifyCustomReque
 import { logger, serializeError } from "../../lib/logger.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
+import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
@@ -834,7 +835,10 @@ export async function performCustomRequestAction(
   const step = chain[stepIdx];
   if (!step) throw badRequest("This request has no pending step");
   if (actor.role !== "ADMIN" && step.approver_id !== actor.userId) {
-    throw forbidden("You are not the approver for the current step");
+    const delegatedManagerIds = await getDelegatedManagerIds(actor.userId, "CUSTOM_WORKFLOW");
+    if (!delegatedManagerIds.includes(step.approver_id)) {
+      throw forbidden("You are not the approver for the current step");
+    }
   }
 
   // Approval (not rejection) is gated on every assignee in any "user_multi"
