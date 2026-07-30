@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { AuthedRequest, isFinanceDept, requireAuth } from "../../lib/auth.js";
+import { AuthedRequest, isFinanceDept, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getUserAccountState, isProfileComplete } from "../../lib/userProfile.js";
@@ -156,7 +156,7 @@ overtimeRouter.get("/requests/:id/pdf", async (req: AuthedRequest, res, next) =>
   }
 });
 
-overtimeRouter.post("/requests", async (req: AuthedRequest, res, next) => {
+overtimeRouter.post("/requests", requireFeatureAccess("overtime_request", ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = OvertimeRequestSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid overtime request payload", parsed.error.flatten());
@@ -318,7 +318,7 @@ overtimeRouter.get("/claims/:id/pdf", async (req: AuthedRequest, res, next) => {
   }
 });
 
-overtimeRouter.post("/claims", async (req: AuthedRequest, res, next) => {
+overtimeRouter.post("/claims", requireFeatureAccess("overtime_claim", ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = OvertimeClaimSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid overtime claim payload", parsed.error.flatten());

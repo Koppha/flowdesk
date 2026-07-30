@@ -1755,7 +1755,8 @@ const FEATURE_KEYS = [
   "team_roster", "ceo_management", "employees",
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
   "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer",
-  "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions"
+  "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions",
+  "overtime_request", "overtime_claim"
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
@@ -1778,7 +1779,9 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   claims_sla_report:     ["ADMIN", "FINANCE", "HR_MANAGER"],
   advance_recovery_settings: ["ADMIN", "FINANCE"],
   manager_delegations:   ["ADMIN"],
-  deductions:            ["ADMIN"]
+  deductions:            ["ADMIN"],
+  overtime_request:      ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
+  overtime_claim:        ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {

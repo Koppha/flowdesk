@@ -3641,8 +3641,12 @@ export default function App() {
           <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
           <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
           {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
-          <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
-          <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
+          {canAccessFeature("overtime_request") && (
+            <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
+          )}
+          {canAccessFeature("overtime_claim") && (
+            <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
+          )}
           {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Requests</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           <a href="#" className={navItemClass(page === "CAPTURE")} onClick={(e) => { e.preventDefault(); setPage("CAPTURE"); }}><span className="sidebar-nav-icon"><Camera size={18} aria-hidden /></span>Capture Inbox <b>{captureCount}</b></a>
@@ -3928,6 +3932,8 @@ export default function App() {
                       { key: "advance_recovery_settings", label: "Advance Recovery Settings", group: "Advances" },
                       { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
                       { key: "deductions",             label: "Deductions",               group: "Deductions" },
+                      { key: "overtime_request",       label: "Overtime Request",         group: "Overtime" },
+                      { key: "overtime_claim",         label: "Overtime Claim",            group: "Overtime" },
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
@@ -3952,6 +3958,8 @@ export default function App() {
                       advance_recovery_settings: ["ADMIN","FINANCE"],
                       manager_delegations:    ["ADMIN"],
                       deductions:             ["ADMIN"],
+                      overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
+                      overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                     };
                     function toggleRole(featureKey: string, roleKey: string) {
                       if (roleKey === "ADMIN") return;
