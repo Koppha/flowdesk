@@ -300,8 +300,10 @@ export async function canApproveStep(
   }
   if (step.approver_id) {
     if (step.approver_id === userId) return true;
-    // Delegation: allow if acting on behalf of the assigned manager
-    if (step.position_type_code === "MANAGER" && delegatedManagerId && step.approver_id === delegatedManagerId) return true;
+    // Delegation: allow if acting on behalf of the assigned approver, whatever
+    // their position type - delegation eligibility (Manager/HOD/Exco/CEO) is
+    // already enforced when the delegation itself is created.
+    if (delegatedManagerId && step.approver_id === delegatedManagerId) return true;
     return false;
   }
   // No specific approver resolved via org structure — FINANCE is based on

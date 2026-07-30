@@ -3808,11 +3808,7 @@ export default function App() {
                           <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)} disabled={!delegationManagerId}>
                             <option value="">Select delegate</option>
                             {adminUsers
-                              .filter((user) => {
-                                const manager = adminUsers.find((u) => u.id === delegationManagerId);
-                                return manager?.role === "CEO" ? ["EXCO", "MANAGER"].includes(user.role) : user.department === manager?.department;
-                              })
-                              .filter((user) => user.id !== delegationManagerId)
+                              .filter((user) => user.is_active !== false && user.id !== delegationManagerId)
                               .map((user) => (
                                 <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                               ))}
@@ -3824,12 +3820,8 @@ export default function App() {
                         <label>Delegate <span className="ep-required">*</span></label>
                         <select className="ep-form-select" value={delegationDelegateId} onChange={(e) => setDelegationDelegateId(e.target.value)}>
                           <option value="">Select delegate</option>
-                          {(role === "CEO"
-                            // CEO is org-wide (no single department) — delegate to any active Exco/Manager.
-                            ? adminUsers.filter((user) => ["EXCO", "MANAGER"].includes(user.role))
-                            : adminUsers.filter((user) => user.department === adminUsers.find((u) => u.id === (profile?.id || me?.userId))?.department)
-                          )
-                            .filter((user) => user.id !== (profile?.id || me?.userId))
+                          {adminUsers
+                            .filter((user) => user.is_active !== false && user.id !== (profile?.id || me?.userId))
                             .map((user) => (
                               <option key={user.id} value={user.id}>{user.full_name || user.email}</option>
                             ))}

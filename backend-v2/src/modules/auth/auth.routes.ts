@@ -1075,17 +1075,9 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
     if (!delegate) throw badRequest("Delegate user not found");
     if (delegate.id === manager.id) throw badRequest("Delegate cannot be the same user");
 
-    // CEO is an org-wide role with no single department, so any active delegate
-    // is acceptable; Manager/Exco delegations stay scoped to their own department.
-    let managerDept = String(manager.department || "").trim();
-    if (manager.role !== "CEO") {
-      const delegateDept = String(delegate.department || "").trim();
-      if (!managerDept || managerDept !== delegateDept) {
-        throw badRequest("Delegate must be in the same division as the manager");
-      }
-    } else {
-      managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
-    }
+    // Delegates can be anyone active, regardless of department - the manager's
+    // own department is only kept as the delegation's recorded scope/label.
+    const managerDept = String(manager.department || "").trim() || String(delegate.department || "").trim() || "ORG-WIDE";
 
     const rows = await query(
       `INSERT INTO manager_delegations (id, manager_id, delegate_id, department, from_date, to_date)
