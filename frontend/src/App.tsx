@@ -900,6 +900,9 @@ export default function App() {
     claims_sla_report:      ["ADMIN", "FINANCE", "HR_MANAGER"],
     advance_recovery_settings: ["ADMIN", "FINANCE"],
     manager_delegations:    ["ADMIN"],
+    deductions:             ["ADMIN"],
+    overtime_request:       ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
+    overtime_claim:         ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
   };
 
   function canAccessFeature(key: string): boolean {
