@@ -409,6 +409,7 @@ export default function WorkflowBuilder() {
   const [requestTypeFilter, setRequestTypeFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [workflowPage, setWorkflowPage] = useState(1);
   const [customRequestTypes, setCustomRequestTypes] = useState<Array<{ value: string; label: string }>>([]);
   const [travelTypes, setTravelTypes] = useState<Array<{ code: string; name: string; active?: boolean }>>([]);
   const [loading, setLoading] = useState(false);
@@ -865,6 +866,17 @@ export default function WorkflowBuilder() {
       ].some((value) => String(value || "").toLowerCase().includes(query));
     });
   }, [departmentFilter, requestTypeFilter, search, statusFilter, workflows]);
+
+  const WORKFLOW_PAGE_SIZE = 10;
+  const workflowTotalPages = Math.max(1, Math.ceil(filteredWorkflows.length / WORKFLOW_PAGE_SIZE));
+  // Clamp rather than reset via effect - handles both "filters changed" and
+  // "list shrank" (e.g. after a delete) without an extra render pass.
+  const workflowCurrentPage = Math.min(workflowPage, workflowTotalPages);
+  const paginatedWorkflows = useMemo(
+    () => filteredWorkflows.slice((workflowCurrentPage - 1) * WORKFLOW_PAGE_SIZE, workflowCurrentPage * WORKFLOW_PAGE_SIZE),
+    [filteredWorkflows, workflowCurrentPage]
+  );
+  useEffect(() => { setWorkflowPage(1); }, [search, requestTypeFilter, departmentFilter, statusFilter]);
 
   const summary = useMemo(() => ({
     total: workflows.length,
@@ -1732,7 +1744,7 @@ export default function WorkflowBuilder() {
                 </tr>
               </thead>
               <tbody>
-                {filteredWorkflows.map((workflow) => {
+                {paginatedWorkflows.map((workflow) => {
                   const isExpanded = expandedRows.has(workflow.id);
                   return (
                     <React.Fragment key={workflow.id}>
@@ -1794,6 +1806,22 @@ export default function WorkflowBuilder() {
               </tbody>
             </table>
           </div>
+          {filteredWorkflows.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--muted, #6b7280)" }}>
+              <span>
+                Showing {(workflowCurrentPage - 1) * WORKFLOW_PAGE_SIZE + 1}–{Math.min(workflowCurrentPage * WORKFLOW_PAGE_SIZE, filteredWorkflows.length)} of {filteredWorkflows.length}
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button className="button small-button button-subtle" type="button" disabled={workflowCurrentPage <= 1} onClick={() => setWorkflowPage((p) => Math.max(1, p - 1))}>
+                  <ChevronLeft size={14} aria-hidden /> Prev
+                </button>
+                <span>Page {workflowCurrentPage} of {workflowTotalPages}</span>
+                <button className="button small-button button-subtle" type="button" disabled={workflowCurrentPage >= workflowTotalPages} onClick={() => setWorkflowPage((p) => Math.min(workflowTotalPages, p + 1))}>
+                  Next <ChevronLeft size={14} aria-hidden style={{ transform: "rotate(180deg)" }} />
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {myRole === "ADMIN" && (
