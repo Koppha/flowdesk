@@ -30,8 +30,12 @@ const DELEGATION_COLUMNS = `id, manager_id, delegate_id, department, from_date, 
 //
 // requestType is optional: a delegation with no rows in delegation_request_types
 // applies to every request type (the original, unscoped behavior). A delegation
-// with rows there only matches the request types it explicitly lists.
-export async function getActiveManagerDelegations(delegateId: string, requestType?: string): Promise<ManagerDelegation[]> {
+// with rows there only matches if one of them is in the given requestType(s) -
+// pass an array so a caller can offer several acceptable tokens at once (e.g.
+// a specific custom request type's own code, plus the broad "CUSTOM_WORKFLOW"
+// bucket that covers every custom type).
+export async function getActiveManagerDelegations(delegateId: string, requestType?: string | string[]): Promise<ManagerDelegation[]> {
+  const requestTypes = requestType == null ? null : Array.isArray(requestType) ? requestType : [requestType];
   return query<ManagerDelegation>(
     `SELECT ${DELEGATION_COLUMNS}
        FROM manager_delegations md
@@ -40,16 +44,16 @@ export async function getActiveManagerDelegations(delegateId: string, requestTyp
         AND (from_date IS NULL OR from_date <= current_date)
         AND (to_date IS NULL OR to_date >= current_date)
         AND (
-          $2::text IS NULL
+          $2::text[] IS NULL
           OR NOT EXISTS (SELECT 1 FROM delegation_request_types drt WHERE drt.delegation_id = md.id)
-          OR EXISTS (SELECT 1 FROM delegation_request_types drt WHERE drt.delegation_id = md.id AND drt.request_type_code = $2)
+          OR EXISTS (SELECT 1 FROM delegation_request_types drt WHERE drt.delegation_id = md.id AND drt.request_type_code = ANY($2::text[]))
         )
       ORDER BY created_at DESC`,
-    [delegateId, requestType ?? null]
+    [delegateId, requestTypes]
   );
 }
 
-export async function getDelegatedManagerIds(delegateId: string, requestType?: string): Promise<string[]> {
+export async function getDelegatedManagerIds(delegateId: string, requestType?: string | string[]): Promise<string[]> {
   const delegations = await getActiveManagerDelegations(delegateId, requestType);
   return delegations.map((d) => d.manager_id);
 }
@@ -72,6 +76,24 @@ export async function getDelegationById(id: string) {
     [id]
   );
   return rows[0] ?? null;
+}
+
+// For callers that need to check many items of different request types
+// against a delegate's delegations in a loop (e.g. the shared inbox listing) -
+// one batch fetch instead of a query per item. `requestTypes: []` means the
+// delegation is unscoped (matches everything).
+export async function getActiveDelegationsWithTypes(delegateId: string): Promise<Array<{ managerId: string; requestTypes: string[] }>> {
+  const delegations = await getActiveManagerDelegations(delegateId);
+  if (!delegations.length) return [];
+  const rows = await query<{ delegation_id: string; request_type_code: string }>(
+    `SELECT delegation_id, request_type_code FROM delegation_request_types WHERE delegation_id = ANY($1::uuid[])`,
+    [delegations.map((d) => d.id)]
+  );
+  const typesByDelegation = new Map<string, string[]>();
+  for (const r of rows) {
+    typesByDelegation.set(r.delegation_id, [...(typesByDelegation.get(r.delegation_id) || []), r.request_type_code]);
+  }
+  return delegations.map((d) => ({ managerId: d.manager_id, requestTypes: typesByDelegation.get(d.id) || [] }));
 }
 
 export async function getDelegationRequestTypes(delegationId: string): Promise<string[]> {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { AuthedRequest, Role, isFinanceDept, requireAuth } from "../../lib/auth.js";
 import { query } from "../../lib/db.js";
-import { getDelegatedManagerIds } from "../../lib/delegations.js";
+import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib/delegations.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 
@@ -161,7 +161,14 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const role = req.user!.role;
     const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId);
-    const customRequestDelegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CUSTOM_WORKFLOW");
+    const customRequestDelegations = await getActiveDelegationsWithTypes(req.user!.userId);
+    // A delegation with no scoped types covers everything; one scoped to
+    // "CUSTOM_WORKFLOW" covers every custom request type; otherwise it must
+    // list this specific type's own code.
+    const isDelegatedForCustomType = (managerId: string | null, typeCode: string | null) =>
+      !!managerId && customRequestDelegations.some((d) =>
+        d.managerId === managerId && (d.requestTypes.length === 0 || d.requestTypes.includes("CUSTOM_WORKFLOW") || d.requestTypes.includes(typeCode || ""))
+      );
     const effectiveRole = delegatedManagerIds.length > 0 && role !== "MANAGER" ? "MANAGER" : role;
     const rule = allowedInboxForUser(effectiveRole, req.user!.department);
 
@@ -494,7 +501,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // approval task — a later-step approver shouldn't see (or be able to
         // act on) this until every earlier step has actually been approved,
         // and no approver should see it until the assignee has signed off.
-        const isStepApprover = !!step && (step.approver_id === req.user!.userId || customRequestDelegatedManagerIds.includes(step.approver_id));
+        const isStepApprover = !!step && (step.approver_id === req.user!.userId || isDelegatedForCustomType(step.approver_id, r.request_type_code));
         const actionable = isStepApprover && !hasUnconfirmedAssignees;
 
         const isAssigneeTask = myFieldKeys.some((key) => {

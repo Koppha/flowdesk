@@ -820,7 +820,7 @@ export async function performCustomRequestAction(
   comment?: string | null
 ): Promise<{ status: string }> {
   const submission = (await query<any>(
-    `SELECT s.*, rt.name AS request_type_name, u.full_name AS requester_name, u.email AS requester_email
+    `SELECT s.*, rt.name AS request_type_name, rt.code AS request_type_code, u.full_name AS requester_name, u.email AS requester_email
        FROM custom_request_submissions s
        JOIN custom_request_types rt ON rt.id = s.request_type_id
        JOIN users u ON u.id = s.requester_id
@@ -835,7 +835,10 @@ export async function performCustomRequestAction(
   const step = chain[stepIdx];
   if (!step) throw badRequest("This request has no pending step");
   if (actor.role !== "ADMIN" && step.approver_id !== actor.userId) {
-    const delegatedManagerIds = await getDelegatedManagerIds(actor.userId, "CUSTOM_WORKFLOW");
+    // Accept either a delegation scoped specifically to this custom request
+    // type, or one scoped to the broad "Custom Requests" bucket that covers
+    // all of them.
+    const delegatedManagerIds = await getDelegatedManagerIds(actor.userId, [submission.request_type_code, "CUSTOM_WORKFLOW"]);
     if (!delegatedManagerIds.includes(step.approver_id)) {
       throw forbidden("You are not the approver for the current step");
     }

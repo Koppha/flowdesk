@@ -342,7 +342,7 @@ function UserSearchSelect(props: {
 const DELEGATION_REQUEST_TYPE_OPTIONS = [
   { value: "ADVANCE_REQUEST", label: "Advance Requests (Salary / Loan / Travel)" },
   { value: "CLEARANCE_REQUEST", label: "Travel Clearances" },
-  { value: "CUSTOM_WORKFLOW", label: "Custom Requests" }
+  { value: "CUSTOM_WORKFLOW", label: "Custom Requests (All Types)" }
 ];
 
 // Derives a delegation's real lifecycle state from its own from/to dates and
@@ -542,6 +542,7 @@ export default function App() {
   const [delegationDeptFilter, setDelegationDeptFilter] = useState("");
   const [delegationAudit, setDelegationAudit] = useState<any[]>([]);
   const [delegationAuditLoading, setDelegationAuditLoading] = useState(false);
+  const [customRequestTypeOptions, setCustomRequestTypeOptions] = useState<Array<{ code: string; name: string }>>([]);
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
   const [dashboardSearch, setDashboardSearch] = useState("");
@@ -1833,10 +1834,23 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    if (page === "MANAGER_DELEGATIONS" && delegations.length === 0 && !delegationsLoading) {
-      void loadDelegations();
+  async function loadCustomRequestTypeOptions() {
+    try {
+      const rows: any[] = await api.requestTypes();
+      setCustomRequestTypeOptions(
+        (Array.isArray(rows) ? rows : [])
+          .filter((rt) => rt.is_active !== false)
+          .map((rt) => ({ code: rt.code as string, name: rt.name as string }))
+      );
+    } catch {
+      setCustomRequestTypeOptions([]);
     }
+  }
+
+  useEffect(() => {
+    if (page !== "MANAGER_DELEGATIONS") return;
+    if (delegations.length === 0 && !delegationsLoading) void loadDelegations();
+    if (customRequestTypeOptions.length === 0) void loadCustomRequestTypeOptions();
   }, [page]);
 
   // ADMIN manages delegations on others' behalf regardless of this check;
@@ -1936,6 +1950,12 @@ export default function App() {
     } finally {
       setDelegationAuditLoading(false);
     }
+  }
+
+  function resolveDelegationTypeLabel(code: string): string {
+    return DELEGATION_REQUEST_TYPE_OPTIONS.find((o) => o.value === code)?.label
+      || customRequestTypeOptions.find((o) => o.code === code)?.name
+      || code;
   }
 
   async function updateAdminUserRole(userId: string, roleValue: string) {
@@ -4010,7 +4030,7 @@ export default function App() {
                           <td style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{delegation.department || "—"}</td>
                           <td style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
                             {delegation.request_types?.length
-                              ? delegation.request_types.map((t: string) => DELEGATION_REQUEST_TYPE_OPTIONS.find((o) => o.value === t)?.label || t).join(", ")
+                              ? delegation.request_types.map((t: string) => resolveDelegationTypeLabel(t)).join(", ")
                               : "All types"}
                           </td>
                           <td style={{ fontSize: "0.85rem" }}>{formatDateOnly(delegation.from_date)} → {formatDateOnly(delegation.to_date)}</td>
@@ -4121,14 +4141,42 @@ export default function App() {
                                 <input
                                   type="checkbox"
                                   checked={delegationRequestTypes.includes(opt.value)}
-                                  onChange={() => setDelegationRequestTypes((current) =>
-                                    current.includes(opt.value) ? current.filter((v) => v !== opt.value) : [...current, opt.value]
-                                  )}
+                                  onChange={() => setDelegationRequestTypes((current) => {
+                                    if (current.includes(opt.value)) return current.filter((v) => v !== opt.value);
+                                    // Checking the broad "all custom types" bucket makes picking
+                                    // individual ones redundant - clear those out.
+                                    const next = opt.value === "CUSTOM_WORKFLOW"
+                                      ? current.filter((v) => !customRequestTypeOptions.some((c) => c.code === v))
+                                      : current;
+                                    return [...next, opt.value];
+                                  })}
                                 />
                                 {opt.label}
                               </label>
                             ))}
                           </div>
+                          {customRequestTypeOptions.length > 0 && (
+                            <div style={{ marginTop: 10, paddingLeft: 16, borderLeft: "2px solid var(--border)" }}>
+                              <p style={{ margin: "0 0 6px", fontSize: 12, color: "var(--muted, #6b7280)" }}>
+                                Or limit to specific custom request types instead of all of them:
+                              </p>
+                              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                                {customRequestTypeOptions.map((opt) => (
+                                  <label key={opt.code} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, opacity: delegationRequestTypes.includes("CUSTOM_WORKFLOW") ? 0.5 : 1 }}>
+                                    <input
+                                      type="checkbox"
+                                      disabled={delegationRequestTypes.includes("CUSTOM_WORKFLOW")}
+                                      checked={delegationRequestTypes.includes(opt.code)}
+                                      onChange={() => setDelegationRequestTypes((current) =>
+                                        current.includes(opt.code) ? current.filter((v) => v !== opt.code) : [...current, opt.code]
+                                      )}
+                                    />
+                                    {opt.name}
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -4163,7 +4211,7 @@ export default function App() {
                         <div><strong>Period</strong><div>{formatDateOnly(detailDelegation.from_date)} → {formatDateOnly(detailDelegation.to_date)}</div></div>
                         <div style={{ gridColumn: "1 / -1" }}><strong>Request Types</strong><div>
                           {detailDelegation.request_types?.length
-                            ? detailDelegation.request_types.map((t: string) => DELEGATION_REQUEST_TYPE_OPTIONS.find((o) => o.value === t)?.label || t).join(", ")
+                            ? detailDelegation.request_types.map((t: string) => resolveDelegationTypeLabel(t)).join(", ")
                             : "All types"}
                         </div></div>
                         {detailDelegation.reason && <div style={{ gridColumn: "1 / -1" }}><strong>Reason</strong><div>{detailDelegation.reason}</div></div>}
