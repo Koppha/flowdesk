@@ -360,6 +360,11 @@ export default function WorkflowBuilder() {
   const { staff } = useStaffDirectory();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
   const [metadata, setMetadata] = useState<WorkflowMetadata>(EMPTY_METADATA);
+  // Multi-select of request types for a NEW workflow (step 1 of the create
+  // flow only) - checking more than one creates one workflow per type at
+  // save time, all sharing the same steps/rules. Editing an existing
+  // workflow never revisits step 1, so this only matters during creation.
+  const [selectedRequestTypeValues, setSelectedRequestTypeValues] = useState<string[]>([`${EMPTY_METADATA.requestType}:${EMPTY_METADATA.advanceSubType}`]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("STANDARD");
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [selectedStepId, setSelectedStepId] = useState<string>("");
@@ -435,10 +440,6 @@ export default function WorkflowBuilder() {
 
   const DEFAULT_SUB_TYPE: Record<string, string> = { ADVANCE_REQUEST: "SALARY", CLEARANCE_REQUEST: "TRAVEL" };
 
-  const step1RequestTypeValue = SUB_TYPED_REQUEST_TYPES[metadata.requestType]
-    ? `${metadata.requestType}:${metadata.advanceSubType || DEFAULT_SUB_TYPE[metadata.requestType]}`
-    : metadata.requestType;
-
   function handleStep1RequestTypeChange(value: string) {
     const colonIdx = value.indexOf(":");
     const requestType = colonIdx === -1 ? value : value.slice(0, colonIdx);
@@ -447,6 +448,35 @@ export default function WorkflowBuilder() {
     } else {
       updateMetadata({ requestType: value, advanceSubType: "" });
     }
+    // A direct single-value change (e.g. from the Designer screen's own
+    // Request Type dropdown) collapses any multi-selection from step 1 back
+    // down to just this one value, so the two controls can't disagree.
+    setSelectedRequestTypeValues([value]);
+  }
+
+  // Toggles a request type in/out of the create-flow's multi-select (step 1
+  // only - see step1RequestTypeOptions). metadata.requestType/advanceSubType
+  // track whichever value is first in the list, since template/step defaults
+  // still need one "primary" type to build against - the other checked types
+  // reuse those same steps verbatim when saved (see saveWorkflow).
+  function toggleRequestTypeValue(value: string) {
+    setSelectedRequestTypeValues((current) => {
+      const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+      const primary = next[0];
+      if (primary) {
+        const colonIdx = primary.indexOf(":");
+        const requestType = colonIdx === -1 ? primary : primary.slice(0, colonIdx);
+        const advanceSubType = colonIdx === -1 ? "" : primary.slice(colonIdx + 1);
+        updateMetadata({ requestType, advanceSubType });
+      }
+      return next;
+    });
+  }
+
+  function toStep1Value(requestType: string, advanceSubType: string) {
+    return SUB_TYPED_REQUEST_TYPES[requestType]
+      ? `${requestType}:${advanceSubType || DEFAULT_SUB_TYPE[requestType]}`
+      : requestType;
   }
 
   function toggleRow(id: string) {
@@ -1036,7 +1066,9 @@ export default function WorkflowBuilder() {
 
   function resetDesigner(nextMetadata: Partial<WorkflowMetadata> = {}) {
     setSelectedWorkflowId("");
-    setMetadata({ ...EMPTY_METADATA, ...nextMetadata });
+    const merged = { ...EMPTY_METADATA, ...nextMetadata };
+    setMetadata(merged);
+    setSelectedRequestTypeValues([toStep1Value(merged.requestType, merged.advanceSubType)]);
     const nextSteps = buildTemplateSteps("STANDARD");
     setSteps(nextSteps);
     setSelectedStepId(nextSteps[0]?.id || "");
@@ -1298,17 +1330,41 @@ export default function WorkflowBuilder() {
       void Swal.fire({ icon: "warning", title: "No workflow steps", text: "Add at least one approval step." });
       return;
     }
+    if (!selectedWorkflowId && selectedRequestTypeValues.length === 0) {
+      void Swal.fire({ icon: "warning", title: "Select a request type", text: "Choose at least one request type for this workflow." });
+      return;
+    }
     try {
       setLoading(true);
       if (selectedWorkflowId) {
         await api.updateWorkflow(selectedWorkflowId, workflowPayload(targetStatus));
+      } else if (selectedRequestTypeValues.length > 1) {
+        // Multiple request types checked on step 1 - create one workflow per
+        // type, all sharing today's steps/rules, named to disambiguate.
+        for (const value of selectedRequestTypeValues) {
+          const colonIdx = value.indexOf(":");
+          const requestType = colonIdx === -1 ? value : value.slice(0, colonIdx);
+          const advanceSubType = colonIdx === -1 ? null : value.slice(colonIdx + 1);
+          const label = step1RequestTypeOptions.find((o) => o.value === value)?.label || value;
+          await api.createWorkflow({
+            ...workflowPayload(targetStatus),
+            name: `${metadata.name.trim()} — ${label}`,
+            request_type: requestType,
+            advance_sub_type: advanceSubType
+          });
+        }
       } else {
         const result = await api.createWorkflow(workflowPayload(targetStatus));
         setSelectedWorkflowId(result.id || "");
       }
       await refreshWorkflows();
       setScreen("LIST");
-      void Swal.fire({ icon: "success", title: "Workflow saved", timer: 1400, showConfirmButton: false });
+      void Swal.fire({
+        icon: "success",
+        title: selectedRequestTypeValues.length > 1 ? `${selectedRequestTypeValues.length} workflows created` : "Workflow saved",
+        timer: 1400,
+        showConfirmButton: false
+      });
     } catch (error: any) {
       void Swal.fire({ icon: "error", title: "Save failed", text: "Unable to save workflow: " + (error?.message || "Unknown error") });
     } finally {
@@ -1356,6 +1412,10 @@ export default function WorkflowBuilder() {
         status: "DRAFT",
         requesterRoles: Array.isArray(detail.requesterRoles) ? detail.requesterRoles : []
       });
+      // Duplicating jumps straight to the Designer (never revisits step 1),
+      // but keep this in sync so a stale multi-selection from an earlier
+      // create-flow session can't leak in and create extra copies on save.
+      setSelectedRequestTypeValues([toStep1Value(detail.requestType, detail.advanceSubType || "")]);
       const clonedSteps = detail.steps.map((step, index) => ({ ...step, id: generateId(), workflowId: null, stepOrder: index + 1 }));
       setSteps(clonedSteps);
       setSelectedStepId(clonedSteps[0]?.id || "");
@@ -1498,6 +1558,10 @@ export default function WorkflowBuilder() {
   function continueToTemplate() {
     if (!metadata.name.trim()) {
       void Swal.fire({ icon: "warning", title: "Missing workflow name", text: "Workflow name is required." });
+      return;
+    }
+    if (selectedRequestTypeValues.length === 0) {
+      void Swal.fire({ icon: "warning", title: "Select a request type", text: "Choose at least one request type for this workflow." });
       return;
     }
     setScreen("TEMPLATE");
@@ -1831,12 +1895,6 @@ export default function WorkflowBuilder() {
                 <input value={metadata.name} onChange={(event) => updateMetadata({ name: event.target.value })} placeholder="Advance Request Workflow" />
               </label>
               <label>
-                <span>Request Type <sup>*</sup></span>
-                <select value={step1RequestTypeValue} onChange={(event) => handleStep1RequestTypeChange(event.target.value)}>
-                  {step1RequestTypeOptions.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
-                </select>
-              </label>
-              <label>
                 <span>Company</span>
                 <select value={metadata.division} onChange={(event) => updateMetadata({ division: event.target.value, department: "", section: "", team: "" })}>
                   <option value="">All Companies</option>
@@ -1907,12 +1965,20 @@ export default function WorkflowBuilder() {
           </section>
 
           <aside className="workflow-panel workflow-request-type-card">
-            <h3>Request Type</h3>
-            <p>Select the request type this workflow will be used for.</p>
+            <h3>Request Type <sup>*</sup></h3>
+            <p>
+              Select one or more request types this workflow applies to. Checking more than one
+              creates a separate copy of this workflow per type (same steps), so pick every type
+              that should share this exact approval flow.
+            </p>
             <div className="workflow-radio-list">
               {step1RequestTypeOptions.map((type) => (
                 <label key={type.value}>
-                  <input type="radio" checked={step1RequestTypeValue === type.value} onChange={() => handleStep1RequestTypeChange(type.value)} />
+                  <input
+                    type="checkbox"
+                    checked={selectedRequestTypeValues.includes(type.value)}
+                    onChange={() => toggleRequestTypeValue(type.value)}
+                  />
                   <span>{type.label}</span>
                 </label>
               ))}
