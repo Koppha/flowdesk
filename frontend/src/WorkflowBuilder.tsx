@@ -66,7 +66,9 @@ type WorkflowStep = {
   isActive: boolean;
   requiresAccommodation: boolean;
   parallelWithPrevious: boolean;
-  actionType: "APPROVE" | "COUNTER_SIGN" | "MARK_PAID";
+  // Not a fixed enum - admins can register custom action types (e.g.
+  // "DEPT_CAPTURE") via the Action Types panel, beyond the 3 built-ins.
+  actionType: string;
   canReject: boolean;
   canRollback: boolean;
 };
@@ -159,7 +161,21 @@ const POSITION_TYPE_FALLBACKS: PositionType[] = [
   { id: "pos-ceo", code: "CEO", name: "CEO", description: "Chief Executive Officer", applies_to: ALL_REQUEST_TYPES, is_active: true }
 ];
 
-type TemplateStepDef = string | { code: string; name: string; description?: string };
+type TemplateStepDef = string | {
+  code: string;
+  name: string;
+  description?: string;
+  // Role-based ANY_ONE group (e.g. "EXCO", "CEO", "Team: X") instead of a
+  // specific assignedUserId - self-maintaining as membership changes, since
+  // getUserGroups() already includes a user's own role as a group name.
+  approvalMode?: "SINGLE" | "ANY_ONE";
+  approvalGroupName?: string;
+  assignedUserId?: string;
+  allowDelegation?: boolean;
+  // Not a fixed enum in practice - admins can register custom action types
+  // (e.g. "DEPT_CAPTURE") via the Action Types panel, beyond the 3 built-ins.
+  actionType?: string;
+};
 
 const TEMPLATE_DEFINITIONS: Array<{ id: string; name: string; description: string; steps: TemplateStepDef[] }> = [
   {
@@ -191,6 +207,21 @@ const TEMPLATE_DEFINITIONS: Array<{ id: string; name: string; description: strin
     name: "Travel Workflow",
     description: "Employee to HOD to Manager to Finance",
     steps: ["EMPLOYEE", "HOD", "MANAGER", "FINANCE"]
+  },
+  {
+    id: "INTERNATIONAL_TRAVEL",
+    name: "International Travel / Rest of Africa",
+    description: "Employee → EXCO → GM - Human Resources → CEO → Treasury Capture → Payment Officer",
+    steps: [
+      "EMPLOYEE",
+      { code: "EXCO", name: "EXCO Member", approvalMode: "ANY_ONE", approvalGroupName: "EXCO", allowDelegation: true },
+      // GM - Human Resources is a specific title, not a role class like EXCO/CEO,
+      // so it stays a named assignment - update this id if that person changes.
+      { code: "EXCO", name: "GM - Human Resources", assignedUserId: "3c8dbb3c-6469-4ac3-b198-51bd161e84f1", allowDelegation: true },
+      { code: "CEO", name: "CEO", approvalMode: "ANY_ONE", approvalGroupName: "CEO", allowDelegation: true },
+      { code: "MANAGER", name: "Team: Treasury & Financial Accounting", approvalMode: "ANY_ONE", approvalGroupName: "Team: Treasury & Financial Accounting", actionType: "DEPT_CAPTURE", allowDelegation: true },
+      { code: "MANAGER", name: "Agnes Mohapi", assignedUserId: "3ca53b79-e9f2-4501-af38-366882c1c050", actionType: "MARK_PAID", allowDelegation: true }
+    ]
   },
   {
     id: "PROCUREMENT",
@@ -1052,6 +1083,11 @@ export default function WorkflowBuilder() {
       if (typeof stepDef === "string") return makeStep(stepDef, index);
       const overrides: Partial<WorkflowStep> = { positionName: stepDef.name };
       if (stepDef.description) overrides.description = stepDef.description;
+      if (stepDef.approvalMode) overrides.approvalMode = stepDef.approvalMode;
+      if (stepDef.approvalGroupName) overrides.approvalGroupName = stepDef.approvalGroupName;
+      if (stepDef.assignedUserId) overrides.assignedUserId = stepDef.assignedUserId;
+      if (stepDef.actionType) overrides.actionType = stepDef.actionType;
+      if (stepDef.allowDelegation !== undefined) overrides.allowDelegation = stepDef.allowDelegation;
       return makeStep(stepDef.code, index, overrides);
     });
     if (next.length > 0) {
