@@ -37,6 +37,7 @@ type InboxItem =
       provider: string | null;
       requester_name: string;
       created_by_name: string;
+      current_step_actionable_by_me?: boolean;
     }
   | {
       doc_type: "CLAIM";
@@ -369,7 +370,10 @@ function actionTypeButtonLabel(code: string | null | undefined) {
 // page instead of showing in the general Approval Inbox. Already-captured
 // items stay visible (rather than disappearing once the workflow moves on)
 // so the capturer can still find and download the form afterwards.
+// Accommodation bookings follow the same capture-then-paid flow, so they
+// belong in the same Capture Inbox rather than the general Approval Inbox.
 export function isCaptureItem(item: any) {
+  if (item.doc_type === "ACCOMMODATION") return true;
   return item.doc_type === "ADVANCE" && (isCaptureActionType(item.current_step_action_type) || item.capture_done === true);
 }
 

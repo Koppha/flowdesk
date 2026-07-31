@@ -234,7 +234,7 @@ async function getAccommodationById(id: string) {
 
 function canViewAccommodation(args: { role: string; department?: string | null; userId: string; row: any }) {
   if (args.role === "ADMIN" || isFinanceDept(args.department)) return true;
-  if (args.role === "MANAGER" && args.row.created_by_id === args.userId) return true;
+  if (args.row.created_by_id === args.userId) return true;
   if (args.row.requester_id === args.userId) return true;
   return false;
 }
@@ -250,12 +250,11 @@ accommodationRouter.get("/", async (req: AuthedRequest, res, next) => {
       where = "WHERE acc.created_by_id=$1 OR acc.requester_id=$1";
     } else if (req.user!.role === "ADMIN" || isFinanceDept(req.user!.department)) {
       where = "";
-    } else if (req.user!.role === "MANAGER") {
-      params.push(req.user!.userId);
-      where = "WHERE acc.created_by_id=$1";
     } else {
+      // Anyone who booked it (e.g. HR Operations staff, regardless of role)
+      // or who it's for can see it - not just MANAGER-role bookers.
       params.push(req.user!.userId);
-      where = "WHERE acc.requester_id=$1";
+      where = "WHERE acc.created_by_id=$1 OR acc.requester_id=$1";
     }
 
     const rows = await query<any>(

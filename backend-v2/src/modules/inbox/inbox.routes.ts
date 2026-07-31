@@ -100,7 +100,6 @@ function allowedInboxForRole(role: Role): InboxRule | null {
       return [
         { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
-        { doc_type: "ACCOMMODATION", status: "SUBMITTED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
         { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
         { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
@@ -425,7 +424,55 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_can_reject: currentStep?.can_reject,
           current_step_can_rollback: currentStep?.can_rollback,
           current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)),
-          capture_done: !!captureStep.approved
+          capture_done: !!captureStep.approved,
+          is_delegated: !!delegatedFrom(captureStep),
+          delegated_from_manager_name: (() => {
+            const id = delegatedFrom(captureStep);
+            return id ? delegatingManagerNames.get(id) ?? null : null;
+          })()
+        });
+      }
+    };
+
+    // Accommodation bookings follow the same Capture-then-paid flow as any
+    // other capture item, so they're loaded unconditionally here (like
+    // loadCaptureHistoryItems) rather than gated behind the legacy per-role
+    // rule list, which only ever covered role==='FINANCE' and left every
+    // Treasury/Finance EMPLOYEE and the HR Operations staff who actually
+    // booked it unable to see it at all. Visible to: ADMIN, whoever holds
+    // the "capture" feature grant (view, same as loadCaptureHistoryItems),
+    // actual Finance dept (can act via the /accommodation-requests routes'
+    // own requireFinance gate), and the HR user who created it or the
+    // traveller it's for (read-only, so they can track it through to paid).
+    const loadAccommodationItems = async () => {
+      const isAdmin = rule === "ALL";
+      const captureViewOnly = !isAdmin && (await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Team: Treasury & Financial Accounting"]));
+      const canAct = isAdmin || isFinanceDept(req.user!.department);
+      const rows = await query<any>(
+        `SELECT acc.id, acc.status, acc.amount, acc.location, acc.provider,
+                acc.created_by_id, acc.requester_id,
+                requester.full_name AS requester_name,
+                creator.full_name AS created_by_name
+           FROM accommodation_requests acc
+           JOIN users requester ON requester.id = acc.requester_id
+           JOIN users creator ON creator.id = acc.created_by_id
+          WHERE acc.status <> 'DRAFT'
+          ORDER BY acc.created_at DESC`
+      );
+      for (const a of rows) {
+        if (items.some((i: any) => i.id === a.id)) continue;
+        const isOwner = a.created_by_id === req.user!.userId || a.requester_id === req.user!.userId;
+        if (!isAdmin && !canAct && !captureViewOnly && !isOwner) continue;
+        items.push({
+          doc_type: "ACCOMMODATION",
+          id: a.id,
+          status: a.status,
+          amount: Number(a.amount),
+          location: a.location,
+          provider: a.provider,
+          requester_name: a.requester_name,
+          created_by_name: a.created_by_name,
+          current_step_actionable_by_me: canAct && a.status === "SUBMITTED"
         });
       }
     };
@@ -584,6 +631,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       await loadWorkflowClaimsForUser();
     }
     await loadCaptureHistoryItems();
+    await loadAccommodationItems();
     await loadCustomRequestsForUser();
 
     if (!rule) return res.json({ items });
@@ -680,36 +728,6 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     };
 
-    const loadAccommodationByStatus = async (status: string) => {
-      const rows = await query<any>(
-        `SELECT acc.id,
-                acc.status,
-                acc.amount,
-                acc.location,
-                acc.provider,
-                requester.full_name AS requester_name,
-                creator.full_name AS created_by_name
-           FROM accommodation_requests acc
-           JOIN users requester ON requester.id = acc.requester_id
-           JOIN users creator ON creator.id = acc.created_by_id
-          WHERE acc.status = $1
-          ORDER BY acc.created_at DESC`,
-        [status]
-      );
-      for (const a of rows) {
-        items.push({
-          doc_type: "ACCOMMODATION",
-          id: a.id,
-          status: a.status,
-          amount: Number(a.amount),
-          location: a.location,
-          provider: a.provider,
-          requester_name: a.requester_name,
-          created_by_name: a.created_by_name
-        });
-      }
-    };
-
     const loadOvertimeRequestByStatus = async (status: string) => {
       const rows = await query<any>(
         `SELECT o.id, o.status, o.employee_name, o.section_name, o.year, o.month,
@@ -763,7 +781,6 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       await loadAdvanceByStatus("HR_REVIEW");
       await loadAdvanceByStatus("HR_OFFICER");
       await loadAdvanceByStatus("APPROVED");
-      await loadAccommodationByStatus("SUBMITTED");
 
       await loadClaimByStatus("SUBMITTED");
       await loadClaimByStatus("MANAGER_APPROVED");
@@ -789,8 +806,6 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     for (const r of rules) {
       if (r.doc_type === "ADVANCE") {
         await loadAdvanceByStatus(r.status, r.advance_type);
-      } else if (r.doc_type === "ACCOMMODATION") {
-        await loadAccommodationByStatus(r.status);
       } else if (r.doc_type === "OVERTIME_REQUEST") {
         await loadOvertimeRequestByStatus(r.status);
       } else if (r.doc_type === "OVERTIME_CLAIM") {
