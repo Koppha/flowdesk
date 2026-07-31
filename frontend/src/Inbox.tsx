@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import Swal from "sweetalert2";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
@@ -1164,13 +1165,28 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     }
   }
 
+  // Marks paid, opens the PDF, and confirms success - all while this window
+  // stays open - only then closes it (via act's onDone). Closing first (what
+  // the generic `act()` helper does on its own) unmounted this component
+  // before the PDF/confirmation could ever be seen, so a "successful" mark-paid
+  // looked like nothing happened at all.
   async function handleMarkAdvancePaid() {
-    const ok = await act(() => api.markAdvancePaid(item.id));
-    if (!ok) return;
+    setBusy(true);
+    setError(null);
     try {
-      await openBlobInNewTab(() => api.advancePdf(item.id));
+      await api.markAdvancePaid(item.id);
+      try {
+        await openBlobInNewTab(() => api.advancePdf(item.id));
+      } catch (e: any) {
+        setError(e?.message || "Advance marked as paid, but failed to generate the PDF.");
+        return;
+      }
+      await Swal.fire({ icon: "success", title: "Marked as Paid", text: "Status updated and the PDF opened in a new tab.", timer: 1800, showConfirmButton: false });
+      await props.onDone();
     } catch (e: any) {
-      setError(e?.message || "Advance marked as paid, but failed to generate the PDF.");
+      setError(String(e.message));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1213,17 +1229,34 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   function handleApproveAdvance() {
     const approvedTotal = item.doc_type === "ADVANCE" ? Number(detail?.requested_total || item.requested_total || 0) : 0;
     // "Capture" is the action label used for the step that finalizes the
-    // travel form's data — surface the form for view/download right after
-    // that step is actioned, same pattern as the mark-paid PDF popup above.
-    // isCaptureStep is derived from the step's Action Label (current_step_action_type).
-    void act(() => api.approveAdvance(item.id, approvedTotal, comments)).then(async (ok) => {
-      if (!ok || !isCaptureStep) return;
-      try {
-        await openBlobInNewTab(() => api.advancePdf(item.id));
-      } catch (e: any) {
-        setError(e?.message || "Captured, but failed to generate the travel form.");
-      }
-    });
+    // travel form's data. For that step, download the form and confirm
+    // success to the user *before* closing this window - the generic act()
+    // helper closes (and unmounts this component) immediately on success,
+    // which left Capture with no visible feedback: the PDF tab could still
+    // open a moment later, but any error or confirmation had nowhere to show.
+    if (isCaptureStep) {
+      void (async () => {
+        setBusy(true);
+        setError(null);
+        try {
+          await api.approveAdvance(item.id, approvedTotal, comments);
+          try {
+            await openBlobInNewTab(() => api.advancePdf(item.id));
+          } catch (e: any) {
+            setError(e?.message || "Captured, but failed to generate the travel form.");
+            return;
+          }
+          await Swal.fire({ icon: "success", title: "Captured", text: "Status updated and the travel form opened in a new tab.", timer: 1800, showConfirmButton: false });
+          await props.onDone();
+        } catch (e: any) {
+          setError(String(e.message));
+        } finally {
+          setBusy(false);
+        }
+      })();
+      return;
+    }
+    void act(() => api.approveAdvance(item.id, approvedTotal, comments));
   }
 
   function handleCreateAccommodation() {
