@@ -1057,6 +1057,13 @@ export default function App() {
   };
 
   function canAccessFeature(key: string): boolean {
+    // ADMIN always has access, regardless of what an allowed_roles list says -
+    // mirrors the backend's own hasFeatureAccess, which checks role==='ADMIN'
+    // before ever consulting the table. Without this hard-coded bypass here
+    // too, an admin who edits a feature's allowed groups (or a row inserted
+    // directly rather than through the Roles & Permissions save button) could
+    // accidentally lock themselves out of it.
+    if (role === "ADMIN") return true;
     const allowed = featurePermissions[key] ?? FEATURE_DEFAULTS[key] ?? [];
     if (allowed.includes(role)) return true;
     const myGroups: string[] = profile?.groups ?? [];
