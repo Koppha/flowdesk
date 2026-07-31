@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
-import { formatMoney } from "./constants";
+import { formatMoney, isFinanceDeptClient } from "./constants";
 import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
@@ -50,6 +50,10 @@ function StatusBadge({ status }: { status: "PENDING" | "PAID" }) {
 export default function Payments(props: { onBack?: () => void }) {
   const me = getUserFromToken();
   const isAdmin = me?.role === "ADMIN";
+  // Viewing Payments can be granted to any group (e.g. HR Operations, for
+  // visibility only); actually marking something paid stays restricted to
+  // Finance dept, mirrored server-side in the mark-paid workflow-step check.
+  const canMarkPaid = isFinanceDeptClient(me?.department || "");
 
   const [items, setItems] = useState<PaymentItem[]>([]);
   const [tab, setTab] = useState<"pending" | "paid">("pending");
@@ -252,7 +256,7 @@ export default function Payments(props: { onBack?: () => void }) {
             </div>
 
             <div style={{ padding: "0 20px 20px", marginTop: "auto" }}>
-              {selected.payment_status === "PENDING" && !isAdmin && (
+              {selected.payment_status === "PENDING" && !isAdmin && canMarkPaid && (
                 <button className="button button-primary" disabled={busy} onClick={() => handleMarkPaid(selected)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                   <Wallet size={16} /> Mark as Paid
                 </button>

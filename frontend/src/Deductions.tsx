@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api } from "./api";
-import { formatMoney } from "./constants";
+import { api, getUserFromToken } from "./api";
+import { formatMoney, isFinanceDeptClient } from "./constants";
 import {
   Clock, Wallet, HandCoins, CheckCircle2, Search, MoreHorizontal,
   ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, X, Check
@@ -66,6 +66,13 @@ type SortKey = "name" | "empNo" | "division" | "destination" | "vrDate" | "advAm
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
 export default function Deductions() {
+  // Viewing this page can be granted to any group (e.g. HR Operations, for
+  // visibility only) via the Deductions feature permission; actually
+  // recording a deduction stays restricted to Finance dept / ADMIN, mirrored
+  // server-side in the PATCH /:id/deducted gate.
+  const me = getUserFromToken();
+  const canAct = me?.role === "ADMIN" || isFinanceDeptClient(me?.department || "");
+
   const [items, setItems] = useState<DeductionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -336,7 +343,7 @@ export default function Deductions() {
               <tbody>
                 {paged.map((item) => {
                   const status = rowStatus(item);
-                  const actionable = status !== "NO_ACTION";
+                  const actionable = status !== "NO_ACTION" && canAct;
                   return (
                     <tr key={item.id}>
                       <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.employee_name || "—"}</td>

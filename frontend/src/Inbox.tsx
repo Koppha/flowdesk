@@ -807,7 +807,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const [detail, setDetail] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [comments, setComments] = useState("");
-  const [paidRef, setPaidRef] = useState("");
   const [settleRef, setSettleRef] = useState("");
   const [settleMethod, setSettleMethod] = useState<"PAYROLL" | "ECOCASH" | "BANK">("ECOCASH");
   const [financeDecision, setFinanceDecision] = useState<"ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE" | "">("");
@@ -1936,19 +1935,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   )}
                 </label>
 
-                <div className="review-secondary-actions">
-                  {item.doc_type === "ACCOMMODATION" && canMarkAccommodationPaid && (
-                    <label>
-                      <span>Payment Reference</span>
-                      <input
-                        className="review-control"
-                        value={paidRef}
-                        onChange={(e) => setPaidRef(e.target.value)}
-                        placeholder="Budget code"
-                      />
-                    </label>
-                  )}
-                </div>
               </div>
 
               <div className="review-action-row">
@@ -2000,7 +1986,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 )}
 
                 {canMarkAccommodationPaid && (
-                  <button className="button small-button button-primary" disabled={busy || !paidRef.trim()} onClick={() => act(() => api.markAccommodationPaid(item.id, paidRef.trim()))}>
+                  <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.markAccommodationPaid(item.id))}>
                     Mark Request Paid
                   </button>
                 )}

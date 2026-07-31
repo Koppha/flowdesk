@@ -98,25 +98,36 @@ export function requireFinance(req: AuthedRequest, _res: Response, next: NextFun
   return next();
 }
 
+// Generic admin-configurable feature-permission check: ADMIN always passes;
+// otherwise checks the admin_feature_permissions table (role or
+// permission-group match), falling back to fallbackRoles if no row exists
+// yet for this feature. Shared by requireFeatureAccess (route gate) and any
+// call site that needs the same check inline (e.g. to decide what to include
+// in a response rather than reject the whole request).
+export async function hasFeatureAccess(userId: string, role: string, featureKey: string, fallbackRoles: string[]): Promise<boolean> {
+  if (role === "ADMIN") return true;
+  try {
+    const rows = await query<{ allowed_roles: string[] }>(
+      `SELECT allowed_roles FROM admin_feature_permissions WHERE feature_key = $1 LIMIT 1`,
+      [featureKey]
+    );
+    const allowed: string[] = rows[0]?.allowed_roles ?? fallbackRoles;
+    if (allowed.includes(role)) return true;
+    const groups = await getUserGroups(userId);
+    return allowed.some((g) => groups.includes(g));
+  } catch {
+    return false;
+  }
+}
+
 // Generic admin-configurable feature-permission gate: ADMIN always passes; otherwise
 // checks the admin_feature_permissions table (role or permission-group match), falling
 // back to fallbackRoles if no row exists yet for this feature.
 export function requireFeatureAccess(featureKey: string, fallbackRoles: Role[]) {
   return async (req: AuthedRequest, _res: Response, next: NextFunction) => {
     if (!req.user) return next(unauthorized());
-    if (req.user.role === "ADMIN") return next();
-    try {
-      const rows = await query<{ allowed_roles: string[] }>(
-        `SELECT allowed_roles FROM admin_feature_permissions WHERE feature_key = $1 LIMIT 1`,
-        [featureKey]
-      );
-      const allowed: string[] = rows[0]?.allowed_roles ?? fallbackRoles;
-      if (allowed.includes(req.user.role)) return next();
-      const groups = await getUserGroups(req.user.userId);
-      if (allowed.some((g) => groups.includes(g))) return next();
-      return next(forbidden());
-    } catch {
-      return next(forbidden());
-    }
+    const allowed = await hasFeatureAccess(req.user.userId, req.user.role, featureKey, fallbackRoles);
+    if (allowed) return next();
+    return next(forbidden());
   };
 }

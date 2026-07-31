@@ -292,8 +292,8 @@ export const api = {
   uploadAccommodationQuotation: (id: string, form: FormData) => req(`/accommodation-requests/${id}/upload-quotation`, { method: "POST", body: form }),
   sendAccommodationToFinance: (id: string) => req(`/accommodation-requests/${id}/send-to-finance`, { method: "POST", body: JSON.stringify({}) }),
   accommodationDetail: (id: string) => req(`/accommodation-requests/${id}`),
-  markAccommodationPaid: (id: string, paid_reference: string) =>
-    req(`/accommodation-requests/${id}/mark-paid`, { method: "POST", body: JSON.stringify({ paid_reference }) }),
+  markAccommodationPaid: (id: string) =>
+    req(`/accommodation-requests/${id}/mark-paid`, { method: "POST", body: JSON.stringify({}) }),
   rejectAccommodation: (id: string, comments: string) =>
     req(`/accommodation-requests/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   advanceHistory: (id: string) => req(`/advances/${id}/history`),
@@ -307,6 +307,7 @@ export const api = {
   markAdvancePaid: (id: string) => req(`/advances/${id}/mark-paid`, { method: "POST", body: JSON.stringify({}) }),
   payments: (params: { status?: "pending" | "paid" | "all"; limit?: number; offset?: number } = {}) =>
     req(`/advances/payments?${new URLSearchParams(params as any).toString()}`),
+  paymentsAccess: () => req("/advances/payments/access"),
 
   approveClaim: (id: string, comments?: string) => req(`/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
   rejectClaim: (id: string, comments: string) => req(`/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),

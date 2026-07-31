@@ -49,6 +49,42 @@ export function getPendingGroup(chain: ChainStep[], stepIdx: number): { indices:
   return { indices, steps: indices.map((i) => chain[i]) };
 }
 
+// Mirrors getFallbackManagerId in reporting-lines.routes.ts: the requester's
+// active reporting_lines manager, falling back to their department's
+// leadership chain (HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else ->
+// MANAGER/HOD/EXCO) when no reporting_lines row exists yet.
+async function resolveRequesterManager(
+  requesterId: string
+): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
+  const lineRows = await query<{ manager_id: string | null }>(
+    `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
+    [requesterId]
+  );
+  let managerId = lineRows[0]?.manager_id ?? null;
+
+  if (!managerId || managerId === requesterId) {
+    const requesterRows = await query<{ role: string; department: string | null }>(
+      `SELECT role::text AS role, department FROM users WHERE id = $1`,
+      [requesterId]
+    );
+    const requesterUser = requesterRows[0];
+    if (requesterUser?.department) {
+      const leadership = await getDepartmentLeadership(requesterUser.department);
+      if (requesterUser.role === "HOD") managerId = leadership.exco_user_id ?? null;
+      else if (requesterUser.role === "MANAGER") managerId = leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+      else managerId = leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+    }
+  }
+
+  if (!managerId || managerId === requesterId) return null;
+  return (
+    (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+      `SELECT id, full_name, title, email FROM users WHERE id = $1 AND is_active = true`,
+      [managerId]
+    ))[0] ?? null
+  );
+}
+
 export async function resolveWorkflowChain(params: {
   requestType: string;
   department: string;
@@ -57,8 +93,9 @@ export async function resolveWorkflowChain(params: {
   needsAccommodation?: boolean;
   overrideChain?: { label: string; user_id: string; user_name?: string }[];
   requesterRole?: string;
+  requesterId?: string;
 }): Promise<{ workflowId: string; chain: ChainStep[] } | null> {
-  const { requestType, department, section = "", advanceSubType = "", needsAccommodation = false, overrideChain = [], requesterRole = "" } = params;
+  const { requestType, department, section = "", advanceSubType = "", needsAccommodation = false, overrideChain = [], requesterRole = "", requesterId = "" } = params;
 
   // TEMPORARY workflows (with a valid date window) take priority over STICKY ones.
   // A workflow restricted to the requester's role (requester_roles) always outranks
@@ -171,6 +208,19 @@ export async function resolveWorkflowChain(params: {
       ))[0] ?? null
     : null;
 
+  // A plain (non-ANY_ONE-group) MANAGER step with no fixed assigned_user_id
+  // routes to the REQUESTER's own manager (reporting_lines, falling back to
+  // department leadership the same way getFallbackManagerId in
+  // reporting-lines.routes.ts does when no reporting_lines row exists yet).
+  // Without this, a single company-wide workflow (e.g. the one Clearance
+  // workflow covering every department) can never resolve its Manager step
+  // for anybody, silently stranding every submission at that step.
+  const hasDeptManagerStep = steps.some((step) => {
+    const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
+    return stepCode === "MANAGER" && !step.assigned_user_id && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+  });
+  const requesterManager = hasDeptManagerStep && requesterId ? await resolveRequesterManager(requesterId) : null;
+
   // Requester-chosen overrides (e.g. a CEO/EXCO/MANAGER picking their own
   // countersigner/approver for a travel advance) replace the position's
   // template-driven approver. Matched by the step's action_type, not its
@@ -216,12 +266,14 @@ export async function resolveWorkflowChain(params: {
     // the requester's own department's EXCO member (see deptExco above).
     const isHrCode = code.startsWith("HR_");
     const isDeptExcoCode = code === "EXCO" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+    const isDeptManagerCode = code === "MANAGER" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
 
     const approverId =
       override               ? override.id :
       step.assigned_user_id ? step.assigned_user_id :
       isHrCode              ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null) :
       isDeptExcoCode         ? (deptExco?.id ?? null) :
+      isDeptManagerCode      ? (requesterManager?.id ?? null) :
                               null;
 
     const approverName =
@@ -229,6 +281,7 @@ export async function resolveWorkflowChain(params: {
       step.assigned_user_id ? step.assigned_user_name :
       isHrCode              ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
       isDeptExcoCode         ? (deptExco?.full_name ?? null) :
+      isDeptManagerCode      ? (requesterManager?.full_name ?? null) :
                               null;
 
     const approverTitle =
@@ -236,6 +289,7 @@ export async function resolveWorkflowChain(params: {
       step.assigned_user_id ? step.assigned_user_title :
       isHrCode              ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
       isDeptExcoCode         ? (deptExco?.title ?? null) :
+      isDeptManagerCode      ? (requesterManager?.title ?? null) :
                               null;
 
     const approverEmail =
@@ -243,6 +297,7 @@ export async function resolveWorkflowChain(params: {
       step.assigned_user_id ? step.assigned_user_email :
       isHrCode              ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
       isDeptExcoCode         ? (deptExco?.email ?? null) :
+      isDeptManagerCode      ? (requesterManager?.email ?? null) :
                               null;
 
     // Group steps (ANY_ONE with approval_group_name) are never "unassigned" —

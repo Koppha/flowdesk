@@ -1826,6 +1826,7 @@ const FEATURE_KEYS = [
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
   "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer",
   "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions",
+  "payments", "capture",
   "overtime_request", "overtime_claim"
 ] as const;
 
@@ -1850,6 +1851,11 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   advance_recovery_settings: ["ADMIN", "FINANCE"],
   manager_delegations:   ["ADMIN"],
   deductions:            ["ADMIN"],
+  // Preserve today's real behavior exactly: Payments was hardcoded to
+  // "ADMIN or Finance dept"; Capture Inbox's only real actors are ADMIN and
+  // whoever is in the Treasury & Financial Accounting team's ANY_ONE group.
+  payments:              ["ADMIN", "Department: Finance"],
+  capture:               ["ADMIN", "Team: Treasury & Financial Accounting"],
   overtime_request:      ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
   overtime_claim:        ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]
 };

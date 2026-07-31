@@ -17,6 +17,7 @@ import { getAdvanceNotificationContext, writeAdvanceAudit } from "../advances/ad
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveAccommodationPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
+import { formatPaymentReference } from "../../lib/pdf/pdfHelpers.js";
 
 const LESOTHO_DISTRICTS = [
   "Butha-Buthe",
@@ -66,10 +67,6 @@ const CreateAccommodationSchema = z.object({
   check_out: z.string().optional(),
   amount: z.coerce.number().positive("amount must be greater than 0"),
   notes: z.string().trim().optional()
-});
-
-const MarkPaidSchema = z.object({
-  paid_reference: z.string().trim().min(1, "payment reference is required")
 });
 
 const RejectSchema = z.object({
@@ -509,14 +506,17 @@ accommodationRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
   }
 });
 
+// The reference is generated the same way an advance's own mark-paid does
+// (payment_ref_seq -> formatPaymentReference) rather than typed in by
+// Finance, so there's no free-text "budget code" to get wrong or leave blank.
 accommodationRouter.post("/:id/mark-paid", requireFinance, async (req: AuthedRequest, res, next) => {
   try {
-    const parsed = MarkPaidSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
-
     const row = await getAccommodationById(req.params.id);
     if (!row) throw notFound();
     if (row.status !== "SUBMITTED") throw badRequest("Only submitted accommodation requests can be paid");
+
+    const seqRows = await query<{ seq: string }>(`SELECT nextval('payment_ref_seq') AS seq`);
+    const paidReference = formatPaymentReference(Number(seqRows[0].seq));
 
     await query(
       `UPDATE accommodation_requests
@@ -525,7 +525,7 @@ accommodationRouter.post("/:id/mark-paid", requireFinance, async (req: AuthedReq
               paid_at=now(),
               updated_at=now()
         WHERE id=$1`,
-      [req.params.id, parsed.data.paid_reference]
+      [req.params.id, paidReference]
     );
 
     await writeAccommodationAudit({
@@ -533,10 +533,10 @@ accommodationRouter.post("/:id/mark-paid", requireFinance, async (req: AuthedReq
       accommodationId: req.params.id,
       action: "ACCOMMODATION_MARK_PAID",
       before: { status: row.status },
-      after: { status: "PAID", paid_reference: parsed.data.paid_reference }
+      after: { status: "PAID", paid_reference: paidReference }
     });
 
-    return res.json({ ok: true, status: "PAID" });
+    return res.json({ ok: true, status: "PAID", paid_reference: paidReference });
   } catch (err) {
     return next(err);
   }

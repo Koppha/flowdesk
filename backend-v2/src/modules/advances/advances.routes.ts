@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, isFinanceDept, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
+import { AuthedRequest, hasFeatureAccess, isFinanceDept, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { advanceWorkflowStep, createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } from "./advances.service.js";
@@ -563,11 +563,23 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
   }
 });
 
+// Lightweight, always-200 check the frontend uses to decide whether to show
+// the Payments nav item at all - mirrors Deductions' /access endpoint.
+advancesRouter.get("/payments/access", async (req: AuthedRequest, res, next) => {
+  try {
+    const allowed = await hasFeatureAccess(req.user!.userId, req.user!.role, "payments", ["ADMIN", "Department: Finance"]);
+    return res.json({ allowed });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // Must be registered before GET /:id, otherwise Express matches "/payments" as id="payments".
 advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
   try {
     const role = req.user!.role;
-    if (role !== "ADMIN" && !isFinanceDept(req.user!.department)) throw forbidden();
+    const allowed = await hasFeatureAccess(req.user!.userId, role, "payments", ["ADMIN", "Department: Finance"]);
+    if (!allowed) throw forbidden();
 
     const statusParam = String(req.query.status || "all") as "pending" | "paid" | "all";
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
@@ -1010,7 +1022,8 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       advanceSubType: adv.type,
       needsAccommodation,
       overrideChain,
-      requesterRole: requester.role
+      requesterRole: requester.role,
+      requesterId: adv.requester_id
     });
     if (!workflowResult || workflowResult.chain.length === 0) {
       throw badRequest(
@@ -1438,6 +1451,17 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
       before: { status: adv.status },
       after: { status, paid_reference: paidReference }
     });
+    if (isNowPaid) {
+      // Any accommodation booking HR sent to Finance for this advance follows
+      // the advance's own capture/payment flow rather than needing its own
+      // separate "mark paid" action - paying the advance pays it too, with
+      // the same reference.
+      await query(
+        `UPDATE accommodation_requests SET status='PAID', paid_reference=$2, paid_at=now(), updated_at=now()
+          WHERE advance_request_id=$1 AND status='SUBMITTED'`,
+        [adv.id, paidReference]
+      );
+    }
     if (status === "PAID") {
       const paidCtx = await getAdvanceNotificationContext(adv.id);
       if (paidCtx) {

@@ -36,7 +36,7 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, formatMoney, getCurrencySymbol, isFinanceDeptClient, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import {
@@ -454,6 +454,7 @@ export default function App() {
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
   const [hasDeductionsAccess, setHasDeductionsAccess] = useState(false);
   const [deductionsCount, setDeductionsCount] = useState(0);
+  const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
   const favoritePagesInitialized = useRef(false);
@@ -1244,7 +1245,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp, paymentsResp, deductionsAccessResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1258,6 +1259,7 @@ export default function App() {
       // Fails silently (403) for anyone outside Finance/Admin via optionalStartupData's
       // catch-and-fallback, same as every other startup call above — no role check needed here.
       optionalStartupData<{ total?: number }>(api.payments({ status: "pending" }), { total: 0 }, "Payments"),
+      optionalStartupData<{ allowed?: boolean }>(api.paymentsAccess(), { allowed: false }, "Payments access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
@@ -1271,6 +1273,7 @@ export default function App() {
     setInboxItems(nonSplitInboxItems);
     setCaptureCount(rawInboxItems.filter(isCaptureItem).length);
     setPaymentsCount(paymentsResp.total || 0);
+    setHasPaymentsAccess(Boolean(paymentsAccessResp?.allowed));
     knownInboxCount.current = inboxItemCount;
     if (justLoggedIn.current && inboxItemCount > 0) {
       justLoggedIn.current = false;
@@ -1370,6 +1373,12 @@ export default function App() {
         setPaymentsCount(paymentsResp.total || 0);
       } catch {
         // ignored — non-Finance/Admin users simply won't see a Payments badge
+      }
+      try {
+        const paymentsAccessResp: { allowed?: boolean } = await api.paymentsAccess();
+        setHasPaymentsAccess(Boolean(paymentsAccessResp?.allowed));
+      } catch {
+        // ignored — users without Payments access simply won't see the nav item
       }
       // Separate try/catch: 403s here (anyone without Deductions access) are
       // expected and must not trigger the inbox poll's auth-error logout above.
@@ -3956,7 +3965,7 @@ export default function App() {
           {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Requests</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           <a href="#" className={navItemClass(page === "CAPTURE")} onClick={(e) => { e.preventDefault(); setPage("CAPTURE"); }}><span className="sidebar-nav-icon"><Camera size={18} aria-hidden /></span>Capture Inbox <b>{captureCount}</b></a>
-          {(isFinanceDeptClient(profile?.department || me?.department || "") || role === "ADMIN") && (
+          {hasPaymentsAccess && (
             <a href="#" className={navItemClass(page === "PAYMENTS")} onClick={(e) => { e.preventDefault(); setPage("PAYMENTS"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Payments <b>{paymentsCount}</b></a>
           )}
           {hasDeductionsAccess && (
@@ -4443,7 +4452,9 @@ export default function App() {
                       { key: "claims_sla_report",      label: "Clearance SLA Report",     group: "Reports" },
                       { key: "advance_recovery_settings", label: "Advance Recovery Settings", group: "Advances" },
                       { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
-                      { key: "deductions",             label: "Deductions",               group: "Deductions" },
+                      { key: "deductions",             label: "Deductions",               group: "Finance Operations" },
+                      { key: "payments",               label: "Payments",                 group: "Finance Operations" },
+                      { key: "capture",                label: "Capture Inbox",            group: "Finance Operations" },
                       { key: "overtime_request",       label: "Overtime Request",         group: "Overtime" },
                       { key: "overtime_claim",         label: "Overtime Claim",            group: "Overtime" },
                     ];
@@ -4470,6 +4481,8 @@ export default function App() {
                       advance_recovery_settings: ["ADMIN","FINANCE"],
                       manager_delegations:    ["ADMIN"],
                       deductions:             ["ADMIN"],
+                      payments:               ["ADMIN","Department: Finance"],
+                      capture:                ["ADMIN","Team: Treasury & Financial Accounting"],
                       overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                     };

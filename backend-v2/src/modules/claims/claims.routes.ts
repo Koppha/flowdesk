@@ -638,7 +638,8 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       requestType: "CLEARANCE_REQUEST",
       department: claim.claimant_department || "",
       section: claim.claimant_section || "",
-      advanceSubType: linkedAdvance?.type
+      advanceSubType: linkedAdvance?.type,
+      requesterId: claim.claimant_id
     });
 
     let status: ClaimStatus = "SUBMITTED";

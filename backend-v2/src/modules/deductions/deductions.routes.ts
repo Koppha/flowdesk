@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
+import { type AuthedRequest, isFinanceDept, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canAccessDeductions } from "../../lib/deductionsPermissions.js";
@@ -95,8 +95,15 @@ deductionsRouter.get("/", async (_req: AuthedRequest, res, next) => {
   }
 });
 
+// Viewing the Deductions list can be granted to any group (e.g. HR
+// Operations, for visibility only), but actually recording a deduction is
+// restricted to Finance dept / ADMIN regardless of that grant - mirrors the
+// same view-vs-act split used for Payments and Capture Inbox.
 deductionsRouter.patch("/:id/deducted", async (req: AuthedRequest, res, next) => {
   try {
+    if (req.user!.role !== "ADMIN" && !isFinanceDept(req.user!.department)) {
+      throw forbidden("Only Finance can record a deduction");
+    }
     const existing = (await query<{ id: string }>(`SELECT id FROM clearance_claims WHERE id=$1 AND status='CLOSED'`, [req.params.id]))[0];
     if (!existing) throw notFound("Clearance claim not found");
 

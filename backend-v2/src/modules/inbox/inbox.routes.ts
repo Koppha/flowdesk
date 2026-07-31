@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { AuthedRequest, Role, isFinanceDept, requireAuth } from "../../lib/auth.js";
+import { AuthedRequest, Role, hasFeatureAccess, isFinanceDept, requireAuth } from "../../lib/auth.js";
 import { query } from "../../lib/db.js";
 import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib/delegations.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
@@ -377,6 +377,13 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     //    PDF download instead of re-offering the (already-completed) Capture action.
     const loadCaptureHistoryItems = async () => {
       const isAdmin = rule === "ALL";
+      // Whoever holds the "capture" feature grant (default: ADMIN + the
+      // Treasury & Financial Accounting team) can see every pending capture
+      // item for visibility, even if they're not personally in the step's
+      // own ANY_ONE group - e.g. HR Operations, granted view-only access.
+      // current_step_actionable_by_me below still runs the real canApproveStep
+      // check, so this never grants the ability to actually capture anything.
+      const captureViewOnly = !isAdmin && (await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Team: Treasury & Financial Accounting"]));
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
                 ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name
@@ -393,9 +400,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         if (!captureStep) continue;
         // Pending (not-yet-captured) items for non-admin users are already
         // surfaced by loadWorkflowAdvancesForUser above — only add them here
-        // for ADMIN (whose main loader is skipped) or once already captured.
-        if (!captureStep.approved && !isAdmin) continue;
-        if (!isAdmin) {
+        // for ADMIN (whose main loader is skipped), a view-only capture-feature
+        // holder (who isn't a real chain participant either), or once already captured.
+        if (!captureStep.approved && !isAdmin && !captureViewOnly) continue;
+        if (!isAdmin && !captureViewOnly) {
           const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department);
           if (!eligible) continue;
         }
