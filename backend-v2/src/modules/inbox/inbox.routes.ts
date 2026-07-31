@@ -5,6 +5,15 @@ import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 
+// "CAPTURE" was this system's original built-in capture action code;
+// "DEPT_CAPTURE" is the custom one actually registered and used by every
+// real workflow's Treasury/Finance capture step today (added later via the
+// Action Types panel - see workflow_action_types). Mirrors the frontend's
+// isCaptureActionType in Inbox.tsx - keep both in sync.
+function isCaptureActionType(code: string | null | undefined) {
+  return code === "CAPTURE" || code === "DEPT_CAPTURE";
+}
+
 type InboxRule =
   | "ALL"
   | {
@@ -172,6 +181,26 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     const effectiveRole = delegatedManagerIds.length > 0 && role !== "MANAGER" ? "MANAGER" : role;
     const rule = allowedInboxForUser(effectiveRole, req.user!.department);
 
+    // Names for every manager this user is delegated by, across both the
+    // advance/claim delegation set and the (possibly different) custom-request
+    // one, so items can say "acting on behalf of X" instead of just being
+    // silently mixed in with the user's own direct approvals.
+    const allDelegatingManagerIds = Array.from(new Set([...delegatedManagerIds, ...customRequestDelegations.map((d) => d.managerId)]));
+    const delegatingManagerNames = allDelegatingManagerIds.length
+      ? new Map((await query<{ id: string; full_name: string | null }>(
+          `SELECT id, full_name FROM users WHERE id = ANY($1::uuid[])`,
+          [allDelegatingManagerIds]
+        )).map((u) => [u.id, u.full_name]))
+      : new Map<string, string | null>();
+    // A plain (non-ANY_ONE-group) step whose approver isn't this user but is
+    // one of their delegating managers - group membership is the user's own,
+    // not a delegation, so it's excluded here regardless of delegatedManagerIds.
+    function delegatedFrom(step: { approver_id: string | null; approval_mode: string; approval_group_name: string | null }): string | null {
+      if (step.approval_mode === "ANY_ONE" && step.approval_group_name) return null;
+      if (!step.approver_id || step.approver_id === req.user!.userId) return null;
+      return delegatedManagerIds.includes(step.approver_id) ? step.approver_id : null;
+    }
+
     const items: any[] = [];
 
     // Load workflow-driven advances where it is this user's turn to act. A
@@ -199,6 +228,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { matched = step; break; }
         }
         if (matched) {
+          const delegatedFromId = delegatedFrom(matched);
           items.push({
             doc_type: "ADVANCE",
             id: a.id,
@@ -215,7 +245,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             current_step_action_type: matched.action_type,
             current_step_can_reject: matched.can_reject,
             current_step_can_rollback: matched.can_rollback,
-            current_step_actionable_by_me: true
+            current_step_actionable_by_me: true,
+            is_delegated: !!delegatedFromId,
+            delegated_from_manager_name: delegatedFromId ? delegatingManagerNames.get(delegatedFromId) ?? null : null
           });
           continue;
         }
@@ -357,7 +389,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       for (const a of rows) {
         if (items.some((i: any) => i.id === a.id)) continue;
         const chain = a.approval_chain as ChainStep[];
-        const captureStep = chain.find((s) => s.action_type === "CAPTURE");
+        const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
         if (!captureStep) continue;
         // Pending (not-yet-captured) items for non-admin users are already
         // surfaced by loadWorkflowAdvancesForUser above — only add them here
@@ -412,6 +444,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { matched = step; break; }
         }
         if (matched) {
+          const delegatedFromId = delegatedFrom(matched);
           items.push({
             doc_type: "CLAIM",
             id: c.id,
@@ -423,7 +456,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             workflow_step_order: c.workflow_step_order,
             current_step_approver_id: matched.approver_id,
             current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
-            current_step_actionable_by_me: true
+            current_step_actionable_by_me: true,
+            is_delegated: !!delegatedFromId,
+            delegated_from_manager_name: delegatedFromId ? delegatingManagerNames.get(delegatedFromId) ?? null : null
           });
           continue;
         }
@@ -501,7 +536,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // approval task — a later-step approver shouldn't see (or be able to
         // act on) this until every earlier step has actually been approved,
         // and no approver should see it until the assignee has signed off.
-        const isStepApprover = !!step && (step.approver_id === req.user!.userId || isDelegatedForCustomType(step.approver_id, r.request_type_code));
+        const isDelegatedCustomMatch = !!step && step.approver_id !== req.user!.userId && isDelegatedForCustomType(step.approver_id, r.request_type_code);
+        const isStepApprover = !!step && (step.approver_id === req.user!.userId || isDelegatedCustomMatch);
         const actionable = isStepApprover && !hasUnconfirmedAssignees;
 
         const isAssigneeTask = myFieldKeys.some((key) => {
@@ -522,6 +558,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_position_name: step?.position_name ?? null,
           current_step_actionable_by_me: actionable,
           is_assignee_task: isAssigneeTask,
+          is_delegated: actionable && isDelegatedCustomMatch,
+          delegated_from_manager_name: (actionable && isDelegatedCustomMatch && step?.approver_id) ? delegatingManagerNames.get(step.approver_id) ?? null : null,
           created_at: r.created_at
         });
       }

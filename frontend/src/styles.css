@@ -1554,6 +1554,23 @@ html[data-theme="dark"] .inbox-error {
   color: var(--text);
 }
 
+.inbox-delegate-banner {
+  border: 1px solid rgba(15, 86, 232, 0.18);
+  background: rgba(15, 86, 232, 0.08);
+  color: #0f56e8;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.inbox-delegated-tag {
+  display: block;
+  color: #b45309;
+  font-weight: 700;
+}
+
 .inbox-stage-cell {
   display: grid;
   gap: 4px;

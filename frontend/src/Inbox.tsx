@@ -25,6 +25,8 @@ type InboxItem =
       current_step_can_reject?: boolean;
       current_step_can_rollback?: boolean;
       current_step_actionable_by_me?: boolean;
+      is_delegated?: boolean;
+      delegated_from_manager_name?: string | null;
     }
   | {
       doc_type: "ACCOMMODATION";
@@ -48,6 +50,8 @@ type InboxItem =
       current_step_approver_id?: string | null;
       current_step_position_name?: string | null;
       current_step_actionable_by_me?: boolean;
+      is_delegated?: boolean;
+      delegated_from_manager_name?: string | null;
     }
   | {
       doc_type: "OVERTIME_REQUEST";
@@ -80,6 +84,8 @@ type InboxItem =
       // True if the viewer is an unconfirmed assignee (e.g. Change Assignee)
       // on this request — distinct from being the current-step approver.
       is_assignee_task?: boolean;
+      is_delegated?: boolean;
+      delegated_from_manager_name?: string | null;
       created_at: string;
     };
 
@@ -337,12 +343,21 @@ function actionLabel(value: string | null | undefined) {
   return statusLabel(value);
 }
 
+// "CAPTURE" was this system's original built-in capture action code;
+// "DEPT_CAPTURE" is the custom one actually registered and used by every
+// real workflow's Treasury/Finance capture step today (added later via the
+// Action Types panel - see workflow_action_types). Recognize both so a step
+// using either one still counts as a capture step everywhere below.
+function isCaptureActionType(code: string | null | undefined) {
+  return code === "CAPTURE" || code === "DEPT_CAPTURE";
+}
+
 // Button label for the current workflow step's action, derived from its
 // Action Label (action_type code) so a "Capture" step reads "Capture", etc.
 function actionTypeButtonLabel(code: string | null | undefined) {
+  if (isCaptureActionType(code)) return "Capture";
   switch (code) {
     case "COUNTER_SIGN": return "Counter Sign";
-    case "CAPTURE": return "Capture";
     case "BOOK_ACC": return "Book Accommodation";
     case "APPROVE": return "Approve Advance";
     default: return code ? statusLabel(code) : "Approve Advance";
@@ -355,7 +370,7 @@ function actionTypeButtonLabel(code: string | null | undefined) {
 // items stay visible (rather than disappearing once the workflow moves on)
 // so the capturer can still find and download the form afterwards.
 export function isCaptureItem(item: any) {
-  return item.doc_type === "ADVANCE" && (item.current_step_action_type === "CAPTURE" || item.capture_done === true);
+  return item.doc_type === "ADVANCE" && (isCaptureActionType(item.current_step_action_type) || item.capture_done === true);
 }
 
 // Items awaiting or already through payment — surfaced in the dedicated
@@ -397,14 +412,33 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
     refresh().catch((e) => setError(String(e.message)));
   }, [mode]);
 
+  // Split "my own approval authority" from "acting on behalf of a manager who
+  // delegated to me" - the two must never silently merge into one list, per
+  // the same principle the audit trail already applies (approvals always
+  // record who acted vs. whose authority it was). Only shown once there's
+  // actually at least one delegated item, so non-delegates see no change.
+  const [delegationScope, setDelegationScope] = useState<"ALL" | "MINE" | "DELEGATED">("ALL");
+  const hasAnyDelegatedItems = useMemo(() => items.some((it: any) => it.is_delegated), [items]);
+  const delegatingManagers = useMemo(
+    () => Array.from(new Set(items.filter((it: any) => it.is_delegated && it.delegated_from_manager_name).map((it: any) => it.delegated_from_manager_name as string))),
+    [items]
+  );
+  useEffect(() => { if (!hasAnyDelegatedItems) setDelegationScope("ALL"); }, [hasAnyDelegatedItems]);
+
+  const scopedItems = useMemo(() => {
+    if (delegationScope === "MINE") return items.filter((it: any) => !it.is_delegated);
+    if (delegationScope === "DELEGATED") return items.filter((it: any) => it.is_delegated);
+    return items;
+  }, [items, delegationScope]);
+
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
-    for (const it of items) {
+    for (const it of scopedItems) {
       g[it.doc_type] = g[it.doc_type] || [];
       g[it.doc_type].push(it);
     }
     return g;
-  }, [items]);
+  }, [scopedItems]);
 
   const [activeGroupTab, setActiveGroupTab] = useState<string | null>(null);
   const groupKeys = useMemo(() => Object.keys(grouped), [grouped]);
@@ -418,7 +452,7 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
   const [queueSearch, setQueueSearch] = useState("");
   const [queuePage, setQueuePage] = useState(1);
   const [queuePageSize, setQueuePageSize] = useState(10);
-  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch]);
+  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope]);
 
   const metrics = useMemo(
     () => ({
@@ -523,6 +557,37 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
             </div>
           ) : (
             <>
+              {hasAnyDelegatedItems && (
+                <>
+                  <div className="inbox-delegate-banner">
+                    You are acting as a delegate for {delegatingManagers.join(", ") || "another manager"}. Delegated items are kept separate from your own approvals below.
+                  </div>
+                  <div className="ep-tabs" style={{ marginBottom: 8 }}>
+                    {([
+                      { key: "ALL", label: "All" },
+                      { key: "MINE", label: "My Approvals" },
+                      { key: "DELEGATED", label: "Delegated To Me" }
+                    ] as const).map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        className={`ep-tab ${delegationScope === tab.key ? "active" : ""}`}
+                        onClick={() => setDelegationScope(tab.key)}
+                      >
+                        {tab.label}
+                        <span className="inbox-count-chip">
+                          {tab.key === "ALL" ? items.length : items.filter((it: any) => (tab.key === "DELEGATED") === !!it.is_delegated).length}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {scopedItems.length === 0 ? (
+                <div className="inbox-empty-state">
+                  <p>Nothing in this view.</p>
+                </div>
+              ) : (
               <div className="ep-tabs">
                 {groupKeys.map((docType) => {
                   const Icon = docTypeIcon(docType);
@@ -540,6 +605,7 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
                   );
                 })}
               </div>
+              )}
 
               {activeGroupTab && grouped[activeGroupTab] && (() => {
                 const groupItems = grouped[activeGroupTab];
@@ -597,6 +663,9 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
                                   <span>
                                     <strong>{itemOwner(it)}</strong>
                                     <small>{docTypeLabel(it.doc_type)}</small>
+                                    {(it as any).is_delegated && (
+                                      <small className="inbox-delegated-tag">On behalf of {(it as any).delegated_from_manager_name || "your manager"}</small>
+                                    )}
                                   </span>
                                 </div>
                               </td>
@@ -959,7 +1028,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // The current step's action type / label (drives the action button text and
   // the post-action travel-form generation on "Capture" steps).
   const currentStepActionType: string | null = isWorkflowDriven ? ((item as any).current_step_action_type ?? null) : null;
-  const isCaptureStep = currentStepActionType === "CAPTURE";
+  const isCaptureStep = isCaptureActionType(currentStepActionType);
   // Custom (non-standard) action types show their own Action Label on the
   // button; standard APPROVE keeps the existing role-aware labels below.
   const customActionLabel = currentStepActionType && !["APPROVE", "COUNTER_SIGN", "MARK_PAID"].includes(currentStepActionType)
