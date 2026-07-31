@@ -228,6 +228,7 @@ export const api = {
   advances: () => req("/advances?mine=true"),
   reconciliationReport: (from: string, to: string) =>
     req(`/advances/reconciliation-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  clearanceStatusReport: () => req("/advances/clearance-status-report"),
   createAdvance: (data: any) => req("/advances", { method: "POST", body: JSON.stringify(data) }),
   // generic update endpoint; backend should allow editing fields such as type/requested_total/salary_month/etc
   updateAdvance: (id: string, data: any) => req(`/advances/${id}`, { method: "PUT", body: JSON.stringify(data) }),

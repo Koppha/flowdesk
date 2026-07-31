@@ -32,6 +32,7 @@ import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
 import ReportAuditTrail from "./ReportAuditTrail";
 import ReportReconciliation from "./ReportReconciliation";
 import ReportTourEngagement from "./ReportTourEngagement";
+import ReportClearanceStatus from "./ReportClearanceStatus";
 import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
@@ -401,7 +402,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -1045,6 +1046,12 @@ export default function App() {
     advance_recovery_settings: ["ADMIN", "FINANCE"],
     manager_delegations:    ["ADMIN"],
     deductions:             ["ADMIN"],
+    payments:               ["ADMIN", "Department: Finance"],
+    capture:                ["ADMIN", "Team: Treasury & Financial Accounting"],
+    clearance_status_report: [
+      "ADMIN", "Department: Finance", "Team: Treasury & Financial Accounting",
+      "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
+    ],
     overtime_request:       ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     overtime_claim:         ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
   };
@@ -3971,8 +3978,8 @@ export default function App() {
           {hasDeductionsAccess && (
             <a href="#" className={navItemClass(page === "DEDUCTIONS")} onClick={(e) => { e.preventDefault(); setPage("DEDUCTIONS"); }}><span className="sidebar-nav-icon"><MinusCircle size={18} aria-hidden /></span>Deductions <b>{deductionsCount}</b></a>
           )}
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
               <a href="#" className={navItemClass(page === "REPORT_APPROVAL")} onClick={(e) => { e.preventDefault(); setPage("REPORT_APPROVAL"); }}><Users size={14} aria-hidden />Approval Performance</a>
@@ -3981,6 +3988,9 @@ export default function App() {
               <a href="#" className={navItemClass(page === "REPORT_AUDIT")} onClick={(e) => { e.preventDefault(); setPage("REPORT_AUDIT"); }}><ShieldCheck size={14} aria-hidden />Audit Trail</a>
               {canAccessFeature("report_reconciliation") && (
                 <a href="#" className={navItemClass(page === "REPORT_RECONCILIATION")} onClick={(e) => { e.preventDefault(); setPage("REPORT_RECONCILIATION"); }}><BarChart3 size={14} aria-hidden />Reconciliation</a>
+              )}
+              {canAccessFeature("clearance_status_report") && (
+                <a href="#" className={navItemClass(page === "REPORT_CLEARANCE_STATUS")} onClick={(e) => { e.preventDefault(); setPage("REPORT_CLEARANCE_STATUS"); }}><CheckCircle2 size={14} aria-hidden />Clearance Status</a>
               )}
               {role === "ADMIN" && (
                 <a href="#" className={navItemClass(page === "REPORT_TOUR_ENGAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("REPORT_TOUR_ENGAGEMENT"); }}><PlayCircle size={14} aria-hidden />Tooltip Engagement</a>
@@ -4450,6 +4460,7 @@ export default function App() {
                       { key: "advance_pdf",            label: "Download Advance PDF",     group: "Advances" },
                       { key: "report_reconciliation",  label: "Reconciliation Report",    group: "Reports" },
                       { key: "claims_sla_report",      label: "Clearance SLA Report",     group: "Reports" },
+                      { key: "clearance_status_report", label: "Clearance Status Report",  group: "Reports" },
                       { key: "advance_recovery_settings", label: "Advance Recovery Settings", group: "Advances" },
                       { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
                       { key: "deductions",             label: "Deductions",               group: "Finance Operations" },
@@ -4478,6 +4489,7 @@ export default function App() {
                       advance_pdf:            ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       report_reconciliation:  ["ADMIN","FINANCE"],
                       claims_sla_report:      ["ADMIN","FINANCE","HR_MANAGER"],
+                      clearance_status_report: ["ADMIN","Department: Finance","Team: Treasury & Financial Accounting","Department: Human Resource","Department: Human Resources","Section: Human Resources Operations"],
                       advance_recovery_settings: ["ADMIN","FINANCE"],
                       manager_delegations:    ["ADMIN"],
                       deductions:             ["ADMIN"],
@@ -5459,6 +5471,9 @@ export default function App() {
                   ...(canAccessFeature("report_reconciliation") ? [
                     { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Reconciliation", desc: "Opening/closing balances, requested, paid, and settled per requester for a period.", action: () => setPage("REPORT_RECONCILIATION"), live: true },
                   ] : []),
+                  ...(canAccessFeature("clearance_status_report") ? [
+                    { icon: <CheckCircle2 size={26} />, color: "#059669", bg: "#d1fae5", title: "Clearance Status", desc: "Every paid travel advance, tracked as Complete, Not Complete, or Not Cleared.", action: () => setPage("REPORT_CLEARANCE_STATUS"), live: true },
+                  ] : []),
                   ...(role === "ADMIN" ? [
                     { icon: <PlayCircle size={26} />, color: "#4f46e5", bg: "#e0e7ff", title: "Tooltip Engagement", desc: "How far users get through each in-app guided tour before completing or skipping it.", action: () => setPage("REPORT_TOUR_ENGAGEMENT"), live: true },
                   ] : []),
@@ -5745,6 +5760,8 @@ export default function App() {
             <ReportReconciliation onBack={() => setPage("REPORTS")} meUserId={profile?.id || me?.userId} />
           ) : page === "REPORT_TOUR_ENGAGEMENT" ? (
             <ReportTourEngagement onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_CLEARANCE_STATUS" ? (
+            <ReportClearanceStatus onBack={() => setPage("REPORTS")} />
           ) : page === "ADVANCE" ? (
             !canOpenAdvanceForm ? (
               <div className="card" style={{ padding: 24 }}>

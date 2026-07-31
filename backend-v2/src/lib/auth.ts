@@ -123,7 +123,7 @@ export async function hasFeatureAccess(userId: string, role: string, featureKey:
 // Generic admin-configurable feature-permission gate: ADMIN always passes; otherwise
 // checks the admin_feature_permissions table (role or permission-group match), falling
 // back to fallbackRoles if no row exists yet for this feature.
-export function requireFeatureAccess(featureKey: string, fallbackRoles: Role[]) {
+export function requireFeatureAccess(featureKey: string, fallbackRoles: string[]) {
   return async (req: AuthedRequest, _res: Response, next: NextFunction) => {
     if (!req.user) return next(unauthorized());
     const allowed = await hasFeatureAccess(req.user.userId, req.user.role, featureKey, fallbackRoles);

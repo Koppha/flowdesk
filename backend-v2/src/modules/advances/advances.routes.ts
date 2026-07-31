@@ -533,6 +533,81 @@ const OVERDUE_SELECT = `
     AND NOT EXISTS (SELECT 1 FROM clearance_claims cc WHERE cc.linked_advance_id = ar.id AND cc.status != 'REJECTED')
   ) AS is_overdue`;
 
+// ── Clearance Status Report (Human Resource / Financial Accounts) ─────────
+// Every paid travel advance, classified into exactly one of:
+//  - COMPLETE:      the linked clearance claim reached SETTLED or CLOSED
+//  - NOT_CLEARED:   no non-rejected claim exists and the advance is overdue
+//                    (past the admin-configured clearance window) or has
+//                    already been manually confirmed as not-cleared
+//  - NOT_COMPLETE:  everything else - a claim is still in progress, or one
+//                    hasn't been submitted yet but the window hasn't lapsed
+// Mirrors the same "overdue" definition already used for the recovery
+// workflow (OVERDUE_SELECT) so the two stay consistent.
+const CLEARANCE_STATUS_REPORT_DEFAULT_ROLES = [
+  "ADMIN", "Department: Finance", "Team: Treasury & Financial Accounting",
+  "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
+];
+advancesRouter.get("/clearance-status-report", requireAuth, requireFeatureAccess("clearance_status_report", CLEARANCE_STATUS_REPORT_DEFAULT_ROLES), async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query<any>(
+      `WITH latest_claim AS (
+         SELECT DISTINCT ON (linked_advance_id)
+                linked_advance_id, id, status, claim_total, submitted_at, closed_at, settled_at
+           FROM clearance_claims
+          WHERE linked_advance_id IS NOT NULL
+          ORDER BY linked_advance_id, created_at DESC
+       )
+       SELECT ar.id AS advance_id, ar.type, ar.approved_total, ar.requested_total, ar.paid_at,
+              COALESCE(tt.currency, 'LSL') AS currency,
+              u.id AS requester_id, u.full_name AS requester_name, u.department,
+              lc.id AS claim_id, lc.status AS claim_status, lc.claim_total,
+              lc.submitted_at, lc.closed_at, lc.settled_at,
+              ${OVERDUE_SELECT},
+              ar.not_cleared_confirmed_at
+         FROM advance_requests ar
+         JOIN users u ON u.id = ar.requester_id
+         JOIN travel_types tt ON tt.code = ar.type
+         CROSS JOIN advance_recovery_settings ars
+         LEFT JOIN latest_claim lc ON lc.linked_advance_id = ar.id
+        WHERE ar.status = 'PAID'
+        ORDER BY ar.paid_at DESC`
+    );
+
+    const items = rows.map((r) => {
+      let status: "COMPLETE" | "NOT_COMPLETE" | "NOT_CLEARED";
+      const claimDone = r.claim_status && ["SETTLED", "CLOSED"].includes(r.claim_status);
+      const claimInProgress = r.claim_status && !["SETTLED", "CLOSED", "REJECTED"].includes(r.claim_status);
+      if (claimDone) status = "COMPLETE";
+      else if (claimInProgress) status = "NOT_COMPLETE";
+      else if (r.is_overdue || r.not_cleared_confirmed_at) status = "NOT_CLEARED";
+      else status = "NOT_COMPLETE";
+
+      return {
+        advance_id: r.advance_id,
+        type: r.type,
+        requester_id: r.requester_id,
+        requester_name: r.requester_name,
+        department: r.department,
+        approved_total: Number(r.approved_total ?? r.requested_total ?? 0),
+        currency: r.currency,
+        paid_at: r.paid_at,
+        claim_id: r.claim_id,
+        claim_status: r.claim_status,
+        claim_total: r.claim_total != null ? Number(r.claim_total) : null,
+        submitted_at: r.submitted_at,
+        closed_at: r.closed_at,
+        settled_at: r.settled_at,
+        not_cleared_confirmed_at: r.not_cleared_confirmed_at,
+        status
+      };
+    });
+
+    return res.json({ items });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const mine = req.query.mine === "true";

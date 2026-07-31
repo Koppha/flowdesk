@@ -1826,7 +1826,7 @@ const FEATURE_KEYS = [
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
   "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer",
   "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions",
-  "payments", "capture",
+  "payments", "capture", "clearance_status_report",
   "overtime_request", "overtime_claim"
 ] as const;
 
@@ -1856,6 +1856,10 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   // whoever is in the Treasury & Financial Accounting team's ANY_ONE group.
   payments:              ["ADMIN", "Department: Finance"],
   capture:               ["ADMIN", "Team: Treasury & Financial Accounting"],
+  clearance_status_report: [
+    "ADMIN", "Department: Finance", "Team: Treasury & Financial Accounting",
+    "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
+  ],
   overtime_request:      ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
   overtime_claim:        ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]
 };
