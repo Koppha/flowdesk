@@ -5,6 +5,10 @@ import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js"
 import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departments.js";
+import { getDelegationsForManager } from "../../lib/delegations.js";
+
+const OPEN_ADVANCE_STATUSES = "('SUBMITTED','COUNTERSIGNED','AUTH_OFFICER_APPROVED','HR_MANAGER_REVIEW','HR_REVIEW','HR_OFFICER','CHIEF_OFFICER_REVIEW','APPROVED')";
+const OPEN_CLAIM_STATUSES = "('SUBMITTED','MANAGER_APPROVED','AUTH_OFFICER_APPROVED','CHIEF_OFFICER_APPROVED','FINANCE_VERIFIED','HR_OFFICER','HR_MANAGER_REVIEW','PAYMENT_PROCESSING')";
 
 // Falls back to department leadership when no reporting_lines row exists yet,
 // mirroring the chain used by /reporting-lines/auto-generate: EXCO -> CEO,
@@ -390,6 +394,62 @@ reportingLinesRouter.post("/auto-generate", requireRole(["ADMIN"]), async (req: 
     }
 
     return res.json({ ok: true, generated, warnings });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /reporting-lines/my-team — the calling manager/HOD/EXCO/CEO's own
+// direct reports plus enough real, computed data to power a "My Team"
+// overview: pending/open request counts per member, this manager's own
+// active outgoing delegation (if any), and recent activity by team members.
+// Deliberately self-scoped (only ever the caller's own reports) so it's
+// safe for any of these roles, unlike the full org-wide "/" listing above.
+reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const managerId = req.user!.userId;
+    const members = await query<any>(
+      `SELECT u.id, u.full_name, u.email, u.title, u.role::text AS role, u.department, u.is_active,
+              (SELECT COUNT(*) FROM advance_requests ar WHERE ar.requester_id = u.id AND ar.status::text IN ${OPEN_ADVANCE_STATUSES}) AS pending_advances,
+              (SELECT COUNT(*) FROM clearance_claims cc WHERE cc.claimant_id = u.id AND cc.status::text IN ${OPEN_CLAIM_STATUSES}) AS pending_claims,
+              (SELECT COUNT(*) FROM advance_requests ar WHERE ar.requester_id = u.id) AS total_advances,
+              (SELECT COUNT(*) FROM clearance_claims cc WHERE cc.claimant_id = u.id) AS total_claims,
+              GREATEST(
+                (SELECT MAX(ar.updated_at) FROM advance_requests ar WHERE ar.requester_id = u.id),
+                (SELECT MAX(cc.updated_at) FROM clearance_claims cc WHERE cc.claimant_id = u.id)
+              ) AS last_activity
+         FROM users u
+         JOIN reporting_lines rl ON rl.employee_id = u.id AND rl.is_active = true
+        WHERE rl.manager_id = $1
+        ORDER BY u.full_name NULLS LAST, u.email`,
+      [managerId]
+    );
+    const memberIds = members.map((m: any) => m.id);
+
+    const [delegations, recentActivity] = await Promise.all([
+      getDelegationsForManager(managerId),
+      memberIds.length
+        ? query<any>(
+            `SELECT al.id, al.action, al.entity_type, al.created_at, u.full_name AS actor_name
+               FROM audit_log al
+               JOIN users u ON u.id = al.actor_id
+              WHERE al.actor_id = ANY($1::uuid[])
+              ORDER BY al.created_at DESC
+              LIMIT 10`,
+            [memberIds]
+          )
+        : Promise.resolve([])
+    ]);
+
+    return res.json({
+      members: members.map((m: any) => ({
+        ...m,
+        pending_requests: Number(m.pending_advances) + Number(m.pending_claims),
+        total_requests: Number(m.total_advances) + Number(m.total_claims)
+      })),
+      active_delegation: delegations.find((d) => d.active) ?? null,
+      recent_activity: recentActivity
+    });
   } catch (err) {
     return next(err);
   }

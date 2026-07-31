@@ -32,6 +32,7 @@ import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
 import ReportAuditTrail from "./ReportAuditTrail";
 import ReportReconciliation from "./ReportReconciliation";
 import ReportTourEngagement from "./ReportTourEngagement";
+import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
@@ -400,7 +401,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -3942,6 +3943,9 @@ export default function App() {
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
           <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
           <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
+          {["MANAGER", "EXCO", "CEO", "ADMIN"].includes(role) && (
+            <a href="#" className={navItemClass(page === "MY_TEAM")} onClick={(e) => { e.preventDefault(); setPage("MY_TEAM"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>My Team</a>
+          )}
           {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
           {canAccessFeature("overtime_request") && (
             <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
@@ -7027,6 +7031,8 @@ export default function App() {
             />
           ) : page === "MY_CLEARANCES" ? (
             <MyClearances claims={claims} onNew={startNewClearance} onEdit={editClearance} onTrack={showClearanceTracking} />
+          ) : page === "MY_TEAM" ? (
+            <MyTeam onDelegate={() => setPage("MANAGER_DELEGATIONS")} />
           ) : page === "SETTINGS" ? (
             <div className="ep-page">
               <div className="ep-breadcrumb"><span className="ep-breadcrumb-active">Settings</span></div>

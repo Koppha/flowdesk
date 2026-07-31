@@ -433,6 +433,7 @@ export const api = {
   reportingLineHistory: (employeeId: string) => req(`/reporting-lines/employee/${employeeId}/history`),
   upsertReportingLine: (data: any) => req("/reporting-lines", { method: "POST", body: JSON.stringify(data) }),
   autoGenerateReportingLines: () => req("/reporting-lines/auto-generate", { method: "POST", body: JSON.stringify({}) }),
+  myTeam: () => req("/reporting-lines/my-team"),
 
   travelTypes: () => req("/travel/types"),
   createTravelType: (data: any) => req("/travel/types", { method: "POST", body: JSON.stringify(data) }),
