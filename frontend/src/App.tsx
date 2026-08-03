@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useStaffDirectory } from "./useStaffDirectory";
+import { useStaffDirectory, refreshStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
 import AttendanceModule from "./AttendanceModule";
 import Inbox, { isCaptureItem, isPaymentItem } from "./Inbox";
@@ -1825,6 +1825,10 @@ export default function App() {
       setTok(r.token);
       setProfile(r.user || null);
       setPage("HOME");
+      // The shared staff directory's first fetch fires on app mount, before
+      // any token exists, so it 401s on every fresh session - force a real
+      // fetch now that we're actually authenticated (see useStaffDirectory.ts).
+      void refreshStaffDirectory();
     } catch (e: any) {
       console.error("Login error:", e);
       const errorMsg = e?.message || "Login failed. Please try again.";
@@ -1882,6 +1886,7 @@ export default function App() {
       setToken(result.token);
       setTok(result.token);
       setProfile(result.user);
+      void refreshStaffDirectory();
       setDepartmentOptions((current) =>
         effectiveDepartment && !current.includes(effectiveDepartment)
           ? [...current, effectiveDepartment].sort((a, b) => a.localeCompare(b))
@@ -6138,17 +6143,25 @@ export default function App() {
                             </>
                           )}
                           <td>
-                            <input
-                              type="number"
-                              min="0"
-                              max={selectedTravelType?.rate_kind === "DAILY" ? undefined : 3}
-                              step="1"
-                              value={String(Number.isFinite(Number(r.meals)) ? r.meals : 0)}
-                              onChange={e => updateRow(idx, "meals", e.target.value === "" ? 0 : Number(e.target.value))}
-                              style={{ width: 80 }}
-                            />
+                            {selectedTravelType?.rate_kind === "DAILY" ? (
+                              // A daily-rate trip pays a flat per-day allowance, not a
+                              // per-meal amount - each row already is one calendar day
+                              // (its own Date), so there's nothing for the traveller to
+                              // enter here; it's always exactly 1 day.
+                              <span>1 day</span>
+                            ) : (
+                              <input
+                                type="number"
+                                min="0"
+                                max={3}
+                                step="1"
+                                value={String(Number.isFinite(Number(r.meals)) ? r.meals : 0)}
+                                onChange={e => updateRow(idx, "meals", e.target.value === "" ? 0 : Number(e.target.value))}
+                                style={{ width: 80 }}
+                              />
+                            )}
                           </td>
-                          <td>{fmtMoney((Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * selectedTravelRate, selectedTravelType?.currency)}</td>
+                          <td>{fmtMoney(selectedTravelType?.rate_kind === "DAILY" ? selectedTravelRate : (Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * selectedTravelRate, selectedTravelType?.currency)}</td>
                           <td>
                             <button
                               className="travel-delete-btn"
@@ -6247,7 +6260,6 @@ export default function App() {
                       const selected = customApprovalChain.find(s => s.label === pt.name);
 
                       const myId = profile?.id || me?.userId || "";
-                      const myTeamId    = profile?.team_id    || null;
                       const mySectionId = profile?.section_id || null;
                       const myDept      = (profile?.department || "").toLowerCase();
 
@@ -6282,25 +6294,21 @@ export default function App() {
                                 u.role === "EXCO"
                               )
                           )
-                        : pt.code === "COUNTER_SIGNER"
-                          ? staffDirectory.filter(u =>
-                              u.is_active !== false &&
-                              isPermanent(u) &&
-                              u.role !== "ADMIN" &&
-                              u.id !== myId &&
-                              myTeamId !== null &&
-                              u.team_id === myTeamId
+                        // No workflow is configured for this request at all, so
+                        // there's no department/section-derived chain to fall
+                        // back on either - the requester's own Manager/HOD/EXCO
+                        // (same department or section) are the only people who
+                        // plausibly have standing to counter-sign or approve it.
+                        : staffDirectory.filter(u =>
+                            u.is_active !== false &&
+                            isPermanent(u) &&
+                            u.id !== myId &&
+                            ["MANAGER", "HOD", "EXCO"].includes(u.role) &&
+                            (
+                              (mySectionId !== null && u.section_id === mySectionId) ||
+                              (!!myDept && (u.department || "").toLowerCase() === myDept)
                             )
-                          : pt.code === "APPROVED_BY"
-                            ? staffDirectory.filter(u =>
-                                u.is_active !== false &&
-                                isPermanent(u) &&
-                                u.id !== myId &&
-                                ["MANAGER", "HOD", "EXCO"].includes(u.role)
-                              )
-                            : staffDirectory.filter(u =>
-                                u.is_active !== false && isPermanent(u) && u.role !== "EMPLOYEE" && u.role !== "ADMIN" && u.id !== myId
-                              );
+                          );
                       const ptSubtitle = pt.code === "COUNTER_SIGNER"
                         ? "Supervisor or Manager to confirm your request details"
                         : pt.code === "APPROVED_BY"

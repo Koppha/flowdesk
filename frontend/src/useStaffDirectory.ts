@@ -50,12 +50,21 @@ export async function refreshStaffDirectory(): Promise<StaffMember[]> {
       cache = Array.isArray(rows) ? rows : [];
       cacheAt = Date.now();
     } catch {
-      cache = cache ?? [];
+      // Leave `cache`/`cacheAt` untouched rather than defaulting to `[]` here.
+      // This hook mounts once at the App shell's top level and fires its one
+      // fetch immediately on first render - before login completes, on a
+      // brand-new session there's no token yet, so this call 401s. Recording
+      // that failure as "cache = []" made isStale() see a populated (if
+      // empty) cache forever after, so nothing ever retried once the user
+      // actually logged in - every picker fed by staffDirectory silently
+      // stayed empty for the rest of the session. Leaving cache as null keeps
+      // isStale() true so the next refreshStaffDirectory() call (see doLogin)
+      // actually fetches instead of trusting a failed attempt.
     } finally {
       inflight = null;
     }
-    notifyListeners(cache!);
-    return cache!;
+    if (cache) notifyListeners(cache);
+    return cache ?? [];
   })();
   return inflight;
 }
