@@ -850,6 +850,24 @@ export default function App() {
     setRows(syncTravelRowStartDistricts(rows.filter((_, i) => i !== index)));
   };
   const updateRow = (index: number, field: string, value: any) => {
+    // Each row is one day of the trip, in order - row 0 is the departure day,
+    // the last row is the return day (see pdfFieldCatalog.ts's departure/
+    // return date fields, which are just this list's earliest/latest date).
+    // Reject an edit that would put this day's date out of order relative
+    // to its neighbors, rather than silently accepting a return date earlier
+    // than the departure date.
+    if (field === "date") {
+      const prevRowDate = index > 0 ? rows[index - 1].date : null;
+      const nextRowDate = index < rows.length - 1 ? rows[index + 1].date : null;
+      if (prevRowDate && value < prevRowDate) {
+        alert("This date can't be earlier than the previous day's date.");
+        return;
+      }
+      if (nextRowDate && value > nextRowDate) {
+        alert("This date can't be later than the next day's date.");
+        return;
+      }
+    }
     const copy = [...rows];
     if (field === "meals") {
       const meals = Number(value) || 0;
