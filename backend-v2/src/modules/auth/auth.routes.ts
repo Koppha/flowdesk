@@ -1010,29 +1010,41 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
   }
 });
 
-// Whether the current user is assigned to at least one active workflow step
-// with "Allow Delegation" enabled — gates self-service delegation visibility.
-authRouter.get("/delegations/eligibility", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+// Whether a user is assigned to at least one active workflow step with
+// "Allow Delegation" enabled — e.g. a MARK_PAID payment-officer step can be
+// (and in production is) assigned to an EMPLOYEE-role person, not just a
+// MANAGER/HOD/EXCO/CEO, so eligibility is about the step assignment, not the
+// account's role.
+async function isDelegationEligible(userId: string): Promise<boolean> {
+  const rows = await query<{ eligible: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM workflow_steps ws
+         JOIN workflows w ON w.id = ws.workflow_id
+        WHERE ws.assigned_user_id = $1
+          AND ws.allow_delegation = true
+          AND ws.is_active = true
+          AND w.status = 'ACTIVE'
+     ) AS eligible`,
+    [userId]
+  );
+  return rows[0]?.eligible ?? false;
+}
+
+// No role gate beyond being authenticated - eligibility depends on workflow
+// step assignment (see isDelegationEligible above), which cuts across roles,
+// not on the account's role itself. A hardcoded role allow-list here
+// previously 403'd anyone assigned such a step whose role wasn't one of
+// ADMIN/MANAGER/HOD/EXCO/CEO (e.g. an EMPLOYEE-role payment officer).
+authRouter.get("/delegations/eligibility", async (req: AuthedRequest, res, next) => {
   try {
-    const rows = await query<{ eligible: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1
-           FROM workflow_steps ws
-           JOIN workflows w ON w.id = ws.workflow_id
-          WHERE ws.assigned_user_id = $1
-            AND ws.allow_delegation = true
-            AND ws.is_active = true
-            AND w.status = 'ACTIVE'
-       ) AS eligible`,
-      [req.user!.userId]
-    );
-    return res.json({ eligible: rows[0]?.eligible ?? false });
+    return res.json({ eligible: await isDelegationEligible(req.user!.userId) });
   } catch (err) {
     return next(err);
   }
 });
 
-authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.get("/delegations", async (req: AuthedRequest, res, next) => {
   try {
     const isAdmin = req.user!.role === "ADMIN";
     const condition = isAdmin ? `` : `WHERE md.manager_id = $1`;
@@ -1079,7 +1091,7 @@ authRouter.get("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "
   }
 });
 
-authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.post("/delegations", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CreateDelegationSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid delegation payload", parsed.error.flatten());
@@ -1093,8 +1105,13 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
     );
     const manager = users.find((user) => user.id === managerId);
     const delegate = users.find((user) => user.id === parsed.data.delegate_id);
-    if (!manager || !["MANAGER", "HOD", "EXCO", "CEO"].includes(manager.role)) {
-      throw badRequest("User must be a Manager, Exco member, or CEO to delegate");
+    // A manager-tier role can always delegate; anyone else must actually be
+    // assigned to a workflow step with delegation allowed (e.g. an
+    // EMPLOYEE-role payment officer on a MARK_PAID step) - role alone isn't
+    // the real eligibility rule, the step assignment is.
+    const managerRoleEligible = !!manager && ["MANAGER", "HOD", "EXCO", "CEO"].includes(manager.role);
+    if (!manager || (!managerRoleEligible && !(await isDelegationEligible(manager.id)))) {
+      throw badRequest("User must be a Manager, Exco member, CEO, or assigned to a workflow step that allows delegation");
     }
     if (!delegate) throw badRequest("Delegate user not found");
     if (delegate.id === manager.id) throw badRequest("Delegate cannot be the same user");
@@ -1149,7 +1166,7 @@ authRouter.post("/delegations", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", 
   }
 });
 
-authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.post("/delegations/:id/end", async (req: AuthedRequest, res, next) => {
   try {
     const endParsed = EndDelegationSchema.safeParse(req.body ?? {});
     const delegation = (await query<{ id: string; manager_id: string; delegate_id: string; department: string }>(
@@ -1206,7 +1223,7 @@ authRouter.post("/delegations/:id/end", requireRole(["ADMIN", "MANAGER", "HOD", 
   }
 });
 
-authRouter.get("/delegations/:id/audit", requireRole(["ADMIN", "MANAGER", "HOD", "EXCO", "CEO"]), async (req: AuthedRequest, res, next) => {
+authRouter.get("/delegations/:id/audit", async (req: AuthedRequest, res, next) => {
   try {
     const delegation = (await query<{ manager_id: string }>(`SELECT manager_id FROM manager_delegations WHERE id=$1`, [req.params.id]))[0];
     if (!delegation) throw notFound();
