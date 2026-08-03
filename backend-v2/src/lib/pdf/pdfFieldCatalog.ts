@@ -194,7 +194,13 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
     ? (await query<{ name: string }>(`SELECT name FROM employment_types WHERE code = $1`, [adv.requester_employment_type]))[0]
     : null;
 
-  const dates = lines.map((l) => l.line_date).filter(Boolean).sort();
+  // Already chronological - the query above orders by line_date. A bare
+  // .sort() here previously re-sorted these (pg returns `date` columns as JS
+  // Date objects) by their default toString(), which starts with the
+  // day-of-week name (e.g. "Mon Aug 03" vs "Sat Aug 01") - alphabetical by
+  // weekday, not chronological - so departure/return could come out as any
+  // scrambled order depending on which weekdays the trip's dates fell on.
+  const dates = lines.map((l) => l.line_date).filter(Boolean);
   const dateFrom = dates[0];
   const dateTo = dates[dates.length - 1];
   const durationDays = dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1) : null;
