@@ -3,7 +3,8 @@ import fs from "fs";
 import type { ResolvedPdfData } from "./pdfFieldCatalog.js";
 
 export interface PdfLetterhead {
-  logo_path: string | null;
+  logo_path?: string | null;
+  logo_data?: string | null;
   company_name: string | null;
   address_lines: string[];
   contact_line: string | null;
@@ -122,16 +123,19 @@ export function renderPdfTemplate(
   // cursor" here would drift back under the left title block).
   if (template.show_letterhead) {
     let rightY = headerTop;
-    if (letterhead.logo_path && fs.existsSync(letterhead.logo_path)) {
+    // Use base64-encoded logo_data if available (preferred, persists across deployments);
+    // fall back to logo_path for backward compatibility with older uploads.
+    const logoSource = letterhead.logo_data || (letterhead.logo_path && fs.existsSync(letterhead.logo_path) ? letterhead.logo_path : null);
+    if (logoSource) {
       try {
         // `fit` scales within this box preserving aspect ratio (rather than a
         // fixed width), so both wide wordmarks and square icon logos come out
         // a sane height instead of overlapping the text below them.
         const logoBox: [number, number] = [70, 32];
-        doc.image(letterhead.logo_path, rightX + rightWidth - logoBox[0], rightY, { fit: logoBox, align: "right" });
+        doc.image(logoSource, rightX + rightWidth - logoBox[0], rightY, { fit: logoBox, align: "right" });
         rightY += logoBox[1] + 4;
       } catch {
-        // corrupt/unreadable logo file — fall back to text-only header
+        // corrupt/unreadable logo data or file — fall back to text-only header
       }
     }
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#111").text(letterhead.company_name || "", rightX, rightY, { align: "right", width: rightWidth });

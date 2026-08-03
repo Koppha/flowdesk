@@ -143,8 +143,8 @@ overtimeRouter.get("/requests/:id/pdf", async (req: AuthedRequest, res, next) =>
 
     const data = await resolveOvertimeRequestPdfData(req.params.id);
     const catalog = await getFieldCatalogFor("OVERTIME_REQUEST");
-    const letterhead = (await query<PdfLetterhead>(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
-      logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+    const letterhead = (await query<PdfLetterhead>(`SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+      logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
     };
     const doc = renderPdfTemplate(template, letterhead, data, catalog);
     res.setHeader("Content-Type", "application/pdf");
@@ -305,8 +305,8 @@ overtimeRouter.get("/claims/:id/pdf", async (req: AuthedRequest, res, next) => {
 
     const data = await resolveOvertimeClaimPdfData(req.params.id);
     const catalog = await getFieldCatalogFor("OVERTIME_CLAIM");
-    const letterhead = (await query<PdfLetterhead>(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
-      logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+    const letterhead = (await query<PdfLetterhead>(`SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+      logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
     };
     const doc = renderPdfTemplate(template, letterhead, data, catalog);
     res.setHeader("Content-Type", "application/pdf");

@@ -112,7 +112,7 @@ pdfTemplatesRouter.get("/field-catalog", async (req: AuthedRequest, res, next) =
 // GET /pdf-templates/letterhead  (fixed path — must precede /:id)
 pdfTemplatesRouter.get("/letterhead", async (_req: AuthedRequest, res, next) => {
   try {
-    const rows = await query(`SELECT * FROM pdf_letterhead_settings LIMIT 1`);
+    const rows = await query<any>(`SELECT id, logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`);
     return res.json(rows[0] ?? null);
   } catch (err) {
     return next(err);
@@ -126,8 +126,8 @@ pdfTemplatesRouter.get("/letterhead", async (_req: AuthedRequest, res, next) => 
 // saves immediately); falls back to the saved row for anything not passed.
 pdfTemplatesRouter.get("/letterhead/preview", async (req: AuthedRequest, res, next) => {
   try {
-    const saved = (await query<PdfLetterhead>(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
-      logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+    const saved = (await query<PdfLetterhead>(`SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+      logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
     };
     const addressLinesParam = typeof req.query.address_lines === "string" ? req.query.address_lines : undefined;
     const letterhead: PdfLetterhead = {
@@ -212,13 +212,28 @@ pdfTemplatesRouter.post("/letterhead/logo", uploadLogo.single("file"), async (re
       if (!allowedAny.some(Boolean)) throw forbidden("You do not have design access to any PDF templates");
     }
     if (!req.file) throw badRequest("Missing file");
+
+    // Read the uploaded file and convert to base64 so it persists in the database
+    // across deployments rather than relying on a file path that may become invalid.
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const base64Data = fileBuffer.toString("base64");
+    const mimeType = req.file.mimetype || "image/png";
+    const logoData = `data:${mimeType};base64,${base64Data}`;
+
+    // Clean up the temporary uploaded file since we've now stored it in the database
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch {
+      // Ignore cleanup errors
+    }
+
     const existing = (await query<{ id: string }>(`SELECT id FROM pdf_letterhead_settings LIMIT 1`))[0];
     if (existing) {
-      await query(`UPDATE pdf_letterhead_settings SET logo_path=$1, updated_by_id=$2, updated_at=now() WHERE id=$3`, [req.file.path, req.user!.userId, existing.id]);
+      await query(`UPDATE pdf_letterhead_settings SET logo_data=$1, updated_by_id=$2, updated_at=now() WHERE id=$3`, [logoData, req.user!.userId, existing.id]);
     } else {
-      await query(`INSERT INTO pdf_letterhead_settings (logo_path, updated_by_id) VALUES ($1,$2)`, [req.file.path, req.user!.userId]);
+      await query(`INSERT INTO pdf_letterhead_settings (logo_data, updated_by_id) VALUES ($1,$2)`, [logoData, req.user!.userId]);
     }
-    return res.json({ ok: true, logo_path: req.file.path });
+    return res.json({ ok: true, logo_data: logoData.substring(0, 50) + "..." });
   } catch (err) {
     return next(err);
   }
@@ -265,8 +280,8 @@ pdfTemplatesRouter.get("/:id/preview", async (req: AuthedRequest, res, next) => 
     const sampleId = String(req.query.sample_id || "") || (await pickSampleRecordId(requestType, template.custom_request_type_id));
     const data = sampleId ? await resolvePdfData(requestType, sampleId) : buildDummyPdfData(requestType, catalog);
 
-    const letterhead = (await query<PdfLetterhead>(`SELECT * FROM pdf_letterhead_settings LIMIT 1`))[0] || {
-      logo_path: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+    const letterhead = (await query<PdfLetterhead>(`SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+      logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
     };
     const doc = renderPdfTemplate(template, letterhead, data, catalog);
     res.setHeader("Content-Type", "application/pdf");

@@ -1210,6 +1210,7 @@ async function ensurePdfSchema() {
     CREATE TABLE IF NOT EXISTS pdf_letterhead_settings (
       id                          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
       logo_path                   text,
+      logo_data                   text,
       company_name                text,
       address_lines               jsonb       NOT NULL DEFAULT '[]',
       contact_line                text,
@@ -1218,6 +1219,7 @@ async function ensurePdfSchema() {
       updated_at                  timestamptz NOT NULL DEFAULT now()
     )
   `);
+  await query(`ALTER TABLE pdf_letterhead_settings ADD COLUMN IF NOT EXISTS logo_data text`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS pdf_templates (
