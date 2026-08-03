@@ -364,7 +364,7 @@ export default function ReportClearanceStatus({ onBack }: Props) {
                 {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} per page</option>)}
               </select>
               <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}><ChevronLeft size={14} /></button>
-              <span style={{ fontSize: 13, color: "var(--muted)" }}>Page {page} of {pageCount}</span>
+              <span style={{ fontSize: 13, color: "var(--muted)", whiteSpace: "nowrap" }}>Page {page} of {pageCount}</span>
               <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount}><ChevronRight size={14} /></button>
             </div>
           </div>

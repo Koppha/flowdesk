@@ -191,7 +191,7 @@ export default function MyTeam({ onDelegate }: Props) {
             {pageCount > 1 && (
               <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, padding: 16 }}>
                 <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Previous</button>
-                <span style={{ fontSize: 13, color: "var(--muted)" }}>Page {page} of {pageCount}</span>
+                <span style={{ fontSize: 13, color: "var(--muted)", whiteSpace: "nowrap" }}>Page {page} of {pageCount}</span>
                 <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount}>Next</button>
               </div>
             )}
