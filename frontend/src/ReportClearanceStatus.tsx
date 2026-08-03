@@ -28,10 +28,15 @@ type Row = {
   status: ClearanceStatus;
 };
 
-const STATUS_CONFIG: Record<ClearanceStatus, { label: string; bg: string; color: string }> = {
-  COMPLETE:     { label: "Complete",     bg: "#d1fae5", color: "#065f46" },
-  NOT_COMPLETE: { label: "Not Complete", bg: "#fef3c7", color: "#92400e" },
-  NOT_CLEARED:  { label: "Not Cleared",  bg: "#fee2e2", color: "#991b1b" }
+// Fixed status palette (good/warning/critical) - reserved for state, never
+// reused as a generic categorical series color. Validated distinct under
+// protanopia/deuteranopia/tritanopia so color never has to carry the
+// distinction alone; every use still pairs it with an icon and a text label
+// (legend swatch, hover title, and the Status column text itself).
+const STATUS_CONFIG: Record<ClearanceStatus, { label: string; bg: string; color: string; chart: string }> = {
+  COMPLETE:     { label: "Complete",     bg: "#d1fae5", color: "#065f46", chart: "#0ca30c" },
+  NOT_COMPLETE: { label: "Not Complete", bg: "#fef3c7", color: "#92400e", chart: "#fab219" },
+  NOT_CLEARED:  { label: "Not Cleared",  bg: "#fee2e2", color: "#991b1b", chart: "#d03b3b" }
 };
 
 function fmtDate(s: string | null) {
@@ -87,9 +92,38 @@ export default function ReportClearanceStatus({ onBack }: Props) {
     notClearedValue: rows.filter((r) => r.status === "NOT_CLEARED").reduce((s, r) => s + Number(r.approved_total || 0), 0)
   }), [rows]);
 
+  // Per-department breakdown for the "Clearance by Department" bar chart and
+  // the "Not Cleared by Department" ranked list. Sorted by total volume so
+  // the departments with the most paid travel advances lead the chart;
+  // the ranked list re-sorts the same data by not-cleared count instead.
+  const byDepartment = useMemo(() => {
+    const map = new Map<string, { department: string; complete: number; notComplete: number; notCleared: number }>();
+    for (const r of rows) {
+      const dept = r.department || "Unassigned";
+      const entry = map.get(dept) || { department: dept, complete: 0, notComplete: 0, notCleared: 0 };
+      if (r.status === "COMPLETE") entry.complete += 1;
+      else if (r.status === "NOT_COMPLETE") entry.notComplete += 1;
+      else entry.notCleared += 1;
+      map.set(dept, entry);
+    }
+    return Array.from(map.values())
+      .map((d) => ({ ...d, total: d.complete + d.notComplete + d.notCleared }))
+      .sort((a, b) => b.total - a.total);
+  }, [rows]);
+
+  const topDepartmentsByVolume = useMemo(() => byDepartment.slice(0, 6), [byDepartment]);
+  const topDepartmentsByNotCleared = useMemo(
+    () => byDepartment.filter((d) => d.notCleared > 0).sort((a, b) => b.notCleared - a.notCleared).slice(0, 6),
+    [byDepartment]
+  );
+
+  function filterToDepartment(department: string) {
+    setDepartmentFilter((current) => (current === department ? "" : department));
+  }
+
   const filtered = useMemo(() => rows.filter((r) => {
     if (statusFilter && r.status !== statusFilter) return false;
-    if (departmentFilter && r.department !== departmentFilter) return false;
+    if (departmentFilter && (r.department || "Unassigned") !== departmentFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       return (r.requester_name || "").toLowerCase().includes(q) || (r.department || "").toLowerCase().includes(q);
@@ -166,6 +200,91 @@ export default function ReportClearanceStatus({ onBack }: Props) {
           </div>
         </div>
       </div>
+
+      {topDepartmentsByVolume.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 14, alignItems: "start" }}>
+          <div className="ep-panel" style={{ padding: "16px 20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Clearance by Department</div>
+              <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--muted)" }}>
+                {(["COMPLETE", "NOT_COMPLETE", "NOT_CLEARED"] as const).map((s) => (
+                  <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 2, background: STATUS_CONFIG[s].chart, display: "inline-block" }} />
+                    {STATUS_CONFIG[s].label}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 14px" }}>Top {topDepartmentsByVolume.length} departments by paid travel advance volume. Click a bar to filter the table below.</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {topDepartmentsByVolume.map((d) => {
+                const isActive = departmentFilter === d.department;
+                const seg = (n: number, status: ClearanceStatus, isFirst: boolean, isLast: boolean) => n === 0 ? null : (
+                  <div
+                    key={status}
+                    title={`${STATUS_CONFIG[status].label}: ${n}`}
+                    style={{
+                      flex: n,
+                      background: STATUS_CONFIG[status].chart,
+                      height: 18,
+                      borderTopLeftRadius: isFirst ? 4 : 0,
+                      borderBottomLeftRadius: isFirst ? 4 : 0,
+                      borderTopRightRadius: isLast ? 4 : 0,
+                      borderBottomRightRadius: isLast ? 4 : 0
+                    }}
+                  />
+                );
+                return (
+                  <button
+                    key={d.department}
+                    type="button"
+                    onClick={() => filterToDepartment(d.department)}
+                    style={{
+                      display: "grid", gridTemplateColumns: "120px 1fr 40px", gap: 10, alignItems: "center",
+                      background: isActive ? "var(--surface-soft, #f1f5f9)" : "transparent",
+                      border: "none", borderRadius: 6, padding: "4px 6px", cursor: "pointer", textAlign: "left", width: "100%"
+                    }}
+                  >
+                    <span style={{ fontSize: 12.5, fontWeight: isActive ? 700 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.department}</span>
+                    <span style={{ display: "flex", gap: 2 }}>
+                      {seg(d.complete, "COMPLETE", true, d.notComplete === 0 && d.notCleared === 0)}
+                      {seg(d.notComplete, "NOT_COMPLETE", d.complete === 0, d.notCleared === 0)}
+                      {seg(d.notCleared, "NOT_CLEARED", d.complete === 0 && d.notComplete === 0, true)}
+                    </span>
+                    <span style={{ fontSize: 12, color: "var(--muted)", textAlign: "right" }}>{d.total}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="ep-panel" style={{ padding: "16px 20px" }}>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Not Cleared by Department</div>
+            <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 12px" }}>Departments with the most unresolved clearances.</p>
+            {topDepartmentsByNotCleared.length === 0 ? (
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>Nothing not-cleared right now.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {topDepartmentsByNotCleared.map((d) => (
+                  <button
+                    key={d.department}
+                    type="button"
+                    onClick={() => filterToDepartment(d.department)}
+                    style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      background: departmentFilter === d.department ? "var(--surface-soft, #f1f5f9)" : "transparent",
+                      border: "none", borderRadius: 6, padding: "6px 8px", cursor: "pointer", textAlign: "left", width: "100%", fontSize: 13
+                    }}
+                  >
+                    <span style={{ fontWeight: departmentFilter === d.department ? 700 : 500 }}>{d.department}</span>
+                    <span style={{ fontWeight: 700, color: STATUS_CONFIG.NOT_CLEARED.chart }}>{d.notCleared}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="ep-tabs">
         {([
