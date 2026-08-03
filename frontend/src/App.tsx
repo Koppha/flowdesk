@@ -3966,7 +3966,7 @@ export default function App() {
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
           <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
           <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
-          {["MANAGER", "EXCO", "CEO", "ADMIN"].includes(role) && (
+          {["MANAGER", "HOD", "EXCO", "CEO", "ADMIN"].includes(role) && (
             <a href="#" className={navItemClass(page === "MY_TEAM")} onClick={(e) => { e.preventDefault(); setPage("MY_TEAM"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>My Team</a>
           )}
           {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
