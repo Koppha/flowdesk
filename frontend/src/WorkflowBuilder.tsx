@@ -414,7 +414,7 @@ export default function WorkflowBuilder() {
   const [travelTypes, setTravelTypes] = useState<Array<{ code: string; name: string; active?: boolean }>>([]);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null }>>([]);
+  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null; section_id?: string | null }>>([]);
   const [stepUserSearch, setStepUserSearch] = useState<Record<string, string>>({});
   const [managerTypes, setManagerTypes] = useState<Array<{ id: string; name: string; role: string; description: string | null; active: boolean; sort_order: number }>>([]);
   const [actionTypes, setActionTypes] = useState<Array<{ id: number; code: string; label: string; is_system: boolean; is_active: boolean; sort_order: number }>>([]);
@@ -1287,13 +1287,24 @@ export default function WorkflowBuilder() {
   // the same full-list default as any other unrecognized position type -
   // this picker is only for the optional manual override anyway.
   function usersForStep(step: WorkflowStep) {
+    let candidates = allUsers;
+
+    // Filter by role for the step's position type
     switch (step.positionTypeCode) {
-      case "MANAGER": return allUsers.filter(u => u.role === "MANAGER" || u.role === "HOD");
-      case "HOD":     return allUsers.filter(u => u.role === "HOD");
-      case "EXCO":    return allUsers.filter(u => u.role === "EXCO");
-      case "CEO":     return allUsers.filter(u => u.role === "CEO");
-      default: return allUsers;
+      case "MANAGER": candidates = candidates.filter(u => u.role === "MANAGER" || u.role === "HOD"); break;
+      case "HOD":     candidates = candidates.filter(u => u.role === "HOD"); break;
+      case "EXCO":    candidates = candidates.filter(u => u.role === "EXCO"); break;
+      case "CEO":     candidates = candidates.filter(u => u.role === "CEO"); break;
     }
+
+    // If the workflow is scoped to a specific section or department, filter to that scope
+    if (metadata.section) {
+      candidates = candidates.filter(u => u.section_id && orgStructure.sections?.some(s => s.id === metadata.section && s.id === u.section_id));
+    } else if (metadata.department) {
+      candidates = candidates.filter(u => (u.department || "").toLowerCase() === metadata.department.toLowerCase());
+    }
+
+    return candidates;
   }
 
   function describeRuleCondition(rule: WorkflowRule) {
@@ -2333,7 +2344,7 @@ export default function WorkflowBuilder() {
                             type="text"
                             value={stepUserSearch[selectedStep.id] ?? ""}
                             onChange={e => setStepUserSearch(p => ({ ...p, [selectedStep.id]: e.target.value }))}
-                            placeholder={pool.length ? `Search ${pool.length} available ${displayPositionName(selectedStep.positionName)} users…` : "No users available for this role"}
+                            placeholder={pool.length ? `Search ${pool.length} available ${metadata.section || metadata.department ? "in " + (metadata.section || metadata.department) + " " : ""}${displayPositionName(selectedStep.positionName)}…` : `No users available${metadata.section || metadata.department ? " in " + (metadata.section || metadata.department) : " for this role"}`}
                             className="ep-form-input"
                             style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
                             disabled={pool.length === 0}
