@@ -1297,11 +1297,13 @@ export default function WorkflowBuilder() {
       case "CEO":     candidates = candidates.filter(u => u.role === "CEO"); break;
     }
 
-    // If the workflow is scoped to a specific section or department, filter to that scope
-    if (metadata.section) {
+    // If the workflow is scoped to a specific section, filter by section
+    if (metadata.section && metadata.section !== "") {
       candidates = candidates.filter(u => u.section_id && orgStructure.sections?.some(s => s.id === metadata.section && s.id === u.section_id));
-    } else if (metadata.department) {
-      candidates = candidates.filter(u => (u.department || "").toLowerCase() === metadata.department.toLowerCase());
+    }
+    // If the workflow is scoped to a specific department (labeled as "Division"), filter by department name
+    else if (metadata.department && metadata.department !== "") {
+      candidates = candidates.filter(u => (u.department || "").toLowerCase().trim() === metadata.department.toLowerCase().trim());
     }
 
     return candidates;
