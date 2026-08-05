@@ -414,7 +414,7 @@ export default function WorkflowBuilder() {
   const [travelTypes, setTravelTypes] = useState<Array<{ code: string; name: string; active?: boolean }>>([]);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null; section_id?: string | null }>>([]);
+  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null; section_id?: string | null; section_name?: string | null }>>([]);
   const [stepUserSearch, setStepUserSearch] = useState<Record<string, string>>({});
   const [managerTypes, setManagerTypes] = useState<Array<{ id: string; name: string; role: string; description: string | null; active: boolean; sort_order: number }>>([]);
   const [actionTypes, setActionTypes] = useState<Array<{ id: number; code: string; label: string; is_system: boolean; is_active: boolean; sort_order: number }>>([]);
@@ -1297,8 +1297,14 @@ export default function WorkflowBuilder() {
       case "CEO":     candidates = candidates.filter(u => u.role === "CEO"); break;
     }
 
+    // Check if this step is scoped to a specific section (approvalGroupName or description starts with "Section:")
+    const stepSectionMatch = step.approvalGroupName?.match(/^Section:\s*(.+)$/) || step.description?.match(/^Section:\s*(.+)$/);
+    if (stepSectionMatch) {
+      const stepSectionName = stepSectionMatch[1].trim();
+      candidates = candidates.filter(u => (u.section_name || "").toLowerCase().trim() === stepSectionName.toLowerCase().trim());
+    }
     // If the workflow is scoped to a specific section, filter by section
-    if (metadata.section && metadata.section !== "") {
+    else if (metadata.section && metadata.section !== "") {
       candidates = candidates.filter(u => u.section_id && orgStructure.sections?.some(s => s.id === metadata.section && s.id === u.section_id));
     }
     // If the workflow is scoped to a specific department (labeled as "Division"), filter by department name
