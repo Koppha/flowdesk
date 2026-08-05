@@ -1301,7 +1301,18 @@ export default function WorkflowBuilder() {
     const stepSectionMatch = step.approvalGroupName?.match(/^Section:\s*(.+)$/) || step.description?.match(/^Section:\s*(.+)$/);
     if (stepSectionMatch) {
       const stepSectionName = stepSectionMatch[1].trim();
-      candidates = candidates.filter(u => (u.section_name || "").toLowerCase().trim() === stepSectionName.toLowerCase().trim());
+      // Show users who are in the specific section OR division-level staff from the same department
+      // (division-level staff don't have a section_id, but should still be able to approve section requests)
+      const sectionId = orgStructure.sections?.find(s => s.name.toLowerCase().trim() === stepSectionName.toLowerCase().trim())?.id;
+      const departmentId = sectionId ? orgStructure.sections?.find(s => s.id === sectionId)?.department_id : null;
+      const departmentName = departmentId ? orgStructure.departments?.find(d => d.id === departmentId)?.name :
+                            metadata.department;
+
+      candidates = candidates.filter(u => {
+        const inSection = (u.section_name || "").toLowerCase().trim() === stepSectionName.toLowerCase().trim();
+        const divisionLevelStaff = !u.section_name && departmentName && (u.department || "").toLowerCase().trim() === departmentName.toLowerCase().trim();
+        return inSection || divisionLevelStaff;
+      });
     }
     // If the workflow is scoped to a specific section, filter by section
     else if (metadata.section && metadata.section !== "") {
