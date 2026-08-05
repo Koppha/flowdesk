@@ -2334,7 +2334,13 @@ export default function WorkflowBuilder() {
                 {!selectedStep.isSystemStep && (() => {
                   const pool = usersForStep(selectedStep);
                   const q = (stepUserSearch[selectedStep.id] ?? "").toLowerCase();
-                  const filtered = q ? pool.filter(u => (u.full_name || u.email).toLowerCase().includes(q) || (u.department || "").toLowerCase().includes(q)) : pool;
+                  const filtered = q ? pool.filter(u =>
+                    (u.full_name || "").toLowerCase().includes(q) ||
+                    (u.email || "").toLowerCase().includes(q) ||
+                    (u.department || "").toLowerCase().includes(q) ||
+                    (u.section_name || "").toLowerCase().includes(q) ||
+                    (u.role || "").toLowerCase().includes(q)
+                  ) : pool;
                   const selectedUser = pool.find(u => u.id === selectedStep.assignedUserId);
                   return (
                     <div>
@@ -2369,12 +2375,17 @@ export default function WorkflowBuilder() {
                               {filtered.map(u => (
                                 <div key={u.id}
                                   onMouseDown={e => { e.preventDefault(); updateStep(selectedStep.id, { assignedUserId: u.id }); setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" })); }}
-                                  style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                                  style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 2 }}
                                   onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; }}
                                   onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = ""; }}
                                 >
-                                  <span style={{ fontWeight: 500 }}>{u.full_name || u.email}</span>
-                                  <span style={{ color: "var(--muted, #9ca3af)", fontSize: 11 }}>{u.department || ""}</span>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <span style={{ fontWeight: 500 }}>{u.full_name || u.email}</span>
+                                    <span style={{ color: "var(--muted, #9ca3af)", fontSize: 11, marginLeft: 8 }}>{u.role}</span>
+                                  </div>
+                                  <span style={{ color: "var(--muted, #9ca3af)", fontSize: 11 }}>
+                                    {[u.section_name, u.department].filter(Boolean).join(" • ")}
+                                  </span>
                                 </div>
                               ))}
                             </div>
