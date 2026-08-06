@@ -102,6 +102,7 @@ type Workflow = {
   name: string;
   requestType: string;
   advanceSubType?: string | null;
+  division?: string | null;
   department?: string | null;
   section?: string | null;
   team?: string | null;
