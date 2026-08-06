@@ -1342,14 +1342,27 @@ export default function WorkflowBuilder() {
     const deptName = orgDept?.name || targetDepartment;
     const posCode = String(step.positionTypeCode || "");
 
-    if (posCode === "HOD" && deptName) {
-      return allUsers.filter((user) => user.role === "HOD" && user.department === deptName);
+    if (posCode === "HOD") {
+      if (deptName) {
+        return allUsers.filter((user) => user.role === "HOD" && user.department === deptName);
+      } else {
+        return allUsers.filter((user) => user.role === "HOD");
+      }
     }
-    if (posCode === "MANAGER" && deptName) {
-      return allUsers.filter((user) => (user.role === "MANAGER" || user.role === "HOD") && user.department === deptName);
+    if (posCode === "MANAGER") {
+      if (deptName) {
+        return allUsers.filter((user) => (user.role === "MANAGER" || user.role === "HOD") && user.department === deptName);
+      } else {
+        return allUsers.filter((user) => user.role === "MANAGER" || user.role === "HOD");
+      }
     }
-    if (posCode === "EXCO" && deptName) {
-      return allUsers.filter((user) => user.role === "EXCO" && user.department === deptName);
+    if (posCode === "EXCO") {
+      if (deptName) {
+        return allUsers.filter((user) => user.role === "EXCO" && user.department === deptName);
+      } else {
+        // No department scope - show all active EXCOs from all departments
+        return allUsers.filter((user) => user.role === "EXCO");
+      }
     }
     if (posCode === "CEO") {
       return allUsers.filter((user) => user.role === "CEO");
