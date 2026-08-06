@@ -2458,11 +2458,6 @@ export default function WorkflowBuilder() {
                               ))}
                             </div>
                           )}
-                          {q && filtered.length === 0 && (
-                            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, padding: "8px 12px", fontSize: 13, color: "var(--muted, #9ca3af)" }}>
-                              No matches
-                            </div>
-                          )}
                         </div>
                       )}
                     </div>
