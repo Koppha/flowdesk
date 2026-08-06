@@ -342,7 +342,6 @@ export async function notifyAdvanceTask(args: {
   if (args.status === "SUBMITTED")            role = "MANAGER";
   if (args.status === "COUNTERSIGNED")        role = "HOD";
   if (args.status === "HR_MANAGER_REVIEW")    role = "HR_MANAGER";
-  if (args.status === "HR_REVIEW")            role = "HR_MANAGER";
   if (args.status === "HR_OFFICER")           role = "FINANCE";
   if (args.status === "APPROVED")             role = "FINANCE";
 
@@ -471,7 +470,6 @@ export async function notifyAdvanceTask(args: {
         SUBMITTED:            `Your advance request has been submitted and is awaiting manager approval.`,
         COUNTERSIGNED:        `Your advance request has been approved by your manager and is now pending HOD / EXCO review.`,
         HR_MANAGER_REVIEW:    `Your advance request is progressing and is now under HR Manager review.`,
-        HR_REVIEW:            `Your advance request is under HR review.`,
         HR_OFFICER:           `Your advance request has been approved and is being processed for payment.`,
         APPROVED:             `Great news! Your advance request has been fully approved and forwarded to Finance for payment.`,
         REJECTED:             `Your advance request has been reviewed and unfortunately has been rejected.${args.comments ? `\n\nReason: ${args.comments}` : ""}`

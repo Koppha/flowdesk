@@ -43,8 +43,7 @@ function allowedInboxForRole(role: Role): InboxRule | null {
       return [
         { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
         { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
       ];
     case "MANAGER":
@@ -52,8 +51,7 @@ function allowedInboxForRole(role: Role): InboxRule | null {
         { doc_type: "ADVANCE", status: "SUBMITTED" },
         { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
         { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "CLAIM", status: "SUBMITTED" },
         { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
@@ -69,8 +67,7 @@ function allowedInboxForRole(role: Role): InboxRule | null {
     case "HR_MANAGER":
       return [
         { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
@@ -91,8 +88,7 @@ function allowedInboxForRole(role: Role): InboxRule | null {
         { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
         { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
         { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_REVIEW" },
-        { doc_type: "ADVANCE", status: "HR_OFFICER" },
+                { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "OVERTIME_REQUEST", status: "HOD_APPROVED" }
       ];
@@ -778,11 +774,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       await loadAdvanceByStatus("SUBMITTED");
       await loadAdvanceByStatus("COUNTERSIGNED");
       await loadAdvanceByStatus("HR_MANAGER_REVIEW");
-      await loadAdvanceByStatus("HR_REVIEW");
       await loadAdvanceByStatus("HR_OFFICER");
       await loadAdvanceByStatus("APPROVED");
 
-      await loadClaimByStatus("SUBMITTED");
       await loadClaimByStatus("MANAGER_APPROVED");
       await loadClaimByStatus("CHIEF_OFFICER_APPROVED");
       await loadClaimByStatus("HR_OFFICER");

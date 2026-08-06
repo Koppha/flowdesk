@@ -4,7 +4,6 @@ export const WORKFLOW_ROUTE_LABELS: Record<string, string> = {
   MANAGER: "Manager",
   FINANCE: "Finance",
   HR_MANAGER_REVIEW: "HR Manager",
-  HR_REVIEW: "HR Review",
   CEO: "CEO",
   PROCUREMENT: "Procurement",
   LEGAL_REVIEW: "Legal Review",

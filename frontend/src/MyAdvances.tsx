@@ -17,7 +17,7 @@ interface Props {
   onContinueClearance?: (claimId: string) => void;
 }
 
-const PENDING_STATUSES = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER"];
+const PENDING_STATUSES = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_OFFICER"];
 const CANCELLED_STATUSES = ["CANCELLED", "REJECTED"];
 
 const TABS: { key: string; label: string }[] = [
@@ -74,7 +74,6 @@ function advanceStageLabel(status: string) {
     case "SUBMITTED": return "Pending Approval";
     case "COUNTERSIGNED": return "Pending HOD / EXCO Approval";
     case "HR_MANAGER_REVIEW": return "Pending HR Manager Approval";
-    case "HR_REVIEW": return "Pending HR Review";
     case "HR_OFFICER": return "Pending Finance Payment";
     case "APPROVED": return "Approved — Awaiting Payment";
     case "PAID": return "Completed";

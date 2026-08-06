@@ -55,7 +55,6 @@ async function ensureUserSchema() {
   await ensureEnumColumnValue("users", "role", "CEO");
   await ensureEnumColumnValue("advance_requests", "status", "HR_OFFICER");
   await ensureEnumColumnValue("advance_requests", "status", "HR_MANAGER_REVIEW");
-  await ensureEnumColumnValue("advance_requests", "status", "HR_REVIEW");
   await ensureEnumColumnValue("advance_requests", "status", "COUNTERSIGNED");
   await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
   await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");

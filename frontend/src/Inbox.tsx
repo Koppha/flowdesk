@@ -1018,7 +1018,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // accommodation before forwarding to Finance) — at this step the assignee
   // attaches the accommodation booking instead of approving/rejecting.
   const isAccommodationStep = isWorkflowDriven && Boolean((item as any).current_step_requires_accommodation);
-  const inProgressStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER"];
+  const inProgressStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_OFFICER"];
   // Workflow steps can be configured (in the Workflow Designer) to label
   // their approval action "Counter Sign" instead of "Approve".
   const isCounterSignStep =
@@ -1047,7 +1047,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
           (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
-          (role === "MANAGER" && item.status === "HR_REVIEW") ||
           (role === "EXCO" && item.status === "COUNTERSIGNED")));
   const canRejectAdvance =
     item.doc_type === "ADVANCE" &&
@@ -1057,7 +1056,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           (role === "MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
           (role === "HR_MANAGER" && item.status === "HR_MANAGER_REVIEW") ||
-          (role === "MANAGER" && item.status === "HR_REVIEW") ||
           (role === "EXCO" && item.status === "COUNTERSIGNED") ||
           (isFinanceDept && ["HR_OFFICER", "APPROVED"].includes(item.status)) ||
           (role === "ADMIN" && inProgressStatuses.includes(item.status))));
@@ -1083,7 +1081,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     isMultiDayTravel &&            // must be more than 1 day
     (isWorkflowDriven
       ? isMyWorkflowStep && isAccommodationStep
-      : (role === "MANAGER" && ["HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(item.status)));
+      : (role === "MANAGER" && ["HR_OFFICER", "APPROVED"].includes(item.status)));
   const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
   const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
   const canConfirmNotCleared =

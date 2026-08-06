@@ -185,9 +185,8 @@ export async function resolveWorkflowChain(params: {
       ORDER BY ws.step_order ASC`,
     [(workflow as any).id]
   );
-  // HR_MANAGER_REVIEW / HR_REVIEW steps are routed to the org-structure
-  // leadership of the "Human Resource" department, not the requester's own
-  // department — there's no per-requester "HR manager" concept.
+  // HR_MANAGER_REVIEW steps are routed to the org-structure leadership of
+  // the "Human Resource" department, not the requester's own department.
   const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
   const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
 
@@ -332,7 +331,6 @@ export async function resolveWorkflowChain(params: {
 }
 
 // Maps workflow position_type_code to advance_requests.status for the given step.
-// For consecutive HR_REVIEW steps, the second+ occurrence maps to HR_REVIEW.
 export function chainStepToStatus(chain: ChainStep[], stepIndex: number): AdvanceStatus {
   const step = chain[stepIndex];
   if (!step) return "SUBMITTED";
@@ -341,12 +339,6 @@ export function chainStepToStatus(chain: ChainStep[], stepIndex: number): Advanc
     case "MANAGER":      return "SUBMITTED";
     case "HOD":           return "COUNTERSIGNED";
     case "HR_MANAGER_REVIEW": return "HR_MANAGER_REVIEW";
-    case "HR_REVIEW": {
-      const prevHr = chain.slice(0, stepIndex).some(s =>
-        s.position_type_code === "HR_REVIEW" || s.position_type_code === "HR_MANAGER_REVIEW"
-      );
-      return prevHr ? "HR_REVIEW" : "HR_MANAGER_REVIEW";
-    }
     case "FINANCE":      return "HR_OFFICER";
     default:             return "HR_MANAGER_REVIEW";
   }

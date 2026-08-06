@@ -187,13 +187,11 @@ const TEMPLATE_DEFINITIONS: Array<{ id: string; name: string; description: strin
   {
     id: "STANDARD",
     name: "Standard Approval",
-    description: "Counter Signer → Approver → HR Manager → HR Team → Finance",
+    description: "Counter Signer → Approver → Finance",
     steps: [
       "EMPLOYEE",
-      { code: "MANAGER",    name: "Counter Signer",          description: "Manager, Supervisor or Delegated person to counter-sign" },
-      { code: "HR_REVIEW",  name: "Human Resource Manager",  description: "HR Manager review — fixed step, does not change" },
-      { code: "HR_REVIEW",  name: "Human Resource",            description: "HR team final check before finance settlement" },
-      { code: "FINANCE",    name: "Finance",                  description: "Finance processes and settles the advance" }
+      { code: "MANAGER", name: "Counter Signer", description: "Manager, Supervisor or Delegated person to counter-sign" },
+      { code: "FINANCE", name: "Finance", description: "Finance processes and settles the advance" }
     ]
   },
   {
@@ -276,8 +274,8 @@ const DEFAULT_RULES: WorkflowRule[] = [
   }
 ];
 
-const RULE_TARGET_ROLE_CODES = ["HOD", "MANAGER", "FINANCE", "HR_REVIEW", "CEO"];
-const RULE_TARGET_STAFF_ROLES = ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "CEO"];
+const RULE_TARGET_ROLE_CODES = ["HOD", "MANAGER", "FINANCE", "CEO"];
+const RULE_TARGET_STAFF_ROLES = ["HOD", "MANAGER", "FINANCE", "CEO"];
 
 function generateId() {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -321,8 +319,6 @@ function staffOrgPath(user: StaffMember | undefined | null) {
 
 function staffRoleToWorkflowCode(role: string | undefined | null) {
   switch (String(role || "").toUpperCase()) {
-    case "HR_MANAGER":
-      return "HR_REVIEW";
     case "HOD":
     case "MANAGER":
     case "FINANCE":
@@ -356,8 +352,6 @@ function getPositionIcon(code: string) {
       return Landmark;
     case "PROCUREMENT":
       return ShoppingCart;
-    case "HR_REVIEW":
-      return Users;
     case "LEGAL_REVIEW":
       return Scale;
     case "CEO":
@@ -537,7 +531,7 @@ export default function WorkflowBuilder() {
 
     if (!metadata.department) {
       // HOD is a type of Manager, not a separate draggable position — fold it into Manager.
-      const base = availablePositionTypes.filter((p) => p.code !== "HR_REVIEW" && p.code !== "FINANCE" && p.code !== "CEO" && p.code !== "HOD");
+      const base = availablePositionTypes.filter((p) => p.code !== "FINANCE" && p.code !== "CEO" && p.code !== "HOD");
       return [...base, ...extraPositions];
     }
 
@@ -1287,39 +1281,75 @@ export default function WorkflowBuilder() {
   // the same full-list default as any other unrecognized position type -
   // this picker is only for the optional manual override anyway.
   function usersForStep(step: WorkflowStep) {
-    let candidates = allUsers;
+    const group = String(step.approvalGroupName || "");
+    let targetDepartment: string | null = metadata.department || null;
+    let targetSection: string | null = metadata.section || null;
+    let targetTeam: string | null = metadata.team || null;
 
-    // Filter by role for the step's position type
+    if (group.startsWith("Team: ")) {
+      targetTeam = group.slice("Team: ".length);
+    } else if (group.startsWith("Section: ")) {
+      targetSection = group.slice("Section: ".length);
+    } else if (group.startsWith("Department: ")) {
+      targetDepartment = group.slice("Department: ".length);
+    } else {
+      if (step.positionName.startsWith("Team: ")) targetTeam = step.positionName.slice("Team: ".length);
+      else if (step.positionName.startsWith("Section: ")) targetSection = step.positionName.slice("Section: ".length);
+      else if (step.positionName.startsWith("Department: ")) targetDepartment = step.positionName.slice("Department: ".length);
+    }
+
+    const orgDept = targetDepartment ? orgStructure.departments.find((d) => d?.name === targetDepartment) : null;
+    const orgSection = targetSection && orgDept ? orgStructure.sections.find((s) => s?.name === targetSection && s?.department_id === orgDept.id) : null;
+    const orgTeam = targetTeam ? orgStructure.teams.find((t) => t?.name === targetTeam) : null;
+
+    const candidateIds = new Set<string>();
+    const candidateById = new Map(allUsers.map((user) => [user.id, user]));
+
+    function addCandidate(id: string | null | undefined) {
+      if (id) candidateIds.add(id);
+    }
+
     switch (step.positionTypeCode) {
-      case "MANAGER": candidates = candidates.filter(u => u.role === "MANAGER" || u.role === "HOD"); break;
-      case "HOD":     candidates = candidates.filter(u => u.role === "HOD"); break;
-      case "EXCO":    candidates = candidates.filter(u => u.role === "EXCO"); break;
-      case "CEO":     candidates = candidates.filter(u => u.role === "CEO"); break;
+      case "HOD":
+        addCandidate(orgSection?.hod_user_id ?? orgDept?.hod_user_id);
+        break;
+      case "MANAGER":
+        addCandidate(orgTeam?.leader_user_id ?? orgSection?.manager_user_id ?? orgDept?.manager_user_id);
+        break;
+      case "EXCO":
+        addCandidate(orgSection?.exco_user_id ?? orgDept?.exco_user_id);
+        break;
+      case "CEO":
+        return allUsers.filter((user) => user.role === "CEO");
+      case "FINANCE":
+        return allUsers.filter((user) => user.role === "FINANCE");
+      default:
+        return allUsers.filter((user) => {
+          if (targetTeam) return user.team_name === targetTeam;
+          if (targetSection) return user.section_name === targetSection;
+          if (targetDepartment) return user.department === targetDepartment;
+          return true;
+        });
     }
 
-    // Check if this step is scoped to a specific section (approvalGroupName or description starts with "Section:")
-    const stepSectionMatch = step.approvalGroupName?.match(/^Section:\s*(.+)$/) || step.description?.match(/^Section:\s*(.+)$/);
-    if (stepSectionMatch) {
-      const stepSectionName = stepSectionMatch[1].trim();
-      // Show users who are in the specific section OR division-level staff from the workflow's department
-      // (division-level staff don't have a section_id, but can still approve section requests)
-      candidates = candidates.filter(u => {
-        const inSection = (u.section_name || "").toLowerCase().trim() === stepSectionName.toLowerCase().trim();
-        const divisionLevelStaff = !u.section_name && metadata.department &&
-                                 (u.department || "").toLowerCase().trim() === metadata.department.toLowerCase().trim();
-        return inSection || divisionLevelStaff;
-      });
+    const candidates = Array.from(candidateIds)
+      .map((id) => candidateById.get(id))
+      .filter((user): user is typeof allUsers[number] => Boolean(user));
+
+    if (candidates.length > 0) return candidates;
+
+    // Fallback: if a specific org scope exists, return all users in that scope
+    if (targetTeam) {
+      return allUsers.filter((user) => user.team_name === targetTeam);
     }
-    // If the workflow is scoped to a specific section, filter by section
-    else if (metadata.section && metadata.section !== "") {
-      candidates = candidates.filter(u => u.section_id && orgStructure.sections?.some(s => s.id === metadata.section && s.id === u.section_id));
+    if (targetSection) {
+      return allUsers.filter((user) => user.section_name === targetSection);
     }
-    // If the workflow is scoped to a specific department (labeled as "Division"), filter by department name
-    else if (metadata.department && metadata.department !== "") {
-      candidates = candidates.filter(u => (u.department || "").toLowerCase().trim() === metadata.department.toLowerCase().trim());
+    if (targetDepartment) {
+      return allUsers.filter((user) => user.department === targetDepartment);
     }
 
-    return candidates;
+    return allUsers;
   }
 
   function describeRuleCondition(rule: WorkflowRule) {
@@ -2365,10 +2395,9 @@ export default function WorkflowBuilder() {
                             type="text"
                             value={stepUserSearch[selectedStep.id] ?? ""}
                             onChange={e => setStepUserSearch(p => ({ ...p, [selectedStep.id]: e.target.value }))}
-                            placeholder={pool.length ? `Search ${pool.length} available ${metadata.section || metadata.department ? "in " + (metadata.section || metadata.department) + " " : ""}${displayPositionName(selectedStep.positionName)}…` : `No users available${metadata.section || metadata.department ? " in " + (metadata.section || metadata.department) : " for this role"}`}
+                            placeholder={pool.length ? `Search ${pool.length} available ${displayPositionName(selectedStep.positionName)} users…` : "Search available users…"}
                             className="ep-form-input"
                             style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
-                            disabled={pool.length === 0}
                           />
                           {q && filtered.length > 0 && (
                             <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>

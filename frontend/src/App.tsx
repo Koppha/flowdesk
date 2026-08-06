@@ -2448,7 +2448,6 @@ export default function App() {
       case "SUBMITTED":         return "Pending Approval";
       case "COUNTERSIGNED":     return "Pending HOD / EXCO Approval";
       case "HR_MANAGER_REVIEW": return "Pending HR Manager Approval";
-      case "HR_REVIEW":         return "Pending HR Review";
       case "HR_OFFICER":        return "Pending Finance Payment";
       case "APPROVED":          return "Approved — Awaiting Payment";
       case "PAID":              return "Completed";
@@ -2689,8 +2688,7 @@ export default function App() {
     // ── Legacy (no workflow chain) — keep existing stage logic ─────────────────
     const managerEvent  = eventForTransition(events, ["SUBMITTED"], ["COUNTERSIGNED", "HR_MANAGER_REVIEW"]);
     const hodEvent      = eventForTransition(events, ["COUNTERSIGNED"], ["HR_MANAGER_REVIEW"]);
-    const hrManagerEvent = eventForTransition(events, ["HR_MANAGER_REVIEW"], ["HR_REVIEW"]);
-    const hrEvent       = eventForTransition(events, ["HR_REVIEW"], ["HR_OFFICER", "APPROVED"]);
+    const hrManagerEvent = eventForTransition(events, ["HR_MANAGER_REVIEW"], ["HR_OFFICER", "APPROVED"]);
     const financeEvent  = eventForTransition(events, ["HR_OFFICER", "APPROVED"], ["APPROVED", "PAID"]);
 
     const managerDest = String(managerEvent?.after_json?.status || "").toUpperCase();
@@ -2699,7 +2697,7 @@ export default function App() {
 
     const order: Record<string, number> = {
       DRAFT: 0, SUBMITTED: 1, COUNTERSIGNED: 2,
-      HR_MANAGER_REVIEW: 3, HR_REVIEW: 4, HR_OFFICER: 5, APPROVED: 6, PAID: 7
+      HR_MANAGER_REVIEW: 3, HR_OFFICER: 4, APPROVED: 5, PAID: 6
     };
     const currentOrder = order[currentStatus] ?? (terminalFailed ? -1 : 0);
 
@@ -2733,8 +2731,7 @@ export default function App() {
 
     stages.push(
       stage("hr-manager", "HR Manager Review", ["HR_MANAGER_REVIEW"], 3, hrManagerEvent),
-      stage("hr", "HR Review", ["HR_REVIEW"], 4, hrEvent),
-      stage("finance", "Finance Approval", ["HR_OFFICER", "APPROVED"], 6, financeEvent),
+      stage("finance", "Finance Approval", ["HR_OFFICER", "APPROVED"], 4, financeEvent),
       {
         ...stage("paid", "Paid", ["PAID"], 7, paidEvent, advance?.paid_at),
         status: currentStatus === "PAID" ? "Completed" : "Waiting"
@@ -2905,7 +2902,7 @@ export default function App() {
   }
 
   function isAtLeastManagerReviewed(status: string | null) {
-    return status === "HR_MANAGER_REVIEW" || status === "HR_REVIEW" || status === "HR_OFFICER" || status === "APPROVED" || status === "PAID";
+    return status === "HR_MANAGER_REVIEW" || status === "HR_OFFICER" || status === "APPROVED" || status === "PAID";
   }
 
   function isAtLeastApproved(status: string | null) {
@@ -3256,7 +3253,7 @@ export default function App() {
   }, [inboxItems]);
 
   // helper summaries
-  const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
+  const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "HR_MANAGER_REVIEW", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
   const pendingClaimCount = claims.filter((c) => !["SETTLED", "CLOSED", "REJECTED"].includes(c.status)).length;
   const monthlySpend = claims.reduce((sum, c) => sum + Number(c.claim_total || 0), 0) + advances.reduce((sum, a) => sum + Number(a.approved_total || 0), 0);
   const advancesByType = advances.reduce<Record<string, number>>((acc, advance) => {
@@ -3466,13 +3463,8 @@ export default function App() {
                     <h3><User size={17} aria-hidden /> Current Owner</h3>
                     <div className="tracking-owner">
                       <strong>{activeStage?.label || "Requester"}</strong>
-                      <span>
-                        {Array.isArray(advance.approval_chain) && advance.approval_chain.length > 0
-                          && !["DRAFT", "PAID", "APPROVED", "REJECTED", "CANCELLED"].includes(currentStatus) && activeStage?.label
-                          ? `Pending ${activeStage.label} Approval`
-                          : advanceStageLabel(currentStatus, advance.type)}
-                      </span>
-                      {["SUBMITTED","COUNTERSIGNED","HR_MANAGER_REVIEW","HR_REVIEW","HR_OFFICER","APPROVED"].includes(currentStatus) && (
+                      <span>{advanceStageLabel(currentStatus, advance.type)}</span>
+                      {["SUBMITTED","COUNTERSIGNED","HR_MANAGER_REVIEW","HR_OFFICER","APPROVED"].includes(currentStatus) && (
                         <button
                           type="button"
                           disabled={remindingAdvanceId === advance.id}

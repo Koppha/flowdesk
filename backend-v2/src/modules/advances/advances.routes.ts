@@ -1368,8 +1368,7 @@ export async function performAdvanceApprove(
     const adminNext: Record<string, AdvanceStatus> = {
       SUBMITTED:          leadership.hod_user_id ? "COUNTERSIGNED" : "HR_MANAGER_REVIEW",
       COUNTERSIGNED:      "HR_MANAGER_REVIEW",
-      HR_MANAGER_REVIEW:  "HR_REVIEW",
-      HR_REVIEW:          "HR_OFFICER",
+      HR_MANAGER_REVIEW:  "HR_OFFICER",
       HR_OFFICER:         "APPROVED"
     };
     nextStatus = adminNext[adv.status] ?? nextStatusOrThrow(adv.status, "APPROVE");
@@ -1604,7 +1603,7 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
     }
 
     // Advance must be in a pending-approval state
-    const pendingStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_REVIEW", "HR_OFFICER", "APPROVED"];
+    const pendingStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_OFFICER", "APPROVED"];
     if (!pendingStatuses.includes(adv.status)) {
       throw badRequest("No pending approver to remind for this request");
     }
@@ -1630,7 +1629,6 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
       if (adv.status === "SUBMITTED")         role = "MANAGER";
       if (adv.status === "COUNTERSIGNED")     role = "HOD";
       if (adv.status === "HR_MANAGER_REVIEW") role = "HR_MANAGER";
-      if (adv.status === "HR_REVIEW")         role = "HR_MANAGER";
       if (adv.status === "HR_OFFICER")        role = "FINANCE";
       if (adv.status === "APPROVED")          role = "FINANCE";
       if (role) {
