@@ -2435,6 +2435,7 @@ export default function WorkflowBuilder() {
                             type="text"
                             value={stepUserSearch[selectedStep.id] ?? ""}
                             onChange={e => setStepUserSearch(p => ({ ...p, [selectedStep.id]: e.target.value }))}
+                            onBlur={() => setTimeout(() => setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" })), 100)}
                             placeholder={pool.length ? `Search ${pool.length} available ${displayPositionName(selectedStep.positionName)} users…` : "Search available users…"}
                             className="ep-form-input"
                             style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
