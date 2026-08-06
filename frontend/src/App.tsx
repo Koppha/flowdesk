@@ -2643,6 +2643,7 @@ export default function App() {
         const stepApproved = Boolean(step.approved);
         const isDone   = terminalDone || stepApproved || currentStepIdx > idx;
         const isActive = !terminalFailed && !isDone && pendingStage.has(idx);
+        const isSkipped = step.skipIfUnassigned && !step.approver_name && !stepApproved;
         // "Team: X" steps are approvable by any member of that group, not the
         // specific individual returned as approver_name/approver_title (the
         // department HOD) — show the group name instead, with no fixed actor.
@@ -2657,10 +2658,11 @@ export default function App() {
         stages.push({
           key: `step-${idx}`,
           label,
-          state: terminalFailed && isActive ? "danger" : isActive ? "active" : isDone ? "done" : "waiting",
+          state: isSkipped ? "done" : terminalFailed && isActive ? "danger" : isActive ? "active" : isDone ? "done" : "waiting",
           date: approveEvent?.created_at || "",
           actor: actorName,
-          status: isActive ? "In Progress" : isDone ? "Approved" : "Waiting"
+          status: isSkipped ? "Skipped (no approver assigned)" : isActive ? "In Progress" : isDone ? "Approved" : "Waiting",
+          tooltip: isSkipped ? "This step was automatically skipped because no approver was assigned and the step is configured to skip if unassigned." : undefined
         });
       });
 
@@ -3369,7 +3371,7 @@ export default function App() {
                 <h3>Request Progress</h3>
                 <div className="tracking-progress-strip">
                   {stages.map((stage: any, index: number) => (
-                    <div key={stage.key} className={`tracking-progress-step is-${stage.state}`}>
+                    <div key={stage.key} className={`tracking-progress-step is-${stage.state}`} title={stage.tooltip}>
                       {index < stages.length - 1 && <span className="tracking-progress-line" aria-hidden />}
                       <span className="tracking-step-icon">
                         {stage.state === "done" ? <CheckCircle2 size={22} aria-hidden /> : stage.state === "danger" ? <X size={21} aria-hidden /> : stage.state === "active" ? <User size={21} aria-hidden /> : <Clock3 size={20} aria-hidden />}
