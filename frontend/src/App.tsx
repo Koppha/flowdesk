@@ -1184,7 +1184,10 @@ export default function App() {
       Boolean(user.profile_completed)
   );
   const eligibleSupportCreators = requestDirectory.filter(
-    (user) => user.id !== profile?.id && (String(user.employment_type || "").toUpperCase() === "PERMANENT" || isApproverRole(user.role))
+    (user) =>
+      user.id !== profile?.id &&
+      (String(user.department || "").trim() === String(profile?.department || "").trim()) &&
+      (String(user.employment_type || "").toUpperCase() === "PERMANENT" || isApproverRole(user.role))
   );
   const selectedRequestUser =
     requestDirectory.find((user) => user.id === requestForUserId) ||
