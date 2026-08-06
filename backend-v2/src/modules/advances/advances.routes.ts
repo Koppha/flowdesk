@@ -1362,23 +1362,8 @@ export async function performAdvanceApprove(
         ? result.currentStep.position_name
         : result.hasMore ? (adv.approval_chain as ChainStep[])[result.newStepOrder].position_name : "Complete"
     };
-  } else if (role === "ADMIN") {
-    // ── Legacy admin override (no workflow chain) ─────────────────────────
-    const leadership = await getDepartmentLeadership(adv.requester_department || "");
-    const adminNext: Record<string, AdvanceStatus> = {
-      SUBMITTED:          leadership.hod_user_id ? "COUNTERSIGNED" : "HR_MANAGER_REVIEW",
-      COUNTERSIGNED:      "HR_MANAGER_REVIEW",
-      HR_MANAGER_REVIEW:  "HR_OFFICER",
-      HR_OFFICER:         "APPROVED"
-    };
-    nextStatus = adminNext[adv.status] ?? nextStatusOrThrow(adv.status, "APPROVE");
-    await setAdvanceStatus(adv.id, nextStatus, { approvedTotal });
-    if (nextStatus === "COUNTERSIGNED" || (adv.status === "SUBMITTED" && nextStatus === "HR_MANAGER_REVIEW")) {
-      await query(`UPDATE advance_requests SET countersigned_at=now() WHERE id=$1 AND countersigned_at IS NULL`, [adv.id]);
-    }
-    auditAfter = { status: nextStatus, approved_total: approvedTotal };
   } else {
-    throw forbidden("This advance does not have an active approval workflow. Please contact the administrator.");
+    throw forbidden("This advance does not have an active approval workflow. Please configure a workflow in the Workflow Builder.");
   }
 
   await writeAdvanceAudit({
