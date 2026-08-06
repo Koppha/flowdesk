@@ -1375,12 +1375,13 @@ export default function WorkflowBuilder() {
     }
     if (targetSection) {
       // For section-scoped steps, include both section-specific users and division-level staff
-      const sectionUsers = allUsers.filter((user) => user.section_name === targetSection);
+      const normalizedTarget = String(targetSection || "").trim();
+      const sectionUsers = allUsers.filter((user) => String(user.section_name || "").trim() === normalizedTarget);
       if (sectionUsers.length > 0) return sectionUsers;
 
       // If no section-specific users, return division-level staff from the department
       if (deptName) {
-        return allUsers.filter((user) => !user.section_name && user.department === deptName);
+        return allUsers.filter((user) => !user.section_name && String(user.department || "").trim() === String(deptName || "").trim());
       }
       return sectionUsers;
     }
