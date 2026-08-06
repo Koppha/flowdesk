@@ -934,7 +934,7 @@ export default function WorkflowBuilder() {
           teams: Array.isArray(orgStructureResult.teams) ? orgStructureResult.teams : []
         });
       }
-      setAllUsers(Array.isArray(usersResult) ? usersResult.filter((u: any) => u.profile_completed && !["EMPLOYEE"].includes(u.role)) : []);
+      setAllUsers(Array.isArray(usersResult) ? usersResult.filter((u: any) => !["EMPLOYEE"].includes(u.role)) : []);
       if (Array.isArray(requestTypesResult)) {
         setCustomRequestTypes(
           requestTypesResult
