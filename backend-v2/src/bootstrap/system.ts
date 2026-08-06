@@ -27,6 +27,7 @@ export async function bootstrapSystem() {
   await ensureTourProgressSchema();
   await ensureDeductionsSchema();
   await ensureAdminAccount();
+  await ensureOrgStructureSections();
 }
 
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;
@@ -1550,4 +1551,58 @@ async function ensureDeductionsSchema() {
   // tracks the one-step "actioned" confirmation per claim.
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_at timestamptz`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_by_id uuid REFERENCES users(id)`);
+}
+
+// Ensure core organizational structure sections exist (e.g., Treasury section
+// in Business Continuity & Company Performance division for Finance workflows).
+async function ensureOrgStructureSections() {
+  // Create Business Continuity & Company Performance department if it doesn't exist
+  const deptResult = await query<{ id: string }>(
+    `SELECT id FROM departments WHERE name = $1`,
+    ["Business Continuity & Company Performance"]
+  );
+  
+  let deptId: string;
+  if (deptResult[0]) {
+    deptId = deptResult[0].id;
+  } else {
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO departments (name) VALUES ($1) RETURNING id`,
+      ["Business Continuity & Company Performance"]
+    );
+    deptId = inserted[0]?.id || "";
+  }
+
+  // Create Treasury & Financial Accounting section if it doesn't exist
+  const sectionResult = await query<{ id: string }>(
+    `SELECT id FROM sections WHERE name = $1 AND department_id = $2`,
+    ["Treasury & Financial Accounting", deptId]
+  );
+
+  if (!sectionResult[0] && deptId) {
+    await query(
+      `INSERT INTO sections (name, department_id, active) VALUES ($1, $2, true)`,
+      ["Treasury & Financial Accounting", deptId]
+    );
+  }
+
+  // Assign Seeiso Molapo as EXCO for Treasury section if they exist
+  const seeiso = await query<{ id: string }>(
+    `SELECT id FROM users WHERE full_name = $1`,
+    ["Seeiso Molapo"]
+  );
+
+  if (seeiso[0] && deptId) {
+    const treasury = await query<{ id: string }>(
+      `SELECT id FROM sections WHERE name = $1 AND department_id = $2`,
+      ["Treasury & Financial Accounting", deptId]
+    );
+    
+    if (treasury[0]) {
+      await query(
+        `UPDATE sections SET exco_user_id = $1 WHERE id = $2`,
+        [seeiso[0].id, treasury[0].id]
+      );
+    }
+  }
 }
