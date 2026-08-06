@@ -1351,18 +1351,16 @@ export default function WorkflowBuilder() {
     }
     if (posCode === "MANAGER") {
       if (deptName) {
+        // Department-scoped step: show managers/HODs from that specific department
         return allUsers.filter((user) => (user.role === "MANAGER" || user.role === "HOD") && user.department === deptName);
       } else {
+        // No scope: show all managers and HODs
         return allUsers.filter((user) => user.role === "MANAGER" || user.role === "HOD");
       }
     }
     if (posCode === "EXCO") {
-      if (deptName) {
-        return allUsers.filter((user) => user.role === "EXCO" && user.department === deptName);
-      } else {
-        // No department scope - show all active EXCOs from all departments
-        return allUsers.filter((user) => user.role === "EXCO");
-      }
+      // Always show all EXCO members regardless of department scope
+      return allUsers.filter((user) => user.role === "EXCO");
     }
     if (posCode === "CEO") {
       return allUsers.filter((user) => user.role === "CEO");
