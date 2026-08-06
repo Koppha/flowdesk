@@ -1159,7 +1159,7 @@ export default function WorkflowBuilder() {
         name: workflow.name,
         requestType: workflow.requestType,
         advanceSubType: workflow.advanceSubType || "",
-        division: "",
+        division: workflow.division || "",
         department: workflow.department || "",
         section: workflow.section || "",
         team: workflow.team || "",
@@ -2250,35 +2250,35 @@ export default function WorkflowBuilder() {
           </label>
           <label className="workflow-config-field">
             <span>Company</span>
-            <select value={metadata.division} onChange={(event) => updateMetadata({ division: event.target.value, department: "", section: "", team: "" })} disabled={readOnly}>
+            <select value={metadata.division} onChange={(event) => updateMetadata({ division: event.target.value, department: "", section: "", team: "" })} onBlur={() => {}} disabled={readOnly}>
               <option value="">All Companies</option>
               {divisionOptionsForPicker.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
           </label>
           <label className="workflow-config-field workflow-config-department">
             <span>Division</span>
-            <select value={metadata.department} onChange={(event) => updateMetadata({ department: event.target.value, section: "", team: "" })} disabled={readOnly}>
+            <select value={metadata.department} onChange={(event) => updateMetadata({ department: event.target.value, section: "", team: "" })} onBlur={() => {}} disabled={readOnly}>
               <option value="">All Divisions</option>
               {departmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
             </select>
           </label>
           <label className="workflow-config-field">
             <span>Department</span>
-            <select value={metadata.section} onChange={(event) => updateMetadata({ section: event.target.value, team: "" })} disabled={readOnly || !metadata.department || sectionOptions.length === 0}>
+            <select value={metadata.section} onChange={(event) => updateMetadata({ section: event.target.value, team: "" })} onBlur={() => {}} disabled={readOnly || !metadata.department || sectionOptions.length === 0}>
               <option value="">All Departments</option>
               {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <label className="workflow-config-field">
             <span>Section</span>
-            <select value={metadata.team} onChange={(event) => updateMetadata({ team: event.target.value })} disabled={readOnly || !metadata.section || teamOptions.length === 0}>
+            <select value={metadata.team} onChange={(event) => updateMetadata({ team: event.target.value })} onBlur={() => {}} disabled={readOnly || !metadata.section || teamOptions.length === 0}>
               <option value="">All Sections</option>
               {teamOptions.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </label>
           <label className="workflow-config-field workflow-config-status">
             <span>Status</span>
-            <select className={`workflow-status-select status-${metadata.status.toLowerCase()}`} value={metadata.status} onChange={(event) => updateMetadata({ status: event.target.value as WorkflowStatus })} disabled={readOnly}>
+            <select className={`workflow-status-select status-${metadata.status.toLowerCase()}`} value={metadata.status} onChange={(event) => updateMetadata({ status: event.target.value as WorkflowStatus })} onBlur={() => {}} disabled={readOnly}>
               {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
