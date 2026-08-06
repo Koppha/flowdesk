@@ -2441,7 +2441,7 @@ export default function WorkflowBuilder() {
                             className="ep-form-input"
                             style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
                           />
-                          {(q || pool.length > 0) && filtered.length > 0 && (
+                          {q && filtered.length > 0 && (
                             <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
                               {filtered.map(u => (
                                 <div key={u.id}
