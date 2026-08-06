@@ -408,7 +408,7 @@ export default function WorkflowBuilder() {
   const [travelTypes, setTravelTypes] = useState<Array<{ code: string; name: string; active?: boolean }>>([]);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null; section_id?: string | null; section_name?: string | null }>>([]);
+  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null; section_id?: string | null; section_name?: string | null; team_name?: string | null }>>([]);
   const [stepUserSearch, setStepUserSearch] = useState<Record<string, string>>({});
   const [managerTypes, setManagerTypes] = useState<Array<{ id: string; name: string; role: string; description: string | null; active: boolean; sort_order: number }>>([]);
   const [actionTypes, setActionTypes] = useState<Array<{ id: number; code: string; label: string; is_system: boolean; is_active: boolean; sort_order: number }>>([]);
@@ -1343,7 +1343,16 @@ export default function WorkflowBuilder() {
       return allUsers.filter((user) => user.team_name === targetTeam);
     }
     if (targetSection) {
-      return allUsers.filter((user) => user.section_name === targetSection);
+      // For section-scoped steps, include both section-specific users and division-level staff
+      const sectionUsers = allUsers.filter((user) => user.section_name === targetSection);
+      if (sectionUsers.length > 0) return sectionUsers;
+
+      // If no section-specific users, return division-level staff from the department
+      const deptName = orgDept?.name;
+      if (deptName) {
+        return allUsers.filter((user) => !user.section_name && user.department === deptName);
+      }
+      return sectionUsers;
     }
     if (targetDepartment) {
       return allUsers.filter((user) => user.department === targetDepartment);
