@@ -1848,7 +1848,7 @@ const FEATURE_KEYS = [
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
-  user_management:       ["ADMIN", "MANAGER", "EXCO"],
+  user_management:       ["ADMIN", "CHIEF_OFFICER", "MANAGER", "HOD", "EXCO", "CEO"],
   roles_permissions:     ["ADMIN", "MANAGER", "EXCO"],
   travel_setup:          ["ADMIN", "MANAGER"],
   org_structure:         ["ADMIN"],
