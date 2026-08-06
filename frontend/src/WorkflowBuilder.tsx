@@ -1338,7 +1338,27 @@ export default function WorkflowBuilder() {
 
     if (candidates.length > 0) return candidates;
 
-    // Fallback: if a specific org scope exists, return all users in that scope
+    // Fallback: if no org-structure assignment found, return all users with the required role in the target scope
+    const deptName = orgDept?.name || targetDepartment;
+    const posCode = String(step.positionTypeCode || "");
+
+    if (posCode === "HOD" && deptName) {
+      return allUsers.filter((user) => user.role === "HOD" && user.department === deptName);
+    }
+    if (posCode === "MANAGER" && deptName) {
+      return allUsers.filter((user) => (user.role === "MANAGER" || user.role === "HOD") && user.department === deptName);
+    }
+    if (posCode === "EXCO" && deptName) {
+      return allUsers.filter((user) => user.role === "EXCO" && user.department === deptName);
+    }
+    if (posCode === "CEO") {
+      return allUsers.filter((user) => user.role === "CEO");
+    }
+    if (posCode === "FINANCE") {
+      return allUsers.filter((user) => user.role === "FINANCE");
+    }
+
+    // Fallback for team/section/department scopes
     if (targetTeam) {
       return allUsers.filter((user) => user.team_name === targetTeam);
     }
@@ -1348,7 +1368,6 @@ export default function WorkflowBuilder() {
       if (sectionUsers.length > 0) return sectionUsers;
 
       // If no section-specific users, return division-level staff from the department
-      const deptName = orgDept?.name;
       if (deptName) {
         return allUsers.filter((user) => !user.section_name && user.department === deptName);
       }
