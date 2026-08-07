@@ -669,7 +669,7 @@ export default function WorkflowBuilder() {
       const div = orgStructure.divisions.find((d) => d.name === metadata.division);
       if (div) {
         base = orgStructure.departments
-          .filter((d) => (d.division_ids as string[] | undefined)?.includes(div.id) || d.division_id === div.id)
+          .filter((d) => d.active !== false && ((d.division_ids as string[] | undefined)?.includes(div.id) || d.division_id === div.id))
           .map((d) => d.name as string)
           .filter(Boolean);
       }
@@ -693,11 +693,11 @@ export default function WorkflowBuilder() {
 
   // Pools + handlers for the unified "Add Workflow Participant" search modal.
   const allSectionNames = useMemo(
-    () => Array.from(new Set(orgStructure.sections.map((s: any) => s.name as string).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(orgStructure.sections.filter((s: any) => s.active !== false).map((s: any) => s.name as string).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [orgStructure.sections]
   );
   const allTeamNames = useMemo(
-    () => Array.from(new Set(orgStructure.teams.map((t: any) => t.name as string).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(orgStructure.teams.filter((t: any) => t.active !== false).map((t: any) => t.name as string).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [orgStructure.teams]
   );
 
@@ -713,7 +713,7 @@ export default function WorkflowBuilder() {
   }, [managerTypes, availablePositionTypes]);
 
   const participantTeamPool = useMemo(() => {
-    return orgStructure.teams.map((t: any) => {
+    return orgStructure.teams.filter((t: any) => t.active !== false).map((t: any) => {
       const section = orgStructure.sections.find((s: any) => s?.id === t.section_id);
       const dept = section ? orgStructure.departments.find((d: any) => d?.id === section.department_id) : null;
       return { id: t.id, name: t.name, departmentLabel: dept?.name || "", sectionLabel: section?.name || "" };
