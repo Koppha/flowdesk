@@ -37,7 +37,7 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
@@ -1230,11 +1230,8 @@ export default function App() {
           filtered.map((s: any) => {
             const rawTitle = s.position_name || s.approver_title;
             const isTeamGroup = rawTitle.startsWith("Team: ");
-            // Stored as "Team: X" for backward-compatible matching, but
-            // renders as "Section: X" per the org-hierarchy rename.
-            const title = isTeamGroup ? `Section: ${rawTitle.slice("Team: ".length)}` : rawTitle;
             return {
-              label: title,
+              label: displayOrgGroupName(rawTitle),
               // "Team: X" steps are approvable by any member of that group, not
               // the specific individual returned as approver_name (the HOD).
               name: isTeamGroup ? null : s.approver_name || null
@@ -2633,9 +2630,7 @@ export default function App() {
         // Prefer the workflow's own step label (position_name) over the
         // approver's personal job title — the tracker should reflect what's
         // configured in the Workflow Builder, not whoever happens to be assigned.
-        // Stored as "Team: X" for backward-compatible matching, but renders
-        // as "Section: X" per the org-hierarchy rename.
-        const label = isTeamGroup ? `Section: ${step.position_name.slice("Team: ".length)}` : (step.position_name || step.approver_title);
+        const label = step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
         const actorName = isTeamGroup ? "" : (approveEvent?.actor_name || step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -2778,9 +2773,7 @@ export default function App() {
         // Prefer the workflow's own step label (position_name) over the
         // approver's personal job title — the tracker should reflect what's
         // configured in the Workflow Builder, not whoever happens to be assigned.
-        // Stored as "Team: X" for backward-compatible matching, but renders
-        // as "Section: X" per the org-hierarchy rename.
-        const label = isTeamGroup ? `Section: ${step.position_name.slice("Team: ".length)}` : (step.position_name || step.approver_title);
+        const label = step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
         const actorName = isTeamGroup ? "" : (step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -4448,7 +4441,7 @@ export default function App() {
                   }}
                 >
                   {(() => {
-                    const GROUPS_LIST = permissionGroups.filter((g) => !g.hidden).map((g) => ({ key: g.name, label: g.name, dynamic: !!g.dynamic }));
+                    const GROUPS_LIST = permissionGroups.filter((g) => !g.hidden).map((g) => ({ key: g.name, label: displayOrgGroupName(g.name), dynamic: !!g.dynamic }));
                     const FEATURES_LIST = [
                       { key: "user_management",        label: "Users",                    group: "User Management" },
                       { key: "roles_permissions",      label: "Roles & Permissions",      group: "User Management" },

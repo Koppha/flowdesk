@@ -102,6 +102,13 @@ const TERMINAL_ADVANCE_STATUSES = ["DRAFT", "PAID", "APPROVED", "REJECTED", "CAN
 // reliably reflect what's actually configured in the Workflow Builder.
 // Returns null when there's no chain to derive from (draft/legacy/terminal),
 // so callers can fall back to the status-based label.
+// Steps assigned to a whole org-level group are stored with a "Team: "
+// position_name/approval_group_name prefix so existing saved workflow steps
+// keep matching, but the org hierarchy now calls that level "Section".
+export function displayOrgGroupName(name: string): string {
+  return name.startsWith("Team: ") ? `Section: ${name.slice("Team: ".length)}` : name;
+}
+
 export function currentApprovalStepLabel(advance: any): string | null {
   const chain = Array.isArray(advance?.approval_chain) ? advance.approval_chain : [];
   if (!chain.length) return null;
@@ -112,11 +119,6 @@ export function currentApprovalStepLabel(advance: any): string | null {
   const step = chain[idx];
   if (!step) return null;
 
-  // "Team: X" steps are approvable by any member of that group, and render
-  // as "Section: X" per the org-hierarchy rename - matches buildTrackingStages.
   const positionName: string | undefined = step.position_name;
-  if (typeof positionName === "string" && positionName.startsWith("Team: ")) {
-    return `Section: ${positionName.slice("Team: ".length)}`;
-  }
-  return positionName || step.approver_title || null;
+  return (positionName && displayOrgGroupName(positionName)) || step.approver_title || null;
 }

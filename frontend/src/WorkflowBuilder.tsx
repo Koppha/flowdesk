@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api } from "./api";
+import { displayOrgGroupName } from "./constants";
 import { useStaffDirectory, isActiveStaff, type StaffMember } from "./useStaffDirectory";
 import WorkflowAddParticipantModal from "./WorkflowAddParticipantModal";
 import {
@@ -340,7 +341,7 @@ function workflowCodeLabel(code: string) {
 // stay as-is so existing saved workflow steps keep matching, but it should
 // read as "Section: " wherever it's shown to a user (Team -> Section rename).
 function displayPositionName(name: string) {
-  return name.startsWith("Team: ") ? `Section: ${name.slice("Team: ".length)}` : name;
+  return displayOrgGroupName(name);
 }
 
 function getPositionIcon(code: string) {

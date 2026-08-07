@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
-import { LESOTHO_DISTRICTS, TravelType, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { roleLabel } from "./roles";
 import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
@@ -965,9 +965,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       // Prefer the workflow's own step label (position_name) over the
       // approver's personal job title — the tracker should reflect what's
       // configured in the Workflow Builder, not whoever happens to be assigned.
-      // Stored as "Team: X" for backward-compatible matching, but renders
-      // as "Section: X" per the org-hierarchy rename.
-      const label = isTeamGroup ? `Section: ${step.position_name.slice("Team: ".length)}` : (step.position_name || step.approver_title);
+      const label = step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
       const isDone = Boolean(step.approved) || stepOrder > idx;
       const isActive = !isDone && pendingStage.has(idx);
       return {
