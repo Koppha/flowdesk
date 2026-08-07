@@ -5,7 +5,7 @@ import { logger, serializeError } from "./logger.js";
 import { buildOnboardingMessage } from "./onboardingTemplates.js";
 import { createEmailActionToken, buildEmailActionUrl } from "./emailActionTokens.js";
 
-type Role = "MANAGER" | "HOD" | "HR_MANAGER" | "EXCO" | "FINANCE" | "CEO";
+type Role = "MANAGER" | "HOD" | "EXCO" | "FINANCE" | "CEO" | "ADMIN";
 
 // ─── Transport: Microsoft Teams Incoming Webhook ─────────────────────────────
 
@@ -341,7 +341,6 @@ export async function notifyAdvanceTask(args: {
   let role: Role | null = null;
   if (args.status === "SUBMITTED")            role = "MANAGER";
   if (args.status === "COUNTERSIGNED")        role = "HOD";
-  if (args.status === "HR_MANAGER_REVIEW")    role = "HR_MANAGER";
   if (args.status === "HR_OFFICER")           role = "FINANCE";
   if (args.status === "APPROVED")             role = "FINANCE";
 
@@ -411,13 +410,12 @@ export async function notifyAdvanceTask(args: {
     }
   } else if (role) {
     try {
-      const recipientDept = role === "HR_MANAGER" ? null : department;
       const approverRecipients =
         args.status === "SUBMITTED"
           ? await getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
           : role === "FINANCE"
             ? await getFinanceRecipients()
-            : await getRecipients(role, recipientDept);
+            : await getRecipients(role, department);
 
       if (approverRecipients.length > 0) {
         const roleLabel = role.replace(/_/g, " ");
@@ -469,7 +467,6 @@ export async function notifyAdvanceTask(args: {
       const requesterMessages: Record<string, string> = {
         SUBMITTED:            `Your advance request has been submitted and is awaiting manager approval.`,
         COUNTERSIGNED:        `Your advance request has been approved by your manager and is now pending HOD / EXCO review.`,
-        HR_MANAGER_REVIEW:    `Your advance request is progressing and is now under HR Manager review.`,
         HR_OFFICER:           `Your advance request has been approved and is being processed for payment.`,
         APPROVED:             `Great news! Your advance request has been fully approved and forwarded to Finance for payment.`,
         REJECTED:             `Your advance request has been reviewed and unfortunately has been rejected.${args.comments ? `\n\nReason: ${args.comments}` : ""}`
@@ -784,9 +781,8 @@ export async function notifyClaimTask(args: {
   let roles: Role[] = [];
   if (args.status === "SUBMITTED")              roles = ["MANAGER"];
   if (args.status === "MANAGER_APPROVED")       roles = ["EXCO"];
-  if (args.status === "CHIEF_OFFICER_APPROVED") roles = ["MANAGER"];
-  if (args.status === "HR_OFFICER")             roles = ["HR_MANAGER"];
-  if (args.status === "HR_MANAGER_REVIEW")      roles = ["FINANCE"];
+  if (args.status === "EXCO_APPROVED")          roles = ["ADMIN"];
+  if (args.status === "HR_OFFICER")      roles = ["FINANCE"];
   if (args.status === "FINANCE_VERIFIED")       roles = ["FINANCE"];
 
   if (roles.length > 0) {
@@ -796,7 +792,7 @@ export async function notifyClaimTask(args: {
           roles.map((role) =>
             role === "FINANCE"
               ? getFinanceRecipients()
-              : args.status === "CHIEF_OFFICER_APPROVED"
+              : args.status === "EXCO_APPROVED"
               ? getRecipients(role, null)
               : args.status === "SUBMITTED"
                 ? getAssignedDepartmentOwnerRecipients(department, "manager_user_id")
@@ -857,9 +853,8 @@ export async function notifyClaimTask(args: {
       const claimantMessages: Record<string, string> = {
         SUBMITTED:              `Your clearance claim has been submitted and is awaiting manager approval.`,
         MANAGER_APPROVED:       `Your clearance claim has been approved by your manager and is now pending EXCO review.`,
-        CHIEF_OFFICER_APPROVED: `Your clearance claim has been approved by EXCO and is now with HR for processing.`,
-        HR_OFFICER:             `Your clearance claim is being reviewed by HR Management.`,
-        HR_MANAGER_REVIEW:      `Your clearance claim has been reviewed by HR and forwarded to Finance for verification.`,
+        EXCO_APPROVED:          `Your clearance claim has been approved by EXCO and is now with HR for processing.`,
+        HR_OFFICER:             `Your clearance claim is with Finance for verification.`,
         FINANCE_VERIFIED:       `Your clearance claim has been verified by Finance and is awaiting final settlement.`,
         CLOSED:                 `Your clearance claim has been fully approved and closed.`
       };
@@ -1111,8 +1106,8 @@ export async function notifyProfileCompleted(args: {
       ]
     }).catch((e) => logger.warn("teams_profile_completed_failed", { error: serializeError(e) }));
 
-    // Also notify HR/Admin that a new user has completed onboarding
-    const hrRecipients = await getRecipients("HR_MANAGER" as Role, null);
+    // Also notify administrators that a new user has completed onboarding.
+    const hrRecipients = await getRecipients("ADMIN", null);
     if (hrRecipients.length > 0) {
       const hrDetails = detailBlock([
         ["Name",            name],

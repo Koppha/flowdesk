@@ -185,8 +185,8 @@ export async function resolveWorkflowChain(params: {
       ORDER BY ws.step_order ASC`,
     [(workflow as any).id]
   );
-  // HR_MANAGER_REVIEW steps are routed to the org-structure leadership of
-  // the "Human Resource" department, not the requester's own department.
+  // HR steps are routed to the org-structure leadership of the
+  // "Human Resource" department, not the requester's own department.
   const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
   const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
 
@@ -335,12 +335,13 @@ export function chainStepToStatus(chain: ChainStep[], stepIndex: number): Advanc
   const step = chain[stepIndex];
   if (!step) return "SUBMITTED";
 
+  if (step.position_type_code.startsWith("HR_")) return "HR_OFFICER";
+
   switch (step.position_type_code) {
     case "MANAGER":      return "SUBMITTED";
     case "HOD":           return "COUNTERSIGNED";
-    case "HR_MANAGER_REVIEW": return "HR_MANAGER_REVIEW";
     case "FINANCE":      return "HR_OFFICER";
-    default:             return "HR_MANAGER_REVIEW";
+    default:             return "SUBMITTED";
   }
 }
 

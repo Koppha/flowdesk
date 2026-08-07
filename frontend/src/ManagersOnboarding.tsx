@@ -5,6 +5,7 @@ import { useStaffDirectory } from "./useStaffDirectory";
 import { CheckCircle2, ChevronRight, Edit3, Layers, Plus, RefreshCw, Search, Trash2, UserCheck, UserPlus, UserRoundCheck, X } from "lucide-react";
 import UserPicker, { type PickableUser } from "./UserPicker";
 import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
+import { roleLabel } from "./roles";
 
 const EMPTY_ORG: OrgSelection = {
   divisionId: null, divisionName: null,
@@ -74,18 +75,13 @@ function resetForm(setters: Array<(v: string) => void>) {
   setters.forEach((s) => s(""));
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  HOD:     "Head of Div",
-  MANAGER: "Manager",
-};
-
 const ROLE_COLOR: Record<string, string> = {
   HOD:     "#1d4ed8",
   MANAGER: "#15803d",
 };
 
 function RoleBadge({ role, label }: { role: string | null | undefined; label?: string }) {
-  const text = label ?? ROLE_LABEL[role ?? ""] ?? role ?? "";
+  const text = label ?? roleLabel(role);
   const color = ROLE_COLOR[role ?? ""] ?? "#6b7280";
   return (
     <span style={{

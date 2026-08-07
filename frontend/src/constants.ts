@@ -96,7 +96,7 @@ const TERMINAL_ADVANCE_STATUSES = ["DRAFT", "PAID", "APPROVED", "REJECTED", "CAN
 
 // The step actually waiting on approval, per this request's own configured
 // workflow (approval_chain) - independent of advance_requests.status, which
-// is a fixed legacy bucket (SUBMITTED/COUNTERSIGNED/HR_MANAGER_REVIEW/...)
+// is a fixed legacy bucket (SUBMITTED/COUNTERSIGNED/HR_OFFICER/...)
 // that can't represent every position type a workflow might use (e.g. EXCO,
 // CEO, or a custom position land in the same bucket as HOD), so it doesn't
 // reliably reflect what's actually configured in the Workflow Builder.

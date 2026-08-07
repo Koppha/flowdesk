@@ -7,8 +7,8 @@ import { query } from "../../lib/db.js";
 import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departments.js";
 import { getDelegationsForManager } from "../../lib/delegations.js";
 
-const OPEN_ADVANCE_STATUSES = "('SUBMITTED','COUNTERSIGNED','AUTH_OFFICER_APPROVED','HR_MANAGER_REVIEW','HR_REVIEW','HR_OFFICER','CHIEF_OFFICER_REVIEW','APPROVED')";
-const OPEN_CLAIM_STATUSES = "('SUBMITTED','MANAGER_APPROVED','AUTH_OFFICER_APPROVED','CHIEF_OFFICER_APPROVED','FINANCE_VERIFIED','HR_OFFICER','HR_MANAGER_REVIEW','PAYMENT_PROCESSING')";
+const OPEN_ADVANCE_STATUSES = "('SUBMITTED','COUNTERSIGNED','HR_REVIEW','HR_OFFICER','APPROVED')";
+const OPEN_CLAIM_STATUSES = "('SUBMITTED','MANAGER_APPROVED','EXCO_APPROVED','FINANCE_VERIFIED','HR_OFFICER','PAYMENT_PROCESSING')";
 
 // Falls back to department leadership when no reporting_lines row exists yet,
 // mirroring the chain used by /reporting-lines/auto-generate: EXCO -> CEO,
@@ -87,7 +87,7 @@ reportingLinesRouter.get("/stats", requireRole(["ADMIN", "MANAGER", "EXCO"]), as
   try {
     const [totalRows, managersRows, hodsRows, excoRows] = await Promise.all([
       query<{ count: string }>(`SELECT COUNT(*) FROM users WHERE is_active = true AND role::text != 'ADMIN'`),
-      query<{ count: string }>(`SELECT COUNT(*) FROM users WHERE is_active = true AND role::text IN ('MANAGER', 'HR_MANAGER')`),
+      query<{ count: string }>(`SELECT COUNT(*) FROM users WHERE is_active = true AND role::text = 'MANAGER'`),
       query<{ count: string }>(`SELECT COUNT(*) FROM users WHERE is_active = true AND role::text = 'HOD'`),
       query<{ count: string }>(`SELECT COUNT(*) FROM users WHERE is_active = true AND role::text = 'EXCO'`)
     ]);

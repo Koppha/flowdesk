@@ -760,7 +760,7 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     // typically in the manager chain, but fall through to canViewAdvance which covers that.
     const canViewDueToRole =
       (isFinanceDept(req.user!.department) && adv.status === "APPROVED") ||
-      (["MANAGER", "HOD", "EXCO", "HR_MANAGER"].includes(req.user!.role));
+      (["MANAGER", "HOD", "EXCO"].includes(req.user!.role));
     if (!canViewDueToRole) {
       const managerChainIds = await getManagerChainIds(adv.requester_id);
       if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, managerChainIds }))) {
@@ -1190,7 +1190,6 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
       });
     } else {
       // Legacy advance — use old role guards
-      if (role === "HR_MANAGER" && adv.status !== "HR_MANAGER_REVIEW") throw forbidden("HR Manager can only roll back advances pending HR Manager review");
       if (role === "HOD" && adv.status !== "COUNTERSIGNED") throw forbidden("HOD can only roll back advances pending HOD review");
       if (role === "EXCO" && adv.status !== "COUNTERSIGNED") throw forbidden("EXCO can only roll back advances pending HOD / EXCO review");
       const status = nextStatusOrThrow(adv.status, "ROLLBACK");
@@ -1254,7 +1253,6 @@ export async function performAdvanceReject(
     }
   } else {
     // Legacy guards
-    if (role === "HR_MANAGER" && adv.status !== "HR_MANAGER_REVIEW") throw forbidden("HR Manager can only reject advances pending HR Manager review");
     if (role === "HOD" && adv.status !== "COUNTERSIGNED") throw forbidden("HOD can only reject advances pending HOD review");
     if (role === "EXCO" && adv.status !== "COUNTERSIGNED") throw forbidden("EXCO can only reject advances pending HOD / EXCO review");
     if (isFinanceDept(department) && !["HR_OFFICER", "APPROVED"].includes(adv.status)) throw forbidden("Finance can only reject HR-approved advances pending payment");
@@ -1588,7 +1586,7 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
     }
 
     // Advance must be in a pending-approval state
-    const pendingStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_MANAGER_REVIEW", "HR_OFFICER", "APPROVED"];
+    const pendingStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_OFFICER", "APPROVED"];
     if (!pendingStatuses.includes(adv.status)) {
       throw badRequest("No pending approver to remind for this request");
     }
@@ -1613,7 +1611,6 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
       let role: string | null = null;
       if (adv.status === "SUBMITTED")         role = "MANAGER";
       if (adv.status === "COUNTERSIGNED")     role = "HOD";
-      if (adv.status === "HR_MANAGER_REVIEW") role = "HR_MANAGER";
       if (adv.status === "HR_OFFICER")        role = "FINANCE";
       if (adv.status === "APPROVED")          role = "FINANCE";
       if (role) {

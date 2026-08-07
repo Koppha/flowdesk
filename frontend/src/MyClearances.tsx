@@ -9,7 +9,7 @@ interface Props {
   onTrack: (claimId: string) => void;
 }
 
-const PENDING_STATUSES = ["SUBMITTED", "MANAGER_APPROVED", "CHIEF_OFFICER_APPROVED", "HR_OFFICER", "HR_MANAGER_REVIEW", "FINANCE_VERIFIED"];
+const PENDING_STATUSES = ["SUBMITTED", "MANAGER_APPROVED", "EXCO_APPROVED", "HR_OFFICER", "FINANCE_VERIFIED"];
 
 const TABS: { key: string; label: string }[] = [
   { key: "ALL", label: "All" },
@@ -64,9 +64,8 @@ function clearanceStageLabel(claim: any) {
     case "REJECTED": return "Rejected";
     case "SUBMITTED": return "Waiting Manager Certification";
     case "MANAGER_APPROVED":
-    case "CHIEF_OFFICER_APPROVED": return "Pending Approval";
-    case "HR_OFFICER": return "Waiting HR Manager Approval";
-    case "HR_MANAGER_REVIEW": return "Waiting Finance Verification";
+    case "EXCO_APPROVED": return "Pending Approval";
+    case "HR_OFFICER": return "Waiting Finance Verification";
     case "FINANCE_VERIFIED": return "Waiting Finance Settlement";
     default: return statusLabel(claim?.status);
   }
@@ -85,7 +84,7 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
   const stats = useMemo(() => ({
     total: claims.length,
     settled: claims.filter((c) => c.status === "SETTLED" || c.status === "CLOSED").length,
-    awaitingCto: claims.filter((c) => c.status === "CHIEF_OFFICER_APPROVED").length,
+    awaitingCto: claims.filter((c) => c.status === "EXCO_APPROVED").length,
     issues: claims.filter((c) => c.status === "REJECTED").length,
   }), [claims]);
 

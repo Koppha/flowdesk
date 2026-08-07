@@ -6,6 +6,7 @@ import {
   Edit3, Mail, Plus, RefreshCw, Search, Trash2, Users, X,
 } from "lucide-react";
 import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
+import { roleLabel } from "./roles";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,19 +32,6 @@ type UserRow = {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const ROLES: { value: string; label: string; color: string; bg: string }[] = [
-  { value: "EMPLOYEE",      label: "Employee",      color: "#1d4ed8", bg: "#dbeafe" },
-  { value: "MANAGER",       label: "Manager",       color: "#0f766e", bg: "#ccfbf1" },
-  { value: "HOD",           label: "HOD",           color: "#6d28d9", bg: "#ede9fe" },
-  { value: "FINANCE",       label: "Finance",       color: "#166534", bg: "#dcfce7" },
-  { value: "EXCO",          label: "EXCO",          color: "#7c3aed", bg: "#f3e8ff" },
-  { value: "CEO",           label: "CEO",           color: "#be185d", bg: "#fce7f3" },
-  { value: "ADMIN",         label: "Admin",         color: "#374151", bg: "#f3f4f6" },
-];
-
-const ROLE_MAP = Object.fromEntries(ROLES.map(r => [r.value, r]));
-
-
 const EMPTY_ORG: OrgSelection = {
   divisionId: null, divisionName: null,
   department: null, departmentId: null,
@@ -68,10 +56,12 @@ function orgPath(u: UserRow) {
 }
 
 function RoleBadge({ role }: { role: string }) {
-  const r = ROLE_MAP[role] ?? { label: role, color: "#6b7280", bg: "#f3f4f6" };
+  const hue = Array.from(role).reduce((total, char) => total + char.charCodeAt(0), 0) % 360;
+  const color = `hsl(${hue} 55% 32%)`;
+  const bg = `hsl(${hue} 65% 94%)`;
   return (
-    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 99, color: r.color, background: r.bg, whiteSpace: "nowrap" }}>
-      {r.label}
+    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 99, color, background: bg, whiteSpace: "nowrap" }}>
+      {roleLabel(role)}
     </span>
   );
 }
@@ -102,6 +92,7 @@ function Field({ label, children, span }: { label: string; children: React.React
 export default function UserManagement() {
   const empTypes = useEmploymentTypes();
   const [users, setUsers]     = useState<UserRow[]>([]);
+  const [roleCodes, setRoleCodes] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -146,8 +137,9 @@ export default function UserManagement() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await api.adminUsers();
+      const [rows, roleResponse] = await Promise.all([api.adminUsers(), api.roles()]);
       setUsers(Array.isArray(rows) ? rows : []);
+      setRoleCodes(Array.isArray(roleResponse?.roles) ? roleResponse.roles : []);
     } catch (e: any) {
       alert("Error loading users: " + e.message);
     } finally {
@@ -204,8 +196,10 @@ export default function UserManagement() {
     total:    users.length,
     active:   users.filter(u => u.is_active).length,
     inactive: users.filter(u => !u.is_active).length,
-    byRole:   ROLES.map(r => ({ ...r, count: users.filter(u => u.role === r.value).length })).filter(r => r.count > 0),
-  }), [users]);
+    byRole: roleCodes
+      .map((value) => ({ value, label: roleLabel(value), count: users.filter((user) => user.role === value).length }))
+      .filter((role) => role.count > 0),
+  }), [users, roleCodes]);
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
@@ -346,7 +340,7 @@ export default function UserManagement() {
         ))}
         {stats.byRole.slice(0, 5).map(r => (
           <div key={r.value} style={{ flex: "1 1 100px", padding: "14px 18px", borderRadius: 10, background: "var(--surface)", border: "1px solid var(--border)", textAlign: "center" }}>
-            <div style={{ fontSize: 28, fontWeight: 700, color: r.color }}>{r.count}</div>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>{r.count}</div>
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{r.label}</div>
           </div>
         ))}
@@ -370,7 +364,7 @@ export default function UserManagement() {
         </div>
         <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ ...fieldStyle, width: "auto", minWidth: 140 }}>
           <option value="ALL">All Roles</option>
-          {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+          {roleCodes.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
         </select>
         {divisionNames.length > 1 && (
           <select value={divFilter} onChange={e => setDivFilter(e.target.value)} style={{ ...fieldStyle, width: "auto", minWidth: 150 }}>
@@ -536,7 +530,7 @@ export default function UserManagement() {
               </Field>
               <Field label="System Role">
                 <select value={addRole} onChange={e => setAddRole(e.target.value)} style={fieldStyle}>
-                  {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  {roleCodes.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
                 </select>
               </Field>
               <Field label="Status">
@@ -605,7 +599,7 @@ export default function UserManagement() {
               </Field>
               <Field label="System Role">
                 <select value={editRole} onChange={e => setEditRole(e.target.value)} style={fieldStyle}>
-                  {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  {roleCodes.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
                 </select>
               </Field>
               <Field label="Status">

@@ -56,5 +56,5 @@ export function isPermanentEmployee(user: Pick<UserAccountState, "employment_typ
 export function canCreateAdvanceOnBehalf(user: Pick<UserAccountState, "employment_type" | "role">) {
   const role = String(user.role || "").trim().toUpperCase();
   if (isPermanentEmployee(user)) return true;
-  return ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "CEO", "EXCO"].includes(role);
+  return ["HOD", "MANAGER", "FINANCE", "ADMIN", "CEO", "EXCO"].includes(role);
 }

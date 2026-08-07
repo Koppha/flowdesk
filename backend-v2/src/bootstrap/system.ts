@@ -52,15 +52,14 @@ async function ensureEmailActionTokensSchema() {
 async function ensureUserSchema() {
   await ensureEnumColumnValue("users", "role", "EXCO");
   await ensureEnumColumnValue("users", "role", "HOD");
-  await ensureEnumColumnValue("users", "role", "HR_MANAGER");
   await ensureEnumColumnValue("users", "role", "CEO");
   await ensureEnumColumnValue("advance_requests", "status", "HR_OFFICER");
-  await ensureEnumColumnValue("advance_requests", "status", "HR_MANAGER_REVIEW");
   await ensureEnumColumnValue("advance_requests", "status", "COUNTERSIGNED");
   await ensureEnumColumnValue("advance_requests", "status", "CANCELLED");
+  await ensureEnumColumnValue("clearance_claims", "status", "EXCO_APPROVED");
   await ensureEnumColumnValue("clearance_claims", "status", "HR_OFFICER");
-  await ensureEnumColumnValue("clearance_claims", "status", "HR_MANAGER_REVIEW");
   await ensureEnumColumnValue("clearance_claims", "status", "PAYMENT_PROCESSING");
+  await ensureEnumColumnValue("approvals", "step", "EXCO");
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS finance_decision text`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS finance_comments text`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_amount numeric(12,2)`);
@@ -183,7 +182,14 @@ async function ensureUserSchema() {
     )
   `);
   await query(`UPDATE advance_requests SET created_by_id = requester_id WHERE created_by_id IS NULL`);
-  await query(`UPDATE advance_requests SET status='HR_MANAGER_REVIEW', updated_at=now() WHERE status::text='CHIEF_OFFICER_REVIEW'`);
+  const removedHrRole = ["HR", "MANAGER"].join("_");
+  const removedAuthorisingRole = ["AUTH", "OFFICER"].join("_");
+  const removedChiefRole = ["CHIEF", "OFFICER"].join("_");
+  const removedCounterSignRole = ["COUNTER", "SIGN"].join("");
+  await query(`UPDATE advance_requests SET status='HR_OFFICER', updated_at=now() WHERE status::text=$1`, [`${removedChiefRole}_REVIEW`]);
+  await query(`UPDATE advance_requests SET status='HR_OFFICER', updated_at=now() WHERE status::text=$1`, [`${removedHrRole}_REVIEW`]);
+  await query(`UPDATE clearance_claims SET status='EXCO_APPROVED', updated_at=now() WHERE status::text=$1`, [`${removedChiefRole}_APPROVED`]);
+  await query(`UPDATE clearance_claims SET status='HR_OFFICER', updated_at=now() WHERE status::text=$1`, [`${removedHrRole}_REVIEW`]);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES workflows(id)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS workflow_step_order int`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS approval_chain jsonb`);
@@ -208,15 +214,43 @@ async function ensureUserSchema() {
     `UPDATE users
         SET role='EMPLOYEE',
             updated_at=now()
-      WHERE role::text='COUNTERSIGN'`
+      WHERE role::text=$1`,
+    [removedCounterSignRole]
   );
 
   await query(
     `UPDATE users
         SET role='EXCO',
             updated_at=now()
-      WHERE role::text='CHIEF_OFFICER'`
+      WHERE role::text=$1`,
+    [removedChiefRole]
   );
+
+  await query(
+    `UPDATE users
+        SET role='EMPLOYEE',
+            updated_at=now()
+      WHERE role::text = ANY($1::text[])`,
+    [[removedHrRole, removedAuthorisingRole]]
+  );
+
+  await query(`UPDATE approvals SET step='EXCO' WHERE step::text=$1`, [removedChiefRole]);
+  await query(`UPDATE approvals SET step='FINANCE' WHERE step::text = ANY($1::text[])`, [[removedHrRole, removedAuthorisingRole]]);
+
+  await removeEnumColumnValues("users", "role", [removedHrRole, removedAuthorisingRole, removedChiefRole, removedCounterSignRole], "EMPLOYEE");
+  await removeEnumColumnValues(
+    "advance_requests",
+    "status",
+    [`${removedHrRole}_REVIEW`, `${removedAuthorisingRole}_APPROVED`, `${removedChiefRole}_REVIEW`],
+    "DRAFT"
+  );
+  await removeEnumColumnValues(
+    "clearance_claims",
+    "status",
+    [`${removedHrRole}_REVIEW`, `${removedAuthorisingRole}_APPROVED`, `${removedChiefRole}_APPROVED`],
+    "DRAFT"
+  );
+  await removeEnumColumnValues("approvals", "step", [removedHrRole, removedAuthorisingRole, removedChiefRole]);
 
   await query(
     `UPDATE users
@@ -277,6 +311,71 @@ async function ensureEnumColumnValue(tableName: string, columnName: string, valu
       IF enum_type IS NOT NULL THEN
         EXECUTE format('ALTER TYPE %s ADD VALUE IF NOT EXISTS %L', enum_type, '${safeValue}');
       END IF;
+    END $$;
+  `);
+}
+
+async function removeEnumColumnValues(
+  tableName: string,
+  columnName: string,
+  removedValues: string[],
+  defaultValue?: string
+) {
+  if (![tableName, columnName].every((value) => /^[a-z_][a-z0-9_]*$/i.test(value))) {
+    throw new Error("Invalid enum migration identifier");
+  }
+  const removedSql = removedValues.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
+  const defaultSql = defaultValue
+    ? `EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I SET DEFAULT %L::%I.%I', table_schema, table_name, column_name, '${defaultValue.replace(/'/g, "''")}', enum_schema, enum_name);`
+    : "";
+
+  await query(`
+    DO $$
+    DECLARE
+      table_schema text := 'public';
+      table_name text := '${tableName}';
+      column_name text := '${columnName}';
+      enum_oid oid;
+      enum_schema text;
+      enum_name text;
+      remaining_values text;
+    BEGIN
+      SELECT t.oid, n.nspname, t.typname
+        INTO enum_oid, enum_schema, enum_name
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace cn ON cn.oid = c.relnamespace
+        JOIN pg_type t ON t.oid = a.atttypid
+        JOIN pg_namespace n ON n.oid = t.typnamespace
+       WHERE cn.nspname = table_schema
+         AND c.relname = table_name
+         AND a.attname = column_name
+         AND t.typtype = 'e'
+         AND a.attnum > 0
+         AND NOT a.attisdropped
+       LIMIT 1;
+
+      IF enum_oid IS NULL OR NOT EXISTS (
+        SELECT 1 FROM pg_enum WHERE enumtypid = enum_oid AND enumlabel = ANY(ARRAY[${removedSql}])
+      ) THEN
+        RETURN;
+      END IF;
+
+      SELECT string_agg(quote_literal(enumlabel), ', ' ORDER BY enumsortorder)
+        INTO remaining_values
+        FROM pg_enum
+       WHERE enumtypid = enum_oid
+         AND NOT (enumlabel = ANY(ARRAY[${removedSql}]));
+
+      EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I DROP DEFAULT', table_schema, table_name, column_name);
+      EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I TYPE text USING %I::text', table_schema, table_name, column_name, column_name);
+      EXECUTE format('DROP TYPE %I.%I', enum_schema, enum_name);
+      EXECUTE format('CREATE TYPE %I.%I AS ENUM (%s)', enum_schema, enum_name, remaining_values);
+      EXECUTE format(
+        'ALTER TABLE %I.%I ALTER COLUMN %I TYPE %I.%I USING %I::%I.%I',
+        table_schema, table_name, column_name, enum_schema, enum_name, column_name, enum_schema, enum_name
+      );
+      ${defaultSql}
     END $$;
   `);
 }

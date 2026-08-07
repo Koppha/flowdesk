@@ -8,9 +8,6 @@ DO $$ BEGIN
     'EMPLOYEE',
     'HOD',
     'MANAGER',
-    'HR_MANAGER',
-    'AUTH_OFFICER',
-    'CHIEF_OFFICER',
     'FINANCE',
     'ADMIN',
     'EXCO',
@@ -32,21 +29,21 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE advance_status AS ENUM (
-    'DRAFT','SUBMITTED','CHIEF_OFFICER_REVIEW','HR_MANAGER_REVIEW','HR_REVIEW','HR_OFFICER','APPROVED','PAID','CLOSED','REJECTED','CANCELLED'
+    'DRAFT','SUBMITTED','COUNTERSIGNED','HR_REVIEW','HR_OFFICER','APPROVED','PAID','CLOSED','REJECTED','CANCELLED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE claim_status AS ENUM (
     'DRAFT','SUBMITTED',
-    'MANAGER_APPROVED','CHIEF_OFFICER_APPROVED','HR_OFFICER','HR_MANAGER_REVIEW',
+    'MANAGER_APPROVED','EXCO_APPROVED','HR_OFFICER',
     'FINANCE_VERIFIED','PAYMENT_PROCESSING','SETTLED','CLOSED','REJECTED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE approval_step AS ENUM (
-    'MANAGER','HR_MANAGER','CHIEF_OFFICER','FINANCE'
+    'MANAGER','EXCO','FINANCE'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -444,7 +441,7 @@ BEGIN
   INSERT INTO admin_feature_permissions (feature_key, allowed_roles) VALUES
     ('user_management',      ARRAY['ADMIN','MANAGER','EXCO']),
     ('roles_permissions',    ARRAY['ADMIN','MANAGER','EXCO']),
-    ('travel_setup',         ARRAY['ADMIN','HR_MANAGER','MANAGER']),
+    ('travel_setup',         ARRAY['ADMIN','MANAGER']),
     ('org_structure',        ARRAY['ADMIN']),
     ('team_roster',          ARRAY['ADMIN']),
     ('sections_departments', ARRAY['ADMIN','MANAGER','EXCO']),

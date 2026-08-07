@@ -143,7 +143,7 @@ export async function canViewClaim(args: { role: string; department?: string | n
   // workflow chain and now sit with Finance/HR/EXCO/Managers awaiting (or
   // having completed) settlement — those are the same roles allowedInboxForRole
   // lists this status for, so let them view it.
-  if (["FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED"].includes(args.status || "") && (isFinanceDept(args.department) || ["MANAGER", "HR_MANAGER", "EXCO"].includes(args.role))) {
+  if (["FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED"].includes(args.status || "") && (isFinanceDept(args.department) || ["MANAGER", "EXCO"].includes(args.role))) {
     return true;
   }
 

@@ -4,7 +4,7 @@
  */
 import React, { useState } from "react";
 import { Search, X } from "lucide-react";
-import { ROLE_LABELS } from "./roles";
+import { roleLabel } from "./roles";
 
 export type PickableUser = {
   id: string;
@@ -177,7 +177,7 @@ export default function UserPicker({
                     flexShrink: 0, fontSize: 11, padding: "2px 7px", borderRadius: 99,
                     background: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0",
                   }}>
-                    {ROLE_LABELS[u.role ?? ""] ?? u.role ?? "Employee"}
+                    {roleLabel(u.role)}
                   </span>
                 </button>
               );
@@ -190,7 +190,7 @@ export default function UserPicker({
           <div style={{ marginTop: 12, padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, fontSize: 13, color: "#1e40af" }}>
             <strong>{selected.full_name || selected.email}</strong> {selectedNote}
             {selected.role && selected.role !== "EMPLOYEE" && (
-              <span style={{ marginLeft: 6, opacity: 0.75 }}>(currently: {ROLE_LABELS[selected.role] ?? selected.role})</span>
+              <span style={{ marginLeft: 6, opacity: 0.75 }}>(currently: {roleLabel(selected.role)})</span>
             )}
           </div>
         )}

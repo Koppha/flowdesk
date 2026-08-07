@@ -104,7 +104,7 @@ export default function OvertimeClaimModule({ profile, requestDirectory, onBack 
   const [submitting, setSubmitting] = useState(false);
 
   const canPickEmployee = ["ADMIN", "MANAGER"].includes(String(profile?.role || "").toUpperCase());
-  const isHR = ["HR_MANAGER", "ADMIN"].includes(String(profile?.role || "").toUpperCase());
+  const isHR = String(profile?.role || "").toUpperCase() === "ADMIN";
   const isFinance =
     String(profile?.role || "").toUpperCase() === "ADMIN" ||
     String(profile?.department || "").trim().toLowerCase() === "finance";

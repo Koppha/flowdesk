@@ -41,9 +41,8 @@ const passwordHash = await hashPassword(password);
 const ids = {
   employee: randomUUID(),
   manager: randomUUID(),
-  chief: randomUUID(),
-  auth: randomUUID(),
-  hrManager: randomUUID(),
+  exco: randomUUID(),
+  hr: randomUUID(),
   finance: randomUUID(),
   department: randomUUID(),
   travelType: randomUUID()
@@ -66,28 +65,20 @@ const users = {
     role: "MANAGER",
     department
   },
-  chief: {
-    id: ids.chief,
-    email: `e2e-chief-${runId}@example.invalid`,
-    fullName: `E2E Chief ${runId}`,
-    employeeNo: `E2E-CHF-${runId}`,
-    role: "CHIEF_OFFICER",
+  exco: {
+    id: ids.exco,
+    email: `e2e-exco-${runId}@example.invalid`,
+    fullName: `E2E EXCO ${runId}`,
+    employeeNo: `E2E-EXCO-${runId}`,
+    role: "EXCO",
     department
   },
-  auth: {
-    id: ids.auth,
-    email: `e2e-auth-${runId}@example.invalid`,
-    fullName: `E2E Auth ${runId}`,
-    employeeNo: `E2E-AUTH-${runId}`,
-    role: "AUTH_OFFICER",
-    department: "HR"
-  },
-  hrManager: {
-    id: ids.hrManager,
-    email: `e2e-hrm-${runId}@example.invalid`,
-    fullName: `E2E HR Manager ${runId}`,
-    employeeNo: `E2E-HRM-${runId}`,
-    role: "HR_MANAGER",
+  hr: {
+    id: ids.hr,
+    email: `e2e-hr-${runId}@example.invalid`,
+    fullName: `E2E HR Officer ${runId}`,
+    employeeNo: `E2E-HR-${runId}`,
+    role: "EMPLOYEE",
     department: "HR"
   },
   finance: {
@@ -150,7 +141,7 @@ const tokens = {
   manager: await login(users.manager),
   chief: await login(users.chief),
   auth: await login(users.auth),
-  hrManager: await login(users.hrManager),
+  hr: await login(users.hr),
   finance: await login(users.finance)
 };
 
@@ -218,11 +209,11 @@ const managerApproved = await request
   .set(authed(tokens.manager))
   .send({ approved_total: 300 })
   .expect(200);
-assert.equal(managerApproved.body.status, "CHIEF_OFFICER_REVIEW");
+assert.equal(managerApproved.body.status, "COUNTERSIGNED");
 advanceStatuses.push(managerApproved.body.status);
 
 const chiefInboxAdvance = await request.get("/inbox").set(authed(tokens.chief)).expect(200);
-expectInboxItem(chiefInboxAdvance.body, "ADVANCE", advanceId, "CHIEF_OFFICER_REVIEW");
+expectInboxItem(chiefInboxAdvance.body, "ADVANCE", advanceId, "COUNTERSIGNED");
 
 const chiefApproved = await request
   .post(`/advances/${advanceId}/approve`)
@@ -294,29 +285,21 @@ const claimManagerApproved = await request
 assert.equal(claimManagerApproved.body.status, "MANAGER_APPROVED");
 claimStatuses.push(claimManagerApproved.body.status);
 
-const claimChiefApproved = await request
-  .post(`/claims/${claimId}/chief-officer-approve`)
-  .set(authed(tokens.chief))
+const claimExcoApproved = await request
+  .post(`/claims/${claimId}/approve`)
+  .set(authed(tokens.exco))
   .send({})
   .expect(200);
-assert.equal(claimChiefApproved.body.status, "CHIEF_OFFICER_APPROVED");
-claimStatuses.push(claimChiefApproved.body.status);
+assert.equal(claimExcoApproved.body.status, "EXCO_APPROVED");
+claimStatuses.push(claimExcoApproved.body.status);
 
-const claimAuthApproved = await request
-  .post(`/claims/${claimId}/auth-officer-approve`)
-  .set(authed(tokens.auth))
+const claimHrApproved = await request
+  .post(`/claims/${claimId}/approve`)
+  .set(authed(tokens.hr))
   .send({})
   .expect(200);
-assert.equal(claimAuthApproved.body.status, "HR_OFFICER");
-claimStatuses.push(claimAuthApproved.body.status);
-
-const claimHrManagerApproved = await request
-  .post(`/claims/${claimId}/hr-manager-approve`)
-  .set(authed(tokens.hrManager))
-  .send({})
-  .expect(200);
-assert.equal(claimHrManagerApproved.body.status, "HR_MANAGER_REVIEW");
-claimStatuses.push(claimHrManagerApproved.body.status);
+assert.equal(claimHrApproved.body.status, "HR_OFFICER");
+claimStatuses.push(claimHrApproved.body.status);
 
 const claimFinanceVerified = await request
   .post(`/claims/${claimId}/finance-verify`)

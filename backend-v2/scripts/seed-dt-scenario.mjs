@@ -6,7 +6,7 @@
  *   - Ensures the "Digital Transformation" department row exists and has
  *     manager_user_id, hod_user_id, and exco_user_id set
  *   - (Re)creates the DT Advance Request workflow with the 6-step chain:
- *       Employee → Manager/Supervisor → HOD → HR Manager → HR → Finance
+ *       Employee → Manager/Supervisor → HOD → HR Officer → Finance
  *   - Creates the DT Clearance workflow with the 5-step chain:
  *       Employee → HOD → EXCO Member → HR → Finance
  *
@@ -61,20 +61,12 @@ const USERS = [
     dtPosition: "Head of Department  ← set as department HOD",
   },
   {
-    employeeNo: "ETL-DT005",
-    fullName:   "Mpho Sefako",
-    title:      "HR Manager",
-    email:      "mpho.sefako@etl.co.ls",
-    role:       "HR_MANAGER",
-    dtPosition: "HR Manager  (step 4 of advance flow)",
-  },
-  {
     employeeNo: "ETL-DT006",
     fullName:   "Palesa Letsie",
     title:      "HR Officer",
     email:      "palesa.letsie@etl.co.ls",
-    role:       "AUTH_OFFICER",
-    dtPosition: "HR  (step 5 of advance flow / step 4 of clearance flow)",
+    role:       "EMPLOYEE",
+    dtPosition: "HR Officer  (step 4 of advance and clearance flows)",
   },
   {
     employeeNo: "ETL-DT007",
@@ -254,13 +246,6 @@ async function main() {
   const ptExco        = await getPositionTypeId(client, "EXCO_OWNER");
   const ptHrReview    = await getPositionTypeId(client, "HR_REVIEW");
   const ptFinance     = await getPositionTypeId(client, "FINANCE");
-  // Ensure HR_MANAGER_REVIEW exists (used as the HR Manager approval step)
-  const ptHrManager   = await ensurePositionType(
-    client,
-    "HR_MANAGER_REVIEW",
-    "HR Manager",
-    "HR Manager review and approval"
-  );
   console.log("  Position types resolved.");
 
   // Find any admin user to set as created_by (fall back to hodId)
@@ -272,7 +257,7 @@ async function main() {
   // 4. Workflows
   console.log("\n── Workflows ─────────────────────────────────────────");
 
-  // 4a. Advance Request (DT) — 6 steps
+  // 4a. Advance Request (DT) — 5 steps
   await recreateWorkflow(client, {
     name:        "Advance Request Workflow – Digital Transformation",
     requestType: "ADVANCE_REQUEST",
@@ -283,9 +268,8 @@ async function main() {
       { order: 1, positionTypeId: ptEmployee,  name: "Employee",             description: "Request Initiator",                 isSystem: true,  required: true,  skipIfUnassigned: false, allowDelegation: false, escalationDays: 0, isFinal: false },
       { order: 2, positionTypeId: ptManager,   name: "Manager / Supervisor", description: "Department Manager review",          isSystem: false, required: true,  skipIfUnassigned: false, allowDelegation: true,  escalationDays: 2, isFinal: false },
       { order: 3, positionTypeId: ptHod,       name: "Head of Department",   description: "HOD approval",                      isSystem: false, required: true,  skipIfUnassigned: false, allowDelegation: true,  escalationDays: 2, isFinal: false },
-      { order: 4, positionTypeId: ptHrManager, name: "HR Manager",           description: "HR Manager endorsement",            isSystem: false, required: true,  skipIfUnassigned: false, allowDelegation: false, escalationDays: 3, isFinal: false },
-      { order: 5, positionTypeId: ptHrReview,  name: "HR",                   description: "HR Officer final HR clearance",     isSystem: false, required: true,  skipIfUnassigned: false, allowDelegation: false, escalationDays: 2, isFinal: false },
-      { order: 6, positionTypeId: ptFinance,   name: "Finance",              description: "Finance authorisation and payment", isSystem: false, required: true,  skipIfUnassigned: false, allowDelegation: false, escalationDays: 3, isFinal: true  },
+      { order: 4, positionTypeId: ptHrReview,  name: "HR Officer",           description: "HR clearance",                      isSystem: false, required: true,  skipIfUnassigned: false, allowDelegation: false, escalationDays: 2, isFinal: false },
+      { order: 5, positionTypeId: ptFinance,   name: "Finance",              description: "Finance authorisation and payment", isSystem: false, required: true,  skipIfUnassigned: false, allowDelegation: false, escalationDays: 3, isFinal: true  },
     ],
   });
 
@@ -327,7 +311,7 @@ async function main() {
 ║   (HOD)           ║                  ║   @etl.co.ls       ║                 ║
 ╠═══════════════════╬══════════════════╬════════════════════╬═════════════════╣
 ║ Mpho Sefako       ║ ETL-DT005        ║ mpho.sefako        ║ Pass@2025!      ║
-║   (HR Manager)    ║                  ║   @etl.co.ls       ║                 ║
+║   (HR Officer)    ║                  ║   @etl.co.ls       ║                 ║
 ╠═══════════════════╬══════════════════╬════════════════════╬═════════════════╣
 ║ Palesa Letsie     ║ ETL-DT006        ║ palesa.letsie      ║ Pass@2025!      ║
 ║   (HR)            ║                  ║   @etl.co.ls       ║                 ║
@@ -342,7 +326,7 @@ async function main() {
   Approval flows created:
 
   ADVANCE REQUEST
-    Employee → Manager/Supervisor → HOD → HR Manager → HR → Finance
+    Employee → Manager/Supervisor → HOD → HR Officer → Finance
 
   CLEARANCE
     Employee → HOD → EXCO → HR → Finance

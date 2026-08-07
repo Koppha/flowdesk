@@ -110,7 +110,7 @@ export function useStaffDirectory() {
 }
 
 export const ACTIVE_STAFF_ROLES = [
-  "EMPLOYEE", "HOD", "MANAGER", "HR_MANAGER", "FINANCE", "EXCO", "CEO",
+  "EMPLOYEE", "HOD", "MANAGER", "FINANCE", "EXCO", "CEO",
 ];
 
 export function isActiveStaff(u: StaffMember): boolean {

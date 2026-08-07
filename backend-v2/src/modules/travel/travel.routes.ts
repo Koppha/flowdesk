@@ -36,14 +36,14 @@ travelRouter.use(requireAuth);
 
 travelRouter.get("/types", async (req: AuthedRequest, res, next) => {
   try {
-    const includeInactive = ["HR_MANAGER", "MANAGER", "ADMIN"].includes(req.user!.role);
+    const includeInactive = ["MANAGER", "ADMIN"].includes(req.user!.role);
     return res.json(await listTravelTypes(includeInactive));
   } catch (err) {
     return next(err);
   }
 });
 
-travelRouter.post("/types", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+travelRouter.post("/types", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = TravelTypeSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid travel type payload", parsed.error.flatten());
@@ -93,7 +93,7 @@ travelRouter.post("/types", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), asy
   }
 });
 
-travelRouter.put("/types/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+travelRouter.put("/types/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = TravelTypeUpdateSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid travel type payload", parsed.error.flatten());
@@ -127,7 +127,7 @@ travelRouter.put("/types/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), 
   }
 });
 
-travelRouter.delete("/types/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+travelRouter.delete("/types/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query(
       `DELETE FROM travel_types WHERE id=$1 RETURNING id`,
@@ -140,7 +140,7 @@ travelRouter.delete("/types/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]
   }
 });
 
-travelRouter.post("/locations", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+travelRouter.post("/locations", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = TravelLocationSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid travel location payload", parsed.error.flatten());
@@ -194,7 +194,7 @@ travelRouter.post("/locations", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]),
   }
 });
 
-travelRouter.put("/locations/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+travelRouter.put("/locations/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = TravelLocationSchema.partial().safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid travel location payload", parsed.error.flatten());

@@ -10,7 +10,6 @@ export type Role =
   | "EMPLOYEE"
   | "HOD"
   | "MANAGER"
-  | "HR_MANAGER"
   | "FINANCE"
   | "ADMIN"
   | "EXCO"

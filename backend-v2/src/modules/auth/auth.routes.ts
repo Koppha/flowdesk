@@ -27,6 +27,24 @@ const LoginSchema = z
 
 export const authRouter = Router();
 
+async function assertKnownRole(role: string) {
+  const rows = await query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_enum e ON e.enumtypid = a.atttypid
+        WHERE n.nspname = 'public'
+          AND c.relname = 'users'
+          AND a.attname = 'role'
+          AND e.enumlabel = $1
+     ) AS exists`,
+    [role]
+  );
+  if (!rows[0]?.exists) throw badRequest("Unknown role");
+}
+
 function assertRoleAssignmentAllowed(req: AuthedRequest, target: { department: string | null; role?: string | null }, nextRole: string) {
   if (req.user!.role === "ADMIN") return;
   if (req.user!.role !== "MANAGER" && req.user!.role !== "EXCO") {
@@ -36,7 +54,7 @@ function assertRoleAssignmentAllowed(req: AuthedRequest, target: { department: s
   const department = String(req.user!.department || "").trim();
   const targetDepartment = String(target.department || "").trim();
   if (!department || !targetDepartment || department !== targetDepartment) {
-    throw forbidden("Managers and chief officers can only assign roles within their division");
+    throw forbidden("Managers and EXCO members can only assign roles within their division");
   }
   if (nextRole === "ADMIN" || target.role === "ADMIN" || nextRole === "CEO" || target.role === "CEO") {
     throw forbidden("Only system administrators can assign or modify the ADMIN or CEO role");
@@ -61,7 +79,7 @@ const ProfileSchema = z
   });
 
 const UpdateUserRoleSchema = z.object({
-  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]),
+  role: z.string().trim().min(1),
   is_active: z.boolean().optional()
 });
 
@@ -77,7 +95,7 @@ const CreateUserSchema = z.object({
   team_id: z.string().uuid().nullable().optional(),
   manager_type_id: z.string().uuid().nullable().optional(),
   employment_type: z.string().trim().optional(),
-  role: z.enum(["EMPLOYEE", "HOD", "MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"]).optional(),
+  role: z.string().trim().min(1).optional(),
   is_active: z.boolean().optional(),
   groups: z.array(z.string().trim().min(1)).optional()
 });
@@ -414,6 +432,25 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
 });
 
 authRouter.use(requireAuth);
+
+authRouter.get("/roles", async (_req: AuthedRequest, res, next) => {
+  try {
+    const roles = await query<{ code: string }>(
+      `SELECT e.enumlabel AS code
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_enum e ON e.enumtypid = a.atttypid
+        WHERE n.nspname = 'public'
+          AND c.relname = 'users'
+          AND a.attname = 'role'
+        ORDER BY e.enumsortorder`
+    );
+    return res.json({ roles: roles.map((role) => role.code) });
+  } catch (err) {
+    return next(err);
+  }
+});
 
 authRouter.get("/me", async (req: AuthedRequest, res, next) => {
   try {
@@ -1247,6 +1284,7 @@ authRouter.post("/users/:id/role", requireRole(["ADMIN", "MANAGER", "EXCO"]), as
   try {
     const parsed = UpdateUserRoleSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid user update payload", parsed.error.flatten());
+    await assertKnownRole(parsed.data.role);
 
     const existing = await query<{ id: string; department: string | null; role: string | null }>(
       `SELECT id, department, role
@@ -1455,6 +1493,7 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
     const pwd = randomUUID();
     const hash = await hashPassword(pwd);
     const role = parsed.data.role ?? "EXCO";
+    await assertKnownRole(role);
     const employeeNo = parsed.data.employee_no?.trim() || null;
     const sectionOrDepartment = parsed.data.section ?? parsed.data.department ?? "";
     const department = sectionOrDepartment
@@ -1749,6 +1788,7 @@ authRouter.post("/departments/:department/role", requireRole(["ADMIN", "MANAGER"
   try {
     const parsed = UpdateUserRoleSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid division role payload", parsed.error.flatten());
+    await assertKnownRole(parsed.data.role);
 
     const department = await resolveDepartmentGroup(String(req.params.department || ""));
     assertRoleAssignmentAllowed(req, { department }, parsed.data.role);
@@ -1864,7 +1904,7 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   advance_pdf:           ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
   report_reconciliation: ["ADMIN", "FINANCE"],
   pdf_designer:          ["ADMIN"],
-  claims_sla_report:     ["ADMIN", "FINANCE", "HR_MANAGER"],
+  claims_sla_report:     ["ADMIN", "FINANCE"],
   advance_recovery_settings: ["ADMIN", "FINANCE"],
   manager_delegations:   ["ADMIN"],
   deductions:            ["ADMIN"],

@@ -93,7 +93,7 @@ const upload = multer({
 export const accommodationRouter = Router();
 accommodationRouter.use(requireAuth);
 
-// Hotels CRUD - HR Managers can onboard hotels
+// Hotels CRUD - managers and administrators can onboard hotels.
 accommodationRouter.get("/hotels", async (_req: AuthedRequest, res, next) => {
   try {
     const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY country NULLS LAST, province NULLS LAST, city NULLS LAST, district NULLS LAST, name`);
@@ -103,7 +103,7 @@ accommodationRouter.get("/hotels", async (_req: AuthedRequest, res, next) => {
   }
 });
 
-accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.post("/hotels", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const body = HotelCreateSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
@@ -128,7 +128,7 @@ accommodationRouter.post("/hotels", requireRole(["HR_MANAGER", "MANAGER", "ADMIN
   }
 });
 
-accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.put("/hotels/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const body = HotelUpdateSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
@@ -148,7 +148,7 @@ accommodationRouter.put("/hotels/:id", requireRole(["HR_MANAGER", "MANAGER", "AD
   }
 });
 
-accommodationRouter.delete("/hotels/:id", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.delete("/hotels/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query<{ id: string }>(
       `DELETE FROM accommodation_hotels WHERE id=$1 RETURNING id`,
@@ -170,7 +170,7 @@ accommodationRouter.get("/meal-value", async (_req: AuthedRequest, res, next) =>
   }
 });
 
-accommodationRouter.put("/meal-value", requireRole(["HR_MANAGER", "MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.put("/meal-value", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const body = MealValueSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid meal value payload", body.error.flatten());

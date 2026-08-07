@@ -1,6 +1,6 @@
 /**
  * Creates the "Unsigned" claim workflow templates:
- *  - "Unsigned" (STICKY, default flow): Human Resource Manager -> Human Resource (Team) -> Finance (Financial Account)
+ *  - "Unsigned" (STICKY, default flow): HR Officer -> Human Resource (Team) -> Finance (Financial Account)
  *  - "Unsigned - Temporary" (TEMPORARY): Countersign -> Approver
  *
  * Both are created INACTIVE; an admin switches the default flow ON via the
@@ -68,7 +68,7 @@ async function main() {
     description: "Default flow for unsigned claim documents",
     workflowType: "STICKY",
     steps: [
-      { order: 1, code: "HR_MANAGER_REVIEW", name: "Human Resource Manager" },
+      { order: 1, code: "HR_OFFICER", name: "HR Officer" },
       { order: 2, code: "HR_REVIEW", name: "Human Resource (Team)", group: "Human Resource Team" },
       { order: 3, code: "FINANCE", name: "Finance", group: "Financial Account", final: true }
     ]

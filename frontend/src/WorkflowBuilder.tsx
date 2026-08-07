@@ -409,7 +409,7 @@ export default function WorkflowBuilder() {
   const [travelTypes, setTravelTypes] = useState<Array<{ code: string; name: string; active?: boolean }>>([]);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null; section_id?: string | null; section_name?: string | null; team_name?: string | null }>>([]);
+  const [allUsers, setAllUsers] = useState<Array<{ id: string; full_name: string | null; email: string; role: string; department: string | null; employee_no: string | null; section_id?: string | null; section_name?: string | null; team_id?: string | null; team_name?: string | null }>>([]);
   const [stepUserSearch, setStepUserSearch] = useState<Record<string, string>>({});
   const [managerTypes, setManagerTypes] = useState<Array<{ id: string; name: string; role: string; description: string | null; active: boolean; sort_order: number }>>([]);
   const [actionTypes, setActionTypes] = useState<Array<{ id: number; code: string; label: string; is_system: boolean; is_active: boolean; sort_order: number }>>([]);
@@ -1075,7 +1075,7 @@ export default function WorkflowBuilder() {
       isActive: true,
       requiresAccommodation: false,
       parallelWithPrevious: false,
-      actionType: position.code === "MANAGER" ? "COUNTER_SIGN" : "APPROVE",
+      actionType: isEmployee ? "" : position.code === "MANAGER" ? "COUNTER_SIGN" : "APPROVE",
       canReject: true,
       canRollback: true,
       ...overrides,
@@ -1314,9 +1314,13 @@ export default function WorkflowBuilder() {
       case "HOD":
         addCandidate(orgSection?.hod_user_id ?? orgDept?.hod_user_id);
         break;
-      case "MANAGER":
-        addCandidate(orgTeam?.leader_user_id ?? orgSection?.manager_user_id ?? orgDept?.manager_user_id);
-        break;
+      case "MANAGER": {
+        const managers = allUsers.filter((user) => user.role === "MANAGER");
+        if (targetTeam) return managers.filter((user) => user.team_name === targetTeam);
+        if (targetSection) return managers.filter((user) => user.section_name === targetSection);
+        if (targetDepartment) return managers.filter((user) => user.department === targetDepartment);
+        return managers;
+      }
       case "EXCO":
         addCandidate(orgSection?.exco_user_id ?? orgDept?.exco_user_id);
         break;
@@ -2326,7 +2330,7 @@ export default function WorkflowBuilder() {
                   actionTypes.find((at) => at.code === step.actionType)?.label
                   ?? ({ APPROVE: "Approver", COUNTER_SIGN: "Counter Signer", MARK_PAID: "Payment Officer" } as Record<string, string>)[step.actionType]
                   ?? step.actionType;
-                const supportLabel = step.isFinalApproval ? `${actionLabel} · Final Approval` : actionLabel;
+                const supportLabel = step.isSystemStep ? "Request Initiator" : step.isFinalApproval ? `${actionLabel} · Final Approval` : actionLabel;
                 const isGrouped = step.parallelWithPrevious || steps[index + 1]?.parallelWithPrevious;
                 return (
                   <React.Fragment key={step.id}>
@@ -2495,21 +2499,23 @@ export default function WorkflowBuilder() {
                     <option value="YES">Yes</option>
                   </select>
                 </label>
-                <label>
-                  <span>Action Label</span>
-                  <select value={selectedStep.actionType} onChange={(event) => updateStep(selectedStep.id, { actionType: event.target.value as "APPROVE" | "COUNTER_SIGN" | "MARK_PAID" })} disabled={readOnly}>
-                    {(actionTypes.filter((at) => at.is_active).length > 0
-                      ? actionTypes.filter((at) => at.is_active)
-                      : [{ code: "APPROVE", label: "Approver" }, { code: "COUNTER_SIGN", label: "Counter Signer" }, { code: "MARK_PAID", label: "Payment Officer" }]
-                    ).map((at) => (
-                      <option key={at.code} value={at.code}>{at.label}</option>
-                    ))}
-                  </select>
-                  <span style={{ display: "block", fontSize: 11, color: "var(--muted, #6b7280)", marginTop: 4 }}>
-                    Set this to "Counter Signer" or "Approver" to let CEO/Exco/Manager requesters pick
-                    their own countersigner/approver for travel advances, replacing this step.
-                  </span>
-                </label>
+                {!selectedStep.isSystemStep && (
+                  <label>
+                    <span>Action Label</span>
+                    <select value={selectedStep.actionType} onChange={(event) => updateStep(selectedStep.id, { actionType: event.target.value as "APPROVE" | "COUNTER_SIGN" | "MARK_PAID" })} disabled={readOnly}>
+                      {(actionTypes.filter((at) => at.is_active).length > 0
+                        ? actionTypes.filter((at) => at.is_active)
+                        : [{ code: "APPROVE", label: "Approver" }, { code: "COUNTER_SIGN", label: "Counter Signer" }, { code: "MARK_PAID", label: "Payment Officer" }]
+                      ).map((at) => (
+                        <option key={at.code} value={at.code}>{at.label}</option>
+                      ))}
+                    </select>
+                    <span style={{ display: "block", fontSize: 11, color: "var(--muted, #6b7280)", marginTop: 4 }}>
+                      Set this to "Counter Signer" or "Approver" to let CEO/Exco/Manager requesters pick
+                      their own countersigner/approver for travel advances, replacing this step.
+                    </span>
+                  </label>
+                )}
                 <div className="workflow-checkbox-list">
                   <label className="workflow-checkbox">
                     <input type="checkbox" checked={selectedStep.allowDelegation} onChange={(event) => updateStep(selectedStep.id, { allowDelegation: event.target.checked })} disabled={readOnly} />

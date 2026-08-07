@@ -117,17 +117,6 @@ export const ONBOARDING_TEMPLATES: Record<string, OnboardingCopy> = {
     accentColor: "0f766e",
     teamsTitle: "New Manager Onboarded"
   },
-  HR_MANAGER: {
-    heading: "WELCOME — YOUR ACCOUNT HAS BEEN CREATED",
-    intro: ({ roleLabel }) =>
-      `An account has been created for you on the Advance Clearance System as ${roleLabel}.`,
-    responsibility: () =>
-      `As HR Manager, you'll review and action requests once they reach the HR stage of the approval chain, including travel, accommodation and clearance matters.`,
-    closing: LEADERSHIP_CLOSING,
-    subject: (roleLabel) => `[Welcome] Your ${roleLabel} account is ready — Advance Clearance System`,
-    accentColor: "be185d",
-    teamsTitle: "New HR Lead Onboarded"
-  },
   FINANCE: {
     heading: "WELCOME — YOUR ACCOUNT HAS BEEN CREATED",
     intro: ({ roleLabel }) =>

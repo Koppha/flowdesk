@@ -42,53 +42,34 @@ function allowedInboxForRole(role: Role): InboxRule | null {
     case "HOD":
       return [
         { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
-        { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-                { doc_type: "ADVANCE", status: "HR_OFFICER" },
+        { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
       ];
     case "MANAGER":
       return [
         { doc_type: "ADVANCE", status: "SUBMITTED" },
         { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
-        { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-                { doc_type: "ADVANCE", status: "HR_OFFICER" },
+        { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "CLAIM", status: "SUBMITTED" },
         { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
-        { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
+        { doc_type: "CLAIM", status: "EXCO_APPROVED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
-        { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
         { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
         { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
         { doc_type: "OVERTIME_REQUEST", status: "SUBMITTED" },
         { doc_type: "OVERTIME_REQUEST", status: "SUPERVISOR_APPROVED" },
         { doc_type: "OVERTIME_CLAIM", status: "SUBMITTED" }
       ];
-    case "HR_MANAGER":
-      return [
-        { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-                { doc_type: "ADVANCE", status: "HR_OFFICER" },
-        { doc_type: "ADVANCE", status: "APPROVED" },
-        { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
-        { doc_type: "CLAIM", status: "HR_OFFICER" },
-        { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
-        { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
-        { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
-        { doc_type: "OVERTIME_CLAIM", status: "MANAGER_AUTHORISED" },
-        { doc_type: "OVERTIME_CLAIM", status: "FINANCE_VERIFIED" },
-        { doc_type: "OVERTIME_CLAIM", status: "EARNINGS_RECORDED" }
-      ];
     case "EXCO":
       return [
         { doc_type: "CLAIM", status: "MANAGER_APPROVED" },
-        { doc_type: "CLAIM", status: "CHIEF_OFFICER_APPROVED" },
+        { doc_type: "CLAIM", status: "EXCO_APPROVED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
-        { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
         { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
         { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
         { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
-        { doc_type: "ADVANCE", status: "HR_MANAGER_REVIEW" },
-                { doc_type: "ADVANCE", status: "HR_OFFICER" },
+        { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "OVERTIME_REQUEST", status: "HOD_APPROVED" }
       ];
@@ -97,7 +78,6 @@ function allowedInboxForRole(role: Role): InboxRule | null {
         { doc_type: "ADVANCE", status: "HR_OFFICER" },
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
-        { doc_type: "CLAIM", status: "HR_MANAGER_REVIEW" },
         { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
         { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
         { doc_type: "OVERTIME_CLAIM", status: "HR_NOTED" }
@@ -773,14 +753,12 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       // Legacy (non-workflow) advances by status
       await loadAdvanceByStatus("SUBMITTED");
       await loadAdvanceByStatus("COUNTERSIGNED");
-      await loadAdvanceByStatus("HR_MANAGER_REVIEW");
       await loadAdvanceByStatus("HR_OFFICER");
       await loadAdvanceByStatus("APPROVED");
 
       await loadClaimByStatus("MANAGER_APPROVED");
-      await loadClaimByStatus("CHIEF_OFFICER_APPROVED");
+      await loadClaimByStatus("EXCO_APPROVED");
       await loadClaimByStatus("HR_OFFICER");
-      await loadClaimByStatus("HR_MANAGER_REVIEW");
       await loadClaimByStatus("FINANCE_VERIFIED");
       await loadClaimByStatus("PAYMENT_PROCESSING");
 

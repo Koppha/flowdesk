@@ -2,8 +2,7 @@ export type AdvanceStatus =
   | "DRAFT"
   | "SUBMITTED"
   | "COUNTERSIGNED"
-  | "HR_MANAGER_REVIEW"
-    | "HR_OFFICER"
+  | "HR_OFFICER"
   | "APPROVED"
   | "PAID"
   | "REJECTED"
@@ -15,9 +14,8 @@ export const AdvanceTransitions: Record<AdvanceStatus, Partial<Record<AdvanceAct
   DRAFT:               { SUBMIT: "SUBMITTED", CANCEL: "CANCELLED" },
   // SUBMITTED: Manager (Counter Signer) approves. Destination resolved dynamically in route.
   SUBMITTED:           { APPROVE: "COUNTERSIGNED", CANCEL: "CANCELLED", REJECT: "REJECTED", ROLLBACK: "DRAFT" },
-  // COUNTERSIGNED: HOD approves (or skipped when dept has no HOD) → HR Manager
-  COUNTERSIGNED:       { APPROVE: "HR_MANAGER_REVIEW", REJECT: "REJECTED", ROLLBACK: "DRAFT" },
-  HR_MANAGER_REVIEW:   { APPROVE: "HR_OFFICER", REJECT: "REJECTED", ROLLBACK: "DRAFT" },
+  // COUNTERSIGNED: HOD/EXCO approves, then the request moves to HR/Finance processing.
+  COUNTERSIGNED:       { APPROVE: "HR_OFFICER", REJECT: "REJECTED", ROLLBACK: "DRAFT" },
   HR_OFFICER:          { APPROVE: "APPROVED", MARK_PAID: "PAID", REJECT: "REJECTED" },
   APPROVED:            { MARK_PAID: "PAID", REJECT: "REJECTED" },
   PAID:                {},

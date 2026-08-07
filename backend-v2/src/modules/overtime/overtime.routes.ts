@@ -553,7 +553,7 @@ overtimeRouter.post("/claims/:id/hr-note", async (req: AuthedRequest, res, next)
     const row = (await query<any>(`SELECT * FROM overtime_claims WHERE id=$1`, [req.params.id]))[0];
     if (!row) throw notFound();
     if (row.status !== "MANAGER_AUTHORISED") throw badRequest("Claim must be MANAGER_AUTHORISED first");
-    if (!["HR_MANAGER", "ADMIN"].includes(req.user!.role)) throw forbidden("Only HR can note this claim");
+    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can note this claim");
     const body = req.body as any ?? {};
     await query(
       `UPDATE overtime_claims
@@ -597,7 +597,7 @@ overtimeRouter.post("/claims/:id/record-earnings", async (req: AuthedRequest, re
     const row = (await query<any>(`SELECT * FROM overtime_claims WHERE id=$1`, [req.params.id]))[0];
     if (!row) throw notFound();
     if (row.status !== "FINANCE_VERIFIED") throw badRequest("Claim must be FINANCE_VERIFIED first");
-    if (!["HR_MANAGER", "ADMIN"].includes(req.user!.role)) throw forbidden("Only HR can record earnings");
+    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can record earnings");
     const body = req.body as any ?? {};
     await query(
       `UPDATE overtime_claims
@@ -617,7 +617,7 @@ overtimeRouter.post("/claims/:id/transfer-summary", async (req: AuthedRequest, r
     const row = (await query<any>(`SELECT * FROM overtime_claims WHERE id=$1`, [req.params.id]))[0];
     if (!row) throw notFound();
     if (row.status !== "EARNINGS_RECORDED") throw badRequest("Claim must be EARNINGS_RECORDED first");
-    if (!["HR_MANAGER", "ADMIN"].includes(req.user!.role)) throw forbidden("Only HR can transfer to summary");
+    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can transfer to summary");
     const body = req.body as any ?? {};
     await query(
       `UPDATE overtime_claims

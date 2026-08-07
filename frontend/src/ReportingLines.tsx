@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { roleLabel } from "./roles";
 import { api } from "./api";
 import { confirmAction } from "./alerts";
 import {
@@ -135,20 +136,6 @@ function avatarColor(name: string | null | undefined) {
   ];
   const idx = (name || "?").charCodeAt(0) % colors.length;
   return colors[idx];
-}
-
-function roleLabel(role: string) {
-  const map: Record<string, string> = {
-    EMPLOYEE: "Employee",
-    HOD: "Head of Division",
-    MANAGER: "Manager",
-    HR_MANAGER: "HR Manager",
-    FINANCE: "Finance",
-    EXCO: "EXCO Member",
-    CEO: "Chief Executive Officer",
-    ADMIN: "Administrator",
-  };
-  return map[role] || role;
 }
 
 function today() {
@@ -1145,8 +1132,8 @@ export default function ReportingLines() {
                     >
                       <option value="">— Select manager —</option>
                       {(() => {
-                        const LEADERSHIP_ROLES = ["CEO", "EXCO", "HOD", "MANAGER", "HR_MANAGER"];
-                        const rolePriority: Record<string, number> = { CEO: 0, EXCO: 1, HOD: 2, MANAGER: 3, HR_MANAGER: 4 };
+                        const LEADERSHIP_ROLES = ["CEO", "EXCO", "HOD", "MANAGER"];
+                        const rolePriority: Record<string, number> = { CEO: 0, EXCO: 1, HOD: 2, MANAGER: 3 };
                         const sameTeamIds = new Set(employees.map(e => e.id));
                         const leadership = allUsers
                           .filter(u => u.id !== editRow.id && u.is_active && LEADERSHIP_ROLES.includes(u.role))

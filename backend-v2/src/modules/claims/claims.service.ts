@@ -6,9 +6,8 @@ export type ClaimStatus =
   | "DRAFT"
   | "SUBMITTED"
   | "MANAGER_APPROVED"
-  | "CHIEF_OFFICER_APPROVED"
+  | "EXCO_APPROVED"
   | "HR_OFFICER"
-  | "HR_MANAGER_REVIEW"
   | "FINANCE_VERIFIED"
   | "PAYMENT_PROCESSING"
   | "SETTLED"
@@ -17,9 +16,8 @@ export type ClaimStatus =
 
 export type ClaimAction =
   | "MANAGER_APPROVE"
-  | "CHIEF_APPROVE"
-  | "AUTH_OFFICER_APPROVE"
-  | "HR_MANAGER_APPROVE"
+  | "EXCO_APPROVE"
+  | "HR_OFFICER_APPROVE"
   | "FINANCE_VERIFY"
   | "SETTLE"
   | "MARK_SETTLED";
@@ -37,10 +35,9 @@ export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
   const map: Record<ClaimStatus, Partial<Record<ClaimAction, ClaimStatus>>> = {
     DRAFT: {},
     SUBMITTED: { MANAGER_APPROVE: "MANAGER_APPROVED" },
-    MANAGER_APPROVED: { CHIEF_APPROVE: "CHIEF_OFFICER_APPROVED" },
-    CHIEF_OFFICER_APPROVED: { AUTH_OFFICER_APPROVE: "HR_OFFICER" },
-    HR_OFFICER: { HR_MANAGER_APPROVE: "HR_MANAGER_REVIEW" },
-    HR_MANAGER_REVIEW: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
+    MANAGER_APPROVED: { EXCO_APPROVE: "EXCO_APPROVED" },
+    EXCO_APPROVED: { HR_OFFICER_APPROVE: "HR_OFFICER" },
+    HR_OFFICER: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
     FINANCE_VERIFIED: { SETTLE: "SETTLED" },
     PAYMENT_PROCESSING: { MARK_SETTLED: "CLOSED" },
     SETTLED: {},
@@ -63,9 +60,9 @@ export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
 const CLAIM_STATUS_PROGRESSION: ClaimStatus[] = [
   "SUBMITTED",
   "MANAGER_APPROVED",
-  "CHIEF_OFFICER_APPROVED",
+  "EXCO_APPROVED",
   "HR_OFFICER",
-  "HR_MANAGER_REVIEW"
+  "FINANCE_VERIFIED"
 ];
 
 export function chainStepToClaimStatus(chain: ChainStep[], stepIndex: number): ClaimStatus {

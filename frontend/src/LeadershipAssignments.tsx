@@ -102,7 +102,7 @@ function getHod(department: DepartmentAssignment, users: LeadershipUser[]) {
 }
 
 function getExco(department: DepartmentAssignment, users: LeadershipUser[]) {
-  return findPerson(users, department.exco_user_id, department.exco_name, department.exco_email, "Chief Officer");
+  return findPerson(users, department.exco_user_id, department.exco_name, department.exco_email, "EXCO Member");
 }
 
 function statusKey(department: DepartmentAssignment): AssignmentStatus {

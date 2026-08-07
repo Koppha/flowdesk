@@ -129,6 +129,7 @@ export async function openBlobInNewTab(fetcher: () => Promise<Blob>) {
 export const api = {
   login: (email: string, password: string) => req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => req("/auth/me"),
+  roles: () => req("/auth/roles"),
   updateFavoritePages: (favorite_pages: string[]) => req("/auth/me/favorites", { method: "PATCH", body: JSON.stringify({ favorite_pages }) }),
   verifyPassword: (password: string) => req("/auth/verify-password", { method: "POST", body: JSON.stringify({ password }) }),
   departments: () => req("/auth/departments"),

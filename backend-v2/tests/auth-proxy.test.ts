@@ -38,7 +38,7 @@ describe("auth proxy role assignment", () => {
     await query(`DELETE FROM users WHERE id IN ($1,$2,$3)`, [chiefId, proxyId, otherDeptId]);
   });
 
-  it("allows a chief officer to view department users and assign proxy roles", async () => {
+  it("allows an EXCO member to view department users and assign proxy roles", async () => {
     if (!dbAvailable) return;
 
     const listResp = await request(app)

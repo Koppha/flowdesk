@@ -10,11 +10,10 @@ const TRAVEL_CODE = "TRAVEL_E2E";
 
 const requesterId = "00000000-0000-0000-0000-0000000000a1";
 const managerId = "00000000-0000-0000-0000-0000000000a2";
-const chiefOfficerId = "00000000-0000-0000-0000-0000000000a3";
-const authOfficerId = "00000000-0000-0000-0000-0000000000a4";
-const hrManagerId = "00000000-0000-0000-0000-0000000000a5";
+const excoId = "00000000-0000-0000-0000-0000000000a3";
+const hrOfficerId = "00000000-0000-0000-0000-0000000000a4";
 const financeId = "00000000-0000-0000-0000-0000000000a6";
-const userIds = [requesterId, managerId, chiefOfficerId, authOfficerId, hrManagerId, financeId];
+const userIds = [requesterId, managerId, excoId, hrOfficerId, financeId];
 
 const departmentId = randomUUID();
 const travelTypeId = randomUUID();
@@ -23,9 +22,8 @@ let claimId = "";
 
 const requesterToken = signToken({ userId: requesterId, role: "EMPLOYEE", department: DEPARTMENT });
 const managerToken = signToken({ userId: managerId, role: "MANAGER", department: DEPARTMENT });
-const chiefOfficerToken = signToken({ userId: chiefOfficerId, role: "EXCO", department: DEPARTMENT });
-const authOfficerToken = signToken({ userId: authOfficerId, role: "MANAGER" });
-const hrManagerToken = signToken({ userId: hrManagerId, role: "HR_MANAGER" });
+const excoToken = signToken({ userId: excoId, role: "EXCO", department: DEPARTMENT });
+const hrOfficerToken = signToken({ userId: hrOfficerId, role: "EMPLOYEE" });
 const financeToken = signToken({ userId: financeId, role: "FINANCE" });
 
 const app = createApp();
@@ -53,19 +51,18 @@ describe("travel advance and clearance end-to-end workflow", () => {
     await query(
       `INSERT INTO users (id, employee_no, full_name, email, password_hash, role, department, employment_type, profile_completed, is_active)
        VALUES
-        ($1, 'TAC001', 'Requester User', 'tac-requester@example.com', 'x', 'EMPLOYEE', $7, 'PERMANENT', true, true),
-        ($2, 'TAC002', 'Manager User', 'tac-manager@example.com', 'x', 'MANAGER', $7, 'PERMANENT', true, true),
-        ($3, 'TAC003', 'EXCO User', 'tac-chief@example.com', 'x', 'EXCO', $7, 'PERMANENT', true, true),
-        ($4, 'TAC004', 'Auth Officer User', 'tac-auth@example.com', 'x', 'MANAGER', $7, 'PERMANENT', true, true),
-        ($5, 'TAC005', 'HR Manager User', 'tac-hrmanager@example.com', 'x', 'HR_MANAGER', $7, 'PERMANENT', true, true),
-        ($6, 'TAC006', 'Finance User', 'tac-finance@example.com', 'x', 'FINANCE', $7, 'PERMANENT', true, true)`,
-      [requesterId, managerId, chiefOfficerId, authOfficerId, hrManagerId, financeId, DEPARTMENT]
+        ($1, 'TAC001', 'Requester User', 'tac-requester@example.com', 'x', 'EMPLOYEE', $6, 'PERMANENT', true, true),
+        ($2, 'TAC002', 'Manager User', 'tac-manager@example.com', 'x', 'MANAGER', $6, 'PERMANENT', true, true),
+        ($3, 'TAC003', 'EXCO User', 'tac-exco@example.com', 'x', 'EXCO', $6, 'PERMANENT', true, true),
+        ($4, 'TAC004', 'HR Officer User', 'tac-hr@example.com', 'x', 'EMPLOYEE', $6, 'PERMANENT', true, true),
+        ($5, 'TAC006', 'Finance User', 'tac-finance@example.com', 'x', 'FINANCE', $6, 'PERMANENT', true, true)`,
+      [requesterId, managerId, excoId, hrOfficerId, financeId, DEPARTMENT]
     );
 
     await query(
       `INSERT INTO departments (id, name, manager_user_id, exco_user_id, active)
        VALUES ($1, $2, $3, $4, true)`,
-      [departmentId, DEPARTMENT, managerId, chiefOfficerId]
+      [departmentId, DEPARTMENT, managerId, excoId]
     );
 
     await query(
@@ -133,18 +130,18 @@ describe("travel advance and clearance end-to-end workflow", () => {
     expect(submitResp.status).toBe(200);
     expect(submitResp.body.status).toBe("SUBMITTED");
 
-    // 4. Department manager approves; an EXCO member is assigned, so it escalates to Chief Officer review
+    // 4. Department manager approves; an EXCO member is assigned next.
     const managerApprove = await request(app)
       .post(`/advances/${advanceId}/approve`)
       .set("Authorization", `Bearer ${managerToken}`)
       .send({ approved_total: 200 });
     expect(managerApprove.status).toBe(200);
-    expect(managerApprove.body.status).toBe("CHIEF_OFFICER_REVIEW");
+    expect(managerApprove.body.status).toBe("COUNTERSIGNED");
 
-    // 5. Chief Officer (EXCO member) approves; advance moves into the HR officer payment queue
+    // 5. The EXCO member approves; the advance moves into the payment queue.
     const chiefApprove = await request(app)
       .post(`/advances/${advanceId}/approve`)
-      .set("Authorization", `Bearer ${chiefOfficerToken}`)
+      .set("Authorization", `Bearer ${excoToken}`)
       .send({ approved_total: 200 });
     expect(chiefApprove.status).toBe(200);
     expect(chiefApprove.body.status).toBe("HR_OFFICER");
@@ -194,7 +191,7 @@ describe("travel advance and clearance end-to-end workflow", () => {
     expect(claimSubmit.status).toBe(200);
     expect(claimSubmit.body.status).toBe("SUBMITTED");
 
-    // 9. Clearance routes through manager, Chief Officer, HR (auth officer), HR manager, then finance verification and settlement
+    // 9. Clearance routes through manager, EXCO, HR, then Finance.
     const managerApproveClaim = await request(app)
       .post(`/claims/${claimId}/manager-approve`)
       .set("Authorization", `Bearer ${managerToken}`)
@@ -202,26 +199,19 @@ describe("travel advance and clearance end-to-end workflow", () => {
     expect(managerApproveClaim.status).toBe(200);
     expect(managerApproveClaim.body.status).toBe("MANAGER_APPROVED");
 
-    const chiefApproveClaim = await request(app)
-      .post(`/claims/${claimId}/chief-officer-approve`)
-      .set("Authorization", `Bearer ${chiefOfficerToken}`)
+    const excoApproveClaim = await request(app)
+      .post(`/claims/${claimId}/approve`)
+      .set("Authorization", `Bearer ${excoToken}`)
       .send({});
-    expect(chiefApproveClaim.status).toBe(200);
-    expect(chiefApproveClaim.body.status).toBe("CHIEF_OFFICER_APPROVED");
+    expect(excoApproveClaim.status).toBe(200);
+    expect(excoApproveClaim.body.status).toBe("EXCO_APPROVED");
 
-    const authOfficerApproveClaim = await request(app)
-      .post(`/claims/${claimId}/auth-officer-approve`)
-      .set("Authorization", `Bearer ${authOfficerToken}`)
+    const hrOfficerApproveClaim = await request(app)
+      .post(`/claims/${claimId}/approve`)
+      .set("Authorization", `Bearer ${hrOfficerToken}`)
       .send({});
-    expect(authOfficerApproveClaim.status).toBe(200);
-    expect(authOfficerApproveClaim.body.status).toBe("HR_OFFICER");
-
-    const hrManagerApproveClaim = await request(app)
-      .post(`/claims/${claimId}/hr-manager-approve`)
-      .set("Authorization", `Bearer ${hrManagerToken}`)
-      .send({});
-    expect(hrManagerApproveClaim.status).toBe(200);
-    expect(hrManagerApproveClaim.body.status).toBe("HR_MANAGER_REVIEW");
+    expect(hrOfficerApproveClaim.status).toBe(200);
+    expect(hrOfficerApproveClaim.body.status).toBe("HR_OFFICER");
 
     const financeVerify = await request(app)
       .post(`/claims/${claimId}/finance-verify`)

@@ -9,11 +9,11 @@
  * scenario.
  *
  * Creates / wires up:
- *   - One user per workflow position (2 requesters, manager, HOD, HR manager,
+ *   - One user per workflow position (2 requesters, manager, HOD,
  *     HR officer, finance, EXCO)
  *   - The "Digital Workflow" department row with manager/HOD/EXCO leadership
  *   - The Advance Request workflow (6 steps):
- *       Employee → Manager/Supervisor → HOD → HR Manager → HR → Finance
+ *       Employee → Manager/Supervisor → HOD → HR Officer → Finance
  *   - The Clearance workflow (5 steps):
  *       Employee → HOD → EXCO Member → HR → Finance
  *
@@ -66,8 +66,7 @@ const POSITIONS = [
   { key: "employee2", role: "EMPLOYEE", label: "Requester (Employee) #2", leads: null },
   { key: "manager", role: "MANAGER", label: "Manager / Supervisor", leads: "manager_user_id" },
   { key: "hod", role: "HOD", label: "Head of Department", leads: "hod_user_id" },
-  { key: "hrManager", role: "HR_MANAGER", label: "HR Manager", leads: null },
-  { key: "hrOfficer", role: "AUTH_OFFICER", label: "HR Officer", leads: null },
+  { key: "hrOfficer", role: "EMPLOYEE", label: "HR Officer", leads: null },
   { key: "finance", role: "FINANCE", label: "Finance", leads: null },
   { key: "exco", role: "EXCO", label: "EXCO Member", leads: "exco_user_id" },
 ];
@@ -251,7 +250,6 @@ async function main() {
   const ptExco = await ensurePositionType(client, "EXCO_OWNER", "EXCO Member", "Executive committee approval");
   const ptHrReview = await ensurePositionType(client, "HR_REVIEW", "HR", "HR officer review");
   const ptFinance = await ensurePositionType(client, "FINANCE", "Finance", "Finance authorisation and payment");
-  const ptHrManager = await ensurePositionType(client, "HR_MANAGER_REVIEW", "HR Manager", "HR Manager review and approval");
   console.log("  Position types resolved.");
 
   const adminRow = await client.query("SELECT id FROM users WHERE role='ADMIN' LIMIT 1");
@@ -270,9 +268,8 @@ async function main() {
       { order: 1, positionTypeId: ptEmployee, name: "Employee", description: "Request initiator", isSystem: true, escalationDays: 0 },
       { order: 2, positionTypeId: ptManager, name: "Manager / Supervisor", description: "Department manager review", allowDelegation: true, escalationDays: 2 },
       { order: 3, positionTypeId: ptHod, name: "Head of Department", description: "HOD approval", allowDelegation: true, escalationDays: 2 },
-      { order: 4, positionTypeId: ptHrManager, name: "HR Manager", description: "HR Manager endorsement", escalationDays: 3 },
-      { order: 5, positionTypeId: ptHrReview, name: "HR", description: "HR Officer final HR clearance", escalationDays: 2 },
-      { order: 6, positionTypeId: ptFinance, name: "Finance", description: "Finance authorisation and payment", escalationDays: 3, isFinal: true },
+      { order: 4, positionTypeId: ptHrReview, name: "HR Officer", description: "HR clearance", escalationDays: 2 },
+      { order: 5, positionTypeId: ptFinance, name: "Finance", description: "Finance authorisation and payment", escalationDays: 3, isFinal: true },
     ],
   });
 
@@ -310,7 +307,7 @@ async function main() {
   Approval flows wired up:
 
   ADVANCE REQUEST
-    ${cast.employee1.fullName} / ${cast.employee2.fullName} → ${cast.manager.fullName} → ${cast.hod.fullName} → ${cast.hrManager.fullName} → ${cast.hrOfficer.fullName} → ${cast.finance.fullName}
+    ${cast.employee1.fullName} / ${cast.employee2.fullName} → ${cast.manager.fullName} → ${cast.hod.fullName} → ${cast.hrOfficer.fullName} → ${cast.finance.fullName}
 
   CLEARANCE
     Employee → ${cast.hod.fullName} → ${cast.exco.fullName} → ${cast.hrOfficer.fullName} → ${cast.finance.fullName}

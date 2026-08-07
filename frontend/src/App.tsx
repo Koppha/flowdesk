@@ -40,6 +40,7 @@ import { confirmAction, showNotice } from "./alerts";
 import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
+import { roleLabel } from "./roles";
 import {
   ArrowRightLeft,
   BarChart3,
@@ -642,23 +643,11 @@ export default function App() {
   }
 
   function displayRoleLabel(value: string | null | undefined) {
-    switch (value) {
-      case "CEO":          return "Chief Executive Officer";
-      case "ADMIN":        return "Administrator";
-      case "EXCO":         return "EXCO Member";
-      case "HR_MANAGER":   return "HR Manager";
-      case "HOD":          return "Head of Division";
-      case "MANAGER":      return "Manager";
-      case "FINANCE":      return "Finance";
-      case "EMPLOYEE":     return "Employee";
-      default:             return value || "Unknown";
-    }
+    return value ? roleLabel(value) : "Unknown";
   }
 
   function displayUserLabel(value: string | null | undefined, roleValue: string | null | undefined) {
-    if (roleValue === "HR_MANAGER") return "HR Manager";
     if (!value) return "User";
-    if (value === "Authorising Officer") return "HR";
     return value;
   }
 
@@ -667,7 +656,7 @@ export default function App() {
   }
 
   function isApproverRole(value: string | null | undefined) {
-    return ["HOD", "MANAGER", "HR_MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"].includes(String(value || "").trim().toUpperCase());
+    return ["HOD", "MANAGER", "FINANCE", "ADMIN", "EXCO", "CEO"].includes(String(value || "").trim().toUpperCase());
   }
 
   function formatPersonLabel(user: { full_name: string | null; email?: string; employee_no?: string | null }) {
@@ -1060,7 +1049,7 @@ export default function App() {
     advance_pdf:            ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     report_reconciliation:  ["ADMIN", "FINANCE"],
     pdf_designer:           ["ADMIN"],
-    claims_sla_report:      ["ADMIN", "FINANCE", "HR_MANAGER"],
+    claims_sla_report:      ["ADMIN", "FINANCE"],
     advance_recovery_settings: ["ADMIN", "FINANCE"],
     manager_delegations:    ["ADMIN"],
     deductions:             ["ADMIN"],
@@ -2450,7 +2439,6 @@ export default function App() {
       case "DRAFT":             return "Draft (not submitted)";
       case "SUBMITTED":         return "Pending Approval";
       case "COUNTERSIGNED":     return "Pending HOD / EXCO Approval";
-      case "HR_MANAGER_REVIEW": return "Pending HR Manager Approval";
       case "HR_OFFICER":        return "Pending Finance Payment";
       case "APPROVED":          return "Approved — Awaiting Payment";
       case "PAID":              return "Completed";
@@ -2485,11 +2473,9 @@ export default function App() {
       case "SUBMITTED":
         return "Waiting Manager Certification";
       case "MANAGER_APPROVED":
-      case "CHIEF_OFFICER_APPROVED":
+      case "EXCO_APPROVED":
         return "Pending Approval";
       case "HR_OFFICER":
-        return "Waiting HR Manager Approval";
-      case "HR_MANAGER_REVIEW":
         return "Waiting Finance Verification";
       case "FINANCE_VERIFIED":
         return "Waiting Finance Settlement";
@@ -2507,13 +2493,9 @@ export default function App() {
     });
   }
 
-  // clearance_claims.status walks a fixed 5-step legacy progression
-  // (SUBMITTED/MANAGER_APPROVED/CHIEF_OFFICER_APPROVED/HR_OFFICER/HR_MANAGER_REVIEW)
-  // that's kept only so workflow-driven claims of any length still map to a
-  // status column — "Chief Officer" isn't an actual position in this org's
-  // structure, so it must never surface as a literal label.
+  // Clearance status is a compact summary of the configured workflow's progress.
   function humanizeClaimStatus(value: any) {
-    if (value === "CHIEF_OFFICER_APPROVED") return "Pending Approval";
+    if (value === "EXCO_APPROVED") return "Pending Approval";
     return humanizeToken(value);
   }
 
@@ -2691,9 +2673,8 @@ export default function App() {
     }
 
     // ── Legacy (no workflow chain) — keep existing stage logic ─────────────────
-    const managerEvent  = eventForTransition(events, ["SUBMITTED"], ["COUNTERSIGNED", "HR_MANAGER_REVIEW"]);
-    const hodEvent      = eventForTransition(events, ["COUNTERSIGNED"], ["HR_MANAGER_REVIEW"]);
-    const hrManagerEvent = eventForTransition(events, ["HR_MANAGER_REVIEW"], ["HR_OFFICER", "APPROVED"]);
+    const managerEvent  = eventForTransition(events, ["SUBMITTED"], ["COUNTERSIGNED", "HR_OFFICER"]);
+    const hodEvent      = eventForTransition(events, ["COUNTERSIGNED"], ["HR_OFFICER"]);
     const financeEvent  = eventForTransition(events, ["HR_OFFICER", "APPROVED"], ["APPROVED", "PAID"]);
 
     const managerDest = String(managerEvent?.after_json?.status || "").toUpperCase();
@@ -2702,7 +2683,7 @@ export default function App() {
 
     const order: Record<string, number> = {
       DRAFT: 0, SUBMITTED: 1, COUNTERSIGNED: 2,
-      HR_MANAGER_REVIEW: 3, HR_OFFICER: 4, APPROVED: 5, PAID: 6
+      HR_OFFICER: 3, APPROVED: 4, PAID: 5
     };
     const currentOrder = order[currentStatus] ?? (terminalFailed ? -1 : 0);
 
@@ -2735,8 +2716,7 @@ export default function App() {
     }
 
     stages.push(
-      stage("hr-manager", "HR Manager Review", ["HR_MANAGER_REVIEW"], 3, hrManagerEvent),
-      stage("finance", "Finance Approval", ["HR_OFFICER", "APPROVED"], 4, financeEvent),
+      stage("finance", "Finance Approval", ["HR_OFFICER", "APPROVED"], 3, financeEvent),
       {
         ...stage("paid", "Paid", ["PAID"], 7, paidEvent, advance?.paid_at),
         status: currentStatus === "PAID" ? "Completed" : "Waiting"
@@ -2907,7 +2887,7 @@ export default function App() {
   }
 
   function isAtLeastManagerReviewed(status: string | null) {
-    return status === "HR_MANAGER_REVIEW" || status === "HR_OFFICER" || status === "APPROVED" || status === "PAID";
+    return status === "HR_OFFICER" || status === "APPROVED" || status === "PAID";
   }
 
   function isAtLeastApproved(status: string | null) {
@@ -3258,7 +3238,7 @@ export default function App() {
   }, [inboxItems]);
 
   // helper summaries
-  const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "HR_MANAGER_REVIEW", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
+  const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "COUNTERSIGNED", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
   const pendingClaimCount = claims.filter((c) => !["SETTLED", "CLOSED", "REJECTED"].includes(c.status)).length;
   const monthlySpend = claims.reduce((sum, c) => sum + Number(c.claim_total || 0), 0) + advances.reduce((sum, a) => sum + Number(a.approved_total || 0), 0);
   const advancesByType = advances.reduce<Record<string, number>>((acc, advance) => {
@@ -3469,7 +3449,7 @@ export default function App() {
                     <div className="tracking-owner">
                       <strong>{activeStage?.label || "Requester"}</strong>
                       <span>{advanceStageLabel(currentStatus, advance.type)}</span>
-                      {["SUBMITTED","COUNTERSIGNED","HR_MANAGER_REVIEW","HR_OFFICER","APPROVED"].includes(currentStatus) && (
+                      {["SUBMITTED","COUNTERSIGNED","HR_OFFICER","APPROVED"].includes(currentStatus) && (
                         <button
                           type="button"
                           disabled={remindingAdvanceId === advance.id}
@@ -4515,7 +4495,7 @@ export default function App() {
                       pdf_designer:           ["ADMIN"],
                       advance_pdf:            ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       report_reconciliation:  ["ADMIN","FINANCE"],
-                      claims_sla_report:      ["ADMIN","FINANCE","HR_MANAGER"],
+                      claims_sla_report:      ["ADMIN","FINANCE"],
                       clearance_status_report: ["ADMIN","Department: Finance","Team: Treasury & Financial Accounting","Department: Human Resource","Department: Human Resources","Section: Human Resources Operations"],
                       advance_recovery_settings: ["ADMIN","FINANCE"],
                       manager_delegations:    ["ADMIN"],

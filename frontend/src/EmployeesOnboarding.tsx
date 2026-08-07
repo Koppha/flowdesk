@@ -6,7 +6,7 @@ import UserPicker, { type PickableUser } from "./UserPicker";
 import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import { useStaffDirectory } from "./useStaffDirectory";
-import { ROLE_LABELS } from "./roles";
+import { roleLabel } from "./roles";
 
 const EMPTY_ORG: OrgSelection = {
   divisionId: null, divisionName: null,
@@ -386,7 +386,7 @@ export default function EmployeesOnboarding() {
                       </td>
                       <td>
                         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#eef2ff", color: "#4338ca", border: "1px solid #e0e7ff", fontWeight: 600 }}>
-                          {ROLE_LABELS[u.role ?? ""] ?? u.role ?? "—"}
+                          {roleLabel(u.role)}
                         </span>
                       </td>
                       <td style={{ fontSize: "0.82rem", color: "var(--muted)" }}>{path || "—"}</td>

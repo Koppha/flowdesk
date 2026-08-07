@@ -10,7 +10,7 @@ export const claimsSlaRouter = Router();
 claimsSlaRouter.use(requireAuth);
 
 const FEATURE_KEY = "claims_sla_report";
-const FALLBACK_ROLES = ["ADMIN", "FINANCE", "HR_MANAGER"] as const;
+const FALLBACK_ROLES = ["ADMIN", "FINANCE"] as const;
 const DEFAULT_CODE = "*";
 
 // ── SLA matrix (admin-configurable day-thresholds per workflow step type) ───
