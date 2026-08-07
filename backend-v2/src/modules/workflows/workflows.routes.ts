@@ -44,6 +44,7 @@ const CreateWorkflowSchema = z.object({
   name: z.string().trim().min(1, "Workflow name is required"),
   request_type: z.string().trim().min(1, "Request type is required"),
   advance_sub_type: z.string().trim().nullish(),
+  division: z.string().trim().nullish(),
   department: z.string().trim().nullish(),
   section: z.string().trim().nullish(),
   team: z.string().trim().nullish(),
@@ -61,6 +62,7 @@ const UpdateWorkflowSchema = z.object({
   name: z.string().trim().min(1).optional(),
   request_type: z.string().trim().min(1).optional(),
   advance_sub_type: z.string().trim().nullish(),
+  division: z.string().trim().nullish(),
   department: z.string().trim().nullish(),
   section: z.string().trim().nullish(),
   team: z.string().trim().nullish(),
@@ -123,6 +125,7 @@ async function ensureAssignedUserColumn() {
 }
 
 async function ensureWorkflowScopeColumns() {
+  await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS division text`);
   await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS section text`);
   await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS team text`);
   await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS advance_sub_type text`);
@@ -598,10 +601,10 @@ workflowsRouter.post("/", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (req:
     await ensureWorkflowScopeColumns();
     const workflowRow = (
       await query<{ id: string }>(
-        `INSERT INTO workflows (name, request_type, advance_sub_type, department, section, team, description, status, workflow_type, valid_from, valid_until, requester_roles, created_by_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        `INSERT INTO workflows (name, request_type, advance_sub_type, division, department, section, team, description, status, workflow_type, valid_from, valid_until, requester_roles, created_by_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          RETURNING id`,
-        [parsed.data.name, parsed.data.request_type, parsed.data.advance_sub_type || null, parsed.data.department || null, parsed.data.section || null, parsed.data.team || null, parsed.data.description || null, parsed.data.status, parsed.data.workflow_type ?? "STICKY", parsed.data.valid_from || null, parsed.data.valid_until || null, parsed.data.requester_roles?.length ? parsed.data.requester_roles : null, req.user!.userId]
+        [parsed.data.name, parsed.data.request_type, parsed.data.advance_sub_type || null, parsed.data.division || null, parsed.data.department || null, parsed.data.section || null, parsed.data.team || null, parsed.data.description || null, parsed.data.status, parsed.data.workflow_type ?? "STICKY", parsed.data.valid_from || null, parsed.data.valid_until || null, parsed.data.requester_roles?.length ? parsed.data.requester_roles : null, req.user!.userId]
       )
     )[0];
 
@@ -635,6 +638,10 @@ workflowsRouter.put("/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (re
     if (parsed.data.advance_sub_type !== undefined) {
       updates.push(`advance_sub_type=$${params.length + 1}`);
       params.push(parsed.data.advance_sub_type || null);
+    }
+    if (parsed.data.division !== undefined) {
+      updates.push(`division=$${params.length + 1}`);
+      params.push(parsed.data.division || null);
     }
     if (parsed.data.department !== undefined) {
       updates.push(`department=$${params.length + 1}`);

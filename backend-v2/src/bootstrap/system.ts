@@ -1168,6 +1168,7 @@ async function ensureWorkflowSchema() {
     )
   `);
   await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS description text`);
+  await query(`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS division text`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS workflow_steps (
