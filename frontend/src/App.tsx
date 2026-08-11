@@ -786,6 +786,9 @@ export default function App() {
   const [requestDate, setRequestDate] = useState(new Date().toISOString().slice(0, 10));
   const districts = LESOTHO_DISTRICTS;
   const [rows, setRows] = useState<TravelRow[]>([]);
+  // Requester's preferred hotel per destination district, keyed by district name.
+  // Only the hotel choice is captured here — HR sets amount/dates/notes during review.
+  const [accommodationHotelChoices, setAccommodationHotelChoices] = useState<Record<string, string>>({});
   const [amountInWords, setAmountInWords] = useState("");
   const [clearanceMonth, setClearanceMonth] = useState("");
   const [clearanceDutyStation, setClearanceDutyStation] = useState("");
@@ -1266,7 +1269,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, hotelsResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1274,6 +1277,7 @@ export default function App() {
       optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox"),
       optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value"),
       optionalStartupData<TravelType[]>(api.travelTypes(), [], "Travel types"),
+      optionalStartupData<any[]>(api.hotels(), [], "Hotels"),
       optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions"),
       optionalStartupData<{ name: string; member_count: string; dynamic?: boolean }[]>(api.permissionGroups(), [], "Permission groups"),
       optionalStartupData<any[]>(api.requestTypes(), [], "Request types"),
@@ -1316,6 +1320,7 @@ export default function App() {
     setMealValue(configuredMealValue);
     setMealValueDraft(String(configuredMealValue));
     setTravelTypes(Array.isArray(travelResp) ? travelResp : []);
+    setHotels(Array.isArray(hotelsResp) ? hotelsResp : []);
     setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
     setHasDeductionsAccess(Boolean(deductionsAccessResp?.allowed));
     setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
@@ -2422,6 +2427,7 @@ export default function App() {
     setPurpose("");
     setRequestDate(new Date().toISOString().slice(0, 10));
     setRows([]);
+    setAccommodationHotelChoices({});
     setMonthField("");
     setCustomApprovalChain([]);
     setCustomChainLabel("");
@@ -2855,6 +2861,14 @@ export default function App() {
     setSalaryAmount(detail.type === "SALARY" ? String(detail.requested_total || 0) : "0");
     setLoanAmount(detail.type === "LOAN" ? String(detail.requested_total || 0) : "");
     setRows(detail.lines ? detail.lines.map((line: any) => travelRowFromLine(line)) : []);
+    setAccommodationHotelChoices(
+      (detail.lines || []).reduce((acc: Record<string, string>, line: any) => {
+        const meta = travelMetaFromLine(line);
+        const destination = meta.destinationDistrict || meta.destination_district || "";
+        if (destination && meta.hotel) acc[destination] = meta.hotel;
+        return acc;
+      }, {})
+    );
     setMonthField(detail.salary_month || "");
     setSalaryPaybackDuration(
       detail.type === "SALARY"
@@ -5932,6 +5946,7 @@ export default function App() {
                   onChange={(e) => {
                     setAdvanceType(e.target.value || null);
                     setRows([]);
+                    setAccommodationHotelChoices({});
                   }}
                 >
                   <option value="">Select advance type</option>
@@ -6174,10 +6189,13 @@ export default function App() {
                     </tbody>
                   </table>
 
-                  {/* ── Accommodation notice for multi-day local travel ── */}
-                  {selectedTravelType?.location_mode === "DISTRICT" && rows.length > 1 && (() => {
+                  {/* ── Accommodation notice for local travel ── */}
+                  {selectedTravelType?.location_mode === "DISTRICT" && rows.length > 0 && (() => {
+                    // On a multi-day trip, the last row is assumed to be the
+                    // return-home leg (no accommodation needed that day) — but
+                    // with only one row, it's the trip itself, so keep it.
                     const destinations = [...new Set(
-                      rows.slice(0, -1)   // exclude last return-home row
+                      (rows.length > 1 ? rows.slice(0, -1) : rows)
                         .map((r) => r.destinationDistrict)
                         .filter(Boolean)
                     )];
@@ -6188,14 +6206,34 @@ export default function App() {
                         <div>
                           <strong>Accommodation may be required</strong> — this is a {rows.length}-day local trip.
                           <div style={{ fontSize: "0.82rem", color: "var(--muted)", margin: "3px 0 6px" }}>
-                            The requester may need accommodation in the following destination district{destinations.length > 1 ? "s" : ""}. HR will process accommodation during review.
+                            If you have a preferred hotel in the destination district{destinations.length > 1 ? "s" : ""} below, choose it here — HR will handle the amount, dates and payment during review.
                           </div>
-                          <div className="accommodation-notice-districts">
-                            {destinations.map((d) => (
-                              <span key={d} className="accommodation-notice-district">
-                                <Hotel size={11} /> {d}
-                              </span>
-                            ))}
+                          <div className="accommodation-notice-districts" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            {destinations.map((d) => {
+                              const districtHotels = hotels.filter((h) => h.district === d);
+                              const hotelListId = `request-hotel-options-${d}`;
+                              return (
+                                <div key={d} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                  <span className="accommodation-notice-district">
+                                    <Hotel size={11} /> {d}
+                                  </span>
+                                  <input
+                                    className="review-control"
+                                    style={{ maxWidth: 260 }}
+                                    list={hotelListId}
+                                    value={accommodationHotelChoices[d] || ""}
+                                    onChange={(e) => setAccommodationHotelChoices((prev) => ({ ...prev, [d]: e.target.value }))}
+                                    placeholder={districtHotels.length === 0 ? "No hotels listed for this district" : "Search or type hotel name (optional)"}
+                                    autoComplete="off"
+                                  />
+                                  <datalist id={hotelListId}>
+                                    {districtHotels.map((h) => (
+                                      <option key={h.id} value={h.name} />
+                                    ))}
+                                  </datalist>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>
@@ -6540,7 +6578,7 @@ export default function App() {
                               ? `${r.startDistrict} → ${r.destinationDistrict}`
                               : [r.country, r.province, r.city].filter(Boolean).join(" / "),
                             travel_meta: selectedTravelType.location_mode === "DISTRICT"
-                              ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict }
+                              ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict, hotel: accommodationHotelChoices[r.destinationDistrict] || undefined }
                               : { location_mode: selectedTravelType.location_mode, country: r.country, province: r.province, city: r.city },
                             meals_count: (selectedTravelType?.rate_kind === "DAILY" && (!r.meals || Number(r.meals) === 0) ? 1 : r.meals),
                             dinner: 0
@@ -6561,7 +6599,7 @@ export default function App() {
                               ? `${r.startDistrict} → ${r.destinationDistrict}`
                               : [r.country, r.province, r.city].filter(Boolean).join(" / "),
                             travel_meta: selectedTravelType.location_mode === "DISTRICT"
-                              ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict }
+                              ? { location_mode: selectedTravelType.location_mode, startDistrict: r.startDistrict, destinationDistrict: r.destinationDistrict, hotel: accommodationHotelChoices[r.destinationDistrict] || undefined }
                               : { location_mode: selectedTravelType.location_mode, country: r.country, province: r.province, city: r.city },
                             meals_count: (selectedTravelType?.rate_kind === "DAILY" && (!r.meals || Number(r.meals) === 0) ? 1 : r.meals),
                             dinner: 0

@@ -896,6 +896,28 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     return ranges;
   }, [isTravelAdvance, detail?.lines]);
 
+  // Requester's preferred hotel per destination district, captured on the
+  // request form (travel_meta.hotel) — used to pre-fill HR's provider field,
+  // which HR can still change; HR owns amount/dates/notes regardless.
+  const destinationHotelChoices = useMemo(() => {
+    const choices = new Map<string, string>();
+    if (!isTravelAdvance || !detail?.lines) return choices;
+    const lines: any[] = detail.lines || [];
+    lines.forEach((line: any) => {
+      const location = String(line.location || "").trim();
+      if (!location.includes("→")) return;
+      const destination = location.split("→")[1]?.trim();
+      if (!destination) return;
+      let meta = line.travel_meta;
+      if (typeof meta === "string") {
+        try { meta = JSON.parse(meta); } catch { meta = {}; }
+      }
+      const hotel = meta?.hotel;
+      if (destination && hotel) choices.set(destination, hotel);
+    });
+    return choices;
+  }, [isTravelAdvance, detail?.lines]);
+
   // Mirrors resolveAdvancePdfData's field derivation (backend-v2/src/lib/pdf/pdfFieldCatalog.ts)
   // so the on-screen summary shows the same fields the generated PDF does.
   const pdfFormSummary = useMemo(() => {
@@ -1123,7 +1145,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
         const range = destinationDateRanges.get(district);
         return {
           district,
-          provider: "",
+          provider: destinationHotelChoices.get(district) || "",
           checkIn: range?.checkIn || "",
           checkOut: range?.checkOut || "",
           amount: "",
@@ -1132,7 +1154,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
         };
       });
     });
-  }, [canCreateAccommodation, destinationDistricts, destinationDateRanges]);
+  }, [canCreateAccommodation, destinationDistricts, destinationDateRanges, destinationHotelChoices]);
 
   function updateAccommodationEntry(index: number, patch: Partial<AccommodationEntry>) {
     setAccommodationEntries((prev) => prev.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
@@ -1891,7 +1913,12 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                             )}
                           </label>
                           <label>
-                            <span>Hotel / Provider</span>
+                            <span>
+                              Hotel / Provider
+                              {destinationHotelChoices.get(entry.district) && (
+                                <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.78rem" }}> — requester's pick, adjust if needed</span>
+                              )}
+                            </span>
                             <input
                               className="review-control"
                               list={datalistId}
