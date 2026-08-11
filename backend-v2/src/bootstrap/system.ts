@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
 import { env } from "../config/env.js";
@@ -1667,8 +1668,8 @@ async function ensureOrgStructureSections() {
     deptId = deptResult[0].id;
   } else {
     const inserted = await query<{ id: string }>(
-      `INSERT INTO departments (name) VALUES ($1) RETURNING id`,
-      ["Business Continuity & Company Performance"]
+      `INSERT INTO departments (id, name) VALUES ($1, $2) RETURNING id`,
+      [randomUUID(), "Business Continuity & Company Performance"]
     );
     deptId = inserted[0]?.id || "";
   }
@@ -1681,8 +1682,8 @@ async function ensureOrgStructureSections() {
 
   if (!sectionResult[0] && deptId) {
     await query(
-      `INSERT INTO sections (name, department_id, active) VALUES ($1, $2, true)`,
-      ["Treasury & Financial Accounting", deptId]
+      `INSERT INTO sections (id, name, department_id, active) VALUES ($1, $2, $3, true)`,
+      [randomUUID(), "Treasury & Financial Accounting", deptId]
     );
   }
 
