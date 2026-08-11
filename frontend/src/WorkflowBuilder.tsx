@@ -1317,6 +1317,17 @@ export default function WorkflowBuilder() {
         addCandidate(orgSection?.hod_user_id ?? orgDept?.hod_user_id);
         break;
       case "MANAGER": {
+        // "Anyone in Team/Section/Department: X" cards reuse the MANAGER position
+        // code for plumbing but mean "any employee in that scope", not literally
+        // users with role=MANAGER — fall through to the scope-only filter for those.
+        if (group.startsWith("Team: ") || group.startsWith("Section: ") || group.startsWith("Department: ")) {
+          return allUsers.filter((user) => {
+            if (targetTeam) return user.team_name === targetTeam;
+            if (targetSection) return user.section_name === targetSection;
+            if (targetDepartment) return user.department === targetDepartment;
+            return true;
+          });
+        }
         const managers = allUsers.filter((user) => user.role === "MANAGER");
         if (targetTeam) return managers.filter((user) => user.team_name === targetTeam);
         if (targetSection) return managers.filter((user) => user.section_name === targetSection);
