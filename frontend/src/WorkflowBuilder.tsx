@@ -936,7 +936,12 @@ export default function WorkflowBuilder() {
           teams: Array.isArray(orgStructureResult.teams) ? orgStructureResult.teams : []
         });
       }
-      setAllUsers(Array.isArray(usersResult) ? usersResult.filter((u: any) => !["EMPLOYEE"].includes(u.role)) : []);
+      // Includes plain EMPLOYEE-role staff: Team/Section/Department "anyone in
+      // X" steps (e.g. a Finance Capture/Payment Officer step) need to offer
+      // ordinary employees, not just approver roles. Role-specific position
+      // types (HOD/MANAGER/EXCO/CEO/FINANCE) still filter by role explicitly
+      // in usersForStep, so this doesn't loosen who can fill those steps.
+      setAllUsers(Array.isArray(usersResult) ? usersResult : []);
       if (Array.isArray(requestTypesResult)) {
         setCustomRequestTypes(
           requestTypesResult
