@@ -6,6 +6,7 @@ import Inbox, { isCaptureItem, isPaymentItem } from "./Inbox";
 import Payments from "./Payments";
 import Deductions from "./Deductions";
 import Refundable from "./Refundable";
+import ITProvisioning from "./ITProvisioning";
 import Overtime from "./Overtime";
 import EmployeesOnboarding from "./EmployeesOnboarding";
 import ExcoOnboarding from "./ExcoOnboarding";
@@ -70,6 +71,7 @@ import {
   LogOut,
   Mail,
   MinusCircle,
+  Monitor,
   Moon,
   PlusCircle,
   Network,
@@ -406,7 +408,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -472,6 +474,8 @@ export default function App() {
   const [deductionsCount, setDeductionsCount] = useState(0);
   const [hasRefundableAccess, setHasRefundableAccess] = useState(false);
   const [refundableCount, setRefundableCount] = useState(0);
+  const [hasItProvisioningAccess, setHasItProvisioningAccess] = useState(false);
+  const [itProvisioningCount, setItProvisioningCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
@@ -1122,6 +1126,7 @@ export default function App() {
     manager_delegations:    ["ADMIN"],
     deductions:             ["ADMIN"],
     refundable:             ["ADMIN"],
+    it_provisioning:        ["ADMIN"],
     payments:               ["ADMIN", "Department: Finance"],
     capture:                ["ADMIN", "Section: Treasury & Financial Accounting"],
     clearance_status_report: [
@@ -1339,7 +1344,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, moduleFlagsResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, itProvisioningAccessResp, moduleFlagsResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1362,6 +1367,7 @@ export default function App() {
       optionalStartupData<{ allowed?: boolean }>(api.paymentsAccess(), { allowed: false }, "Payments access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.refundableAccess(), { allowed: false }, "Refundable access"),
+      optionalStartupData<{ allowed?: boolean; awaitingProvisioning?: number; inProgress?: number }>(api.itProvisioningAccess(), { allowed: false }, "IT Provisioning access"),
       optionalStartupData<{
         overtime_enabled?: boolean; standby_enabled?: boolean;
         salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
@@ -1416,6 +1422,8 @@ export default function App() {
     setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
     setHasRefundableAccess(Boolean(refundableAccessResp?.allowed));
     setRefundableCount(refundableAccessResp?.pendingCount || 0);
+    setHasItProvisioningAccess(Boolean(itProvisioningAccessResp?.allowed));
+    setItProvisioningCount((itProvisioningAccessResp?.awaitingProvisioning || 0) + (itProvisioningAccessResp?.inProgress || 0));
     if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
       setFeaturePermissions(featPermResp.features as Record<string, string[]>);
     }
@@ -1513,6 +1521,13 @@ export default function App() {
         setRefundableCount(refundableResp?.pendingCount || 0);
       } catch {
         // ignored — users without Refundable access simply won't see the nav item
+      }
+      try {
+        const itProvResp: { allowed?: boolean; awaitingProvisioning?: number; inProgress?: number } = await api.itProvisioningAccess();
+        setHasItProvisioningAccess(Boolean(itProvResp?.allowed));
+        setItProvisioningCount((itProvResp?.awaitingProvisioning || 0) + (itProvResp?.inProgress || 0));
+      } catch {
+        // ignored — users without IT Provisioning access simply won't see the nav item
       }
     }, 30_000);
     return () => clearInterval(id);
@@ -4109,6 +4124,9 @@ export default function App() {
           {hasRefundableAccess && (
             <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><span className="sidebar-nav-icon"><PlusCircle size={18} aria-hidden /></span>Refundable <b>{refundableCount}</b></a>
           )}
+          {hasItProvisioningAccess && (
+            <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>
+          )}
           <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page) ? "open" : ""}`}>
             <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
@@ -4202,6 +4220,8 @@ export default function App() {
             <Deductions />
           ) : page === "REFUNDABLE" ? (
             <Refundable />
+          ) : page === "IT_PROVISIONING" ? (
+            <ITProvisioning />
           ) : page === "ATTENDANCE" ? (
             <AttendanceModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME" ? (
@@ -4625,6 +4645,7 @@ export default function App() {
                       { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
                       { key: "deductions",             label: "Deductions",               group: "Finance Operations" },
                       { key: "refundable",             label: "Refundable",               group: "Finance Operations" },
+                      { key: "it_provisioning",        label: "IT Provisioning",          group: "IT" },
                       { key: "payments",               label: "Payments",                 group: "Finance Operations" },
                       { key: "capture",                label: "Capture Inbox",            group: "Finance Operations" },
                       { key: "overtime_request",       label: "Overtime Request",         group: "Overtime" },
@@ -4656,6 +4677,7 @@ export default function App() {
                       manager_delegations:    ["ADMIN"],
                       deductions:             ["ADMIN"],
                       refundable:             ["ADMIN"],
+    it_provisioning:        ["ADMIN"],
                       payments:               ["ADMIN","Department: Finance"],
                       capture:                ["ADMIN","Section: Treasury & Financial Accounting"],
                       overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],

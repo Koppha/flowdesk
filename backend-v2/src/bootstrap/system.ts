@@ -707,6 +707,112 @@ async function ensureRequestTypesSchema() {
   await seedChangeRequestType();
   await seedAttendanceRegisterType();
   await seedComputerRequestType();
+  await ensureItProvisioningSchema();
+}
+
+// IT Provisioning: the operational back-office that picks up a Computer
+// Request once it's fully APPROVED (see performCustomRequestAction in
+// custom-requests.routes.ts, which creates the it_provisioning_tasks row)
+// and carries it through device allocation, checklist, handover and
+// completion. Deliberately kept as its own tables rather than more fields
+// on custom_request_submissions - the *request* (who/why/what was asked
+// for) and the *device*/task (what was actually issued and how it was
+// configured) are different lifecycles that happen to start from the same
+// approval. Per-task structured detail (checklist, software, handover,
+// replacement/upgrade specifics) is stored as jsonb on the task row rather
+// than further child tables, since it's always read/written as a whole
+// alongside the task and never queried independently.
+async function ensureItProvisioningSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS it_devices (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      asset_number text UNIQUE NOT NULL,
+      serial_number text,
+      manufacturer text,
+      model text,
+      computer_type text,
+      operating_system text,
+      hostname text,
+      network_details text,
+      warranty_expiry date,
+      status text NOT NULL DEFAULT 'ASSIGNED',
+      assigned_user_id uuid REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS it_provisioning_tasks (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      submission_id uuid UNIQUE NOT NULL REFERENCES custom_request_submissions(id) ON DELETE CASCADE,
+      status text NOT NULL DEFAULT 'AWAITING_PROVISIONING',
+      assigned_to_id uuid REFERENCES users(id),
+      device_source text,
+      device_id uuid REFERENCES it_devices(id),
+      checklist jsonb NOT NULL DEFAULT '[]',
+      software jsonb NOT NULL DEFAULT '[]',
+      replacement_details jsonb,
+      upgrade_details jsonb,
+      handover jsonb,
+      provisioned_by_id uuid REFERENCES users(id),
+      provisioned_at timestamptz,
+      ready_for_collection_at timestamptz,
+      handed_over_at timestamptz,
+      completed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_it_prov_status ON it_provisioning_tasks(status)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_it_prov_assigned ON it_provisioning_tasks(assigned_to_id)`);
+
+  // Admin-configurable checklist/standard-software templates, scoped by
+  // computer type ('LAPTOP', 'DESKTOP', or 'ALL' for both) so e.g. a desktop
+  // can skip a VPN-configured item a laptop needs. A task's own checklist/
+  // software jsonb is seeded from the matching templates when the task is
+  // created, then edited independently per task from there.
+  await query(`
+    CREATE TABLE IF NOT EXISTS it_checklist_templates (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      computer_type text NOT NULL DEFAULT 'ALL',
+      label text NOT NULL,
+      sort_order integer NOT NULL DEFAULT 0,
+      active boolean NOT NULL DEFAULT true
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS it_software_templates (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      computer_type text NOT NULL DEFAULT 'ALL',
+      name text NOT NULL,
+      is_standard boolean NOT NULL DEFAULT true,
+      sort_order integer NOT NULL DEFAULT 0,
+      active boolean NOT NULL DEFAULT true
+    )
+  `);
+
+  const hasChecklist = (await query<{ id: string }>(`SELECT id FROM it_checklist_templates LIMIT 1`))[0];
+  if (!hasChecklist) {
+    const defaults = [
+      "Device allocated", "Asset number assigned", "Operating system installed",
+      "Latest patches installed", "Antivirus / endpoint security installed",
+      "Device joined to domain", "User account configured", "Microsoft 365 configured",
+      "VPN configured", "Standard applications installed", "Email tested",
+      "Network connectivity tested", "Asset register updated"
+    ];
+    for (let i = 0; i < defaults.length; i++) {
+      await query(`INSERT INTO it_checklist_templates (computer_type, label, sort_order) VALUES ('ALL', $1, $2)`, [defaults[i], i]);
+    }
+  }
+
+  const hasSoftware = (await query<{ id: string }>(`SELECT id FROM it_software_templates LIMIT 1`))[0];
+  if (!hasSoftware) {
+    const defaults = ["Microsoft 365", "Microsoft Teams", "VPN Client", "Google Chrome", "Endpoint Security"];
+    for (let i = 0; i < defaults.length; i++) {
+      await query(`INSERT INTO it_software_templates (computer_type, name, sort_order) VALUES ('ALL', $1, $2)`, [defaults[i], i]);
+    }
+  }
 }
 
 // Seeds the "Change Request" custom request type (ECONET Change Control

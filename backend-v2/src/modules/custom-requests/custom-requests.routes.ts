@@ -13,6 +13,7 @@ import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
+import { createProvisioningTaskForSubmission } from "../it-provisioning/it-provisioning.service.js";
 
 export const customRequestsRouter = Router();
 customRequestsRouter.use(requireAuth);
@@ -894,6 +895,13 @@ export async function performCustomRequestAction(
       WHERE id = $4`,
     [JSON.stringify(chain), newStepOrder, newStatus, submission.id]
   );
+
+  // Computer Request specifically hands off to the IT Provisioning back
+  // office once fully approved - every other custom request type is
+  // unaffected (no matching submission_id will ever ask for a task).
+  if (newStatus === "APPROVED" && submission.request_type_code === "COMPUTER_REQUEST") {
+    await createProvisioningTaskForSubmission(submission.id, submission.data?.computer_type);
+  }
 
   // Email/Teams sends are slow relative to a request-response cycle and
   // already self-log on failure — don't make the caller (the action route,

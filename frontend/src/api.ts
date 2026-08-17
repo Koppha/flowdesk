@@ -492,6 +492,36 @@ export const api = {
   setRefundableActioned: (id: string, refunded: boolean) =>
     req(`/refundable/${id}/refunded`, { method: "PATCH", body: JSON.stringify({ refunded }) }),
 
+  itProvisioningAccess: () => req("/it-provisioning/access"),
+  itProvisioningList: (params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v))).toString();
+    return req(`/it-provisioning${qs ? `?${qs}` : ""}`);
+  },
+  itProvisioningDetail: (id: string) => req(`/it-provisioning/${id}`),
+  itProvisioningAssign: (id: string, data: { assigned_to_id?: string | null; device_source?: string }) =>
+    req(`/it-provisioning/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  itProvisioningSetDevice: (id: string, data: any) =>
+    req(`/it-provisioning/${id}/device`, { method: "PUT", body: JSON.stringify(data) }),
+  itProvisioningSetChecklist: (id: string, checklist: Array<{ label: string; checked: boolean }>) =>
+    req(`/it-provisioning/${id}/checklist`, { method: "PUT", body: JSON.stringify({ checklist }) }),
+  itProvisioningSetSoftware: (id: string, software: Array<{ name: string; status: string; is_standard?: boolean }>) =>
+    req(`/it-provisioning/${id}/software`, { method: "PUT", body: JSON.stringify({ software }) }),
+  itProvisioningSetReplacementDetails: (id: string, data: any) =>
+    req(`/it-provisioning/${id}/replacement-details`, { method: "PUT", body: JSON.stringify(data) }),
+  itProvisioningSetUpgradeDetails: (id: string, data: any) =>
+    req(`/it-provisioning/${id}/upgrade-details`, { method: "PUT", body: JSON.stringify(data) }),
+  itProvisioningMarkProvisioned: (id: string) => req(`/it-provisioning/${id}/mark-provisioned`, { method: "POST", body: JSON.stringify({}) }),
+  itProvisioningReadyForCollection: (id: string) => req(`/it-provisioning/${id}/ready-for-collection`, { method: "POST", body: JSON.stringify({}) }),
+  itProvisioningHandover: (id: string, data: any) => req(`/it-provisioning/${id}/handover`, { method: "POST", body: JSON.stringify(data) }),
+  itProvisioningDevices: () => req("/it-provisioning/devices"),
+  itProvisioningReportsSummary: () => req("/it-provisioning/reports/summary"),
+  itProvisioningChecklistTemplates: () => req("/it-provisioning/checklist-templates"),
+  itProvisioningSaveChecklistTemplates: (computer_type: string, items: string[]) =>
+    req("/it-provisioning/checklist-templates", { method: "PUT", body: JSON.stringify({ computer_type, items }) }),
+  itProvisioningSoftwareTemplates: () => req("/it-provisioning/software-templates"),
+  itProvisioningSaveSoftwareTemplates: (computer_type: string, items: Array<{ name: string; is_standard?: boolean }>) =>
+    req("/it-provisioning/software-templates", { method: "PUT", body: JSON.stringify({ computer_type, items }) }),
+
   standbyDashboard: () => req("/standby/dashboard"),
   standbyTeams: () => req("/standby/teams"),
   standbyRosters: (teamId?: string) => req(`/standby/rosters${teamId ? `?team_id=${teamId}` : ""}`),
