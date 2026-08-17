@@ -478,6 +478,7 @@ export default function App() {
   const [itProvisioningCount, setItProvisioningCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
+  const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
   const favoritePagesInitialized = useRef(false);
   const shortcutPickerRef = useRef<HTMLDivElement>(null);
@@ -4112,17 +4113,28 @@ export default function App() {
           )}
           {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Requests</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
-          {canAccessFeature("capture") && (
-            <a href="#" className={navItemClass(page === "CAPTURE")} onClick={(e) => { e.preventDefault(); setPage("CAPTURE"); }}><span className="sidebar-nav-icon"><Camera size={18} aria-hidden /></span>Capture Inbox <b>{captureCount}</b></a>
-          )}
-          {hasPaymentsAccess && (
-            <a href="#" className={navItemClass(page === "PAYMENTS")} onClick={(e) => { e.preventDefault(); setPage("PAYMENTS"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Payments <b>{paymentsCount}</b></a>
-          )}
-          {hasDeductionsAccess && (
-            <a href="#" className={navItemClass(page === "DEDUCTIONS")} onClick={(e) => { e.preventDefault(); setPage("DEDUCTIONS"); }}><span className="sidebar-nav-icon"><MinusCircle size={18} aria-hidden /></span>Deductions <b>{deductionsCount}</b></a>
-          )}
-          {hasRefundableAccess && (
-            <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><span className="sidebar-nav-icon"><PlusCircle size={18} aria-hidden /></span>Refundable <b>{refundableCount}</b></a>
+          {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasRefundableAccess) && (
+            <div className={`sidebar-group ${(financeMenuOpen || ["CAPTURE","PAYMENTS","DEDUCTIONS","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); setFinanceMenuOpen((v) => !v); }}>
+                <span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Finance
+                {(captureCount + paymentsCount + deductionsCount + refundableCount) > 0 && <b>{captureCount + paymentsCount + deductionsCount + refundableCount}</b>}
+                <strong><ChevronDown size={14} aria-hidden /></strong>
+              </a>
+              <div className="sidebar-subnav">
+                {canAccessFeature("capture") && (
+                  <a href="#" className={navItemClass(page === "CAPTURE")} onClick={(e) => { e.preventDefault(); setPage("CAPTURE"); }}><Camera size={14} aria-hidden />Capture Inbox <span className="inbox-count-chip">{captureCount}</span></a>
+                )}
+                {hasPaymentsAccess && (
+                  <a href="#" className={navItemClass(page === "PAYMENTS")} onClick={(e) => { e.preventDefault(); setPage("PAYMENTS"); }}><Wallet size={14} aria-hidden />Payments <span className="inbox-count-chip">{paymentsCount}</span></a>
+                )}
+                {hasDeductionsAccess && (
+                  <a href="#" className={navItemClass(page === "DEDUCTIONS")} onClick={(e) => { e.preventDefault(); setPage("DEDUCTIONS"); }}><MinusCircle size={14} aria-hidden />Deductions <span className="inbox-count-chip">{deductionsCount}</span></a>
+                )}
+                {hasRefundableAccess && (
+                  <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
+                )}
+              </div>
+            </div>
           )}
           {hasItProvisioningAccess && (
             <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>

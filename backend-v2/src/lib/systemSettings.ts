@@ -14,7 +14,7 @@ export const SYSTEM_SETTING_KEYS = {
   loanAdvanceEnabled: "loan_advance_enabled",
   salaryAdvanceMaxPaybackMonths: "salary_advance_max_payback_months",
   loanAdvanceMaxPaybackMonths: "loan_advance_max_payback_months",
-  defaultItProvisioningAssigneeId: "default_it_provisioning_assignee_id"
+  defaultItProvisioningAssigneeIds: "default_it_provisioning_assignee_ids"
 } as const;
 
 export async function getStringSystemSetting(key: string, fallback: string | null = null) {

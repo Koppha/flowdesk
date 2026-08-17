@@ -521,9 +521,10 @@ export const api = {
   itProvisioningSoftwareTemplates: () => req("/it-provisioning/software-templates"),
   itProvisioningSaveSoftwareTemplates: (computer_type: string, items: Array<{ name: string; is_standard?: boolean }>) =>
     req("/it-provisioning/software-templates", { method: "PUT", body: JSON.stringify({ computer_type, items }) }),
-  itProvisioningDefaultAssignee: () => req("/it-provisioning/default-assignee"),
-  itProvisioningSetDefaultAssignee: (assigned_to_id: string | null) =>
-    req("/it-provisioning/default-assignee", { method: "PUT", body: JSON.stringify({ assigned_to_id }) }),
+  itProvisioningDefaultAssignees: () => req("/it-provisioning/default-assignees"),
+  itProvisioningSetDefaultAssignees: (assigned_to_ids: string[]) =>
+    req("/it-provisioning/default-assignees", { method: "PUT", body: JSON.stringify({ assigned_to_ids }) }),
+  itProvisioningClaim: (id: string) => req(`/it-provisioning/${id}/claim`, { method: "POST", body: JSON.stringify({}) }),
 
   standbyDashboard: () => req("/standby/dashboard"),
   standbyTeams: () => req("/standby/teams"),

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import {
   Monitor, Laptop, Clock, Loader2, PackageCheck, CheckCircle2, Search,
-  ArrowLeft, RefreshCw, Download, HardDrive, ClipboardList, BarChart3
+  ArrowLeft, RefreshCw, Download, HardDrive, ClipboardList, BarChart3, ChevronDown, UserCheck
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -106,24 +106,30 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
   const [search, setSearch] = useState("");
 
   const [staff, setStaff] = useState<Array<{ id: string; full_name: string | null }>>([]);
-  const [defaultAssigneeId, setDefaultAssigneeId] = useState("");
-  const [savingDefaultAssignee, setSavingDefaultAssignee] = useState(false);
+  const [defaultAssigneeIds, setDefaultAssigneeIds] = useState<string[]>([]);
+  const [showAssigneePicker, setShowAssigneePicker] = useState(false);
+  const [savingDefaultAssignees, setSavingDefaultAssignees] = useState(false);
 
   useEffect(() => {
     api.adminUsers().then((rows: any[]) => setStaff(Array.isArray(rows) ? rows.filter((u) => u.is_active !== false) : [])).catch(() => {});
-    api.itProvisioningDefaultAssignee().then((r: any) => setDefaultAssigneeId(r?.assignee?.id || "")).catch(() => {});
+    api.itProvisioningDefaultAssignees().then((r: any) => setDefaultAssigneeIds((r?.assignees || []).map((a: any) => a.id))).catch(() => {});
   }, []);
 
-  async function saveDefaultAssignee(id: string) {
-    setDefaultAssigneeId(id);
-    setSavingDefaultAssignee(true);
+  async function saveDefaultAssignees(ids: string[]) {
+    setDefaultAssigneeIds(ids);
+    setSavingDefaultAssignees(true);
     try {
-      await api.itProvisioningSetDefaultAssignee(id || null);
+      await api.itProvisioningSetDefaultAssignees(ids);
     } catch (e: any) {
-      alert(e.message || "Failed to save default assignee");
+      alert(e.message || "Failed to save default assignees");
     } finally {
-      setSavingDefaultAssignee(false);
+      setSavingDefaultAssignees(false);
     }
+  }
+
+  function toggleDefaultAssignee(id: string) {
+    const next = defaultAssigneeIds.includes(id) ? defaultAssigneeIds.filter((x) => x !== id) : [...defaultAssigneeIds, id];
+    void saveDefaultAssignees(next);
   }
 
   async function loadList() {
@@ -207,13 +213,45 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
       </div>
 
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "12px 20px", alignItems: "center" }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Default Assignee:</span>
-          <select className="ep-form-select" value={defaultAssigneeId} onChange={(e) => void saveDefaultAssignee(e.target.value)} disabled={savingDefaultAssignee} style={{ minWidth: 200 }}>
-            <option value="">None — new requests land unassigned</option>
-            {staff.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
-          </select>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>Every new Computer Request is pre-assigned to this IT Officer automatically.</span>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "12px 20px", alignItems: "center", position: "relative" }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Default Assignees:</span>
+          <button
+            type="button"
+            className="ep-btn-outline"
+            style={{ minWidth: 220, justifyContent: "space-between", display: "inline-flex", alignItems: "center" }}
+            onClick={() => setShowAssigneePicker((v) => !v)}
+          >
+            <span>
+              {defaultAssigneeIds.length === 0
+                ? "None — new requests land unassigned"
+                : defaultAssigneeIds.map((id) => staff.find((s) => s.id === id)?.full_name || id).join(", ")}
+            </span>
+            <ChevronDown size={14} />
+          </button>
+          {showAssigneePicker && (
+            <div
+              style={{
+                position: "absolute", top: "100%", left: 130, marginTop: 4, zIndex: 20,
+                background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.12)", padding: 8, minWidth: 240, maxHeight: 280, overflowY: "auto"
+              }}
+            >
+              {staff.map((u) => (
+                <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", fontSize: 13, cursor: "pointer", borderRadius: 6 }}>
+                  <input type="checkbox" checked={defaultAssigneeIds.includes(u.id)} disabled={savingDefaultAssignees} onChange={() => toggleDefaultAssignee(u.id)} />
+                  {u.full_name || u.id}
+                </label>
+              ))}
+              <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 6, textAlign: "right" }}>
+                <button className="ep-btn-outline" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setShowAssigneePicker(false)}>Done</button>
+              </div>
+            </div>
+          )}
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+            {defaultAssigneeIds.length <= 1
+              ? "Every new Computer Request is pre-assigned to this IT Officer automatically."
+              : "New requests are left unassigned but claimable by any of these officers — first to claim it gets it."}
+          </span>
         </div>
       </div>
 
@@ -504,6 +542,14 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
     } catch (e: any) { alert(e.message || "Failed to save"); } finally { setSaving(false); }
   }
 
+  async function claimTask() {
+    setSaving(true);
+    try {
+      await api.itProvisioningClaim(task.id);
+      onReload();
+    } catch (e: any) { alert(e.message || "Failed to claim this request"); } finally { setSaving(false); }
+  }
+
   async function markProvisioned() {
     setSaving(true);
     try {
@@ -536,6 +582,20 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
 
   return (
     <>
+      {!task.assigned_to_id && (
+        <div className="ep-panel" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+          <div style={{ padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <UserCheck size={20} color="#2563eb" />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>This request is unassigned</div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>If you're one of the preset IT Officers, claim it to start working on it.</div>
+              </div>
+            </div>
+            <button className="ep-btn" onClick={claimTask} disabled={saving}>Claim this request</button>
+          </div>
+        </div>
+      )}
       <div className="ep-panel">
         <div className="ep-panel-head"><div className="ep-panel-title">Provisioning Details</div></div>
         <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>

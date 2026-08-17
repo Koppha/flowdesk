@@ -3,7 +3,8 @@ import { z } from "zod";
 import { type AuthedRequest, hasFeatureAccess, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { getStringSystemSetting, setStringSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { setStringSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { getDefaultAssigneeIds } from "./it-provisioning.service.js";
 
 export const itProvisioningRouter = Router();
 itProvisioningRouter.use(requireAuth);
@@ -265,36 +266,37 @@ itProvisioningRouter.put("/software-templates", async (req: AuthedRequest, res, 
   }
 });
 
-// GET/PUT /it-provisioning/default-assignee — the IT Officer every new
-// Computer Request's provisioning task is pre-assigned to at creation (see
-// createProvisioningTaskForSubmission), so the IT Manager doesn't have to
-// manually assign each one as it comes in. Optional - leave unset and tasks
-// fall back to landing unassigned in AWAITING_PROVISIONING as before.
-itProvisioningRouter.get("/default-assignee", async (_req: AuthedRequest, res, next) => {
+// GET/PUT /it-provisioning/default-assignees — the IT Manager's preset pool
+// of IT Officers. Exactly one preset officer auto-assigns every new
+// Computer Request directly, same as before; more than one leaves new tasks
+// unassigned but claimable by any of them (POST /:id/claim) - first to
+// claim it gets it. Optional - leave the pool empty and tasks fall back to
+// landing unassigned in AWAITING_PROVISIONING as always.
+itProvisioningRouter.get("/default-assignees", async (_req: AuthedRequest, res, next) => {
   try {
-    const assigneeId = await getStringSystemSetting(SYSTEM_SETTING_KEYS.defaultItProvisioningAssigneeId);
-    if (!assigneeId) return res.json({ assignee: null });
-    const user = (await query<{ id: string; full_name: string | null }>(
-      `SELECT id, full_name FROM users WHERE id = $1 AND is_active = true`,
-      [assigneeId]
-    ))[0];
-    return res.json({ assignee: user || null });
+    const ids = await getDefaultAssigneeIds();
+    if (!ids.length) return res.json({ assignees: [] });
+    const users = await query<{ id: string; full_name: string | null }>(
+      `SELECT id, full_name FROM users WHERE id = ANY($1::uuid[])`,
+      [ids]
+    );
+    return res.json({ assignees: users });
   } catch (err) {
     return next(err);
   }
 });
 
-const DefaultAssigneeSchema = z.object({ assigned_to_id: z.string().uuid().nullable() });
+const DefaultAssigneesSchema = z.object({ assigned_to_ids: z.array(z.string().uuid()) });
 
-itProvisioningRouter.put("/default-assignee", async (req: AuthedRequest, res, next) => {
+itProvisioningRouter.put("/default-assignees", async (req: AuthedRequest, res, next) => {
   try {
-    const parsed = DefaultAssigneeSchema.safeParse(req.body);
+    const parsed = DefaultAssigneesSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
-    if (parsed.data.assigned_to_id) {
-      const user = (await query<{ id: string }>(`SELECT id FROM users WHERE id = $1 AND is_active = true`, [parsed.data.assigned_to_id]))[0];
-      if (!user) throw badRequest("That user is not an active account");
+    if (parsed.data.assigned_to_ids.length) {
+      const active = await query<{ id: string }>(`SELECT id FROM users WHERE id = ANY($1::uuid[]) AND is_active = true`, [parsed.data.assigned_to_ids]);
+      if (active.length !== parsed.data.assigned_to_ids.length) throw badRequest("One or more selected users are not active accounts");
     }
-    await setStringSystemSetting(SYSTEM_SETTING_KEYS.defaultItProvisioningAssigneeId, parsed.data.assigned_to_id);
+    await setStringSystemSetting(SYSTEM_SETTING_KEYS.defaultItProvisioningAssigneeIds, JSON.stringify(parsed.data.assigned_to_ids));
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
@@ -346,6 +348,37 @@ itProvisioningRouter.patch("/:id", async (req: AuthedRequest, res, next) => {
 
     params.push(req.params.id);
     await query(`UPDATE it_provisioning_tasks SET ${updates.join(",")}, updated_at = now() WHERE id = $${params.length}`, params);
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /:id/claim — "first to claim it gets it" for tasks left unassigned
+// because more than one default assignee is preset. Restricted to ADMIN or
+// whoever is currently in that preset pool (not just anyone with module
+// access), and race-safe: the UPDATE only succeeds if assigned_to_id is
+// still null, so if two people claim at once, only the first write wins -
+// the loser gets a normal "already claimed" error rather than silently
+// overwriting the winner.
+itProvisioningRouter.post("/:id/claim", async (req: AuthedRequest, res, next) => {
+  try {
+    const task = await getTaskOr404(req.params.id);
+    if (task.assigned_to_id) throw badRequest("This request has already been claimed");
+
+    if (req.user!.role !== "ADMIN") {
+      const pool = await getDefaultAssigneeIds();
+      if (!pool.includes(req.user!.userId)) throw forbidden("Only a preset default assignee can claim this request");
+    }
+
+    const claimed = await query<{ id: string }>(
+      `UPDATE it_provisioning_tasks
+          SET assigned_to_id = $1, status = 'IN_PROGRESS', updated_at = now()
+        WHERE id = $2 AND assigned_to_id IS NULL
+        RETURNING id`,
+      [req.user!.userId, req.params.id]
+    );
+    if (!claimed[0]) throw badRequest("This request has already been claimed by someone else");
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
