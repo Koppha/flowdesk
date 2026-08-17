@@ -33,6 +33,7 @@ export async function bootstrapSystem() {
   await ensureDeductionsSchema();
   await ensureAdminAccount();
   await ensureOrgStructureSections();
+  await ensureExcoMembersReportToCeo();
   await ensureSefsExcoReportsToCeo();
   await ensureStandbySchema();
   await ensureFinanceAuthoritySchema();
@@ -1685,6 +1686,30 @@ async function upsertReportingLine(employeeId: string, managerId: string, reason
      VALUES ($1, $2, $3, CURRENT_DATE, $4)`,
     [randomUUID(), employeeId, managerId, reason]
   );
+}
+
+// Every active EXCO-role user (the GMs) must report straight to the CEO -
+// never to another GM. /reporting-lines/auto-generate already gets this
+// right going forward (role === 'EXCO' is checked before any
+// department-leadership fallback), but stale or manually-entered
+// reporting_lines rows predating that logic can still have one GM pointed
+// at a peer GM (e.g. seen live: Puleng Masoabi and another GM both showing
+// Lebohang Ramaisa, a fellow GM, as their manager instead of the CEO).
+// Idempotently corrects every such row on every startup, in both UAT and
+// prod, rather than requiring a one-off manual fix per person found.
+async function ensureExcoMembersReportToCeo() {
+  const ceo = (await query<{ id: string }>(
+    `SELECT id FROM users WHERE role::text = 'CEO' AND is_active = true ORDER BY full_name LIMIT 1`
+  ))[0];
+  if (!ceo) return;
+
+  const excoUsers = await query<{ id: string }>(
+    `SELECT id FROM users WHERE role::text = 'EXCO' AND is_active = true`
+  );
+  for (const exco of excoUsers) {
+    if (exco.id === ceo.id) continue;
+    await upsertReportingLine(exco.id, ceo.id, "EXCO members report to CEO, never a peer GM - auto-fixed");
+  }
 }
 
 // SEFS's EXCO Member (Moeketsi Mafereka - GM Sasai Econet Financial
