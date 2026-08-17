@@ -1716,7 +1716,7 @@ async function ensureSefsExcoReportsToCeo() {
 
   await upsertReportingLine(mafereka.id, ceo.id, "SEFS EXCO reports to CEO - auto-fixed for division-level org placement");
 
-  const sefs = (await query<{ id: string }>(`SELECT id FROM divisions WHERE name = 'SEFS'`))[0];
+  const sefs = (await query<{ id: string }>(`SELECT id FROM divisions WHERE trim(lower(name)) = 'sefs'`))[0];
   if (!sefs) return;
 
   const sefsDepartments = await query<{ name: string; hod_user_id: string | null; manager_user_id: string | null }>(
