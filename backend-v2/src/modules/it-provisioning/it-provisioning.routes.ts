@@ -3,6 +3,7 @@ import { z } from "zod";
 import { type AuthedRequest, hasFeatureAccess, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
+import { getStringSystemSetting, setStringSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 
 export const itProvisioningRouter = Router();
 itProvisioningRouter.use(requireAuth);
@@ -258,6 +259,42 @@ itProvisioningRouter.put("/software-templates", async (req: AuthedRequest, res, 
         [parsed.data.computer_type, item.name, item.is_standard, i]
       );
     }
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET/PUT /it-provisioning/default-assignee — the IT Officer every new
+// Computer Request's provisioning task is pre-assigned to at creation (see
+// createProvisioningTaskForSubmission), so the IT Manager doesn't have to
+// manually assign each one as it comes in. Optional - leave unset and tasks
+// fall back to landing unassigned in AWAITING_PROVISIONING as before.
+itProvisioningRouter.get("/default-assignee", async (_req: AuthedRequest, res, next) => {
+  try {
+    const assigneeId = await getStringSystemSetting(SYSTEM_SETTING_KEYS.defaultItProvisioningAssigneeId);
+    if (!assigneeId) return res.json({ assignee: null });
+    const user = (await query<{ id: string; full_name: string | null }>(
+      `SELECT id, full_name FROM users WHERE id = $1 AND is_active = true`,
+      [assigneeId]
+    ))[0];
+    return res.json({ assignee: user || null });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const DefaultAssigneeSchema = z.object({ assigned_to_id: z.string().uuid().nullable() });
+
+itProvisioningRouter.put("/default-assignee", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = DefaultAssigneeSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    if (parsed.data.assigned_to_id) {
+      const user = (await query<{ id: string }>(`SELECT id FROM users WHERE id = $1 AND is_active = true`, [parsed.data.assigned_to_id]))[0];
+      if (!user) throw badRequest("That user is not an active account");
+    }
+    await setStringSystemSetting(SYSTEM_SETTING_KEYS.defaultItProvisioningAssigneeId, parsed.data.assigned_to_id);
     return res.json({ ok: true });
   } catch (err) {
     return next(err);

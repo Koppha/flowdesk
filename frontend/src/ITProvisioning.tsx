@@ -105,6 +105,27 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [search, setSearch] = useState("");
 
+  const [staff, setStaff] = useState<Array<{ id: string; full_name: string | null }>>([]);
+  const [defaultAssigneeId, setDefaultAssigneeId] = useState("");
+  const [savingDefaultAssignee, setSavingDefaultAssignee] = useState(false);
+
+  useEffect(() => {
+    api.adminUsers().then((rows: any[]) => setStaff(Array.isArray(rows) ? rows.filter((u) => u.is_active !== false) : [])).catch(() => {});
+    api.itProvisioningDefaultAssignee().then((r: any) => setDefaultAssigneeId(r?.assignee?.id || "")).catch(() => {});
+  }, []);
+
+  async function saveDefaultAssignee(id: string) {
+    setDefaultAssigneeId(id);
+    setSavingDefaultAssignee(true);
+    try {
+      await api.itProvisioningSetDefaultAssignee(id || null);
+    } catch (e: any) {
+      alert(e.message || "Failed to save default assignee");
+    } finally {
+      setSavingDefaultAssignee(false);
+    }
+  }
+
   async function loadList() {
     setLoading(true);
     setError(null);
@@ -182,6 +203,17 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
         <div className="ep-kpi ep-kpi-purple" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("COMPLETED")}>
           <div className="ep-kpi-icon"><CheckCircle2 size={26} /></div>
           <div><div className="ep-kpi-value">{kpis.completed}</div><div className="ep-kpi-label">Completed</div></div>
+        </div>
+      </div>
+
+      <div className="ep-panel" style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "12px 20px", alignItems: "center" }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Default Assignee:</span>
+          <select className="ep-form-select" value={defaultAssigneeId} onChange={(e) => void saveDefaultAssignee(e.target.value)} disabled={savingDefaultAssignee} style={{ minWidth: 200 }}>
+            <option value="">None — new requests land unassigned</option>
+            {staff.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
+          </select>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>Every new Computer Request is pre-assigned to this IT Officer automatically.</span>
         </div>
       </div>
 

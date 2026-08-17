@@ -13,8 +13,32 @@ export const SYSTEM_SETTING_KEYS = {
   salaryAdvanceEnabled: "salary_advance_enabled",
   loanAdvanceEnabled: "loan_advance_enabled",
   salaryAdvanceMaxPaybackMonths: "salary_advance_max_payback_months",
-  loanAdvanceMaxPaybackMonths: "loan_advance_max_payback_months"
+  loanAdvanceMaxPaybackMonths: "loan_advance_max_payback_months",
+  defaultItProvisioningAssigneeId: "default_it_provisioning_assignee_id"
 } as const;
+
+export async function getStringSystemSetting(key: string, fallback: string | null = null) {
+  const row = (
+    await query<{ value: string | null }>(
+      `SELECT value FROM system_state WHERE key=$1`,
+      [key]
+    )
+  )[0];
+  return row?.value ?? fallback;
+}
+
+export async function setStringSystemSetting(key: string, value: string | null) {
+  if (value === null) {
+    await query(`DELETE FROM system_state WHERE key=$1`, [key]);
+    return;
+  }
+  await query(
+    `INSERT INTO system_state (key, value)
+     VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [key, value]
+  );
+}
 
 export async function getNumericSystemSetting(key: string, fallback = 0) {
   const row = (
