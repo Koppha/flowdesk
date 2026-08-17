@@ -10,6 +10,7 @@ interface PaymentItem {
   status: string;
   payment_status: "PENDING" | "PAID";
   type: string;
+  currency: string;
   requested_total: number;
   approved_total: number;
   purpose: string | null;
@@ -78,11 +79,23 @@ export default function Payments(props: { onBack?: () => void }) {
     refresh();
   }, []);
 
+  // Totals are grouped by currency rather than blended into one number —
+  // an LSL and a USD advance summed together and labelled with one
+  // currency symbol would be meaningless.
+  function valueByCurrency(list: PaymentItem[]) {
+    const totals = new Map<string, number>();
+    for (const i of list) {
+      const currency = i.currency || "LSL";
+      totals.set(currency, (totals.get(currency) || 0) + Number(i.approved_total || i.requested_total || 0));
+    }
+    return Array.from(totals.entries());
+  }
+
   const stats = useMemo(() => ({
     pending: items.filter((i) => i.payment_status === "PENDING").length,
-    pendingValue: items.filter((i) => i.payment_status === "PENDING").reduce((s, i) => s + Number(i.approved_total || i.requested_total || 0), 0),
+    pendingValueByCurrency: valueByCurrency(items.filter((i) => i.payment_status === "PENDING")),
     paid: items.filter((i) => i.payment_status === "PAID").length,
-    paidValue: items.filter((i) => i.payment_status === "PAID").reduce((s, i) => s + Number(i.approved_total || i.requested_total || 0), 0)
+    paidValueByCurrency: valueByCurrency(items.filter((i) => i.payment_status === "PAID"))
   }), [items]);
 
   const filtered = useMemo(() => {
@@ -135,11 +148,21 @@ export default function Payments(props: { onBack?: () => void }) {
       <div className="ep-kpi-row">
         <div className="stat-card stat-card-gold">
           <span className="stat-icon"><Clock size={28} /></span>
-          <div><div className="stat-value">{stats.pending}</div><div className="stat-label">Pending Payment</div><small>{formatMoney(stats.pendingValue)}</small></div>
+          <div>
+            <div className="stat-value">{stats.pending}</div><div className="stat-label">Pending Payment</div>
+            {stats.pendingValueByCurrency.length === 0
+              ? <small>{formatMoney(0)}</small>
+              : stats.pendingValueByCurrency.map(([currency, value]) => <small key={currency} style={{ display: "block" }}>{formatMoney(value, currency)}</small>)}
+          </div>
         </div>
         <div className="stat-card stat-card-green">
           <span className="stat-icon"><CheckCircle size={28} /></span>
-          <div><div className="stat-value">{stats.paid}</div><div className="stat-label">Paid</div><small>{formatMoney(stats.paidValue)}</small></div>
+          <div>
+            <div className="stat-value">{stats.paid}</div><div className="stat-label">Paid</div>
+            {stats.paidValueByCurrency.length === 0
+              ? <small>{formatMoney(0)}</small>
+              : stats.paidValueByCurrency.map(([currency, value]) => <small key={currency} style={{ display: "block" }}>{formatMoney(value, currency)}</small>)}
+          </div>
         </div>
       </div>
 
@@ -185,7 +208,7 @@ export default function Payments(props: { onBack?: () => void }) {
                     <td>{requestNumber(item)}</td>
                     <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.requester_name || "—"}</td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.department || "—"}</td>
-                    <td style={{ fontWeight: 600 }}>{formatMoney(item.approved_total || item.requested_total)}</td>
+                    <td style={{ fontWeight: 600 }}>{formatMoney(item.approved_total || item.requested_total, item.currency)}</td>
                     <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(item.created_at)}</td>
                     <td><StatusBadge status={item.payment_status} /></td>
                   </tr>
@@ -235,7 +258,7 @@ export default function Payments(props: { onBack?: () => void }) {
             <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10 }}>
               <DetailRow label="Payee" value={selected.requester_name || "—"} />
               <DetailRow label="Department" value={selected.department || "—"} />
-              <DetailRow label="Amount" value={formatMoney(selected.approved_total || selected.requested_total)} />
+              <DetailRow label="Amount" value={formatMoney(selected.approved_total || selected.requested_total, selected.currency)} />
               <DetailRow label="Request No." value={requestNumber(selected)} />
               <DetailRow label="Requested By" value={selected.requester_name || "—"} />
               <DetailRow label="Request Date" value={fmtDateTime(selected.created_at)} />

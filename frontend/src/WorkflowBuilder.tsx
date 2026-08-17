@@ -219,7 +219,7 @@ const TEMPLATE_DEFINITIONS: Array<{ id: string; name: string; description: strin
       // so it stays a named assignment - update this id if that person changes.
       { code: "EXCO", name: "GM - Human Resources", assignedUserId: "3c8dbb3c-6469-4ac3-b198-51bd161e84f1", allowDelegation: true },
       { code: "CEO", name: "CEO", approvalMode: "ANY_ONE", approvalGroupName: "CEO", allowDelegation: true },
-      { code: "MANAGER", name: "Team: Treasury & Financial Accounting", approvalMode: "ANY_ONE", approvalGroupName: "Team: Treasury & Financial Accounting", actionType: "DEPT_CAPTURE", allowDelegation: true },
+      { code: "MANAGER", name: "Section: Treasury & Financial Accounting", approvalMode: "ANY_ONE", approvalGroupName: "Section: Treasury & Financial Accounting", actionType: "DEPT_CAPTURE", allowDelegation: true },
       { code: "MANAGER", name: "Agnes Mohapi", assignedUserId: "3ca53b79-e9f2-4501-af38-366882c1c050", actionType: "MARK_PAID", allowDelegation: true }
     ]
   },

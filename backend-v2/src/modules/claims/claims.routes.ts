@@ -3,9 +3,10 @@ import { z } from "zod";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
-import { AuthedRequest, isFinanceDept, requireAuth, requireFinance, requireRole } from "../../lib/auth.js";
+import { AuthedRequest, hasFeatureAccess, requireAuth, requireFinance, requireRole } from "../../lib/auth.js";
+import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
-import { query } from "../../lib/db.js";
+import { query, withTransaction } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
@@ -97,25 +98,31 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
     [linkedAdvanceId]
   );
 
-  await query(`DELETE FROM claim_trips WHERE clearance_claim_id=$1`, [claimId]);
+  // Delete + per-line insert run in one transaction — previously separate
+  // unwrapped calls, so a crash/restart mid-loop could leave the claim with
+  // only some of its trip lines while claim_total (computed below from the
+  // full set) is written as if all of them were persisted.
+  await withTransaction(async (client) => {
+    await client.query(`DELETE FROM claim_trips WHERE clearance_claim_id=$1`, [claimId]);
 
-  for (const line of advanceLines) {
-    const lineTotal = Number(line.lunch || 0) + Number(line.dinner || 0);
-    await query(
-      `INSERT INTO claim_trips
-       (clearance_claim_id, trip_date, from_place, to_place, depart_time, arrive_time, km_travelled, petrol_allowance,
-        breakfast, lunch, dinner, other_expenses, purpose, line_total)
-       VALUES ($1,$2,$3,null,null,null,0,0,0,$4,$5,0,null,$6)`,
-      [
-        claimId,
-        line.line_date,
-        line.location ?? null,
-        Number(line.lunch || 0),
-        Number(line.dinner || 0),
-        lineTotal
-      ]
-    );
-  }
+    for (const line of advanceLines) {
+      const lineTotal = Number(line.lunch || 0) + Number(line.dinner || 0);
+      await client.query(
+        `INSERT INTO claim_trips
+         (clearance_claim_id, trip_date, from_place, to_place, depart_time, arrive_time, km_travelled, petrol_allowance,
+          breakfast, lunch, dinner, other_expenses, purpose, line_total)
+         VALUES ($1,$2,$3,null,null,null,0,0,0,$4,$5,0,null,$6)`,
+        [
+          claimId,
+          line.line_date,
+          line.location ?? null,
+          Number(line.lunch || 0),
+          Number(line.dinner || 0),
+          lineTotal
+        ]
+      );
+    }
+  });
 
   const claimTotal = Number(
     advanceLines.reduce((sum, line) => sum + Number(line.lunch || 0) + Number(line.dinner || 0), 0).toFixed(2)
@@ -123,7 +130,7 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
   return { claimTotal };
 }
 
-export async function canViewClaim(args: { role: string; department?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; managerChainIds?: string[] }) {
+export async function canViewClaim(args: { role: string; sectionId?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; managerChainIds?: string[] }) {
   if (args.role === "ADMIN") return true;
   if (args.claimantId === args.userId) return true;
 
@@ -143,7 +150,7 @@ export async function canViewClaim(args: { role: string; department?: string | n
   // workflow chain and now sit with Finance/HR/EXCO/Managers awaiting (or
   // having completed) settlement — those are the same roles allowedInboxForRole
   // lists this status for, so let them view it.
-  if (["FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED"].includes(args.status || "") && (isFinanceDept(args.department) || ["MANAGER", "EXCO"].includes(args.role))) {
+  if (["FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED"].includes(args.status || "") && ((await isCompensationFinanceSection(args.sectionId)) || ["MANAGER", "EXCO"].includes(args.role))) {
     return true;
   }
 
@@ -167,7 +174,8 @@ claimsRouter.get("/", async (req: AuthedRequest, res, next) => {
       );
       return res.json(rows);
     }
-    if (req.user!.role !== "ADMIN") throw forbidden("Only admin can list all claims");
+    const allowed = await hasFeatureAccess(req.user!.userId, req.user!.role, "report_advances", ["ADMIN"]);
+    if (!allowed) throw forbidden("Not authorized to list all claims");
     const rows = await query(
       `SELECT cc.*, u.full_name AS requester_name, u.full_name AS claimant_name, u.department AS department
          FROM clearance_claims cc
@@ -264,7 +272,7 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, department: req.user!.department, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
       throw forbidden();
     }
 
@@ -292,7 +300,7 @@ claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, department: req.user!.department, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
       throw forbidden();
     }
     const receipt = (await query<any>(`SELECT * FROM receipts WHERE id=$1 AND clearance_claim_id=$2`, [req.params.receiptId, req.params.id]))[0];
@@ -323,7 +331,7 @@ claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, department: req.user!.department, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
       throw forbidden();
     }
     const isOwner = claim.claimant_id === req.user!.userId;
@@ -682,7 +690,7 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
 // Shared by POST /:id/approve and the email-approval flow (email-actions.routes.ts).
 export async function performClaimApprove(
   claimId: string,
-  actor: { userId: string; role: string; department: string | null }
+  actor: { userId: string; role: string; sectionId: string | null }
 ): Promise<{ status: string }> {
   const claim = await getClaimById(claimId);
   if (!claim) throw notFound();
@@ -690,7 +698,7 @@ export async function performClaimApprove(
     throw badRequest("This clearance does not follow a dynamic approval workflow.");
   }
 
-  const { role, userId, department } = actor;
+  const { role, userId, sectionId } = actor;
   const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
 
   const result = await advanceClaimWorkflowStep({
@@ -698,7 +706,7 @@ export async function performClaimApprove(
     userId,
     role,
     delegatedManagerIds,
-    userDepartment: department
+    userSectionId: sectionId
   });
 
   const notificationContext = await getClaimNotificationContext(claim.id);
@@ -722,7 +730,7 @@ export async function performClaimApprove(
 claimsRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const result = await performClaimApprove(req.params.id, {
-      userId: req.user!.userId, role: req.user!.role, department: req.user!.department ?? null
+      userId: req.user!.userId, role: req.user!.role, sectionId: req.user!.sectionId ?? null
     });
     return res.json({ ok: true, status: result.status });
   } catch (err) {
@@ -733,7 +741,7 @@ claimsRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res, n
 // Shared by POST /:id/reject and the email-approval flow (email-actions.routes.ts).
 export async function performClaimReject(
   claimId: string,
-  actor: { userId: string; role: string; department: string | null },
+  actor: { userId: string; role: string; sectionId: string | null },
   comments: string
 ): Promise<{ status: string }> {
   const claim = await getClaimById(claimId);
@@ -747,12 +755,12 @@ export async function performClaimReject(
   const group = getPendingGroup(chain, stepIdx);
   if (!group.indices.length) throw badRequest("No active workflow step to reject");
 
-  const { role, userId, department } = actor;
+  const { role, userId, sectionId } = actor;
   const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
   if (role !== "ADMIN") {
     let currentStep: ChainStep | undefined;
     for (const idx of group.indices) {
-      if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, department)) { currentStep = chain[idx]; break; }
+      if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, sectionId)) { currentStep = chain[idx]; break; }
     }
     if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
   }
@@ -780,7 +788,7 @@ claimsRouter.post("/:id/reject", requireAuth, async (req: AuthedRequest, res, ne
     if (!parsed.success) throw badRequest("Comments are required for reject", parsed.error.flatten());
     const result = await performClaimReject(
       req.params.id,
-      { userId: req.user!.userId, role: req.user!.role, department: req.user!.department ?? null },
+      { userId: req.user!.userId, role: req.user!.role, sectionId: req.user!.sectionId ?? null },
       parsed.data.comments
     );
     return res.json({ ok: true, status: result.status });
@@ -804,7 +812,7 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
     // workflow chain (status FINANCE_VERIFIED) by the time Finance acts on
     // it, so there's no pending chain step to gate against — Finance/Admin
     // can send it straight back to DRAFT, same as canViewClaim's Finance access.
-    const isFinanceCorrection = claim.status === "FINANCE_VERIFIED" && (role === "ADMIN" || isFinanceDept(req.user!.department));
+    const isFinanceCorrection = claim.status === "FINANCE_VERIFIED" && (role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId)));
 
     if (!isFinanceCorrection) {
       if (!claim.approval_chain?.length) {
@@ -820,7 +828,7 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
       if (role !== "ADMIN") {
         let currentStep: ChainStep | undefined;
         for (const idx of group.indices) {
-          if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, req.user!.department)) { currentStep = chain[idx]; break; }
+          if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, req.user!.sectionId)) { currentStep = chain[idx]; break; }
         }
         if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
       }

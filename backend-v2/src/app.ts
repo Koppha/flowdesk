@@ -23,15 +23,20 @@ import { customRequestsRouter } from "./modules/custom-requests/custom-requests.
 import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
+import { standbyRouter } from "./modules/standby/standby.routes.js";
 
 export function createApp() {
   const app = express();
 
   app.use(helmet());
   app.use(compression());
+  // CORS_ORIGIN may be a comma-separated list — lets a TLS cutover allow both
+  // the old and new origin during the transition instead of forcing a
+  // single-instant switch that breaks whoever hasn't reloaded yet.
+  const allowedOrigins = env.CORS_ORIGIN ? env.CORS_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean) : null;
   app.use(
     cors({
-      origin: env.CORS_ORIGIN || true,
+      origin: allowedOrigins && allowedOrigins.length ? allowedOrigins : env.CORS_ORIGIN || true,
       credentials: true
     })
   );
@@ -63,6 +68,7 @@ export function createApp() {
   app.use("/inbox", inboxRouter);
   app.use("/attendance", attendanceRouter);
   app.use("/overtime", overtimeRouter);
+  app.use("/standby", standbyRouter);
   app.use("/travel", travelRouter);
   app.use("/workflows", workflowsRouter);
   app.use("/reporting-lines", reportingLinesRouter);

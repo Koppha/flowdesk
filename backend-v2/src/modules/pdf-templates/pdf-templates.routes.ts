@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import fs from "fs";
 import multer from "multer";
+import sharp from "sharp";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
@@ -213,12 +214,18 @@ pdfTemplatesRouter.post("/letterhead/logo", uploadLogo.single("file"), async (re
     }
     if (!req.file) throw badRequest("Missing file");
 
-    // Read the uploaded file and convert to base64 so it persists in the database
-    // across deployments rather than relying on a file path that may become invalid.
-    const fileBuffer = fs.readFileSync(req.file.path);
-    const base64Data = fileBuffer.toString("base64");
-    const mimeType = req.file.mimetype || "image/png";
-    const logoData = `data:${mimeType};base64,${base64Data}`;
+    // Normalize every upload to PNG regardless of source format: pdfkit's doc.image()
+    // (used by the PDF renderer) only supports PNG/JPEG natively, so a webp/svg/gif
+    // upload would silently fail to render on generated PDFs (caught and dropped by
+    // the renderer's try/catch) even though it looked fine in this admin screen.
+    let pngBuffer: Buffer;
+    try {
+      pngBuffer = await sharp(req.file.path).png().toBuffer();
+    } catch {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore cleanup errors */ }
+      throw badRequest("Could not read this image file — please upload a valid image");
+    }
+    const logoData = `data:image/png;base64,${pngBuffer.toString("base64")}`;
 
     // Clean up the temporary uploaded file since we've now stored it in the database
     try {
@@ -261,6 +268,7 @@ pdfTemplatesRouter.get("/", async (req: AuthedRequest, res, next) => {
 pdfTemplatesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
     const template = await getTemplateOr404(req.params.id);
+    await assertCanDesign(req, template.request_type as PdfRequestType, template.custom_request_type_id);
     return res.json(template);
   } catch (err) {
     return next(err);

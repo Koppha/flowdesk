@@ -5,7 +5,7 @@ import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { roleLabel } from "./roles";
-import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
+import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
@@ -57,25 +57,6 @@ type InboxItem =
       delegated_from_manager_name?: string | null;
     }
   | {
-      doc_type: "OVERTIME_REQUEST";
-      id: string;
-      status: string;
-      employee_name: string | null;
-      section_name: string | null;
-      year: number;
-      month: number;
-    }
-  | {
-      doc_type: "OVERTIME_CLAIM";
-      id: string;
-      status: string;
-      employee_name: string | null;
-      division: string | null;
-      year: number;
-      month: number;
-      total_amount: number;
-    }
-  | {
       doc_type: "CUSTOM_REQUEST";
       id: string;
       status: string;
@@ -90,7 +71,56 @@ type InboxItem =
       is_delegated?: boolean;
       delegated_from_manager_name?: string | null;
       created_at: string;
+    }
+  | {
+      doc_type: "OVERTIME_REQUEST";
+      id: string;
+      status: string;
+      request_no: string;
+      employee_name: string;
+      year: number;
+      month: number;
+      my_title: string | null;
+      submitted_at: string | null;
+      current_step_actionable_by_me?: boolean;
+      is_delegated?: boolean;
+      delegated_from_manager_name?: string | null;
+    }
+  | {
+      doc_type: "OVERTIME_CLAIM";
+      id: string;
+      status: string;
+      claim_no: string;
+      employee_name: string;
+      year: number;
+      month: number;
+      converted_hours: number;
+      total_amount: number;
+      my_title: string | null;
+      submitted_at: string | null;
+      current_step_actionable_by_me?: boolean;
+      is_delegated?: boolean;
+      delegated_from_manager_name?: string | null;
+    }
+  | {
+      doc_type: "STANDBY_CLAIM";
+      id: string;
+      status: string;
+      claim_no: string;
+      employee_name: string;
+      claim_month: string;
+      calculated_amount: number;
+      my_title: string | null;
+      submitted_at: string | null;
+      current_step_actionable_by_me?: boolean;
+      is_delegated?: boolean;
+      delegated_from_manager_name?: string | null;
     };
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function monthLabel(year: number, month: number) {
+  return `${MONTH_NAMES[(month || 1) - 1] || ""} ${year || ""}`.trim();
+}
 
 type MyInboxAction = {
   id: string;
@@ -230,16 +260,15 @@ function statusTone(value: string | null | undefined) {
   return "status-pill-info";
 }
 
-const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-
 function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) {
   switch (value) {
     case "ADVANCE":          return "Advance";
     case "ACCOMMODATION":    return "Travel Accommodation";
     case "CLAIM":            return "Clearance";
+    case "CUSTOM_REQUEST":   return "Change Request";
     case "OVERTIME_REQUEST": return "Overtime Request";
     case "OVERTIME_CLAIM":   return "Overtime Claim";
-    case "CUSTOM_REQUEST":   return "Change Request";
+    case "STANDBY_CLAIM":    return "Standby Claim";
     default:                 return statusLabel(String(value || "Document"));
   }
 }
@@ -251,9 +280,10 @@ function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
     case "ADVANCE":          return Plane;
     case "ACCOMMODATION":    return Briefcase;
     case "CLAIM":            return ShieldCheck;
+    case "CUSTOM_REQUEST":   return ClipboardList;
     case "OVERTIME_REQUEST":
     case "OVERTIME_CLAIM":   return Clock3;
-    case "CUSTOM_REQUEST":   return ClipboardList;
+    case "STANDBY_CLAIM":    return CircleDot;
     default:                 return CreditCard;
   }
 }
@@ -263,16 +293,18 @@ function docTypeTone(value: InboxItem["doc_type"] | string | null | undefined) {
     case "ADVANCE":          return "doc-tone-blue";
     case "ACCOMMODATION":    return "doc-tone-purple";
     case "CLAIM":            return "doc-tone-green";
-    case "OVERTIME_REQUEST":
-    case "OVERTIME_CLAIM":   return "doc-tone-amber";
     case "CUSTOM_REQUEST":   return "doc-tone-blue";
+    case "OVERTIME_REQUEST":
+    case "OVERTIME_CLAIM":
+    case "STANDBY_CLAIM":    return "doc-tone-purple";
     default:                 return "doc-tone-blue";
   }
 }
 
 function itemStageProgress(item: InboxItem) {
   const status = String(item.status || "").toUpperCase();
-  if (item.doc_type === "CUSTOM_REQUEST") return item.current_step_position_name || statusLabel(status);
+  if (item.doc_type === "CUSTOM_REQUEST") return (item.current_step_position_name && displayOrgGroupName(item.current_step_position_name)) || statusLabel(status);
+  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return item.my_title || "Pending";
   if (status === "SUBMITTED") return "Pending";
   if (TERMINAL_STATUSES.has(status)) return statusLabel(status);
   return "In Progress";
@@ -296,35 +328,38 @@ function itemStatusLabel(item: InboxItem) {
     if (item.is_assignee_task) return "Awaiting Your Confirmation";
     return "In Progress";
   }
+  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return "Pending Approval";
   return statusLabel(item.status);
 }
 
 function itemOwner(item: InboxItem) {
   if (item.doc_type === "CLAIM") return item.claimant_name || "Unknown";
-  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM") return item.employee_name || "Unknown";
   if (item.doc_type === "CUSTOM_REQUEST") return item.requester_name || "Unknown";
+  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return item.employee_name || "Unknown";
   return item.requester_name || "Unknown";
 }
 
 function itemAmountValue(item: InboxItem) {
   if (item.doc_type === "ADVANCE") return Number(item.requested_total || 0);
   if (item.doc_type === "ACCOMMODATION") return Number(item.amount || 0);
+  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST") return 0;
   if (item.doc_type === "OVERTIME_CLAIM") return Number(item.total_amount || 0);
-  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "CUSTOM_REQUEST") return 0;
+  if (item.doc_type === "STANDBY_CLAIM") return Number(item.calculated_amount || 0);
   return Number(item.claim_total || 0);
 }
 
 function itemAmount(item: InboxItem) {
-  if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "CUSTOM_REQUEST") return "—";
+  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST") return "—";
   return fmt(itemAmountValue(item));
 }
 
 function itemContext(item: InboxItem) {
   if (item.doc_type === "ADVANCE") return item.purpose || "Advance request";
   if (item.doc_type === "ACCOMMODATION") return `${item.location || "Location pending"}${item.provider ? ` - ${item.provider}` : ""}`;
-  if (item.doc_type === "OVERTIME_REQUEST") return `${MONTHS[(item.month ?? 1) - 1]} ${item.year} · ${item.section_name || ""}`;
-  if (item.doc_type === "OVERTIME_CLAIM") return `${MONTHS[(item.month ?? 1) - 1]} ${item.year} · ${item.division || ""}`;
   if (item.doc_type === "CUSTOM_REQUEST") return item.request_type_name;
+  if (item.doc_type === "OVERTIME_REQUEST") return `${item.request_no} — ${monthLabel(item.year, item.month)}`;
+  if (item.doc_type === "OVERTIME_CLAIM") return `${item.claim_no} — ${monthLabel(item.year, item.month)} (${item.converted_hours}h)`;
+  if (item.doc_type === "STANDBY_CLAIM") return `${item.claim_no} — ${new Date(item.claim_month).toLocaleDateString(undefined, { year: "numeric", month: "long" })}`;
   return `Advance ${fmt(item.advance_amount)} / Balance ${fmt(item.balance_amount)}`;
 }
 
@@ -385,7 +420,15 @@ export function isPaymentItem(item: any) {
      ["HR_OFFICER", "APPROVED"].includes(item.status));
 }
 
-export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capture" }) {
+export default function Inbox(props: {
+  onBack?: () => void;
+  mode?: "all" | "capture";
+  // Overtime and Standby have their own dedicated Approvals/detail screens
+  // (with the full line-item view and the Approve/Reject/Send Back "Your
+  // Decision" panel) — rather than re-implement that UI a second time inside
+  // this generic inbox, these items hand off to that module's own page.
+  onNavigateToModule?: (target: "OVERTIME" | "STANDBY", deepLink: { kind: "REQUEST" | "CLAIM"; id: string }) => void;
+}) {
   const me = getUserFromToken();
   const role = me?.role || "UNKNOWN";
   const mode = props.mode ?? "all";
@@ -394,6 +437,13 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
   const [myActions, setMyActions] = useState<MyInboxAction[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<InboxItem | null>(null);
+
+  function openItem(it: InboxItem) {
+    if (it.doc_type === "OVERTIME_REQUEST") return props.onNavigateToModule?.("OVERTIME", { kind: "REQUEST", id: it.id });
+    if (it.doc_type === "OVERTIME_CLAIM") return props.onNavigateToModule?.("OVERTIME", { kind: "CLAIM", id: it.id });
+    if (it.doc_type === "STANDBY_CLAIM") return props.onNavigateToModule?.("STANDBY", { kind: "CLAIM", id: it.id });
+    setSelected(it);
+  }
 
   async function refresh() {
     setError(null);
@@ -682,11 +732,11 @@ export default function Inbox(props: { onBack?: () => void; mode?: "all" | "capt
                                 <button
                                   type="button"
                                   className="inbox-review-button"
-                                  onClick={() => setSelected(it)}
+                                  onClick={() => openItem(it)}
                                   aria-label={`Review ${docTypeLabel(it.doc_type)} for ${itemOwner(it)}`}
                                   title="Review"
                                 >
-                                  <RefreshCw size={15} aria-hidden="true" />
+                                  <Eye size={15} aria-hidden="true" />
                                 </button>
                               </td>
                             </tr>
@@ -1123,7 +1173,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       return "This advance is visible for reference only.";
     }
     if (item.doc_type === "CLAIM" && isWorkflowDrivenClaim && !isMyClaimWorkflowStep) {
-      return `This clearance is visible for reference only — it is currently awaiting ${item.current_step_position_name || "the next approver"}.`;
+      return `This clearance is visible for reference only — it is currently awaiting ${(item.current_step_position_name && displayOrgGroupName(item.current_step_position_name)) || "the next approver"}.`;
     }
     if (item.doc_type === "CLAIM" && !isWorkflowDrivenClaim && role === "MANAGER" && item.status !== "SUBMITTED") {
       return "This claim is visible for reference only because manager approval is only required on submitted claims.";
@@ -1915,6 +1965,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                           <label>
                             <span>
                               Hotel / Provider
+                              <span
+                                className="info-tooltip"
+                                title="Pre-filled from the requester's chosen hotel, if they picked one. You control the final booking, amount, dates and payment — change it if needed."
+                                style={{ marginLeft: 4 }}
+                              >
+                                <Info size={12} aria-hidden />
+                              </span>
                               {destinationHotelChoices.get(entry.district) && (
                                 <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.78rem" }}> — requester's pick, adjust if needed</span>
                               )}
@@ -2264,7 +2321,7 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
                     <div className="review-chain-step" key={idx}>
                       <div className="review-chain-step-number">{idx + 1}</div>
                       <div className="review-chain-step-info">
-                        <strong>{step.position_name}</strong> — {step.approver_name || "—"}
+                        <strong>{step.position_name ? displayOrgGroupName(step.position_name) : step.position_name}</strong> — {step.approver_name || "—"}
                         {step.decision_type === "NOTE" && <span style={{ color: "var(--muted)", fontSize: 12 }}> (noting)</span>}
                         {step.comment && <div style={{ fontSize: 12, color: "var(--muted)" }}>"{step.comment}"</div>}
                       </div>

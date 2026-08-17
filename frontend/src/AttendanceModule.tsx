@@ -96,6 +96,42 @@ function getCellClassName(day: DayInfo) {
 }
 
 export default function AttendanceModule(props: AttendanceModuleProps) {
+  const isFinance = Boolean(props.profile?.is_compensation_finance);
+  const [tab, setTab] = useState<"MY" | "FINANCE">("MY");
+  const [financeQueue, setFinanceQueue] = useState<any[]>([]);
+  const [financeBusyId, setFinanceBusyId] = useState<string | null>(null);
+
+  async function refreshFinanceQueue() {
+    const rows = await api.attendanceFinanceQueue();
+    setFinanceQueue(rows);
+  }
+
+  useEffect(() => {
+    if (isFinance && tab === "FINANCE") void refreshFinanceQueue();
+  }, [isFinance, tab]);
+
+  async function processRecord(id: string) {
+    setFinanceBusyId(id);
+    try {
+      await api.processAttendanceFinance(id);
+      await refreshFinanceQueue();
+    } finally {
+      setFinanceBusyId(null);
+    }
+  }
+
+  async function returnRecord(id: string) {
+    const reason = window.prompt("Reason for returning this record to the submitter:");
+    if (!reason || !reason.trim()) return;
+    setFinanceBusyId(id);
+    try {
+      await api.returnAttendanceFinance(id, reason.trim());
+      await refreshFinanceQueue();
+    } finally {
+      setFinanceBusyId(null);
+    }
+  }
+
   const [records, setRecords] = useState<any[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [division, setDivision] = useState("MNO");
@@ -211,6 +247,72 @@ export default function AttendanceModule(props: AttendanceModuleProps) {
         <button className="button small-button" onClick={props.onBack}>Back</button>
       </div>
 
+      {isFinance && (
+        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 18 }}>
+          {(
+            [
+              { key: "MY" as const, label: "My Attendance" },
+              { key: "FINANCE" as const, label: "Finance Queue" }
+            ]
+          ).map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              style={{
+                padding: "8px 14px", fontSize: 13, fontWeight: 600,
+                border: "none", background: "none", cursor: "pointer",
+                color: tab === t.key ? "#1d4ed8" : "var(--muted)",
+                borderBottom: tab === t.key ? "2px solid #1d4ed8" : "2px solid transparent"
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isFinance && tab === "FINANCE" ? (
+        <div className="card" style={{ padding: 20 }}>
+          <h3 style={{ marginTop: 0 }}>Attendance Records Awaiting Finance Review</h3>
+          <div style={{ overflowX: "auto" }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Employee No.</th>
+                  <th>Month</th>
+                  <th>Year</th>
+                  <th>Regular</th>
+                  <th>Holiday</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {financeQueue.length === 0 ? (
+                  <tr><td colSpan={7} style={{ textAlign: "center" }}>No attendance records awaiting Finance review.</td></tr>
+                ) : (
+                  financeQueue.map((record) => (
+                    <tr key={record.id}>
+                      <td>{record.employee_name || "—"}</td>
+                      <td>{record.employee_no || "—"}</td>
+                      <td>{record.month}</td>
+                      <td>{record.year}</td>
+                      <td>{record.regular_days}</td>
+                      <td>{record.holidays}</td>
+                      <td style={{ display: "flex", gap: 8 }}>
+                        <button className="button button-success small-button" disabled={financeBusyId === record.id} onClick={() => void processRecord(record.id)}>Process</button>
+                        <button className="button button-danger small-button" disabled={financeBusyId === record.id} onClick={() => void returnRecord(record.id)}>Return</button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="card" style={{ padding: 20 }}>
         <div className="form-grid-3">
           <div className="form-field">
@@ -366,6 +468,8 @@ export default function AttendanceModule(props: AttendanceModuleProps) {
           </table>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

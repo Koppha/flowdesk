@@ -5,13 +5,13 @@ import AttendanceModule from "./AttendanceModule";
 import Inbox, { isCaptureItem, isPaymentItem } from "./Inbox";
 import Payments from "./Payments";
 import Deductions from "./Deductions";
-import OvertimeModule from "./OvertimeModule";
-import OvertimeClaimModule from "./OvertimeClaimModule";
+import Overtime from "./Overtime";
 import EmployeesOnboarding from "./EmployeesOnboarding";
 import ExcoOnboarding from "./ExcoOnboarding";
 import LeadershipAssignments from "./LeadershipAssignments";
 import ManagersOnboarding from "./ManagersOnboarding";
 import WorkflowBuilder from "./WorkflowBuilder";
+import Standby from "./Standby";
 import ReportingLines from "./ReportingLines";
 import PdfDesigner from "./PdfDesigner";
 import RequestTypes from "./RequestTypes";
@@ -347,7 +347,8 @@ function UserSearchSelect(props: {
 const DELEGATION_REQUEST_TYPE_OPTIONS = [
   { value: "ADVANCE_REQUEST", label: "Advance Requests (Salary / Loan / Travel)" },
   { value: "CLEARANCE_REQUEST", label: "Travel Clearances" },
-  { value: "CUSTOM_WORKFLOW", label: "Custom Requests (All Types)" }
+  { value: "CUSTOM_WORKFLOW", label: "Custom Requests (All Types)" },
+  { value: "STANDBY_CLAIM", label: "Standby Claim Approvals" }
 ];
 
 // Derives a delegation's real lifecycle state from its own from/to dates and
@@ -403,7 +404,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "OVERTIME_CLAIM" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -414,6 +415,10 @@ function clearanceMonthYearRange(): number[] {
   const years: number[] = [];
   for (let y = current - 2; y <= current + 1; y++) years.push(y);
   return years;
+}
+
+function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
+  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
 }
 
 export default function App() {
@@ -440,6 +445,7 @@ export default function App() {
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const [hotels, setHotels] = useState<any[]>([]);
+  const [standbyToday, setStandbyToday] = useState<any[]>([]);
   const [hotelsLoading, setHotelsLoading] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
   const [newHotelDistrict, setNewHotelDistrict] = useState("");
@@ -454,6 +460,8 @@ export default function App() {
   const [importHotelResult, setImportHotelResult] = useState<{ created: number; skipped: number; errors: string[] } | null>(null);
   const hotelFileInputRef = useRef<HTMLInputElement>(null);
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
+  const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(true);
+  const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(true);
   const [hasDeductionsAccess, setHasDeductionsAccess] = useState(false);
   const [deductionsCount, setDeductionsCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
@@ -497,6 +505,8 @@ export default function App() {
   const [newSectionExcoId, setNewSectionExcoId] = useState("");
   const [leadershipUsers, setLeadershipUsers] = useState<{ hods: any[]; managers: any[]; exco: any[] }>({ hods: [], managers: [], exco: [] });
   const [profileAccordionOpen, setProfileAccordionOpen] = useState(true);
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [savingPhone, setSavingPhone] = useState(false);
   const [displayAccordionOpen, setDisplayAccordionOpen] = useState(true);
   const [travelSettingsOpen, setTravelSettingsOpen] = useState(true);
   const [sectionManagementOpen, setSectionManagementOpen] = useState(true);
@@ -525,6 +535,24 @@ export default function App() {
   const [featurePermDraft, setFeaturePermDraft] = useState<Record<string, string[]>>({});
   const [permissionGroups, setPermissionGroups] = useState<{ name: string; member_count: string; dynamic?: boolean; hidden?: boolean }[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
+  // "+Add Group" defaults to picking an existing Division/Department/Section/
+  // Team by name (these already exist as live, auto-membership columns - see
+  // listOrgStructureGroups on the backend - so "adding" one really means
+  // revealing its already-hidden column) rather than free-typing a name that
+  // could typo-mismatch the real org unit and silently grant nobody access.
+  // "Custom" is the escape hatch for a genuinely new hand-picked cohort.
+  const [addGroupType, setAddGroupType] = useState<"Division" | "Department" | "Section" | "Team" | "Custom">("Division");
+  const [selectedOrgGroupName, setSelectedOrgGroupName] = useState("");
+  // addGroupType's raw values ("Division"/"Department"/"Section"/"Team") match the
+  // legacy table names and must stay as-is for filtering permissionGroups by their
+  // stored raw prefix (see orgGroupPool below) — this map only controls what's shown.
+  const ADD_GROUP_TYPE_LABELS: Record<typeof addGroupType, string> = {
+    Division: "Company",
+    Department: "Division",
+    Section: "Department",
+    Team: "Section",
+    Custom: "Custom group",
+  };
   const [manageColumnsOpen, setManageColumnsOpen] = useState(false);
   const [groupSaving, setGroupSaving] = useState(false);
   const [expandedGroupName, setExpandedGroupName] = useState<string | null>(null);
@@ -537,6 +565,11 @@ export default function App() {
   const [featureAccessSearch, setFeatureAccessSearch] = useState("");
   const [featureAccessModuleFilter, setFeatureAccessModuleFilter] = useState("ALL");
   const [featureAccessSelectedKey, setFeatureAccessSelectedKey] = useState<string | null>(null);
+  // Groups (roles + every Division/Department/Section/Team) render as
+  // columns, and that list only grows over time - paginate it the same way
+  // the rest of the app paginates long row lists, just on the column axis.
+  const [featureAccessGroupsPage, setFeatureAccessGroupsPage] = useState(1);
+  const [featureAccessGroupsPageSize, setFeatureAccessGroupsPageSize] = useState(8);
   const [delegations, setDelegations] = useState<any[]>([]);
   const [delegationsLoading, setDelegationsLoading] = useState(false);
   // Whether the current (non-ADMIN) user is assigned to any active workflow
@@ -564,12 +597,24 @@ export default function App() {
   const [customRequestTypeOptions, setCustomRequestTypeOptions] = useState<Array<{ code: string; name: string }>>([]);
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
+  // Org-wide (not "mine=true") datasets for the Advance Requests / Approval
+  // Performance reports only - kept separate from `advances`/`claims` above,
+  // which are always the signed-in user's own requests and back My
+  // Advances/My Clearances. Silently empty for anyone without the
+  // report_advances feature permission (the fetch 403s, same as payments).
+  const [reportAdvances, setReportAdvances] = useState<any[]>([]);
+  const [reportClaims, setReportClaims] = useState<any[]>([]);
   const [dashboardSearch, setDashboardSearch] = useState("");
   const [inboxCount, setInboxCount] = useState(0);
   const [inboxItems, setInboxItems] = useState<any[]>([]);
   const [captureCount, setCaptureCount] = useState(0);
   const [paymentsCount, setPaymentsCount] = useState(0);
   const [page, setRawPage] = useState<AppPage>("HOME");
+  // Set when the Inbox hands off an Overtime/Standby item to that module's
+  // own detail screen (see Inbox.tsx's onNavigateToModule) — consumed once by
+  // Overtime/Standby on mount, then cleared so re-visiting the page later
+  // doesn't keep re-opening the same item.
+  const [moduleDeepLink, setModuleDeepLink] = useState<{ kind: "REQUEST" | "CLAIM"; id: string } | null>(null);
 
   // The app is a single-page client that switches "pages" via state only, with
   // no URL changes. Without pushing history entries, the browser back button
@@ -863,7 +908,9 @@ export default function App() {
     const copy = [...rows];
     if (field === "meals") {
       const meals = Number(value) || 0;
-      const maxMeals = selectedTravelType?.rate_kind === "DAILY" ? Infinity : 3;
+      // Day 1 (breakfast/lunch/dinner) allows up to 3 meals; subsequent days
+      // exclude breakfast (assumed eaten before departure that day), so 2.
+      const maxMeals = selectedTravelType?.rate_kind === "DAILY" ? Infinity : (index === 0 ? 3 : 2);
       (copy[index] as any).meals = Math.min(Math.max(meals, 0), maxMeals);
     } else {
       (copy[index] as any)[field] = value;
@@ -875,7 +922,16 @@ export default function App() {
   };
   const mealValueNumber = Number.isFinite(Number(mealValue)) ? Number(mealValue) : 0;
   const selectedTravelType = travelTypes.find((type) => type.code === advanceType && type.active !== false) || null;
-  const selectedTravelRate = selectedTravelType ? Number(selectedTravelType.rate_general_staff || 0) : 0;
+  // The advance is billed at the traveller's own rate (whoever it's
+  // actually for, not necessarily the person filling in the form on their
+  // behalf) — EXCO/CEO have their own configured rates precisely so this
+  // doesn't silently fall back to the general-staff rate for them.
+  const travellerRole = requestDirectory.find((user) => user.id === requestForUserId)?.role || profile?.role || "UNKNOWN";
+  const selectedTravelRate = selectedTravelType
+    ? Number(
+        (travellerRole === "CEO" ? selectedTravelType.rate_ceo : travellerRole === "EXCO" ? selectedTravelType.rate_exco : selectedTravelType.rate_general_staff) || 0
+      )
+    : 0;
   const selectedTravelUnitLabel = selectedTravelType?.rate_kind === "DAILY" ? "day" : "meal";
   const selectedTravelLocations = selectedTravelType?.locations || [];
   const selectedTravelDistricts = selectedTravelLocations
@@ -1051,15 +1107,16 @@ export default function App() {
     reporting_lines:        ["ADMIN", "MANAGER", "EXCO"],
     advance_pdf:            ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     report_reconciliation:  ["ADMIN", "FINANCE"],
+    report_advances:        ["ADMIN", "FINANCE"],
     pdf_designer:           ["ADMIN"],
     claims_sla_report:      ["ADMIN", "FINANCE"],
     advance_recovery_settings: ["ADMIN", "FINANCE"],
     manager_delegations:    ["ADMIN"],
     deductions:             ["ADMIN"],
     payments:               ["ADMIN", "Department: Finance"],
-    capture:                ["ADMIN", "Team: Treasury & Financial Accounting"],
+    capture:                ["ADMIN", "Section: Treasury & Financial Accounting"],
     clearance_status_report: [
-      "ADMIN", "Department: Finance", "Team: Treasury & Financial Accounting",
+      "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
       "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
     ],
     overtime_request:       ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
@@ -1083,6 +1140,10 @@ export default function App() {
   const canManageTravelSettings = canAccessFeature("travel_setup");
   const profileCompleted = Boolean(profile?.profile_completed ?? me?.profileCompleted);
   const employmentType = profile?.employment_type || me?.employmentType || "PERMANENT";
+  // Finance-authorized users (same authority Standby/Overtime gate their
+  // Finance queues on) also need Attendance open to review submitted
+  // records, even though they aren't interns/temporary staff themselves.
+  const canAccessAttendance = ["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) || Boolean(profile?.is_compensation_finance);
 
   // Dashboard "shortcuts" — every process a user could plausibly pin, gated
   // by the same visibility rules as the sidebar so the picker never offers
@@ -1090,9 +1151,8 @@ export default function App() {
   const shortcutCatalog: { key: AppPage; label: string; icon: typeof ClipboardList; available: boolean }[] = [
     { key: "MY_ADVANCES", label: "Advance Requests", icon: ClipboardList, available: true },
     { key: "MY_CLEARANCES", label: "Clearances", icon: CheckCircle2, available: true },
-    { key: "ATTENDANCE", label: "Attendance", icon: FileText, available: ["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) },
-    { key: "OVERTIME", label: "Overtime Request", icon: Clock3, available: true },
-    { key: "OVERTIME_CLAIM", label: "Overtime Claim", icon: Clock3, available: true },
+    { key: "ATTENDANCE", label: "Attendance", icon: FileText, available: canAccessAttendance },
+    { key: "OVERTIME", label: "Overtime", icon: Clock3, available: overtimeModuleEnabled },
     { key: "CHANGE_REQUEST", label: "Custom Requests", icon: GitBranch, available: hasActiveCustomRequestTypes },
     { key: "INBOX", label: "Approval Inbox", icon: Mail, available: true },
     { key: "REPORTS", label: "Reports", icon: BarChart3, available: true },
@@ -1256,6 +1316,7 @@ export default function App() {
     setError(null);
     const meResp = await withStartupTimeout(api.me(), "Profile");
     setProfile(meResp);
+    setPhoneDraft(meResp?.phone || "");
     // Only seed from the server once per session — afterwards, local state
     // (updated optimistically as the user pins/unpins shortcuts) is authoritative.
     if (meResp && !favoritePagesInitialized.current) {
@@ -1269,15 +1330,20 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, i, mealResp, travelResp, hotelsResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, moduleFlagsResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
       optionalStartupData<any[]>(api.claims(), [], "Claims"),
+      // Fails silently (403) for anyone without the report_advances feature
+      // permission, same as payments below - only feeds the Reports screens.
+      optionalStartupData<any[]>(api.allAdvances(), [], "All advances"),
+      optionalStartupData<any[]>(api.allClaims(), [], "All claims"),
       optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox"),
       optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value"),
       optionalStartupData<TravelType[]>(api.travelTypes(), [], "Travel types"),
       optionalStartupData<any[]>(api.hotels(), [], "Hotels"),
+      optionalStartupData<{ on_standby_today?: any[] }>(api.standbyDashboard(), { on_standby_today: [] }, "Standby"),
       optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions"),
       optionalStartupData<{ name: string; member_count: string; dynamic?: boolean }[]>(api.permissionGroups(), [], "Permission groups"),
       optionalStartupData<any[]>(api.requestTypes(), [], "Request types"),
@@ -1286,11 +1352,14 @@ export default function App() {
       optionalStartupData<{ total?: number }>(api.payments({ status: "pending" }), { total: 0 }, "Payments"),
       optionalStartupData<{ allowed?: boolean }>(api.paymentsAccess(), { allowed: false }, "Payments access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
+      optionalStartupData<{ overtime_enabled?: boolean; standby_enabled?: boolean }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true }, "Module flags"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
     setAdvances(Array.isArray(a) ? a : []);
     setClaims(Array.isArray(c) ? c : []);
+    setReportAdvances(Array.isArray(allAdvancesResp) ? allAdvancesResp : []);
+    setReportClaims(Array.isArray(allClaimsResp) ? allClaimsResp : []);
     const rawInboxItems: any[] = Array.isArray(i.items) ? i.items : [];
     const nonSplitInboxItems = rawInboxItems.filter((it) => !isCaptureItem(it) && !isPaymentItem(it));
     const inboxItemCount = nonSplitInboxItems.length;
@@ -1321,7 +1390,10 @@ export default function App() {
     setMealValueDraft(String(configuredMealValue));
     setTravelTypes(Array.isArray(travelResp) ? travelResp : []);
     setHotels(Array.isArray(hotelsResp) ? hotelsResp : []);
+    setStandbyToday(Array.isArray(standbyResp?.on_standby_today) ? standbyResp.on_standby_today : []);
     setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
+    setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
+    setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
     setHasDeductionsAccess(Boolean(deductionsAccessResp?.allowed));
     setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
     if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
@@ -1839,6 +1911,8 @@ export default function App() {
     setRequestDirectory([]);
     setAdvances([]);
     setClaims([]);
+    setReportAdvances([]);
+    setReportClaims([]);
     setInboxCount(0);
     setInboxItems([]);
     setAdminUsers([]);
@@ -2056,6 +2130,12 @@ export default function App() {
   }
 
   function resolveDelegationTypeLabel(code: string): string {
+    // Standby roster-creation delegations are created from the Standby
+    // module (which supplies the required team_id), not the generic admin
+    // "Create Delegation" modal — so this code is deliberately not in
+    // DELEGATION_REQUEST_TYPE_OPTIONS (that list doubles as the modal's
+    // picker), it's just given a readable label here.
+    if (code === "STANDBY_ROSTER") return "Standby Roster Creation";
     return DELEGATION_REQUEST_TYPE_OPTIONS.find((o) => o.value === code)?.label
       || customRequestTypeOptions.find((o) => o.code === code)?.name
       || code;
@@ -2468,7 +2548,7 @@ export default function App() {
       const stepIdx = typeof claim.workflow_step_order === "number" ? claim.workflow_step_order : 0;
       const step = chain[stepIdx];
       if (step) {
-        return `Waiting on ${step.position_name || step.approver_title || "Approver"}`;
+        return `Waiting on ${(step.position_name && displayOrgGroupName(step.position_name)) || step.approver_title || "Approver"}`;
       }
     }
 
@@ -2572,8 +2652,6 @@ export default function App() {
   }
   const downloadClaimPdf = (id: string) => openPdfBlob(() => api.claimPdf(id));
   const downloadAccommodationPdf = (id: string) => openPdfBlob(() => api.accommodationPdf(id));
-  const downloadOvertimeRequestPdf = (id: string) => openPdfBlob(() => api.overtimeRequestPdf(id));
-  const downloadOvertimeClaimPdf = (id: string) => openPdfBlob(() => api.overtimeClaimPdf(id));
   const downloadCustomRequestPdf = (id: string) => openPdfBlob(() => api.customRequestPdf(id));
 
   function buildTrackingStages(advance: any, events: any[]) {
@@ -3247,7 +3325,21 @@ export default function App() {
   // helper summaries
   const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "COUNTERSIGNED", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
   const pendingClaimCount = claims.filter((c) => !["SETTLED", "CLOSED", "REJECTED"].includes(c.status)).length;
-  const monthlySpend = claims.reduce((sum, c) => sum + Number(c.claim_total || 0), 0) + advances.reduce((sum, a) => sum + Number(a.approved_total || 0), 0);
+  // Grouped by currency rather than blended into one number — an LSL and a
+  // USD advance/claim summed together and labelled with one currency symbol
+  // would be meaningless.
+  const monthlySpendByCurrency = (() => {
+    const totals = new Map<string, number>();
+    for (const c of claims) {
+      const currency = c.currency || "LSL";
+      totals.set(currency, (totals.get(currency) || 0) + Number(c.claim_total || 0));
+    }
+    for (const a of advances) {
+      const currency = travelTypeCurrency(a.type, travelTypes);
+      totals.set(currency, (totals.get(currency) || 0) + Number(a.approved_total || 0));
+    }
+    return Array.from(totals.entries());
+  })();
   const advancesByType = advances.reduce<Record<string, number>>((acc, advance) => {
     acc[advance.type] = (acc[advance.type] || 0) + 1;
     return acc;
@@ -3971,21 +4063,24 @@ export default function App() {
             <h2>FlowDesk</h2>
           </div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
-          <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests</a>
-          <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><span className="sidebar-nav-icon"><CheckCircle2 size={18} aria-hidden /></span>Clearances</a>
-          {["MANAGER", "HOD", "EXCO", "CEO", "ADMIN"].includes(role) && (
-            <a href="#" className={navItemClass(page === "MY_TEAM")} onClick={(e) => { e.preventDefault(); setPage("MY_TEAM"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>My Team</a>
+          <div className={`sidebar-group ${["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests <strong><ChevronDown size={14} aria-hidden /></strong></a>
+            <div className="sidebar-subnav">
+              <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><CheckCircle2 size={14} aria-hidden />Clearances</a>
+            </div>
+          </div>
+          {canAccessAttendance && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
+          {(canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled && (
+            <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime</a>
           )}
-          {["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
-          {canAccessFeature("overtime_request") && (
-            <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Request</a>
-          )}
-          {canAccessFeature("overtime_claim") && (
-            <a href="#" className={navItemClass(page === "OVERTIME_CLAIM")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME_CLAIM"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime Claim</a>
+          {standbyModuleEnabled && (
+            <a href="#" className={navItemClass(page === "STANDBY")} onClick={(e) => { e.preventDefault(); setPage("STANDBY"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Standby</a>
           )}
           {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Requests</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
-          <a href="#" className={navItemClass(page === "CAPTURE")} onClick={(e) => { e.preventDefault(); setPage("CAPTURE"); }}><span className="sidebar-nav-icon"><Camera size={18} aria-hidden /></span>Capture Inbox <b>{captureCount}</b></a>
+          {canAccessFeature("capture") && (
+            <a href="#" className={navItemClass(page === "CAPTURE")} onClick={(e) => { e.preventDefault(); setPage("CAPTURE"); }}><span className="sidebar-nav-icon"><Camera size={18} aria-hidden /></span>Capture Inbox <b>{captureCount}</b></a>
+          )}
           {hasPaymentsAccess && (
             <a href="#" className={navItemClass(page === "PAYMENTS")} onClick={(e) => { e.preventDefault(); setPage("PAYMENTS"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Payments <b>{paymentsCount}</b></a>
           )}
@@ -3995,8 +4090,12 @@ export default function App() {
           <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page) ? "open" : ""}`}>
             <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
-              <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
-              <a href="#" className={navItemClass(page === "REPORT_APPROVAL")} onClick={(e) => { e.preventDefault(); setPage("REPORT_APPROVAL"); }}><Users size={14} aria-hidden />Approval Performance</a>
+              {canAccessFeature("report_advances") && (
+                <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
+              )}
+              {canAccessFeature("report_advances") && (
+                <a href="#" className={navItemClass(page === "REPORT_APPROVAL")} onClick={(e) => { e.preventDefault(); setPage("REPORT_APPROVAL"); }}><Users size={14} aria-hidden />Approval Performance</a>
+              )}
               <a href="#" className={navItemClass(page === "SLA_REPORTS")} onClick={(e) => { e.preventDefault(); setPage("SLA_REPORTS"); }}><BarChart3 size={14} aria-hidden />SLA Reports</a>
               <a href="#" className={navItemClass(page === "REPORT_WORKFLOW")} onClick={(e) => { e.preventDefault(); setPage("REPORT_WORKFLOW"); }}><GitBranch size={14} aria-hidden />Workflow Analytics</a>
               <a href="#" className={navItemClass(page === "REPORT_AUDIT")} onClick={(e) => { e.preventDefault(); setPage("REPORT_AUDIT"); }}><ShieldCheck size={14} aria-hidden />Audit Trail</a>
@@ -4021,6 +4120,9 @@ export default function App() {
                 {(canAccessFeature("manager_delegations") || delegationEligible) && <a href="#" className={navItemClass(page === "MANAGER_DELEGATIONS")} onClick={(e) => { e.preventDefault(); setPage("MANAGER_DELEGATIONS"); }}><Users size={14} aria-hidden />Manager Delegations</a>}
               </div>
             </div>
+          )}
+          {["MANAGER", "HOD", "EXCO", "CEO", "ADMIN"].includes(role) && (
+            <a href="#" className={navItemClass(page === "MY_TEAM")} onClick={(e) => { e.preventDefault(); setPage("MY_TEAM"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>My Team</a>
           )}
           {canManageTravelSettings && (
             <a href="#" className={navItemClass(page === "TRAVEL_SETUP")} onClick={(e) => { e.preventDefault(); setPage("TRAVEL_SETUP"); }}><span className="sidebar-nav-icon"><BriefcaseBusiness size={18} aria-hidden /></span>Travel Setup</a>
@@ -4062,9 +4164,16 @@ export default function App() {
           {error && <pre style={{ color: "crimson" }}>{error}</pre>}
 
           {page === "INBOX" ? (
-            <Inbox onBack={() => setPage("HOME")} />
+            <Inbox
+              onBack={() => setPage("HOME")}
+              onNavigateToModule={(target, deepLink) => { setModuleDeepLink(deepLink); setPage(target); }}
+            />
           ) : page === "CAPTURE" ? (
-            <Inbox mode="capture" onBack={() => setPage("HOME")} />
+            <Inbox
+              mode="capture"
+              onBack={() => setPage("HOME")}
+              onNavigateToModule={(target, deepLink) => { setModuleDeepLink(deepLink); setPage(target); }}
+            />
           ) : page === "PAYMENTS" ? (
             <Payments onBack={() => setPage("HOME")} />
           ) : page === "DEDUCTIONS" ? (
@@ -4072,9 +4181,21 @@ export default function App() {
           ) : page === "ATTENDANCE" ? (
             <AttendanceModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME" ? (
-            <OvertimeModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
-          ) : page === "OVERTIME_CLAIM" ? (
-            <OvertimeClaimModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
+            <Overtime
+              profile={profile}
+              role={role}
+              onBack={() => setPage("HOME")}
+              deepLink={moduleDeepLink}
+              onDeepLinkConsumed={() => setModuleDeepLink(null)}
+            />
+          ) : page === "STANDBY" ? (
+            <Standby
+              profile={profile}
+              role={role}
+              onBack={() => setPage("HOME")}
+              deepLink={moduleDeepLink}
+              onDeepLinkConsumed={() => setModuleDeepLink(null)}
+            />
           ) : page === "CHANGE_REQUEST" ? (
             <CustomRequestsHub profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "CEO_MANAGEMENT" ? (
@@ -4098,7 +4219,7 @@ export default function App() {
           ) : page === "TEAM_ROSTER" ? (
             <TeamRoster />
           ) : page === "REQUEST_TYPES" ? (
-            <RequestTypes onNavigate={(p) => setPage(p as any)} />
+            <RequestTypes onNavigate={(p) => setPage(p as any)} isAdmin={role === "ADMIN"} />
           ) : page === "USER_MANAGEMENT" ? (
             <div className="ep-page">
               <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Users</span></div>
@@ -4472,6 +4593,7 @@ export default function App() {
                       { key: "reporting_lines",        label: "Reporting Lines",          group: "Org Structure" },
                       { key: "pdf_designer",           label: "PDF Designer",             group: "Org Structure" },
                       { key: "advance_pdf",            label: "Download Advance PDF",     group: "Advances" },
+                      { key: "report_advances",        label: "Advance Requests / Approval Performance Reports", group: "Reports" },
                       { key: "report_reconciliation",  label: "Reconciliation Report",    group: "Reports" },
                       { key: "claims_sla_report",      label: "Clearance SLA Report",     group: "Reports" },
                       { key: "clearance_status_report", label: "Clearance Status Report",  group: "Reports" },
@@ -4501,14 +4623,15 @@ export default function App() {
                       reporting_lines:        ["ADMIN","MANAGER","EXCO"],
                       pdf_designer:           ["ADMIN"],
                       advance_pdf:            ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
+                      report_advances:        ["ADMIN","FINANCE"],
                       report_reconciliation:  ["ADMIN","FINANCE"],
                       claims_sla_report:      ["ADMIN","FINANCE"],
-                      clearance_status_report: ["ADMIN","Department: Finance","Team: Treasury & Financial Accounting","Department: Human Resource","Department: Human Resources","Section: Human Resources Operations"],
+                      clearance_status_report: ["ADMIN","Department: Finance","Section: Treasury & Financial Accounting","Department: Human Resource","Department: Human Resources","Section: Human Resources Operations"],
                       advance_recovery_settings: ["ADMIN","FINANCE"],
                       manager_delegations:    ["ADMIN"],
                       deductions:             ["ADMIN"],
                       payments:               ["ADMIN","Department: Finance"],
-                      capture:                ["ADMIN","Team: Treasury & Financial Accounting"],
+                      capture:                ["ADMIN","Section: Treasury & Financial Accounting"],
                       overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                     };
@@ -4520,14 +4643,35 @@ export default function App() {
                         : [...current, roleKey];
                       setFeaturePermDraft({ ...draft, [featureKey]: next });
                     }
+                    // Every real Division/Department/Section/Team already exists as a
+                    // live column (membership computed automatically from org data) -
+                    // "adding" one here just reveals it if it's currently hidden.
+                    const orgGroupPool = addGroupType === "Custom"
+                      ? []
+                      : permissionGroups.filter((g) => g.dynamic && g.name.startsWith(`${addGroupType}: `));
+
                     async function handleAddGroup() {
-                      const name = newGroupName.trim();
-                      if (!name) return;
+                      if (addGroupType === "Custom") {
+                        const name = newGroupName.trim();
+                        if (!name) return;
+                        setGroupSaving(true);
+                        try {
+                          const updated = await api.createPermissionGroup(name);
+                          setPermissionGroups(Array.isArray(updated) ? updated : []);
+                          setNewGroupName("");
+                        } catch (err: any) {
+                          alert(err?.message || "Failed to add group.");
+                        } finally {
+                          setGroupSaving(false);
+                        }
+                        return;
+                      }
+                      if (!selectedOrgGroupName) return;
                       setGroupSaving(true);
                       try {
-                        const updated = await api.createPermissionGroup(name);
+                        const updated = await api.setGroupVisibility(selectedOrgGroupName, false);
                         setPermissionGroups(Array.isArray(updated) ? updated : []);
-                        setNewGroupName("");
+                        setSelectedOrgGroupName("");
                       } catch (err: any) {
                         alert(err?.message || "Failed to add group.");
                       } finally {
@@ -4620,6 +4764,12 @@ export default function App() {
                     }, 0);
                     const restrictedCells = totalCells - grantedCells;
                     const coveragePct = totalCells > 0 ? Math.round((grantedCells / totalCells) * 100) : 0;
+                    const groupsTotalPages = Math.max(1, Math.ceil(GROUPS_LIST.length / featureAccessGroupsPageSize));
+                    const groupsCurrentPage = Math.min(featureAccessGroupsPage, groupsTotalPages);
+                    const pagedGroupsList = GROUPS_LIST.slice(
+                      (groupsCurrentPage - 1) * featureAccessGroupsPageSize,
+                      groupsCurrentPage * featureAccessGroupsPageSize
+                    );
                     const searchQuery = featureAccessSearch.trim().toLowerCase();
                     const filteredFeatures = FEATURES_LIST.filter((f) =>
                       (featureAccessModuleFilter === "ALL" || f.group === featureAccessModuleFilter) &&
@@ -4674,7 +4824,7 @@ export default function App() {
                               <thead>
                                 <tr>
                                   <th style={{ textAlign: "left", padding: "6px 10px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", minWidth: 180 }}>Feature</th>
-                                  {GROUPS_LIST.map((r) => (
+                                  {pagedGroupsList.map((r) => (
                                     <th key={r.key} style={{ padding: "6px 8px", background: "var(--bg-secondary,#f8fafc)", borderBottom: "2px solid var(--border,#e5e7eb)", textAlign: "center", minWidth: 70, fontSize: 12, fontWeight: 600 }}>
                                       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
                                         <span>{r.label}</span>
@@ -4700,7 +4850,7 @@ export default function App() {
                                   return (
                                     <React.Fragment key={group}>
                                       <tr>
-                                        <td colSpan={GROUPS_LIST.length + 1} style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted,#6b7280)", background: "var(--bg-secondary,#f8fafc)", borderTop: "1px solid var(--border,#e5e7eb)" }}>{group}</td>
+                                        <td colSpan={pagedGroupsList.length + 1} style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted,#6b7280)", background: "var(--bg-secondary,#f8fafc)", borderTop: "1px solid var(--border,#e5e7eb)" }}>{group}</td>
                                       </tr>
                                       {groupFeatures.map((feat, idx) => {
                                         const allowed = draft[feat.key] ?? DEFAULTS[feat.key] ?? [];
@@ -4713,7 +4863,7 @@ export default function App() {
                                             >
                                               {feat.label}
                                             </td>
-                                            {GROUPS_LIST.map((r) => {
+                                            {pagedGroupsList.map((r) => {
                                               const checked = allowed.includes(r.key);
                                               const isAdmin = r.key === "ADMIN";
                                               return (
@@ -4737,13 +4887,58 @@ export default function App() {
                                 })}
                                 {visibleGroups.length === 0 && (
                                   <tr>
-                                    <td colSpan={GROUPS_LIST.length + 1} style={{ padding: "16px 10px", textAlign: "center", color: "var(--text-muted,#6b7280)" }}>
+                                    <td colSpan={pagedGroupsList.length + 1} style={{ padding: "16px 10px", textAlign: "center", color: "var(--text-muted,#6b7280)" }}>
                                       No features match your search/filter.
                                     </td>
                                   </tr>
                                 )}
                               </tbody>
                             </table>
+                            {GROUPS_LIST.length > 0 && (
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px", flexWrap: "wrap", gap: 10 }}>
+                                <span style={{ fontSize: 12, color: "var(--text-muted,#6b7280)" }}>
+                                  Showing groups {(groupsCurrentPage - 1) * featureAccessGroupsPageSize + 1}
+                                  –{Math.min(groupsCurrentPage * featureAccessGroupsPageSize, GROUPS_LIST.length)} of {GROUPS_LIST.length}
+                                </span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <select
+                                    value={featureAccessGroupsPageSize}
+                                    onChange={(e) => { setFeatureAccessGroupsPageSize(Number(e.target.value)); setFeatureAccessGroupsPage(1); }}
+                                    style={{ padding: "4px 8px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 12 }}
+                                  >
+                                    {[8, 16, 24].map((n) => <option key={n} value={n}>{n} per page</option>)}
+                                  </select>
+                                  <button
+                                    className="ep-btn-outline"
+                                    type="button"
+                                    onClick={() => setFeatureAccessGroupsPage((p) => Math.max(1, p - 1))}
+                                    disabled={groupsCurrentPage === 1}
+                                    style={{ padding: "4px 8px" }}
+                                  >
+                                    <ChevronLeft size={14} aria-hidden />
+                                  </button>
+                                  {Array.from({ length: groupsTotalPages }, (_, i) => i + 1).slice(0, 7).map((n) => (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      className={`button small-button ${groupsCurrentPage === n ? "button-primary" : "button-subtle"}`}
+                                      onClick={() => setFeatureAccessGroupsPage(n)}
+                                    >
+                                      {n}
+                                    </button>
+                                  ))}
+                                  <button
+                                    className="ep-btn-outline"
+                                    type="button"
+                                    onClick={() => setFeatureAccessGroupsPage((p) => Math.min(groupsTotalPages, p + 1))}
+                                    disabled={groupsCurrentPage === groupsTotalPages}
+                                    style={{ padding: "4px 8px" }}
+                                  >
+                                    <ChevronRight size={14} aria-hidden />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {selectedFeature && (
@@ -4780,16 +4975,49 @@ export default function App() {
                           )}
                         </div>
 
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14 }}>
-                          <input
-                            type="text"
-                            placeholder="New group name"
-                            value={newGroupName}
-                            onChange={(e) => setNewGroupName(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") void handleAddGroup(); }}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+                          <select
+                            value={addGroupType}
+                            onChange={(e) => { setAddGroupType(e.target.value as typeof addGroupType); setSelectedOrgGroupName(""); setNewGroupName(""); }}
                             style={{ padding: "6px 10px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 13 }}
-                          />
-                          <button className="ep-btn-outline" type="button" onClick={() => void handleAddGroup()} disabled={groupSaving || !newGroupName.trim()}>
+                          >
+                            <option value="Division">{ADD_GROUP_TYPE_LABELS.Division}</option>
+                            <option value="Department">{ADD_GROUP_TYPE_LABELS.Department}</option>
+                            <option value="Section">{ADD_GROUP_TYPE_LABELS.Section}</option>
+                            <option value="Team">{ADD_GROUP_TYPE_LABELS.Team}</option>
+                            <option value="Custom">{ADD_GROUP_TYPE_LABELS.Custom}</option>
+                          </select>
+                          {addGroupType === "Custom" ? (
+                            <input
+                              type="text"
+                              placeholder="New group name"
+                              value={newGroupName}
+                              onChange={(e) => setNewGroupName(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") void handleAddGroup(); }}
+                              style={{ padding: "6px 10px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 13 }}
+                            />
+                          ) : orgGroupPool.filter((g) => g.hidden).length === 0 ? (
+                            <span style={{ fontSize: 12, color: "var(--text-muted,#6b7280)" }}>
+                              Every {ADD_GROUP_TYPE_LABELS[addGroupType].toLowerCase()} already has a column — use Manage Columns to re-hide one.
+                            </span>
+                          ) : (
+                            <select
+                              value={selectedOrgGroupName}
+                              onChange={(e) => setSelectedOrgGroupName(e.target.value)}
+                              style={{ padding: "6px 10px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, fontSize: 13, minWidth: 220 }}
+                            >
+                              <option value="">Select a {ADD_GROUP_TYPE_LABELS[addGroupType].toLowerCase()}…</option>
+                              {orgGroupPool.filter((g) => g.hidden).map((g) => (
+                                <option key={g.name} value={g.name}>{displayOrgGroupName(g.name)} ({g.member_count})</option>
+                              ))}
+                            </select>
+                          )}
+                          <button
+                            className="ep-btn-outline"
+                            type="button"
+                            onClick={() => void handleAddGroup()}
+                            disabled={groupSaving || (addGroupType === "Custom" ? !newGroupName.trim() : !selectedOrgGroupName)}
+                          >
                             {groupSaving ? "Saving…" : "+ Add Group"}
                           </button>
                           <button className="ep-btn-outline" type="button" onClick={() => setManageColumnsOpen((v) => !v)}>
@@ -5442,43 +5670,75 @@ export default function App() {
                 </div>
               </div>
 
-              {/* KPI stat cards */}
+              {/* KPI stat cards - organisation-wide for anyone with the
+                  report_advances permission; otherwise falls back to just
+                  the viewer's own requests (never blank, never someone
+                  else's data without the permission to see it). */}
+              {(() => {
+                const canSeeOrgWide = canAccessFeature("report_advances");
+                const hubAdvances = canSeeOrgWide ? reportAdvances : advances;
+                const hubClaims = canSeeOrgWide ? reportClaims : claims;
+                return (
               <div className="ep-kpi-row">
                 <div className="stat-card stat-card-blue">
                   <span className="stat-icon"><FileText size={28} /></span>
                   <div>
-                    <div className="stat-value">{advances.length}</div>
+                    <div className="stat-value">{hubAdvances.length}</div>
                     <div className="stat-label">Total Advances</div>
                   </div>
                 </div>
                 <div className="stat-card stat-card-green">
                   <span className="stat-icon"><ClipboardList size={28} /></span>
                   <div>
-                    <div className="stat-value">{claims.length}</div>
+                    <div className="stat-value">{hubClaims.length}</div>
                     <div className="stat-label">Total Clearances</div>
                   </div>
                 </div>
                 <div className="stat-card stat-card-gold">
                   <span className="stat-icon"><Wallet size={28} /></span>
                   <div>
-                    <div className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(advances.reduce((s, a) => s + Number(a.approved_total || 0), 0))}</div>
+                    {(() => {
+                      const totals = new Map<string, number>();
+                      for (const a of hubAdvances) {
+                        const currency = travelTypeCurrency(a.type, travelTypes);
+                        totals.set(currency, (totals.get(currency) || 0) + Number(a.approved_total || 0));
+                      }
+                      const entries = Array.from(totals.entries());
+                      return entries.length === 0
+                        ? <div className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(0)}</div>
+                        : entries.map(([currency, value]) => <div key={currency} className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(value, currency)}</div>);
+                    })()}
                     <div className="stat-label">Approved / Paid Value</div>
                   </div>
                 </div>
                 <div className="stat-card stat-card-rose">
                   <span className="stat-icon"><Wallet size={28} /></span>
                   <div>
-                    <div className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(claims.reduce((s, c) => s + Number(c.claim_total || 0), 0))}</div>
+                    {(() => {
+                      const totals = new Map<string, number>();
+                      for (const c of hubClaims) {
+                        const currency = c.currency || "LSL";
+                        totals.set(currency, (totals.get(currency) || 0) + Number(c.claim_total || 0));
+                      }
+                      const entries = Array.from(totals.entries());
+                      return entries.length === 0
+                        ? <div className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(0)}</div>
+                        : entries.map(([currency, value]) => <div key={currency} className="stat-value" style={{ fontSize: "1.35rem" }}>{fmtMoney(value, currency)}</div>);
+                    })()}
                     <div className="stat-label">Clearance Spend</div>
                   </div>
                 </div>
               </div>
+                );
+              })()}
 
               {/* Report module cards */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 24 }}>
                 {([
-                  { icon: <FileText size={26} />, color: "#3b82f6", bg: "#eff6ff", title: "Advance Requests", desc: "Full admin view of all advance requests with filters and export.", action: () => setPage("REPORT_ADVANCES"), live: true },
-                  { icon: <Users size={26} />, color: "#059669", bg: "#d1fae5", title: "Approval Performance", desc: "Approval rates, processing times, and department breakdowns.", action: () => setPage("REPORT_APPROVAL"), live: true },
+                  ...(canAccessFeature("report_advances") ? [
+                    { icon: <FileText size={26} />, color: "#3b82f6", bg: "#eff6ff", title: "Advance Requests", desc: "Full admin view of all advance requests with filters and export.", action: () => setPage("REPORT_ADVANCES"), live: true },
+                    { icon: <Users size={26} />, color: "#059669", bg: "#d1fae5", title: "Approval Performance", desc: "Approval rates, processing times, and department breakdowns.", action: () => setPage("REPORT_APPROVAL"), live: true },
+                  ] : []),
                   { icon: <BarChart3 size={26} />, color: "#8b5cf6", bg: "#ede9fe", title: "SLA Reports", desc: "Track processing times, breach rates, and SLA compliance by department.", action: () => setPage("SLA_REPORTS"), live: true },
                   { icon: <GitBranch size={26} />, color: "#f59e0b", bg: "#fef3c7", title: "Workflow Analytics", desc: "Workflow coverage, step complexity, and usage by request type.", action: () => setPage("REPORT_WORKFLOW"), live: true },
                   { icon: <ShieldCheck size={26} />, color: "#dc2626", bg: "#fee2e2", title: "Audit Trail", desc: "Chronological log of all advance and clearance activity.", action: () => setPage("REPORT_AUDIT"), live: true },
@@ -5763,9 +6023,9 @@ export default function App() {
           ) : page === "SLA_REPORTS" ? (
             <SlaReports onBack={() => setPage("REPORTS")} canViewClaimsSla={canAccessFeature("claims_sla_report")} />
           ) : page === "REPORT_ADVANCES" ? (
-            <ReportAdvances advances={advances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
+            <ReportAdvances advances={reportAdvances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_APPROVAL" ? (
-            <ReportApprovalPerformance advances={advances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
+            <ReportApprovalPerformance advances={reportAdvances} travelTypes={travelTypes} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_WORKFLOW" ? (
             <ReportWorkflowAnalytics advances={advances} onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_AUDIT" ? (
@@ -5859,9 +6119,6 @@ export default function App() {
                       </option>
                     ))}
                   </select>
-                  <div style={{ fontSize: 13, opacity: 0.78 }}>
-                    Permanent employees and approvers can create requests on behalf of interns and temporary employees in their department.
-                  </div>
                 </div>
               )}
 
@@ -6138,7 +6395,7 @@ export default function App() {
                               <input
                                 type="number"
                                 min="0"
-                                max={3}
+                                max={idx === 0 ? 3 : 2}
                                 step="1"
                                 value={String(Number.isFinite(Number(r.meals)) ? r.meals : 0)}
                                 onChange={e => updateRow(idx, "meals", e.target.value === "" ? 0 : Number(e.target.value))}
@@ -6204,7 +6461,15 @@ export default function App() {
                       <div className="accommodation-notice">
                         <Hotel size={18} className="accommodation-notice-icon" />
                         <div>
-                          <strong>Accommodation may be required</strong> — this is a {rows.length}-day local trip.
+                          <strong>Accommodation may be required</strong>
+                          <span
+                            className="info-tooltip"
+                            title="Choosing a hotel here is optional. HR confirms the booking, amount, dates and payment during review."
+                            style={{ marginLeft: 4, marginRight: 4 }}
+                          >
+                            <Info size={13} aria-hidden />
+                          </span>
+                           — this is a {rows.length}-day local trip.
                           <div style={{ fontSize: "0.82rem", color: "var(--muted)", margin: "3px 0 6px" }}>
                             If you have a preferred hotel in the destination district{destinations.length > 1 ? "s" : ""} below, choose it here — HR will handle the amount, dates and payment during review.
                           </div>
@@ -6688,9 +6953,6 @@ export default function App() {
                       </dd>
                     </div>
                   </dl>
-                  <div className="summary-note">
-                    Permanent employees and approvers can create requests on behalf of interns and temporary employees in their department.
-                  </div>
                 </aside>
               </div>
             </div>
@@ -6718,7 +6980,7 @@ export default function App() {
                       <option value="">Select paid travel advance</option>
                       {newClearanceAdvanceOptions.map((advance) => (
                         <option key={advance.id} value={advance.id}>
-                          {travelTypeLabel(advance.type, travelTypes)} - {fmtMoney(advance.approved_total || advance.requested_total)} - {new Date(advance.created_at).toLocaleDateString()}
+                          {travelTypeLabel(advance.type, travelTypes)} - {fmtMoney(advance.approved_total || advance.requested_total, travelTypeCurrency(advance.type, travelTypes))} - {new Date(advance.created_at).toLocaleDateString()}
                         </option>
                       ))}
                     </select>
@@ -7125,6 +7387,36 @@ export default function App() {
                   <div>Employment Type: {fmtEmploymentType(employmentType)}</div>
                   <div>Employment Number: {profile?.employee_no || "—"}</div>
                   <div>Role: {displayRoleLabel(role)}</div>
+                  <div>Email: {profile?.email || "—"}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                    <span>Phone:</span>
+                    <input
+                      type="tel"
+                      value={phoneDraft}
+                      onChange={(e) => setPhoneDraft(e.target.value)}
+                      placeholder="e.g. 6222 0000"
+                      style={{ maxWidth: 180 }}
+                    />
+                    <button
+                      className="ep-btn-outline"
+                      style={{ padding: "4px 10px", fontSize: 12 }}
+                      disabled={savingPhone || phoneDraft.trim() === (profile?.phone || "")}
+                      onClick={async () => {
+                        setSavingPhone(true);
+                        try {
+                          await api.updateMyProfileContact({ phone: phoneDraft.trim() });
+                          setProfile((p: any) => ({ ...p, phone: phoneDraft.trim() }));
+                        } catch (e: any) {
+                          alert("Could not save phone number: " + e.message);
+                        } finally {
+                          setSavingPhone(false);
+                        }
+                      }}
+                    >
+                      {savingPhone ? "Saving…" : "Save"}
+                    </button>
+                    <span style={{ fontSize: 11, color: "var(--muted)" }}>Used to show your contact on standby rosters.</span>
+                  </div>
                 </SettingsAccordion>
 
               <SettingsAccordion
@@ -7285,7 +7577,12 @@ export default function App() {
                 </div>
                 <div className="stat-card stat-card-green">
                   <span className="stat-icon"><BarChart3 size={28} /></span>
-                  <div><div className="stat-value">{fmtMoney(monthlySpend)}</div><div className="stat-label">Monthly Spend</div></div>
+                  <div>
+                    {monthlySpendByCurrency.length === 0
+                      ? <div className="stat-value">{fmtMoney(0)}</div>
+                      : monthlySpendByCurrency.map(([currency, value]) => <div key={currency} className="stat-value">{fmtMoney(value, currency)}</div>)}
+                    <div className="stat-label">Monthly Spend</div>
+                  </div>
                 </div>
               </div>
 
@@ -7470,7 +7767,7 @@ export default function App() {
                               <div className="dashboard-queue-stages">
                                 {Object.entries(g.byStage).map(([stage, s]) => (
                                   <div className="dashboard-queue-stage" key={stage}>
-                                    <span>Pending {stage} <b>{s.count}</b></span>
+                                    <span>Pending {displayOrgGroupName(stage)} <b>{s.count}</b></span>
                                     <span>{fmtMoney(s.amount)}</span>
                                   </div>
                                 ))}
@@ -7484,6 +7781,36 @@ export default function App() {
                   <div className="dashboard-panel-footer" onClick={() => setPage("INBOX")}>View all queues →</div>
                 </div>
               </div>
+
+              {standbyModuleEnabled && (
+                <div className="card dashboard-panel" style={{ marginTop: 16 }}>
+                  <div className="dashboard-panel-head">
+                    <h3>Who's on Standby Today</h3>
+                    <span className="dashboard-panel-link" onClick={() => setPage("STANDBY")}>Open Standby →</span>
+                  </div>
+                  {standbyToday.length === 0 ? (
+                    <div className="dashboard-panel-empty">Nobody on standby today.</div>
+                  ) : (
+                    <div className="ep-table-wrap">
+                      <table className="ep-table">
+                        <thead><tr><th>Employee</th><th>Position</th><th>Email</th><th>Phone</th><th>From</th><th>To</th></tr></thead>
+                        <tbody>
+                          {standbyToday.map((p: any, idx: number) => (
+                            <tr key={idx}>
+                              <td>{p.full_name}</td>
+                              <td>{p.title || "—"}</td>
+                              <td>{p.email ? <a href={`mailto:${p.email}`}>{p.email}</a> : "—"}</td>
+                              <td>{p.phone ? <a href={`tel:${p.phone}`}>{p.phone}</a> : "—"}</td>
+                              <td>{p.start_time}</td>
+                              <td>{p.end_time}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {!canOpenAdvanceForm && (
                 <div className="card" style={{ marginTop: 20, padding: 16 }}>

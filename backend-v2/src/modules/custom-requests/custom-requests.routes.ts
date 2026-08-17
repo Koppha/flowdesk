@@ -227,6 +227,13 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
       });
     }
 
+    // A requester can never name themself as their own approver — applies
+    // even to a fixed-chain non-AUTO_MANAGER step, since that step's
+    // approver is still requester-chosen.
+    if (chainInput.some((s) => s.approver_id === req.user!.userId)) {
+      throw badRequest("You cannot select yourself as an approver on your own request");
+    }
+
     const approverIds = chainInput.map((s) => s.approver_id);
     const approvers = await query<{ id: string; full_name: string | null; email: string; role: string }>(
       `SELECT id, full_name, email, role FROM users WHERE id = ANY($1::uuid[]) AND is_active = true`,

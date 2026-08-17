@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
+import { getBooleanSystemSetting, setBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 
 export const requestTypesRouter = Router();
 requestTypesRouter.use(requireAuth);
@@ -109,6 +110,40 @@ requestTypesRouter.get("/", async (req: AuthedRequest, res, next) => {
       [isAdmin, userId, dept, employmentType]
     );
     return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /request-types/module-flags — any authed user (used to gate nav). Fixed
+// path, must precede /:id so it isn't swallowed by the :id param.
+requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) => {
+  try {
+    const [overtime_enabled, standby_enabled] = await Promise.all([
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.overtimeModuleEnabled, true),
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, true)
+    ]);
+    return res.json({ overtime_enabled, standby_enabled });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// PUT /request-types/module-flags — admin only. Fixed path, must precede /:id.
+requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = z.object({
+      overtime_enabled: z.boolean().optional(),
+      standby_enabled: z.boolean().optional()
+    }).safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    if (parsed.data.overtime_enabled !== undefined) {
+      await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.overtimeModuleEnabled, parsed.data.overtime_enabled);
+    }
+    if (parsed.data.standby_enabled !== undefined) {
+      await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, parsed.data.standby_enabled);
+    }
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }

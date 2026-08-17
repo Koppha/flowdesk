@@ -114,6 +114,24 @@ export async function setDelegationRequestTypes(delegationId: string, requestTyp
   }
 }
 
+// Section-scoped delegations (e.g. Standby roster-creation, tagged
+// request_type_code='STANDBY_ROSTER') are additionally scoped by team_id,
+// which ordinary department-wide approval delegations don't use.
+export async function isActiveTeamDelegate(delegateId: string, teamId: string, requestType: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `SELECT md.id
+       FROM manager_delegations md
+       JOIN delegation_request_types drt ON drt.delegation_id = md.id AND drt.request_type_code = $3
+      WHERE md.delegate_id = $1
+        AND md.team_id = $2
+        AND md.active = true
+        AND (md.from_date IS NULL OR md.from_date <= current_date)
+        AND (md.to_date IS NULL OR md.to_date >= current_date)`,
+    [delegateId, teamId, requestType]
+  );
+  return rows.length > 0;
+}
+
 export async function generateDelegationReference(): Promise<string> {
   const year = new Date().getFullYear();
   const rows = await query<{ next_seq: string }>(

@@ -1,9 +1,13 @@
 import { randomUUID } from "crypto";
 import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
+import { ensureStandbySchema } from "../modules/standby/standby.routes.js";
+import { ensureOvertimeSchema } from "../modules/overtime/overtime.routes.js";
 import { env } from "../config/env.js";
 import { ensureDepartmentGroups, ensureManagerTypesTable, ensureUserOrgColumns } from "../lib/departments.js";
 import { ensureTravelSchema } from "../lib/travel.js";
+import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
+import { DEFAULT_ECONET_LOGO_DATA_URI } from "../lib/pdf/assets/econetLogo.js";
 
 const DEFAULT_ADMIN_EMAIL = env.ADMIN_SEED_EMAIL || "admin@example.com";
 const DEFAULT_ADMIN_PASSWORD = env.ADMIN_SEED_PASSWORD || "pass123";
@@ -29,6 +33,10 @@ export async function bootstrapSystem() {
   await ensureDeductionsSchema();
   await ensureAdminAccount();
   await ensureOrgStructureSections();
+  await ensureSefsExcoReportsToCeo();
+  await ensureStandbySchema();
+  await ensureFinanceAuthoritySchema();
+  await ensureOvertimeSchema();
 }
 
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;
@@ -47,10 +55,17 @@ async function ensureEmailActionTokensSchema() {
       created_at  timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // Overtime/Standby track approval steps in a normalized child table keyed by
+  // (parent_id, route_version, step_order) rather than a single JSONB chain —
+  // a "send back" bumps route_version and resets step_order to 0, so staleness
+  // detection for those doc types needs both fields, not step_order alone.
+  // Always 0 for ADVANCE/CLAIM/CUSTOM_REQUEST, where it's a no-op comparison.
+  await query(`ALTER TABLE email_action_tokens ADD COLUMN IF NOT EXISTS route_version integer NOT NULL DEFAULT 0`);
   await query(`CREATE INDEX IF NOT EXISTS idx_eat_doc ON email_action_tokens(doc_type, doc_id)`);
 }
 
 async function ensureUserSchema() {
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone text`);
   await ensureEnumColumnValue("users", "role", "EXCO");
   await ensureEnumColumnValue("users", "role", "HOD");
   await ensureEnumColumnValue("users", "role", "CEO");
@@ -450,6 +465,12 @@ async function ensureFeatureSchema() {
     )
   `);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique_month ON attendance_records(employee_id, month, year)`);
+  // Finance review — reuses the same compensation-finance authority
+  // (sections.is_compensation_finance / isCompensationFinanceUser) that
+  // gates Standby and Overtime's Finance queues.
+  await query(`ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS finance_processed_by_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS finance_processed_at timestamptz`);
+  await query(`ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS finance_comments text`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS manager_delegations (
@@ -488,6 +509,13 @@ async function ensureFeatureSchema() {
   `);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_delegations_reference ON manager_delegations(reference)`);
 
+  // Section (team) scope for delegations that grant an operational capability
+  // within one specific Section rather than department-wide approval
+  // authority — e.g. Standby's roster-creation delegation (tagged
+  // request_type_code='STANDBY_ROSTER' in delegation_request_types). NULL
+  // for ordinary approval delegations.
+  await query(`ALTER TABLE manager_delegations ADD COLUMN IF NOT EXISTS team_id uuid REFERENCES teams(id)`);
+
   // Optional per-delegation request-type scope. No rows for a delegation means
   // "all request types" — the original, unscoped behavior — so this is purely
   // additive and never narrows an existing delegation that predates it.
@@ -501,54 +529,6 @@ async function ensureFeatureSchema() {
   `);
 
   await query(`
-    CREATE TABLE IF NOT EXISTS overtime_requests (
-      id uuid PRIMARY KEY,
-      employee_id uuid NOT NULL REFERENCES users(id),
-      created_by_id uuid NOT NULL REFERENCES users(id),
-      employee_name text,
-      employee_no text,
-      job_title text,
-      section_name text,
-      year integer NOT NULL,
-      month integer NOT NULL,
-      car_reg text,
-      remarks text,
-      lines jsonb NOT NULL DEFAULT '[]'::jsonb,
-      status text NOT NULL DEFAULT 'DRAFT',
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS overtime_claims (
-      id uuid PRIMARY KEY,
-      employee_id uuid NOT NULL REFERENCES users(id),
-      created_by_id uuid NOT NULL REFERENCES users(id),
-      overtime_request_id uuid REFERENCES overtime_requests(id),
-      employee_name text,
-      employee_no text,
-      job_title text,
-      division text,
-      year integer NOT NULL,
-      month integer NOT NULL,
-      lines jsonb NOT NULL DEFAULT '[]'::jsonb,
-      total_overtime numeric(12,2) NOT NULL DEFAULT 0,
-      compensated_hours numeric(12,2) NOT NULL DEFAULT 0,
-      pay_days numeric(12,2) NOT NULL DEFAULT 0,
-      authorised_by text,
-      checked_by_supervisor text,
-      approved_by_manager text,
-      approved_by_cto text,
-      notation_hr text,
-      hourly_rate numeric(12,2) NOT NULL DEFAULT 0,
-      total_amount numeric(12,2) NOT NULL DEFAULT 0,
-      status text NOT NULL DEFAULT 'DRAFT',
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    )
-  `);
-  await query(`
     CREATE TABLE IF NOT EXISTS accommodation_hotels (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       name text NOT NULL,
@@ -560,33 +540,6 @@ async function ensureFeatureSchema() {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS recommended_by_supervisor text`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS supervisor_date text`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS approved_by_hod text`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS approved_by_cto text`);
-  // Workflow audit columns for overtime_requests
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS supervisor_approved_by_id uuid REFERENCES users(id)`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS supervisor_approved_at timestamptz`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS hod_approved_by_id uuid REFERENCES users(id)`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS hod_approved_at timestamptz`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS cto_approved_by_id uuid REFERENCES users(id)`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS cto_approved_at timestamptz`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS rejected_by_id uuid REFERENCES users(id)`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS rejected_at timestamptz`);
-  await query(`ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS rejection_reason text`);
-  // Workflow audit columns for overtime_claims
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS compensation_type text`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS salary_class text`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS number_of_hours numeric(12,2)`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS calculated_by text`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS checked_noted_earning_by text`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS transferred_to_summary_by text`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS manager_authorised_by_id uuid REFERENCES users(id)`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS manager_authorised_at timestamptz`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS hr_noted_at timestamptz`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS finance_verified_at timestamptz`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS earnings_recorded_at timestamptz`);
-  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS summary_transferred_at timestamptz`);
   await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS district text`);
   await query(`ALTER TABLE accommodation_hotels DROP COLUMN IF EXISTS department`);
   await query(`CREATE INDEX IF NOT EXISTS idx_accommodation_hotels_district ON accommodation_hotels(district)`);
@@ -1358,18 +1311,24 @@ async function ensurePdfSchema() {
   await query(`CREATE INDEX IF NOT EXISTS idx_pdf_perm_type ON pdf_permissions(request_type, custom_request_type_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_pdf_perm_user ON pdf_permissions(user_id)`);
 
-  const hasLetterhead = await query<{ id: string }>(`SELECT id FROM pdf_letterhead_settings LIMIT 1`);
+  const hasLetterhead = await query<{ id: string; logo_data: string | null }>(`SELECT id, logo_data FROM pdf_letterhead_settings LIMIT 1`);
   if (!hasLetterhead[0]) {
     await query(
-      `INSERT INTO pdf_letterhead_settings (company_name, address_lines, contact_line, footer_confidentiality_text)
-       VALUES ($1, $2, $3, $4)`,
+      `INSERT INTO pdf_letterhead_settings (company_name, address_lines, contact_line, footer_confidentiality_text, logo_data)
+       VALUES ($1, $2, $3, $4, $5)`,
       [
         "Econet Telecom Lesotho",
         JSON.stringify(["Kingsway Road, Maseru"]),
         "+266 2221 1000  |  www.etl.co.ls",
-        "CONFIDENTIAL — For internal use only."
+        "CONFIDENTIAL — For internal use only.",
+        DEFAULT_ECONET_LOGO_DATA_URI
       ]
     );
+  } else if (!hasLetterhead[0].logo_data) {
+    // Backfill: a row already exists (e.g. from before logo support, or no admin
+    // has uploaded one yet) but has no logo — apply the bundled Econet logo so
+    // every PDF gets a logo without requiring a manual upload step.
+    await query(`UPDATE pdf_letterhead_settings SET logo_data = $1 WHERE id = $2`, [DEFAULT_ECONET_LOGO_DATA_URI, hasLetterhead[0].id]);
   }
 
   await seedDefaultPdfTemplates();
@@ -1706,4 +1665,38 @@ async function ensureOrgStructureSections() {
       );
     }
   }
+}
+
+// SEFS's EXCO Member (Moeketsi Mafereka - GM Sasai Econet Financial
+// Services) sits directly at Division level with no department underneath,
+// so /reporting-lines/auto-generate's per-department loop never reaches him
+// and he was left with no reporting manager. Wire him straight to the CEO,
+// same as every other EXCO member, idempotently on every startup so this
+// applies to UAT and prod alike without a one-off manual data fix in either.
+async function ensureSefsExcoReportsToCeo() {
+  const mafereka = (await query<{ id: string }>(
+    `SELECT id FROM users WHERE lower(email) = 'maferekam@etl.co.ls' AND is_active = true`
+  ))[0];
+  if (!mafereka) return;
+
+  const ceo = (await query<{ id: string }>(
+    `SELECT id FROM users WHERE role::text = 'CEO' AND is_active = true ORDER BY full_name LIMIT 1`
+  ))[0];
+  if (!ceo) return;
+
+  const active = (await query<{ manager_id: string | null }>(
+    `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
+    [mafereka.id]
+  ))[0];
+  if (active && active.manager_id === ceo.id) return;
+
+  await query(
+    `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true`,
+    [mafereka.id]
+  );
+  await query(
+    `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, reason)
+     VALUES ($1, $2, $3, CURRENT_DATE, 'SEFS EXCO reports to CEO - auto-fixed for division-level org placement')`,
+    [randomUUID(), mafereka.id, ceo.id]
+  );
 }

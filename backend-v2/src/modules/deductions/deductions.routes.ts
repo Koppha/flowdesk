@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
-import { type AuthedRequest, isFinanceDept, requireAuth } from "../../lib/auth.js";
+import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
+import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canAccessDeductions } from "../../lib/deductionsPermissions.js";
@@ -30,6 +31,7 @@ type DeductionRow = {
   deducted_at: string | null;
   deducted_by_name: string | null;
   closed_at: string | null;
+  currency: string | null;
 };
 
 const LIST_QUERY = `
@@ -42,6 +44,7 @@ const LIST_QUERY = `
          c.month,
          ar.approved_at AS vr_date,
          EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
+         COALESCE(c.currency, 'LSL') AS currency,
          c.advance_amount,
          c.claim_total AS cleared_amount,
          abs(c.balance_amount) AS amount_to_be_expensed,
@@ -101,7 +104,7 @@ deductionsRouter.get("/", async (_req: AuthedRequest, res, next) => {
 // same view-vs-act split used for Payments and Capture Inbox.
 deductionsRouter.patch("/:id/deducted", async (req: AuthedRequest, res, next) => {
   try {
-    if (req.user!.role !== "ADMIN" && !isFinanceDept(req.user!.department)) {
+    if (req.user!.role !== "ADMIN" && !(await isCompensationFinanceSection(req.user!.sectionId))) {
       throw forbidden("Only Finance can record a deduction");
     }
     const existing = (await query<{ id: string }>(`SELECT id FROM clearance_claims WHERE id=$1 AND status='CLOSED'`, [req.params.id]))[0];

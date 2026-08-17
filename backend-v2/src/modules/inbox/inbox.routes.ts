@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { AuthedRequest, Role, hasFeatureAccess, isFinanceDept, requireAuth } from "../../lib/auth.js";
+import { AuthedRequest, Role, hasFeatureAccess, requireAuth } from "../../lib/auth.js";
+import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { query } from "../../lib/db.js";
 import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib/delegations.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
@@ -14,22 +15,26 @@ function isCaptureActionType(code: string | null | undefined) {
   return code === "CAPTURE" || code === "DEPT_CAPTURE";
 }
 
+// Overtime (like Standby) is not wired into this role-based inbox rule
+// system — its approval-route stages are employee-defined and delegation-
+// scoped, not fixed by role/status, so it has its own dedicated Approvals
+// screen (see Overtime.tsx) instead of a generic status-rule mapping here.
 type InboxRule =
   | "ALL"
   | {
-      doc_type: "ADVANCE" | "CLAIM" | "ACCOMMODATION" | "OVERTIME_REQUEST" | "OVERTIME_CLAIM";
+      doc_type: "ADVANCE" | "CLAIM" | "ACCOMMODATION";
       status: string;
       advance_type?: string;
     }
   | Array<{
-      doc_type: "ADVANCE" | "CLAIM" | "ACCOMMODATION" | "OVERTIME_REQUEST" | "OVERTIME_CLAIM";
+      doc_type: "ADVANCE" | "CLAIM" | "ACCOMMODATION";
       status: string;
       advance_type?: string;
     }>;
 
-function allowedInboxForUser(role: Role, department?: string | null): InboxRule | null {
+async function allowedInboxForUser(role: Role, sectionId?: string | null): Promise<InboxRule | null> {
   const base = allowedInboxForRole(role);
-  if (!isFinanceDept(department) || role === "FINANCE") return base;
+  if (!(await isCompensationFinanceSection(sectionId)) || role === "FINANCE") return base;
   const finance = allowedInboxForRole("FINANCE");
   if (base === "ALL" || finance === "ALL") return "ALL";
   const baseArr = base ? (Array.isArray(base) ? base : [base]) : [];
@@ -56,10 +61,7 @@ function allowedInboxForRole(role: Role): InboxRule | null {
         { doc_type: "CLAIM", status: "EXCO_APPROVED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
         { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
-        { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
-        { doc_type: "OVERTIME_REQUEST", status: "SUBMITTED" },
-        { doc_type: "OVERTIME_REQUEST", status: "SUPERVISOR_APPROVED" },
-        { doc_type: "OVERTIME_CLAIM", status: "SUBMITTED" }
+        { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" }
       ];
     case "EXCO":
       return [
@@ -70,8 +72,7 @@ function allowedInboxForRole(role: Role): InboxRule | null {
         { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
         { doc_type: "ADVANCE", status: "COUNTERSIGNED" },
         { doc_type: "ADVANCE", status: "HR_OFFICER" },
-        { doc_type: "ADVANCE", status: "APPROVED" },
-        { doc_type: "OVERTIME_REQUEST", status: "HOD_APPROVED" }
+        { doc_type: "ADVANCE", status: "APPROVED" }
       ];
     case "FINANCE":
       return [
@@ -79,8 +80,7 @@ function allowedInboxForRole(role: Role): InboxRule | null {
         { doc_type: "ADVANCE", status: "APPROVED" },
         { doc_type: "CLAIM", status: "HR_OFFICER" },
         { doc_type: "CLAIM", status: "FINANCE_VERIFIED" },
-        { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" },
-        { doc_type: "OVERTIME_CLAIM", status: "HR_NOTED" }
+        { doc_type: "CLAIM", status: "PAYMENT_PROCESSING" }
       ];
     case "ADMIN":
       return "ALL";
@@ -154,7 +154,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         d.managerId === managerId && (d.requestTypes.length === 0 || d.requestTypes.includes("CUSTOM_WORKFLOW") || d.requestTypes.includes(typeCode || ""))
       );
     const effectiveRole = delegatedManagerIds.length > 0 && role !== "MANAGER" ? "MANAGER" : role;
-    const rule = allowedInboxForUser(effectiveRole, req.user!.department);
+    const rule = await allowedInboxForUser(effectiveRole, req.user!.sectionId);
 
     // Names for every manager this user is delegated by, across both the
     // advance/claim delegation set and the (possibly different) custom-request
@@ -200,7 +200,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let matched: ChainStep | undefined;
         for (const step of group.steps) {
           if (step.approved) continue;
-          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { matched = step; break; }
+          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { matched = step; break; }
         }
         if (matched) {
           const delegatedFromId = delegatedFrom(matched);
@@ -234,7 +234,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let isChainParticipant = false;
         const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
         for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
-          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { isChainParticipant = true; break; }
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { isChainParticipant = true; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -358,7 +358,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       // own ANY_ONE group - e.g. HR Operations, granted view-only access.
       // current_step_actionable_by_me below still runs the real canApproveStep
       // check, so this never grants the ability to actually capture anything.
-      const captureViewOnly = !isAdmin && (await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Team: Treasury & Financial Accounting"]));
+      const captureViewOnly = !isAdmin && ((await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req)));
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
                 ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name
@@ -379,7 +379,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // holder (who isn't a real chain participant either), or once already captured.
         if (!captureStep.approved && !isAdmin && !captureViewOnly) continue;
         if (!isAdmin && !captureViewOnly) {
-          const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department);
+          const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId);
           if (!eligible) continue;
         }
         const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
@@ -399,7 +399,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_action_type: currentStep?.action_type ?? null,
           current_step_can_reject: currentStep?.can_reject,
           current_step_can_rollback: currentStep?.can_rollback,
-          current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)),
+          current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)),
           capture_done: !!captureStep.approved,
           is_delegated: !!delegatedFrom(captureStep),
           delegated_from_manager_name: (() => {
@@ -422,8 +422,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     // traveller it's for (read-only, so they can track it through to paid).
     const loadAccommodationItems = async () => {
       const isAdmin = rule === "ALL";
-      const captureViewOnly = !isAdmin && (await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Team: Treasury & Financial Accounting"]));
-      const canAct = isAdmin || isFinanceDept(req.user!.department);
+      const captureViewOnly = !isAdmin && ((await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req)));
+      const canAct = isAdmin || (await isCompensationFinanceSection(req.user!.sectionId));
       const rows = await query<any>(
         `SELECT acc.id, acc.status, acc.amount, acc.location, acc.provider,
                 acc.created_by_id, acc.requester_id,
@@ -472,7 +472,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let matched: ChainStep | undefined;
         for (const step of group.steps) {
           if (step.approved) continue;
-          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { matched = step; break; }
+          if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { matched = step; break; }
         }
         if (matched) {
           const delegatedFromId = delegatedFrom(matched);
@@ -501,7 +501,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         let isChainParticipant = false;
         const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
         for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
-          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.department)) { isChainParticipant = true; break; }
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { isChainParticipant = true; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -596,6 +596,123 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     };
 
+    // Overtime and Standby have their own employee-defined, delegation-scoped
+    // approval routes (route_version + step_order on a dedicated steps table,
+    // not the inline approval_chain JSONB the workflow engine uses) — same
+    // shape as loadCustomRequestsForUser's chain-of-approval model, just
+    // stored differently. Mirrors the exact queries behind /overtime/request-
+    // approvals, /overtime/approvals and /standby/approvals so the inbox and
+    // each module's own Approvals tab never disagree about who's up next.
+    // Each of these has its own delegation scope (OVERTIME_REQUEST /
+    // OVERTIME_CLAIM / STANDBY_CLAIM), distinct from the advance/custom-request
+    // delegation set the outer delegatingManagerNames map was built from — so
+    // each loader resolves names for its own delegatedFor list instead of
+    // relying on that map, same as /overtime/request-approvals etc. do.
+    const nameMapFor = async (managerIds: string[]) =>
+      managerIds.length
+        ? new Map((await query<{ id: string; full_name: string | null }>(`SELECT id, full_name FROM users WHERE id = ANY($1::uuid[])`, [managerIds])).map((u) => [u.id, u.full_name]))
+        : new Map<string, string | null>();
+
+    const loadOvertimeRequestItems = async () => {
+      const delegatedFor = await getDelegatedManagerIds(req.user!.userId, "OVERTIME_REQUEST");
+      const approverIds = [req.user!.userId, ...delegatedFor];
+      const names = await nameMapFor(delegatedFor);
+      const rows = await query<any>(
+        `SELECT r.id, r.request_no, r.year, r.month, r.submitted_at, u.full_name AS employee_name, s.title AS my_title, s.approver_user_id
+           FROM overtime_requests r
+           JOIN overtime_request_approval_steps s ON s.request_id = r.id AND s.step_order = r.current_step_order AND s.route_version = r.current_route_version
+           JOIN users u ON u.id = r.employee_id
+          WHERE s.approver_user_id = ANY($1::uuid[]) AND s.status='PENDING'
+          ORDER BY r.submitted_at`,
+        [approverIds]
+      );
+      for (const r of rows) {
+        const delegatedFromId = r.approver_user_id !== req.user!.userId ? r.approver_user_id : null;
+        items.push({
+          doc_type: "OVERTIME_REQUEST",
+          id: r.id,
+          status: "SUBMITTED",
+          request_no: r.request_no,
+          employee_name: r.employee_name,
+          year: r.year,
+          month: r.month,
+          my_title: r.my_title,
+          submitted_at: r.submitted_at,
+          current_step_actionable_by_me: true,
+          is_delegated: !!delegatedFromId,
+          delegated_from_manager_name: delegatedFromId ? names.get(delegatedFromId) ?? null : null
+        });
+      }
+    };
+
+    const loadOvertimeClaimItems = async () => {
+      const delegatedFor = await getDelegatedManagerIds(req.user!.userId, "OVERTIME_CLAIM");
+      const approverIds = [req.user!.userId, ...delegatedFor];
+      const names = await nameMapFor(delegatedFor);
+      const rows = await query<any>(
+        `SELECT c.id, c.claim_no, c.year, c.month, c.submitted_at, c.total_amount, c.converted_hours,
+                u.full_name AS employee_name, s.title AS my_title, s.approver_user_id
+           FROM overtime_claims c
+           JOIN overtime_claim_approval_steps s ON s.claim_id = c.id AND s.step_order = c.current_step_order AND s.route_version = c.current_route_version
+           JOIN users u ON u.id = c.employee_id
+          WHERE s.approver_user_id = ANY($1::uuid[]) AND s.status='PENDING'
+          ORDER BY c.submitted_at`,
+        [approverIds]
+      );
+      for (const c of rows) {
+        const delegatedFromId = c.approver_user_id !== req.user!.userId ? c.approver_user_id : null;
+        items.push({
+          doc_type: "OVERTIME_CLAIM",
+          id: c.id,
+          status: "SUBMITTED",
+          claim_no: c.claim_no,
+          employee_name: c.employee_name,
+          year: c.year,
+          month: c.month,
+          converted_hours: Number(c.converted_hours || 0),
+          total_amount: Number(c.total_amount || 0),
+          my_title: c.my_title,
+          submitted_at: c.submitted_at,
+          current_step_actionable_by_me: true,
+          is_delegated: !!delegatedFromId,
+          delegated_from_manager_name: delegatedFromId ? names.get(delegatedFromId) ?? null : null
+        });
+      }
+    };
+
+    const loadStandbyClaimItems = async () => {
+      const delegatedFor = await getDelegatedManagerIds(req.user!.userId, "STANDBY_CLAIM");
+      const approverIds = [req.user!.userId, ...delegatedFor];
+      const names = await nameMapFor(delegatedFor);
+      const rows = await query<any>(
+        `SELECT sc.id, sc.claim_no, sc.claim_month, sc.submitted_at, sc.calculated_amount,
+                u.full_name AS employee_name, sas.title AS my_title, sas.approver_user_id
+           FROM standby_claims sc
+           JOIN standby_approval_steps sas ON sas.claim_id = sc.id AND sas.step_order = sc.current_step_order AND sas.route_version = sc.current_route_version
+           JOIN users u ON u.id = sc.employee_id
+          WHERE sas.approver_user_id = ANY($1::uuid[]) AND sas.status='PENDING'
+          ORDER BY sc.submitted_at`,
+        [approverIds]
+      );
+      for (const sc of rows) {
+        const delegatedFromId = sc.approver_user_id !== req.user!.userId ? sc.approver_user_id : null;
+        items.push({
+          doc_type: "STANDBY_CLAIM",
+          id: sc.id,
+          status: "SUBMITTED",
+          claim_no: sc.claim_no,
+          employee_name: sc.employee_name,
+          claim_month: sc.claim_month,
+          calculated_amount: Number(sc.calculated_amount || 0),
+          my_title: sc.my_title,
+          submitted_at: sc.submitted_at,
+          current_step_actionable_by_me: true,
+          is_delegated: !!delegatedFromId,
+          delegated_from_manager_name: delegatedFromId ? names.get(delegatedFromId) ?? null : null
+        });
+      }
+    };
+
     // Workflow-driven advances for this user (their pending approval steps).
     // Runs regardless of `rule` so a step with a specific assigned_user_id is
     // visible even if the user's role has no general inbox rule (e.g. an
@@ -609,6 +726,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     await loadCaptureHistoryItems();
     await loadAccommodationItems();
     await loadCustomRequestsForUser();
+    await loadOvertimeRequestItems();
+    await loadOvertimeClaimItems();
+    await loadStandbyClaimItems();
 
     if (!rule) return res.json({ items });
 
@@ -704,51 +824,6 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     };
 
-    const loadOvertimeRequestByStatus = async (status: string) => {
-      const rows = await query<any>(
-        `SELECT o.id, o.status, o.employee_name, o.section_name, o.year, o.month,
-                u.full_name AS created_by_name
-         FROM overtime_requests o
-         JOIN users u ON u.id = o.created_by_id
-         WHERE o.status = $1
-         ORDER BY o.created_at DESC`,
-        [status]
-      );
-      for (const o of rows) {
-        items.push({
-          doc_type: "OVERTIME_REQUEST",
-          id: o.id,
-          status: o.status,
-          employee_name: o.employee_name,
-          section_name: o.section_name,
-          year: o.year,
-          month: o.month
-        });
-      }
-    };
-
-    const loadOvertimeClaimByStatus = async (status: string) => {
-      const rows = await query<any>(
-        `SELECT o.id, o.status, o.employee_name, o.division, o.year, o.month, o.total_amount
-         FROM overtime_claims o
-         WHERE o.status = $1
-         ORDER BY o.created_at DESC`,
-        [status]
-      );
-      for (const o of rows) {
-        items.push({
-          doc_type: "OVERTIME_CLAIM",
-          id: o.id,
-          status: o.status,
-          employee_name: o.employee_name,
-          division: o.division,
-          year: o.year,
-          month: o.month,
-          total_amount: Number(o.total_amount)
-        });
-      }
-    };
-
     if (rule === "ALL") {
       // Legacy (non-workflow) advances by status
       await loadAdvanceByStatus("SUBMITTED");
@@ -762,15 +837,6 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       await loadClaimByStatus("FINANCE_VERIFIED");
       await loadClaimByStatus("PAYMENT_PROCESSING");
 
-      await loadOvertimeRequestByStatus("SUBMITTED");
-      await loadOvertimeRequestByStatus("SUPERVISOR_APPROVED");
-      await loadOvertimeRequestByStatus("HOD_APPROVED");
-      await loadOvertimeClaimByStatus("SUBMITTED");
-      await loadOvertimeClaimByStatus("MANAGER_AUTHORISED");
-      await loadOvertimeClaimByStatus("HR_NOTED");
-      await loadOvertimeClaimByStatus("FINANCE_VERIFIED");
-      await loadOvertimeClaimByStatus("EARNINGS_RECORDED");
-
       return res.json({ items });
     }
 
@@ -778,10 +844,6 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     for (const r of rules) {
       if (r.doc_type === "ADVANCE") {
         await loadAdvanceByStatus(r.status, r.advance_type);
-      } else if (r.doc_type === "OVERTIME_REQUEST") {
-        await loadOvertimeRequestByStatus(r.status);
-      } else if (r.doc_type === "OVERTIME_CLAIM") {
-        await loadOvertimeClaimByStatus(r.status);
       } else {
         await loadClaimByStatus(r.status);
       }

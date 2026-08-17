@@ -156,7 +156,7 @@ export default function TeamRoster() {
   async function handleMove() {
     if (!movingEmployee) return;
     if (!moveOrg.department && !moveOrg.teamId) {
-      alert("Select at least a department or team to move this employee to.");
+      alert("Select at least a department or section to move this employee to.");
       return;
     }
     setMoving(true);
@@ -483,7 +483,7 @@ function EmployeeRow({ emp, onMove, onEdit }: { emp: Employee; onMove: () => voi
         </button>
         <button
           onClick={onMove}
-          title="Move to another team"
+          title="Move to another section"
           style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 5, color: "#1d4ed8", cursor: "pointer", fontSize: 11, fontWeight: 500, whiteSpace: "nowrap" }}
         >
           <ArrowRight size={11} /> Move

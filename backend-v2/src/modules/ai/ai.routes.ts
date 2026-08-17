@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, requireAuth } from "../../lib/auth.js";
+import { AuthedRequest, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
 import { badRequest } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 
@@ -41,7 +41,10 @@ function extractReference(text: string) {
 export const aiRouter = Router();
 aiRouter.use(requireAuth);
 
-aiRouter.get("/anomalies", async (_req: AuthedRequest, res, next) => {
+// Both routes below expose company-wide names/departments/amounts — same
+// class of data every other reporting endpoint in the app restricts to
+// ADMIN/Finance (see e.g. advances.routes.ts's /payments, /reconciliation-report).
+aiRouter.get("/anomalies", requireFeatureAccess("ai_insights", ["ADMIN", "Department: Finance"]), async (_req: AuthedRequest, res, next) => {
   try {
     const duplicateClaims = await query(
       `SELECT u.department, u.full_name AS claimant_name, c.month, c.linked_advance_id, COUNT(*)::int AS duplicate_count
@@ -82,7 +85,7 @@ aiRouter.get("/anomalies", async (_req: AuthedRequest, res, next) => {
   }
 });
 
-aiRouter.post("/nl-report", async (req: AuthedRequest, res, next) => {
+aiRouter.post("/nl-report", requireFeatureAccess("ai_insights", ["ADMIN", "Department: Finance"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = z.object({ prompt: z.string().trim().min(3) }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid report prompt", parsed.error.flatten());

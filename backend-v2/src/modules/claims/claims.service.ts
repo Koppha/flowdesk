@@ -1,5 +1,5 @@
 import { badRequest, forbidden } from "../../lib/errors.js";
-import { query } from "../../lib/db.js";
+import { query, withTransaction } from "../../lib/db.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
 
 export type ClaimStatus =
@@ -105,7 +105,7 @@ export async function advanceClaimWorkflowStep(args: {
   userId: string;
   role: string;
   delegatedManagerIds?: string[] | null;
-  userDepartment?: string | null;
+  userSectionId?: string | null;
 }): Promise<{
   nextStatus: ClaimStatus;
   newStepOrder: number;
@@ -115,67 +115,84 @@ export async function advanceClaimWorkflowStep(args: {
   nextApprover: { id: string | null; name: string | null; email: string | null; title: string | null } | null;
   nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }>;
 }> {
-  const { claim, userId, role, delegatedManagerIds, userDepartment } = args;
+  const { claim, userId, role, delegatedManagerIds, userSectionId } = args;
   if (!claim.approval_chain?.length) throw badRequest("This clearance does not have an active approval workflow.");
 
-  const chain = claim.approval_chain as ChainStep[];
-  const stepIdx = claim.workflow_step_order ?? 0;
-  if (stepIdx >= chain.length) throw badRequest("All workflow steps have been completed");
+  // Re-reads the row locked (SELECT ... FOR UPDATE) inside a transaction
+  // rather than trusting the possibly-stale `claim` passed in — mirrors the
+  // fix applied to advanceWorkflowStep (advances.service.ts) for the same
+  // concurrent-approver race. Also re-checks status: a REJECTED claim's
+  // workflow_step_order/approval_chain are left untouched by reject (see
+  // performClaimReject), so without this check the same or another eligible
+  // approver could still call approve and walk a rejected claim to CLOSED.
+  return withTransaction(async (client) => {
+    const lockedRows = await client.query<{ status: ClaimStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null }>(
+      `SELECT status, workflow_step_order, approval_chain FROM clearance_claims WHERE id=$1 FOR UPDATE`,
+      [claim.id]
+    );
+    const locked = lockedRows.rows[0];
+    if (!locked?.approval_chain?.length) throw badRequest("This clearance does not have an active approval workflow.");
+    if (locked.status === "REJECTED") throw badRequest("This claim has been rejected and can no longer be approved");
 
-  const group = getPendingGroup(chain, stepIdx);
+    const chain = locked.approval_chain as ChainStep[];
+    const stepIdx = locked.workflow_step_order ?? 0;
+    if (stepIdx >= chain.length) throw badRequest("All workflow steps have been completed");
 
-  let actedIdx: number | null = null;
-  if (role === "ADMIN") {
-    actedIdx = group.indices.find((idx) => !chain[idx].approved) ?? group.indices[0];
-  } else {
-    for (const idx of group.indices) {
-      if (chain[idx].approved) continue;
-      if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, userDepartment)) { actedIdx = idx; break; }
+    const group = getPendingGroup(chain, stepIdx);
+
+    let actedIdx: number | null = null;
+    if (role === "ADMIN") {
+      actedIdx = group.indices.find((idx) => !chain[idx].approved) ?? group.indices[0];
+    } else {
+      for (const idx of group.indices) {
+        if (chain[idx].approved) continue;
+        if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, userSectionId)) { actedIdx = idx; break; }
+      }
     }
-  }
-  if (actedIdx == null) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+    if (actedIdx == null) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
 
-  const currentStep = chain[actedIdx];
-  const actedAt = new Date().toISOString();
-  const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true, approved_at: actedAt } : s));
-  if (role === "ADMIN") {
-    for (const idx of group.indices) newChain[idx] = { ...newChain[idx], approved: true, approved_at: actedAt };
-  }
-
-  const stillPending = group.indices.some((idx) => !newChain[idx].approved);
-  let nextStatus: ClaimStatus;
-  let newStepOrder: number;
-  let hasMore: boolean;
-  let nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }> = [];
-
-  if (stillPending) {
-    nextStatus = claim.status;
-    newStepOrder = stepIdx;
-    hasMore = true;
-  } else {
-    const nextIdx = group.indices[group.indices.length - 1] + 1;
-    hasMore = nextIdx < newChain.length;
-    nextStatus = chainStepToClaimStatus(newChain, nextIdx);
-    newStepOrder = hasMore ? nextIdx : newChain.length;
-    if (hasMore) {
-      nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
-        id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
-      }));
+    const currentStep = chain[actedIdx];
+    const actedAt = new Date().toISOString();
+    const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true, approved_at: actedAt } : s));
+    if (role === "ADMIN") {
+      for (const idx of group.indices) newChain[idx] = { ...newChain[idx], approved: true, approved_at: actedAt };
     }
-  }
 
-  // $2 (status) is bound to the claim_status enum column, so it can't also be
-  // compared against a text literal in the same statement (Postgres requires
-  // one type per parameter) — pass the "did this just close" check as its own
-  // boolean parameter instead of reusing $2 in a second, conflicting context.
-  await query(
-    `UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4,
-       closed_at=CASE WHEN $5 THEN now() ELSE closed_at END, updated_at=now()
-     WHERE id=$1`,
-    [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain), nextStatus === "CLOSED"]
-  );
+    const stillPending = group.indices.some((idx) => !newChain[idx].approved);
+    let nextStatus: ClaimStatus;
+    let newStepOrder: number;
+    let hasMore: boolean;
+    let nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }> = [];
 
-  const nextApprover = nextApprovers[0] ?? null;
+    if (stillPending) {
+      nextStatus = locked.status;
+      newStepOrder = stepIdx;
+      hasMore = true;
+    } else {
+      const nextIdx = group.indices[group.indices.length - 1] + 1;
+      hasMore = nextIdx < newChain.length;
+      nextStatus = chainStepToClaimStatus(newChain, nextIdx);
+      newStepOrder = hasMore ? nextIdx : newChain.length;
+      if (hasMore) {
+        nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
+          id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
+        }));
+      }
+    }
 
-  return { nextStatus, newStepOrder, hasMore, currentStep, stillPending, nextApprover, nextApprovers };
+    // $2 (status) is bound to the claim_status enum column, so it can't also be
+    // compared against a text literal in the same statement (Postgres requires
+    // one type per parameter) — pass the "did this just close" check as its own
+    // boolean parameter instead of reusing $2 in a second, conflicting context.
+    await client.query(
+      `UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4,
+         closed_at=CASE WHEN $5 THEN now() ELSE closed_at END, updated_at=now()
+       WHERE id=$1`,
+      [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain), nextStatus === "CLOSED"]
+    );
+
+    const nextApprover = nextApprovers[0] ?? null;
+
+    return { nextStatus, newStepOrder, hasMore, currentStep, stillPending, nextApprover, nextApprovers };
+  });
 }

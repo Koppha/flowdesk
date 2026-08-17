@@ -311,6 +311,7 @@ reportingLinesRouter.post("/auto-generate", requireRole(["ADMIN"]), async (req: 
     const departments = await listDepartmentGroups();
     const warnings: string[] = [];
     let generated = 0;
+    const processedEmployeeIds = new Set<string>();
 
     // Find the active CEO (top of the entire chain)
     const ceoUsers = await query<{ id: string; full_name: string | null }>(
@@ -390,6 +391,32 @@ reportingLinesRouter.post("/auto-generate", requireRole(["ADMIN"]), async (req: 
           [randomUUID(), emp.id, reportsTo, req.user!.userId]
         );
         generated++;
+        processedEmployeeIds.add(emp.id);
+      }
+    }
+
+    // EXCO members placed directly at Division level (no department under
+    // them at all - e.g. SEFS's single EXCO covering every SEFS
+    // department) never match the per-department loop above, since it only
+    // finds employees via users.department. Wire any leftover active EXCO
+    // straight to the CEO too, same as their department-scoped peers.
+    if (ceoId) {
+      const orphanedExco = await query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM users WHERE role::text = 'EXCO' AND is_active = true`
+      );
+      for (const exco of orphanedExco) {
+        if (processedEmployeeIds.has(exco.id)) continue;
+        await query(
+          `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true`,
+          [exco.id]
+        );
+        await query(
+          `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, reason, created_by_id)
+           VALUES ($1, $2, $3, CURRENT_DATE, 'Auto-generated (Division-level EXCO)', $4)`,
+          [randomUUID(), exco.id, ceoId, req.user!.userId]
+        );
+        generated++;
+        processedEmployeeIds.add(exco.id);
       }
     }
 

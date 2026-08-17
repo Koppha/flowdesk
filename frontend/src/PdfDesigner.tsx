@@ -3,7 +3,7 @@ import { api, openBlobInNewTab } from "./api";
 import { confirmAction, showNotice } from "./alerts";
 import { ArrowDown, ArrowUp, FileText, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
 
-type PdfRequestType = "ADVANCE_REQUEST" | "CLEARANCE_CLAIM" | "ACCOMMODATION_REQUEST" | "OVERTIME_REQUEST" | "OVERTIME_CLAIM" | "CUSTOM_REQUEST";
+type PdfRequestType = "ADVANCE_REQUEST" | "CLEARANCE_CLAIM" | "ACCOMMODATION_REQUEST" | "OVERTIME_REQUEST" | "OVERTIME_CLAIM" | "STANDBY_CLAIM" | "CUSTOM_REQUEST";
 
 const REQUEST_TYPE_LABELS: Record<PdfRequestType, string> = {
   ADVANCE_REQUEST: "Travel Advance Request",
@@ -11,6 +11,7 @@ const REQUEST_TYPE_LABELS: Record<PdfRequestType, string> = {
   ACCOMMODATION_REQUEST: "Accommodation Request",
   OVERTIME_REQUEST: "Overtime Request",
   OVERTIME_CLAIM: "Overtime Claim",
+  STANDBY_CLAIM: "Standby Claim",
   CUSTOM_REQUEST: "Custom Request"
 };
 const REQUEST_TYPES = Object.keys(REQUEST_TYPE_LABELS) as PdfRequestType[];
@@ -679,7 +680,7 @@ function LetterheadScreen({ onBack }: { onBack: () => void }) {
   const [addressLines, setAddressLines] = useState("");
   const [contactLine, setContactLine] = useState("");
   const [footerText, setFooterText] = useState("");
-  const [logoPath, setLogoPath] = useState<string | null>(null);
+  const [hasLogo, setHasLogo] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -694,7 +695,7 @@ function LetterheadScreen({ onBack }: { onBack: () => void }) {
           setAddressLines((data.address_lines || []).join("\n"));
           setContactLine(data.contact_line || "");
           setFooterText(data.footer_confidentiality_text || "");
-          setLogoPath(data.logo_path || null);
+          setHasLogo(Boolean(data.logo_data || data.logo_path));
         }
       } catch (err: any) {
         void showNotice(err?.message || "Failed to load letterhead.");
@@ -729,7 +730,7 @@ function LetterheadScreen({ onBack }: { onBack: () => void }) {
     }, 600);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, companyName, addressLines, contactLine, footerText, logoPath]);
+  }, [loading, companyName, addressLines, contactLine, footerText, hasLogo]);
 
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
 
@@ -752,8 +753,8 @@ function LetterheadScreen({ onBack }: { onBack: () => void }) {
 
   const uploadLogo = async (file: File) => {
     try {
-      const result = await api.uploadPdfLetterheadLogo(file);
-      setLogoPath(result.logo_path);
+      await api.uploadPdfLetterheadLogo(file);
+      setHasLogo(true);
       await refreshPreview({ company_name: companyName, address_lines: addressLines, contact_line: contactLine, footer_text: footerText });
     } catch (err: any) {
       void showNotice(err?.message || "Failed to upload logo.");
@@ -773,7 +774,7 @@ function LetterheadScreen({ onBack }: { onBack: () => void }) {
           <div className="form-field">
             <label>Logo</label>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {logoPath && <span style={{ fontSize: 12, color: "var(--muted)" }}>Logo uploaded</span>}
+              {hasLogo && <span style={{ fontSize: 12, color: "var(--muted)" }}>Logo uploaded</span>}
               <label className="button small-button" style={{ cursor: "pointer" }}>
                 <Upload size={14} style={{ marginRight: 4 }} />Upload
                 <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => e.target.files?.[0] && uploadLogo(e.target.files[0])} />

@@ -1,14 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, hasFeatureAccess, isFinanceDept, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
+import type { PoolClient } from "pg";
+import { AuthedRequest, hasFeatureAccess, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
+import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
-import { query } from "../../lib/db.js";
+import { query, withTransaction } from "../../lib/db.js";
 import { advanceWorkflowStep, createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } from "./advances.service.js";
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
 import type { AdvanceStatus } from "./advances.types.js";
 import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
-import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isTravelAdvanceType } from "../../lib/travel.js";
+import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
 import { canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
@@ -122,14 +124,6 @@ const ActionCommentSchema = z.object({
 export const advancesRouter = Router();
 advancesRouter.use(requireAuth);
 
-// Roll back / reject on legacy (non-workflow) advances: allowed for the usual
-// approval-chain roles, or for anyone in the Finance department (org structure).
-function requireAdvanceActionAccess(req: AuthedRequest, _res: import("express").Response, next: import("express").NextFunction) {
-  const role = req.user!.role;
-  if (["MANAGER", "HOD", "EXCO", "ADMIN"].includes(role) || isFinanceDept(req.user!.department)) return next();
-  return next(forbidden());
-}
-
 function toPaymentAccount(args: {
   payment_method: "ECOCASH" | "BANK";
   payment_account?: string;
@@ -165,39 +159,40 @@ export async function writeAdvanceAudit(args: {
   );
 }
 
-// Interns/temporary staff may request for themselves (unlike before), but
-// since they don't go through the same recovery/deduction process as
-// permanent employees, they're capped on how many advances they can have
-// outstanding (not yet cleared) at once - clear one to free up a slot.
-const MAX_OUTSTANDING_NON_PERMANENT_ADVANCES = 3;
-
-async function countOutstandingAdvances(requesterId: string): Promise<number> {
-  const rows = await query<{ count: string }>(
-    `SELECT count(*)::text AS count
+// Every requester (permanent, intern, or temporary) may have at most one
+// travel advance outstanding (not yet cleared) at a time - clear it before
+// requesting another. SALARY/LOAN advances are administrative, not travel,
+// so they neither count against this limit nor are restricted by it.
+async function countOutstandingTravelAdvances(requesterId: string, client?: PoolClient): Promise<number> {
+  const sql = `SELECT count(*)::text AS count
        FROM advance_requests ar
       WHERE ar.requester_id = $1
+        AND ar.type NOT IN ('SALARY','LOAN')
         AND ar.status NOT IN ('REJECTED','CANCELLED')
         AND NOT EXISTS (
           SELECT 1 FROM clearance_claims cc
            WHERE cc.linked_advance_id = ar.id AND cc.status = 'CLOSED'
-        )`,
-    [requesterId]
-  );
+        )`;
+  const rows = client
+    ? (await client.query<{ count: string }>(sql, [requesterId])).rows
+    : await query<{ count: string }>(sql, [requesterId]);
   return Number(rows[0]?.count || 0);
 }
 
-async function assertNonPermanentAdvanceCap(requester: { id: string; employment_type: string | null }) {
-  const employmentType = String(requester.employment_type || "").trim().toUpperCase();
-  if (!["INTERN", "TEMPORARY"].includes(employmentType)) return;
-  const outstanding = await countOutstandingAdvances(requester.id);
-  if (outstanding >= MAX_OUTSTANDING_NON_PERMANENT_ADVANCES) {
-    throw badRequest(
-      `Interns and temporary employees can have at most ${MAX_OUTSTANDING_NON_PERMANENT_ADVANCES} outstanding advances - clear an existing one before requesting another`
-    );
+// Takes an optional locked transaction client so the count-check and the
+// subsequent INSERT (in the POST / handler) can be serialized per-requester
+// via pg_advisory_xact_lock — otherwise two concurrent requests from the
+// same requester near the cap could both read a count under the limit and
+// both insert, exceeding it.
+async function assertSingleOutstandingTravelAdvance(requester: { id: string }, type: string, client?: PoolClient) {
+  if (isReservedAdvanceType(type)) return;
+  const outstanding = await countOutstandingTravelAdvances(requester.id, client);
+  if (outstanding >= 1) {
+    throw badRequest("You already have a travel advance outstanding - clear it before requesting another");
   }
 }
 
-async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: string) {
+async function resolveAdvanceRequester(actorId: string, beneficiaryUserId: string | undefined, type: string, client?: PoolClient) {
   const actor = await getUserAccountState(actorId);
   if (!isProfileComplete(actor)) {
     throw badRequest("Complete your profile before requesting an advance");
@@ -208,7 +203,7 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: stri
     if (!isPermanentEmployee(actor) && !["INTERN", "TEMPORARY"].includes(String(actor.employment_type || "").trim().toUpperCase())) {
       throw forbidden("Only permanent employees, interns, and temporary employees can request advances for themselves");
     }
-    await assertNonPermanentAdvanceCap(actor);
+    await assertSingleOutstandingTravelAdvance(actor, type, client);
     return { actor, requester: actor };
   }
 
@@ -233,7 +228,7 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId?: stri
     throw forbidden("On-behalf advances must stay within the same division");
   }
 
-  await assertNonPermanentAdvanceCap(requester);
+  await assertSingleOutstandingTravelAdvance(requester, type, client);
   return { actor, requester };
 }
 
@@ -471,49 +466,52 @@ advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("
       throw badRequest("from/to must be valid dates (YYYY-MM-DD)");
     }
 
+    // Each user gets one row per currency they actually transacted in
+    // (rather than blending e.g. LSL and USD amounts into a single number
+    // under one arbitrary currency label) — advances and claims are
+    // aggregated separately by (user, currency) and then combined with a
+    // FULL OUTER JOIN so a currency present in only one side isn't dropped.
     const rows = await query<any>(
       `WITH adv AS (
-         SELECT requester_id AS user_id,
-                SUM(CASE WHEN status = 'PAID' AND paid_at < $1 THEN approved_total ELSE 0 END) AS paid_before,
-                SUM(CASE WHEN status = 'PAID' AND paid_at >= $1 AND paid_at <= $2 THEN approved_total ELSE 0 END) AS paid_in_period,
-                SUM(CASE WHEN created_at >= $1 AND created_at <= $2 THEN requested_total ELSE 0 END) AS requested_in_period
-           FROM advance_requests
-          GROUP BY requester_id
-       ),
-       adv AS (
          SELECT ar.requester_id AS user_id,
-                MAX(COALESCE(tt.currency, 'LSL')) AS currency,
+                COALESCE(tt.currency, 'LSL') AS currency,
                 SUM(CASE WHEN status = 'PAID' AND paid_at < $1 THEN approved_total ELSE 0 END) AS paid_before,
                 SUM(CASE WHEN status = 'PAID' AND paid_at >= $1 AND paid_at <= $2 THEN approved_total ELSE 0 END) AS paid_in_period,
-                SUM(CASE WHEN created_at >= $1 AND created_at <= $2 THEN requested_total ELSE 0 END) AS requested_in_period
+                SUM(CASE WHEN ar.created_at >= $1 AND ar.created_at <= $2 THEN requested_total ELSE 0 END) AS requested_in_period
            FROM advance_requests ar
            LEFT JOIN travel_types tt ON tt.code = ar.type
-          GROUP BY ar.requester_id
+          GROUP BY ar.requester_id, COALESCE(tt.currency, 'LSL')
        ),
        clm AS (
          SELECT claimant_id AS user_id,
-                MAX(COALESCE(currency, 'LSL')) AS currency,
+                COALESCE(currency, 'LSL') AS currency,
                 SUM(CASE WHEN status = 'SETTLED' AND settled_at < $1 THEN claim_total ELSE 0 END) AS settled_before,
                 SUM(CASE WHEN status = 'SETTLED' AND settled_at >= $1 AND settled_at <= $2 THEN claim_total ELSE 0 END) AS settled_in_period
            FROM clearance_claims
-          GROUP BY claimant_id
+          GROUP BY claimant_id, COALESCE(currency, 'LSL')
+       ),
+       combined AS (
+         SELECT COALESCE(adv.user_id, clm.user_id) AS user_id,
+                COALESCE(adv.currency, clm.currency) AS currency,
+                adv.paid_before, adv.paid_in_period, adv.requested_in_period,
+                clm.settled_before, clm.settled_in_period
+           FROM adv
+           FULL OUTER JOIN clm ON clm.user_id = adv.user_id AND clm.currency = adv.currency
        )
        SELECT u.id AS requester_id, u.full_name AS requester_name, u.department,
-              COALESCE(adv.paid_before, 0) - COALESCE(clm.settled_before, 0) AS opening_balance,
-              COALESCE(adv.requested_in_period, 0) AS total_requested,
-              COALESCE(adv.paid_in_period, 0) AS total_paid,
-              COALESCE(clm.settled_in_period, 0) AS total_settled,
-              (COALESCE(adv.paid_before, 0) - COALESCE(clm.settled_before, 0))
-                + COALESCE(adv.paid_in_period, 0) - COALESCE(clm.settled_in_period, 0) AS closing_balance,
-              COALESCE(clm.currency, adv.currency, 'LSL') AS currency
-         FROM users u
-         LEFT JOIN adv ON adv.user_id = u.id
-         LEFT JOIN clm ON clm.user_id = u.id
-        WHERE (adv.user_id IS NOT NULL OR clm.user_id IS NOT NULL)
-          AND (COALESCE(adv.paid_before, 0) <> 0 OR COALESCE(clm.settled_before, 0) <> 0
-           OR COALESCE(adv.requested_in_period, 0) <> 0 OR COALESCE(adv.paid_in_period, 0) <> 0
-           OR COALESCE(clm.settled_in_period, 0) <> 0)
-        ORDER BY u.full_name`,
+              c.currency,
+              COALESCE(c.paid_before, 0) - COALESCE(c.settled_before, 0) AS opening_balance,
+              COALESCE(c.requested_in_period, 0) AS total_requested,
+              COALESCE(c.paid_in_period, 0) AS total_paid,
+              COALESCE(c.settled_in_period, 0) AS total_settled,
+              (COALESCE(c.paid_before, 0) - COALESCE(c.settled_before, 0))
+                + COALESCE(c.paid_in_period, 0) - COALESCE(c.settled_in_period, 0) AS closing_balance
+         FROM combined c
+         JOIN users u ON u.id = c.user_id
+        WHERE COALESCE(c.paid_before, 0) <> 0 OR COALESCE(c.settled_before, 0) <> 0
+           OR COALESCE(c.requested_in_period, 0) <> 0 OR COALESCE(c.paid_in_period, 0) <> 0
+           OR COALESCE(c.settled_in_period, 0) <> 0
+        ORDER BY u.full_name, c.currency`,
       [from + "T00:00:00", to + "T23:59:59"]
     );
 
@@ -544,7 +542,7 @@ const OVERDUE_SELECT = `
 // Mirrors the same "overdue" definition already used for the recovery
 // workflow (OVERDUE_SELECT) so the two stay consistent.
 const CLEARANCE_STATUS_REPORT_DEFAULT_ROLES = [
-  "ADMIN", "Department: Finance", "Team: Treasury & Financial Accounting",
+  "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
   "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
 ];
 advancesRouter.get("/clearance-status-report", requireAuth, requireFeatureAccess("clearance_status_report", CLEARANCE_STATUS_REPORT_DEFAULT_ROLES), async (req: AuthedRequest, res, next) => {
@@ -624,7 +622,8 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
       return res.json(rows);
     }
 
-    if (req.user?.role !== "ADMIN") throw forbidden("Only admin can list all advances");
+    const allowed = await hasFeatureAccess(req.user!.userId, req.user!.role, "report_advances", ["ADMIN"]);
+    if (!allowed) throw forbidden("Not authorized to list all advances");
     const rows = await query(
       `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ${OVERDUE_SELECT}
          FROM advance_requests ar
@@ -642,7 +641,11 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
 // the Payments nav item at all - mirrors Deductions' /access endpoint.
 advancesRouter.get("/payments/access", async (req: AuthedRequest, res, next) => {
   try {
-    const allowed = await hasFeatureAccess(req.user!.userId, req.user!.role, "payments", ["ADMIN", "Department: Finance"]);
+    // Admin-configured group grant (e.g. for HR view-only access) OR anyone
+    // with real Finance authority (is_compensation_finance), regardless of
+    // which company's naming their finance unit uses.
+    const allowed = (await hasFeatureAccess(req.user!.userId, req.user!.role, "payments", ["ADMIN", "Department: Finance"]))
+      || (await isCompensationFinanceUser(req));
     return res.json({ allowed });
   } catch (err) {
     return next(err);
@@ -653,7 +656,8 @@ advancesRouter.get("/payments/access", async (req: AuthedRequest, res, next) => 
 advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
   try {
     const role = req.user!.role;
-    const allowed = await hasFeatureAccess(req.user!.userId, role, "payments", ["ADMIN", "Department: Finance"]);
+    const allowed = (await hasFeatureAccess(req.user!.userId, role, "payments", ["ADMIN", "Department: Finance"]))
+      || (await isCompensationFinanceUser(req));
     if (!allowed) throw forbidden();
 
     const statusParam = String(req.query.status || "all") as "pending" | "paid" | "all";
@@ -663,10 +667,11 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
     const rows = await query<any>(
       `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
               ar.workflow_step_order, ar.approval_chain, ar.paid_at, ar.paid_reference,
-              ar.created_at, ar.sequence_no,
+              ar.created_at, ar.sequence_no, COALESCE(tt.currency, 'LSL') AS currency,
               u.full_name AS requester_name, u.employee_no AS requester_employee_no, u.department
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
+         LEFT JOIN travel_types tt ON tt.code = ar.type
         WHERE ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
         ORDER BY ar.created_at DESC`
     );
@@ -702,6 +707,7 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
         status: a.status,
         payment_status: paymentStatus,
         type: a.type,
+        currency: a.currency,
         requested_total: Number(a.requested_total),
         approved_total: Number(a.approved_total),
         purpose: a.purpose,
@@ -756,11 +762,11 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     )[0];
     if (!adv) throw notFound();
     // Finance dept users need to view APPROVED advances to mark them paid.
-    // HOD/EXCO/MANAGER users see APPROVED advances in their inbox too — they're
-    // typically in the manager chain, but fall through to canViewAdvance which covers that.
-    const canViewDueToRole =
-      (isFinanceDept(req.user!.department) && adv.status === "APPROVED") ||
-      (["MANAGER", "HOD", "EXCO"].includes(req.user!.role));
+    // MANAGER/HOD/EXCO users who are actually in this request's approval
+    // chain or the requester's management chain are covered by
+    // canViewAdvance below — a bare role match here would let any
+    // manager/HOD/EXCO view every advance company-wide, so it isn't used.
+    const canViewDueToRole = (await isCompensationFinanceSection(req.user!.sectionId)) && adv.status === "APPROVED";
     if (!canViewDueToRole) {
       const managerChainIds = await getManagerChainIds(adv.requester_id);
       if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, managerChainIds }))) {
@@ -868,15 +874,28 @@ advancesRouter.post("/", async (req: AuthedRequest, res, next) => {
     const parsed = CreateAdvanceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
     const type = await assertAdvanceTypeAllowed(parsed.data.type);
-    const { requester } = await resolveAdvanceRequester(req.user!.userId, parsed.data.beneficiary_user_id);
 
-    const id = await createAdvance({
-      requesterId: requester.id,
-      createdById: req.user!.userId,
-      ...parsed.data,
-      type,
-      payment_account: toPaymentAccount(parsed.data),
-      override_chain: parsed.data.override_chain ?? null
+    // The cap check (assertSingleOutstandingTravelAdvance, inside
+    // resolveAdvanceRequester) and this INSERT run in one transaction,
+    // serialized per-requester via an advisory lock keyed on their id — two
+    // concurrent requests from the same requester near the cap previously
+    // could both read a count under the limit and both insert.
+    const targetUserId = String(parsed.data.beneficiary_user_id || "").trim() || req.user!.userId;
+    const id = await withTransaction(async (client) => {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [targetUserId]);
+      const { requester } = await resolveAdvanceRequester(req.user!.userId, parsed.data.beneficiary_user_id, type, client);
+
+      return createAdvance(
+        {
+          requesterId: requester.id,
+          createdById: req.user!.userId,
+          ...parsed.data,
+          type,
+          payment_account: toPaymentAccount(parsed.data),
+          override_chain: parsed.data.override_chain ?? null
+        },
+        client
+      );
     });
 
     await writeAdvanceAudit({
@@ -952,62 +971,71 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
     const parsed = LinesSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
 
-    await query(`DELETE FROM advance_lines WHERE advance_request_id=$1`, [req.params.id]);
-
     const travelType = await getTravelTypeByCode(adv.type);
     if (!travelType?.active) throw badRequest("Travel lines can only be added for travel advances");
-    const configuredMealValue = await getTravelRateForCode(adv.type);
+    const configuredMealValue = await getTravelRateForCode(adv.type, adv.requester_role);
 
-    for (const line of parsed.data.lines) {
-      const hasMealCount = line.meals_count !== undefined;
-      const mealsCount = hasMealCount ? Number(line.meals_count) : 0;
-      if (hasMealCount && mealsCount > 0 && configuredMealValue <= 0) {
-        throw badRequest("HR must set a rate for this travel type before requests can be submitted");
-      }
-      const mealValue = hasMealCount ? configuredMealValue : Number(line.meal_value || 0);
-      // 1 meal/day = lunch only, 2 = lunch+dinner, 3 = breakfast+lunch+dinner.
-      // Each applicable slot costs the full configured rate, so the sum still
-      // equals mealsCount * configuredMealValue exactly as before. Only
-      // applies to MEAL-rate-kind types (capped at 3/day by the frontend) —
-      // for DAILY-rate-kind types, meals_count is actually a day count (can
-      // exceed 3) multiplying a flat per-diem rate, not a meal tally, so keep
-      // dumping the whole amount into "lunch" as before.
-      const isMealBased = hasMealCount && travelType.rate_kind === "MEAL";
-      const breakfastAmount = isMealBased
-        ? (mealsCount >= 3 ? toMoney(configuredMealValue) : 0)
-        : hasMealCount ? 0 : Number(line.breakfast || 0);
-      const lunchAmount = isMealBased
-        ? (mealsCount >= 1 ? toMoney(configuredMealValue) : 0)
-        : hasMealCount ? toMoney(mealsCount * configuredMealValue) : Number(line.lunch || 0);
-      const dinnerAmount = isMealBased
-        ? (mealsCount >= 2 ? toMoney(configuredMealValue) : 0)
-        : hasMealCount ? 0 : Number(line.dinner || 0);
-      const total = toMoney(breakfastAmount + lunchAmount + dinnerAmount);
-      await query(
-        `INSERT INTO advance_lines (advance_request_id, line_date, location, travel_meta, meals_count, meal_value, breakfast, lunch, dinner, line_total)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [
-          req.params.id,
-          line.line_date,
-          line.location ?? null,
-          JSON.stringify(line.travel_meta || {}),
-          mealsCount,
-          mealValue,
-          breakfastAmount,
-          lunchAmount,
-          dinnerAmount,
-          total
-        ]
-      );
-    }
+    // Delete + per-line insert + total recompute all run in one transaction —
+    // previously a mid-loop validation error (e.g. missing rate on a later
+    // line) could leave the old lines already deleted and only some of the
+    // replacement lines inserted, with requested_total never recomputed.
+    const requestedTotal = await withTransaction(async (client) => {
+      await client.query(`DELETE FROM advance_lines WHERE advance_request_id=$1`, [req.params.id]);
 
-    const requestedTotal = parsed.data.lines.reduce((acc, line) => {
-      if (line.meals_count !== undefined) {
-        return acc + Number(line.meals_count) * configuredMealValue;
+      let runningTotal = 0;
+      for (const line of parsed.data.lines) {
+        const hasMealCount = line.meals_count !== undefined;
+        const mealsCount = hasMealCount ? Number(line.meals_count) : 0;
+        if (hasMealCount && mealsCount > 0 && configuredMealValue <= 0) {
+          throw badRequest("HR must set a rate for this travel type before requests can be submitted");
+        }
+        const mealValue = hasMealCount ? configuredMealValue : Number(line.meal_value || 0);
+        // 1 meal/day = lunch only, 2 = lunch+dinner, 3 = breakfast+lunch+dinner.
+        // Each applicable slot costs the full configured rate, so the sum still
+        // equals mealsCount * configuredMealValue exactly as before. Only
+        // applies to MEAL-rate-kind types (capped at 3/day by the frontend) —
+        // for DAILY-rate-kind types, meals_count is actually a day count (can
+        // exceed 3) multiplying a flat per-diem rate, not a meal tally, so keep
+        // dumping the whole amount into "lunch" as before.
+        const isMealBased = hasMealCount && travelType.rate_kind === "MEAL";
+        const breakfastAmount = isMealBased
+          ? (mealsCount >= 3 ? toMoney(configuredMealValue) : 0)
+          : hasMealCount ? 0 : Number(line.breakfast || 0);
+        const lunchAmount = isMealBased
+          ? (mealsCount >= 1 ? toMoney(configuredMealValue) : 0)
+          : hasMealCount ? toMoney(mealsCount * configuredMealValue) : Number(line.lunch || 0);
+        const dinnerAmount = isMealBased
+          ? (mealsCount >= 2 ? toMoney(configuredMealValue) : 0)
+          : hasMealCount ? 0 : Number(line.dinner || 0);
+        const total = toMoney(breakfastAmount + lunchAmount + dinnerAmount);
+        await client.query(
+          `INSERT INTO advance_lines (advance_request_id, line_date, location, travel_meta, meals_count, meal_value, breakfast, lunch, dinner, line_total)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [
+            req.params.id,
+            line.line_date,
+            line.location ?? null,
+            JSON.stringify(line.travel_meta || {}),
+            mealsCount,
+            mealValue,
+            breakfastAmount,
+            lunchAmount,
+            dinnerAmount,
+            total
+          ]
+        );
+        // Sum the same capped per-line total that was just inserted, rather
+        // than recomputing mealsCount * configuredMealValue uncapped — a
+        // MEAL-kind line only ever bills up to 3 slots (breakfast/lunch/
+        // dinner), so an uncapped recompute could leave requested_total
+        // overstating the sum of the advance's own line items.
+        runningTotal += total;
       }
-      return acc + (line.breakfast || 0) + (line.lunch || 0) + (line.dinner || 0);
-    }, 0);
-    await query(`UPDATE advance_requests SET requested_total=$2, updated_at=now() WHERE id=$1`, [req.params.id, requestedTotal]);
+
+      await client.query(`UPDATE advance_requests SET requested_total=$2, updated_at=now() WHERE id=$1`, [req.params.id, runningTotal]);
+      return runningTotal;
+    });
+
     await writeAdvanceAudit({
       actorId: req.user!.userId,
       advanceId: req.params.id,
@@ -1066,8 +1094,10 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         [overrideUserIds]
       );
 
-      const isEligible = (u: { role: string; section_id: string | null; department: string | null } | undefined) => {
+      const isEligible = (u: { id: string; role: string; section_id: string | null; department: string | null } | undefined) => {
         if (!u) return false;
+        // A requester can never name themself as their own countersigner/approver.
+        if (u.id === adv.requester_id) return false;
         if (requester.role === "CEO" || requester.role === "EXCO") return u.role === "EXCO";
         if (requester.role === "MANAGER") {
           return (
@@ -1147,7 +1177,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
   }
 });
 
-advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: AuthedRequest, res, next) => {
+advancesRouter.post("/:id/rollback", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ActionCommentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for rollback", parsed.error.flatten());
@@ -1158,50 +1188,38 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
     const role = req.user!.role;
     const userId = req.user!.userId;
 
-    if (adv.approval_chain?.length) {
-      // Workflow-driven: only the current step's approver (or ADMIN) can roll back
-      const chain = adv.approval_chain as ChainStep[];
-      const stepIdx = adv.workflow_step_order ?? 0;
-      const group = getPendingGroup(chain, stepIdx);
-      if (!group.indices.length) throw badRequest("No active workflow step to roll back");
-      const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
-      let currentStep: ChainStep | undefined = chain[group.indices[0]];
-      if (role !== "ADMIN") {
-        currentStep = undefined;
-        for (const idx of group.indices) {
-          if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, req.user!.department)) { currentStep = chain[idx]; break; }
-        }
-        if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
-        if (currentStep.can_rollback === false) throw forbidden("This step does not allow rolling back to draft");
-      }
-      // Reset to DRAFT — requester can edit and re-submit, chain re-resolved on next submit
-      await query(
-        `UPDATE advance_requests SET
-           status='DRAFT', workflow_id=NULL, workflow_step_order=NULL, approval_chain=NULL, updated_at=now()
-         WHERE id=$1`,
-        [adv.id]
-      );
-      await writeAdvanceAudit({
-        actorId: userId,
-        advanceId: adv.id,
-        action: "ADVANCE_ROLLBACK",
-        before: { status: adv.status, workflow_step: stepIdx, step_name: currentStep.position_name },
-        after: { status: "DRAFT", comments: parsed.data.comments }
-      });
-    } else {
-      // Legacy advance — use old role guards
-      if (role === "HOD" && adv.status !== "COUNTERSIGNED") throw forbidden("HOD can only roll back advances pending HOD review");
-      if (role === "EXCO" && adv.status !== "COUNTERSIGNED") throw forbidden("EXCO can only roll back advances pending HOD / EXCO review");
-      const status = nextStatusOrThrow(adv.status, "ROLLBACK");
-      await setAdvanceStatus(adv.id, status);
-      await writeAdvanceAudit({
-        actorId: userId,
-        advanceId: adv.id,
-        action: "ADVANCE_ROLLBACK",
-        before: { status: adv.status },
-        after: { status, comments: parsed.data.comments }
-      });
+    if (!adv.approval_chain?.length) {
+      throw badRequest("This advance does not have an active approval workflow to roll back.");
     }
+    // Workflow-driven: only the current step's approver (or ADMIN) can roll back
+    const chain = adv.approval_chain as ChainStep[];
+    const stepIdx = adv.workflow_step_order ?? 0;
+    const group = getPendingGroup(chain, stepIdx);
+    if (!group.indices.length) throw badRequest("No active workflow step to roll back");
+    const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
+    let currentStep: ChainStep | undefined = chain[group.indices[0]];
+    if (role !== "ADMIN") {
+      currentStep = undefined;
+      for (const idx of group.indices) {
+        if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, req.user!.sectionId)) { currentStep = chain[idx]; break; }
+      }
+      if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+      if (currentStep.can_rollback === false) throw forbidden("This step does not allow rolling back to draft");
+    }
+    // Reset to DRAFT — requester can edit and re-submit, chain re-resolved on next submit
+    await query(
+      `UPDATE advance_requests SET
+         status='DRAFT', workflow_id=NULL, workflow_step_order=NULL, approval_chain=NULL, updated_at=now()
+       WHERE id=$1`,
+      [adv.id]
+    );
+    await writeAdvanceAudit({
+      actorId: userId,
+      advanceId: adv.id,
+      action: "ADVANCE_ROLLBACK",
+      before: { status: adv.status, workflow_step: stepIdx, step_name: currentStep.position_name },
+      after: { status: "DRAFT", comments: parsed.data.comments }
+    });
 
     const notificationContext = await getAdvanceNotificationContext(adv.id);
     if (notificationContext) {
@@ -1213,7 +1231,8 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
         requesterEmail: notificationContext.email,
         department: notificationContext.department,
         requestedTotal: Number(notificationContext.requested_total),
-        currency: notificationContext.currency
+        currency: notificationContext.currency,
+        comments: parsed.data.comments
       });
     }
     return res.json({ ok: true, status: "DRAFT" });
@@ -1227,35 +1246,31 @@ advancesRouter.post("/:id/rollback", requireAdvanceActionAccess, async (req: Aut
 // and notification side-effects as rejecting from the Inbox.
 export async function performAdvanceReject(
   advanceId: string,
-  actor: { userId: string; role: string; department: string | null },
+  actor: { userId: string; role: string; sectionId: string | null },
   comments: string
 ): Promise<{ status: AdvanceStatus }> {
   const adv = await getAdvanceById(advanceId);
   if (!adv) throw notFound();
 
-  const { role, userId, department } = actor;
+  const { role, userId, sectionId } = actor;
 
-  if (adv.approval_chain?.length) {
-    // Workflow-driven: only the current step's approver (or ADMIN) can reject
-    const chain = adv.approval_chain as ChainStep[];
-    const stepIdx = adv.workflow_step_order ?? 0;
-    const group = getPendingGroup(chain, stepIdx);
-    if (!group.indices.length) throw badRequest("No active workflow step to reject");
-    const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
-    let currentStep: ChainStep | undefined = chain[group.indices[0]];
-    if (role !== "ADMIN") {
-      currentStep = undefined;
-      for (const idx of group.indices) {
-        if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, department)) { currentStep = chain[idx]; break; }
-      }
-      if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
-      if (currentStep.can_reject === false) throw forbidden("This step does not allow rejection");
+  if (!adv.approval_chain?.length) {
+    throw badRequest("This advance does not have an active approval workflow to reject.");
+  }
+  // Workflow-driven: only the current step's approver (or ADMIN) can reject
+  const chain = adv.approval_chain as ChainStep[];
+  const stepIdx = adv.workflow_step_order ?? 0;
+  const group = getPendingGroup(chain, stepIdx);
+  if (!group.indices.length) throw badRequest("No active workflow step to reject");
+  const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
+  let currentStep: ChainStep | undefined = chain[group.indices[0]];
+  if (role !== "ADMIN") {
+    currentStep = undefined;
+    for (const idx of group.indices) {
+      if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, sectionId)) { currentStep = chain[idx]; break; }
     }
-  } else {
-    // Legacy guards
-    if (role === "HOD" && adv.status !== "COUNTERSIGNED") throw forbidden("HOD can only reject advances pending HOD review");
-    if (role === "EXCO" && adv.status !== "COUNTERSIGNED") throw forbidden("EXCO can only reject advances pending HOD / EXCO review");
-    if (isFinanceDept(department) && !["HR_OFFICER", "APPROVED"].includes(adv.status)) throw forbidden("Finance can only reject HR-approved advances pending payment");
+    if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+    if (currentStep.can_reject === false) throw forbidden("This step does not allow rejection");
   }
 
   const status: AdvanceStatus = "REJECTED";
@@ -1277,21 +1292,23 @@ export async function performAdvanceReject(
       status,
       advanceType: notificationContext.type,
       requesterName: notificationContext.full_name,
+      requesterEmail: notificationContext.email,
       department: notificationContext.department,
       requestedTotal: Number(notificationContext.requested_total),
-      currency: notificationContext.currency
+      currency: notificationContext.currency,
+      comments
     });
   }
   return { status };
 }
 
-advancesRouter.post("/:id/reject", requireAdvanceActionAccess, async (req: AuthedRequest, res, next) => {
+advancesRouter.post("/:id/reject", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ActionCommentSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for reject", parsed.error.flatten());
     const result = await performAdvanceReject(
       req.params.id,
-      { userId: req.user!.userId, role: req.user!.role, department: req.user!.department ?? null },
+      { userId: req.user!.userId, role: req.user!.role, sectionId: req.user!.sectionId ?? null },
       parsed.data.comments
     );
     return res.json({ ok: true, status: result.status });
@@ -1307,7 +1324,7 @@ advancesRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res,
 
     const result = await performAdvanceApprove(
       req.params.id,
-      { userId: req.user!.userId, role: req.user!.role, department: req.user!.department ?? null },
+      { userId: req.user!.userId, role: req.user!.role, sectionId: req.user!.sectionId ?? null },
       parsed.data.approved_total
     );
     return res.json({ ok: true, status: result.status });
@@ -1319,7 +1336,7 @@ advancesRouter.post("/:id/approve", requireAuth, async (req: AuthedRequest, res,
 // Shared by POST /:id/approve and the email-approval flow (email-actions.routes.ts).
 export async function performAdvanceApprove(
   advanceId: string,
-  actor: { userId: string; role: string; department: string | null },
+  actor: { userId: string; role: string; sectionId: string | null },
   approvedTotal: number
 ): Promise<{ status: AdvanceStatus }> {
   const adv = await getAdvanceById(advanceId);
@@ -1329,7 +1346,7 @@ export async function performAdvanceApprove(
     throw badRequest("This advance cannot be approved in its current state");
   }
 
-  const { role, userId, department } = actor;
+  const { role, userId, sectionId } = actor;
   const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
 
   let nextStatus: AdvanceStatus;
@@ -1345,7 +1362,7 @@ export async function performAdvanceApprove(
       userId,
       role,
       delegatedManagerIds,
-      userDepartment: department,
+      userSectionId: sectionId,
       approvedTotal
     });
     nextStatus = result.nextStatus;
@@ -1434,91 +1451,110 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
     // MARK_PAID step — that person also needs to be able to mark the advance
     // paid once their step has completed, even if they're not in Finance.
     const role = req.user!.role;
-    const chain = (adv.approval_chain as ChainStep[] | null) || [];
-    // The MARK_PAID step isn't necessarily exactly at workflow_step_order — it
-    // may be one member of a "both must approve" parallel stage alongside
-    // other (non-payment) steps, so look for it within the current pending
-    // group rather than indexing workflow_step_order directly.
-    const group = chain.length ? getPendingGroup(chain, adv.workflow_step_order ?? 0) : { indices: [], steps: [] };
-    const markPaidIdx = group.indices.find((idx) => chain[idx]?.action_type === "MARK_PAID" && !chain[idx]?.approved);
-    const markPaidStep = markPaidIdx != null ? chain[markPaidIdx] : null;
 
-    let status: AdvanceStatus;
-    let newChain: ChainStep[] | undefined;
-    let newWorkflowStepOrder: number | undefined;
+    // Locks the row (SELECT ... FOR UPDATE) inside a transaction so two
+    // concurrent "Mark as Paid" clicks on the same advance can't both pass
+    // the status check and each generate their own payment_ref_seq value —
+    // the second waits for the first's transaction to commit, then sees the
+    // already-PAID status and is rejected by nextStatusOrThrow/precondition
+    // checks below instead of silently overwriting the first reference.
+    const { status, paidReference, priorStatus } = await withTransaction(async (client) => {
+      const lockedRows = await client.query<{ status: AdvanceStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null }>(
+        `SELECT status, workflow_step_order, approval_chain FROM advance_requests WHERE id=$1 FOR UPDATE`,
+        [adv.id]
+      );
+      const locked = lockedRows.rows[0];
+      if (!locked) throw notFound();
+      const chain = (locked.approval_chain as ChainStep[] | null) || [];
+      // The MARK_PAID step isn't necessarily exactly at workflow_step_order — it
+      // may be one member of a "both must approve" parallel stage alongside
+      // other (non-payment) steps, so look for it within the current pending
+      // group rather than indexing workflow_step_order directly.
+      const group = chain.length ? getPendingGroup(chain, locked.workflow_step_order ?? 0) : { indices: [], steps: [] };
+      const markPaidIdx = group.indices.find((idx) => chain[idx]?.action_type === "MARK_PAID" && !chain[idx]?.approved);
+      const markPaidStep = markPaidIdx != null ? chain[markPaidIdx] : null;
 
-    if (markPaidStep) {
-      // ADMIN is intentionally excluded here — Admin can view payments but must not
-      // be able to mark them paid, only the workflow's actual assigned payer can.
-      const isAuthorized = await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.department);
-      if (!isAuthorized) throw forbidden("You are not the assigned payer for this step");
+      let status: AdvanceStatus;
+      let newChain: ChainStep[] | undefined;
+      let newWorkflowStepOrder: number | undefined;
 
-      newChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: true } : s));
-      const stillPending = group.indices.some((idx) => !newChain![idx].approved);
-      if (stillPending) {
-        // Other (non-payment) members of this parallel stage haven't finished yet —
-        // record this step's completion but the advance isn't fully PAID until they do.
-        status = adv.status;
-        newWorkflowStepOrder = adv.workflow_step_order ?? 0;
+      if (markPaidStep) {
+        // ADMIN is intentionally excluded here — Admin can view payments but must not
+        // be able to mark them paid, only the workflow's actual assigned payer can.
+        const isAuthorized = await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.sectionId);
+        if (!isAuthorized) throw forbidden("You are not the assigned payer for this step");
+
+        newChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: true } : s));
+        const stillPending = group.indices.some((idx) => !newChain![idx].approved);
+        if (stillPending) {
+          // Other (non-payment) members of this parallel stage haven't finished yet —
+          // record this step's completion but the advance isn't fully PAID until they do.
+          status = locked.status;
+          newWorkflowStepOrder = locked.workflow_step_order ?? 0;
+        } else {
+          const nextIdx = group.indices[group.indices.length - 1] + 1;
+          const hasMore = nextIdx < newChain.length;
+          status = hasMore ? chainStepToStatus(newChain, nextIdx) : "PAID";
+          newWorkflowStepOrder = hasMore ? nextIdx : newChain.length;
+        }
       } else {
-        const nextIdx = group.indices[group.indices.length - 1] + 1;
-        const hasMore = nextIdx < newChain.length;
-        status = hasMore ? chainStepToStatus(newChain, nextIdx) : "PAID";
-        newWorkflowStepOrder = hasMore ? nextIdx : newChain.length;
+        // No pending MARK_PAID step right now — either this is a legacy/no-workflow
+        // advance, or the chain never had an explicit MARK_PAID step and instead
+        // relies on the named final-step approver once status reaches APPROVED.
+        let isFinalStepAuthorized = false;
+        if (chain.length && !chain.some((s) => s.action_type === "MARK_PAID")) {
+          const finalStep = chain[chain.length - 1];
+          if (finalStep?.approver_id === req.user!.userId) isFinalStepAuthorized = true;
+        }
+        // ADMIN is intentionally excluded here too — view-only for Admin.
+        if (!(await isCompensationFinanceSection(req.user!.sectionId)) && !isFinalStepAuthorized) {
+          throw forbidden("Only Finance can mark an advance as paid");
+        }
+        status = nextStatusOrThrow(locked.status, "MARK_PAID");
       }
-    } else {
-      // No pending MARK_PAID step right now — either this is a legacy/no-workflow
-      // advance, or the chain never had an explicit MARK_PAID step and instead
-      // relies on the named final-step approver once status reaches APPROVED.
-      let isFinalStepAuthorized = false;
-      if (chain.length && !chain.some((s) => s.action_type === "MARK_PAID")) {
-        const finalStep = chain[chain.length - 1];
-        if (finalStep?.approver_id === req.user!.userId) isFinalStepAuthorized = true;
-      }
-      // ADMIN is intentionally excluded here too — view-only for Admin.
-      if (!isFinanceDept(req.user!.department) && !isFinalStepAuthorized) {
-        throw forbidden("Only Finance can mark an advance as paid");
-      }
-      status = nextStatusOrThrow(adv.status, "MARK_PAID");
-    }
 
-    const isNowPaid = status === "PAID";
-    let paidReference: string | null = null;
-    if (isNowPaid) {
-      const seqRows = await query<{ seq: string }>(`SELECT nextval('payment_ref_seq') AS seq`);
-      paidReference = formatPaymentReference(Number(seqRows[0].seq));
-    }
-    if (newChain) {
-      await query(
-        `UPDATE advance_requests SET status=$2, workflow_step_order=$3, approval_chain=$4, paid_reference=$5,
-                paid_at = CASE WHEN $6 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
-        [adv.id, status, newWorkflowStepOrder, JSON.stringify(newChain), paidReference, isNowPaid]
-      );
-    } else {
-      await query(
-        `UPDATE advance_requests SET status=$2, paid_reference=$3,
-                paid_at = CASE WHEN $4 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
-        [adv.id, status, paidReference, isNowPaid]
-      );
-    }
+      const isNowPaid = status === "PAID";
+      let paidReference: string | null = null;
+      if (isNowPaid) {
+        const seqRows = await client.query<{ seq: string }>(`SELECT nextval('payment_ref_seq') AS seq`);
+        paidReference = formatPaymentReference(Number(seqRows.rows[0].seq));
+      }
+      if (newChain) {
+        await client.query(
+          `UPDATE advance_requests SET status=$2, workflow_step_order=$3, approval_chain=$4, paid_reference=$5,
+                  paid_at = CASE WHEN $6 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
+          [adv.id, status, newWorkflowStepOrder, JSON.stringify(newChain), paidReference, isNowPaid]
+        );
+      } else {
+        await client.query(
+          `UPDATE advance_requests SET status=$2, paid_reference=$3,
+                  paid_at = CASE WHEN $4 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
+          [adv.id, status, paidReference, isNowPaid]
+        );
+      }
+      if (isNowPaid) {
+        // Any accommodation booking HR sent to Finance for this advance follows
+        // the advance's own capture/payment flow rather than needing its own
+        // separate "mark paid" action - paying the advance pays it too, with
+        // the same reference. Updated in the same transaction so a crash
+        // between the two can't leave the advance PAID with its
+        // accommodation booking stuck SUBMITTED forever.
+        await client.query(
+          `UPDATE accommodation_requests SET status='PAID', paid_reference=$2, paid_at=now(), updated_at=now()
+            WHERE advance_request_id=$1 AND status='SUBMITTED'`,
+          [adv.id, paidReference]
+        );
+      }
+      return { status, paidReference, priorStatus: locked.status };
+    });
+
     await writeAdvanceAudit({
       actorId: req.user!.userId,
       advanceId: adv.id,
       action: "ADVANCE_MARK_PAID",
-      before: { status: adv.status },
+      before: { status: priorStatus },
       after: { status, paid_reference: paidReference }
     });
-    if (isNowPaid) {
-      // Any accommodation booking HR sent to Finance for this advance follows
-      // the advance's own capture/payment flow rather than needing its own
-      // separate "mark paid" action - paying the advance pays it too, with
-      // the same reference.
-      await query(
-        `UPDATE accommodation_requests SET status='PAID', paid_reference=$2, paid_at=now(), updated_at=now()
-          WHERE advance_request_id=$1 AND status='SUBMITTED'`,
-        [adv.id, paidReference]
-      );
-    }
     if (status === "PAID") {
       const paidCtx = await getAdvanceNotificationContext(adv.id);
       if (paidCtx) {

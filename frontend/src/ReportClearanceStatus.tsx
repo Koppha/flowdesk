@@ -84,13 +84,24 @@ export default function ReportClearanceStatus({ onBack }: Props) {
     [rows]
   );
 
-  const counts = useMemo(() => ({
-    total: rows.length,
-    complete: rows.filter((r) => r.status === "COMPLETE").length,
-    notComplete: rows.filter((r) => r.status === "NOT_COMPLETE").length,
-    notCleared: rows.filter((r) => r.status === "NOT_CLEARED").length,
-    notClearedValue: rows.filter((r) => r.status === "NOT_CLEARED").reduce((s, r) => s + Number(r.approved_total || 0), 0)
-  }), [rows]);
+  const counts = useMemo(() => {
+    const notCleared = rows.filter((r) => r.status === "NOT_CLEARED");
+    // Grouped by currency rather than blended into one number — an LSL and
+    // a USD advance summed together and labelled with one currency symbol
+    // would be meaningless.
+    const notClearedValueByCurrency = new Map<string, number>();
+    for (const r of notCleared) {
+      const currency = r.currency || "LSL";
+      notClearedValueByCurrency.set(currency, (notClearedValueByCurrency.get(currency) || 0) + Number(r.approved_total || 0));
+    }
+    return {
+      total: rows.length,
+      complete: rows.filter((r) => r.status === "COMPLETE").length,
+      notComplete: rows.filter((r) => r.status === "NOT_COMPLETE").length,
+      notCleared: notCleared.length,
+      notClearedValueByCurrency: Array.from(notClearedValueByCurrency.entries())
+    };
+  }, [rows]);
 
   // Per-department breakdown for the "Clearance by Department" bar chart and
   // the "Not Cleared by Department" ranked list. Sorted by total volume so
@@ -196,7 +207,9 @@ export default function ReportClearanceStatus({ onBack }: Props) {
           <div>
             <div className="stat-value">{counts.notCleared}</div>
             <div className="stat-label">Not Cleared</div>
-            <small>{formatMoney(counts.notClearedValue)}</small>
+            {counts.notClearedValueByCurrency.length === 0
+              ? <small>{formatMoney(0)}</small>
+              : counts.notClearedValueByCurrency.map(([currency, value]) => <small key={currency} style={{ display: "block" }}>{formatMoney(value, currency)}</small>)}
           </div>
         </div>
       </div>

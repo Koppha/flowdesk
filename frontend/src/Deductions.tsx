@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, getUserFromToken } from "./api";
 import { formatMoney, isFinanceDeptClient } from "./constants";
 import {
@@ -36,6 +37,24 @@ interface DeductionItem {
   deducted_at: string | null;
   deducted_by_name: string | null;
   closed_at: string | null;
+  currency: string | null;
+}
+
+// Groups amounts by currency rather than blending e.g. LSL and USD claims
+// into one number under a single (arbitrary) currency symbol.
+function sumByCurrency(items: DeductionItem[], keys: Array<"salary_deduction" | "payable">) {
+  const totals = new Map<string, number>();
+  for (const i of items) {
+    const currency = i.currency || "LSL";
+    const value = keys.reduce((s, key) => s + Number(i[key] || 0), 0);
+    totals.set(currency, (totals.get(currency) || 0) + value);
+  }
+  return Array.from(totals.entries());
+}
+
+function CurrencyBreakdown({ byCurrency }: { byCurrency: Array<[string, number]> }) {
+  if (byCurrency.length === 0) return <div className="ep-kpi-subvalue">{formatMoney(0)}</div>;
+  return <>{byCurrency.map(([currency, value]) => <div key={currency} className="ep-kpi-subvalue">{formatMoney(value, currency)}</div>)}</>;
 }
 
 function fmtDate(s: string | null | undefined) {
@@ -90,6 +109,7 @@ export default function Deductions() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ top: number; left: number } | null>(null);
 
   async function refresh() {
     setError(null);
@@ -110,21 +130,32 @@ export default function Deductions() {
   useEffect(() => {
     function closeMenu() { setOpenMenuId(null); }
     window.addEventListener("click", closeMenu);
-    return () => window.removeEventListener("click", closeMenu);
+    // The menu is portaled to <body> with a fixed position computed from the
+    // trigger button's rect, so it won't track the table's own scrolling —
+    // close it instead of letting it drift away from the button.
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("resize", closeMenu);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("resize", closeMenu);
+    };
   }, []);
 
   const stats = useMemo(() => {
     const pendingDeduction = items.filter((i) => !i.deducted_at && Number(i.salary_deduction || 0) > 0);
     const pendingPayable = items.filter((i) => !i.deducted_at && Number(i.payable || 0) > 0);
     const deductedThisMonth = items.filter((i) => i.deducted_at && isThisMonth(i.deducted_at));
-    const sum = (arr: DeductionItem[], key: "salary_deduction" | "payable") => arr.reduce((s, i) => s + Number(i[key] || 0), 0);
+    const outstanding = items.filter((i) => !i.deducted_at && (Number(i.salary_deduction || 0) > 0 || Number(i.payable || 0) > 0));
     return {
       pendingDeductionCount: pendingDeduction.length,
-      pendingDeductionValue: sum(pendingDeduction, "salary_deduction"),
+      pendingDeductionByCurrency: sumByCurrency(pendingDeduction, ["salary_deduction"]),
       pendingPayableCount: pendingPayable.length,
-      pendingPayableValue: sum(pendingPayable, "payable"),
+      pendingPayableByCurrency: sumByCurrency(pendingPayable, ["payable"]),
       deductedCount: deductedThisMonth.length,
-      deductedValue: sum(deductedThisMonth, "salary_deduction") + sum(deductedThisMonth, "payable")
+      deductedByCurrency: sumByCurrency(deductedThisMonth, ["salary_deduction", "payable"]),
+      outstandingCount: outstanding.length,
+      outstandingByCurrency: sumByCurrency(outstanding, ["salary_deduction", "payable"])
     };
   }, [items]);
 
@@ -251,7 +282,7 @@ export default function Deductions() {
           <div>
             <div className="ep-kpi-value">{stats.pendingDeductionCount}</div>
             <div className="ep-kpi-label">Pending Salary Deductions</div>
-            <div className="ep-kpi-subvalue">{formatMoney(stats.pendingDeductionValue)}</div>
+            <CurrencyBreakdown byCurrency={stats.pendingDeductionByCurrency} />
           </div>
         </div>
         <div className="ep-kpi ep-kpi-gold">
@@ -259,7 +290,7 @@ export default function Deductions() {
           <div>
             <div className="ep-kpi-value">{stats.pendingPayableCount}</div>
             <div className="ep-kpi-label">Pending Payables</div>
-            <div className="ep-kpi-subvalue">{formatMoney(stats.pendingPayableValue)}</div>
+            <CurrencyBreakdown byCurrency={stats.pendingPayableByCurrency} />
           </div>
         </div>
         <div className="ep-kpi ep-kpi-green">
@@ -267,15 +298,17 @@ export default function Deductions() {
           <div>
             <div className="ep-kpi-value">{stats.deductedCount}</div>
             <div className="ep-kpi-label">Deducted (This Month)</div>
-            <div className="ep-kpi-subvalue">{formatMoney(stats.deductedValue)}</div>
+            <CurrencyBreakdown byCurrency={stats.deductedByCurrency} />
           </div>
         </div>
         <div className="ep-kpi ep-kpi-purple">
           <div className="ep-kpi-icon"><Wallet size={26} /></div>
           <div>
-            <div className="ep-kpi-value">{formatMoney(stats.pendingDeductionValue + stats.pendingPayableValue)}</div>
+            {stats.outstandingByCurrency.length === 0
+              ? <div className="ep-kpi-value">{formatMoney(0)}</div>
+              : stats.outstandingByCurrency.map(([currency, value]) => <div key={currency} className="ep-kpi-value">{formatMoney(value, currency)}</div>)}
             <div className="ep-kpi-label">Total Outstanding</div>
-            <div className="ep-kpi-subvalue">Across {stats.pendingDeductionCount + stats.pendingPayableCount} claims</div>
+            <div className="ep-kpi-subvalue">Across {stats.outstandingCount} claims</div>
           </div>
         </div>
       </div>
@@ -355,28 +388,38 @@ export default function Deductions() {
                         ? <span style={{ color: "#065f46", fontWeight: 600, fontSize: 12 }}>Yes</span>
                         : <span style={{ color: "var(--muted)", fontSize: 12 }}>No</span>}
                       </td>
-                      <td style={{ fontWeight: 600 }}>{Number(item.advance_amount || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td style={{ fontWeight: 600 }}>{Number(item.cleared_amount || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td>{Number(item.amount_to_be_expensed || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ fontWeight: 600 }}>{formatMoney(item.advance_amount, item.currency)}</td>
+                      <td style={{ fontWeight: 600 }}>{formatMoney(item.cleared_amount, item.currency)}</td>
+                      <td>{formatMoney(item.amount_to_be_expensed, item.currency)}</td>
                       <td style={{ color: Number(item.salary_deduction) > 0 ? "#dc2626" : "var(--muted)", fontWeight: 600 }}>
-                        {Number(item.salary_deduction || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatMoney(item.salary_deduction, item.currency)}
                       </td>
                       <td style={{ color: Number(item.payable) > 0 ? "#059669" : "var(--muted)", fontWeight: 600 }}>
-                        {Number(item.payable || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatMoney(item.payable, item.currency)}
                       </td>
                       <td><StatusBadge status={status} /></td>
                       <td className="ep-dropdown-wrap">
                         {actionable && (
                           <button
                             className="ep-icon-btn"
-                            onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === item.id ? null : item.id); }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (openMenuId === item.id) { setOpenMenuId(null); return; }
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setMenuAnchor({ top: rect.bottom + 6, left: rect.right - 180 });
+                              setOpenMenuId(item.id);
+                            }}
                             aria-label="Row actions"
                           >
                             <MoreHorizontal size={16} />
                           </button>
                         )}
-                        {openMenuId === item.id && (
-                          <div className="ep-dropdown" onClick={(e) => e.stopPropagation()}>
+                        {openMenuId === item.id && menuAnchor && createPortal(
+                          <div
+                            className="ep-dropdown ep-dropdown-portal"
+                            style={{ top: menuAnchor.top, left: Math.max(8, menuAnchor.left) }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             {status === "PENDING" && (
                               <button className="ep-dropdown-item" onClick={() => toggleDeducted(item, true)} disabled={busyId === item.id}>
                                 <Check size={14} style={{ marginRight: 6 }} /> Mark as Deducted
@@ -387,7 +430,8 @@ export default function Deductions() {
                                 <X size={14} style={{ marginRight: 6 }} /> Undo
                               </button>
                             )}
-                          </div>
+                          </div>,
+                          document.body
                         )}
                       </td>
                     </tr>

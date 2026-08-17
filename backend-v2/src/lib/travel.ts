@@ -171,9 +171,12 @@ export async function assertAdvanceTypeAllowed(type: string) {
   return normalized;
 }
 
-export async function getTravelRateForCode(code: string) {
+export async function getTravelRateForCode(code: string, requesterRole?: string | null) {
   const travelType = await getTravelTypeByCode(code);
-  return travelType ? toNumber(travelType.rate_general_staff) : 0;
+  if (!travelType) return 0;
+  if (requesterRole === "CEO") return toNumber(travelType.rate_ceo);
+  if (requesterRole === "EXCO") return toNumber(travelType.rate_exco);
+  return toNumber(travelType.rate_general_staff);
 }
 
 export function isReservedAdvanceType(code: string) {

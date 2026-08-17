@@ -313,7 +313,13 @@ export default function ManagersOnboarding() {
       .filter((u) => (statusView === "inactive" ? u.is_active === false : u.is_active !== false))
       .filter((u) => {
         if (divisionFilter !== "ALL" && (u.division_name ?? "Unassigned") !== divisionFilter) return false;
-        if (roleFilter !== "ALL" && u.role !== roleFilter) return false;
+        if (roleFilter !== "ALL") {
+          if (roleFilter.startsWith("TYPE:")) {
+            if ((u.manager_type_name ?? "") !== roleFilter.slice(5)) return false;
+          } else if (u.role !== roleFilter) {
+            return false;
+          }
+        }
         if (!needle) return true;
         return [u.full_name, u.email, u.employee_no, u.title, u.department, u.division_name]
           .some((v) => String(v ?? "").toLowerCase().includes(needle));
@@ -339,6 +345,15 @@ export default function ManagersOnboarding() {
     return Array.from(names).sort();
   }, [managers]);
 
+  // Unique manager type names (e.g. "Senior Manager", "Senior Operations
+  // Manager") currently in use, for the role filter - lets admins filter
+  // by the finer-grained type instead of just the blunt HOD/Manager role.
+  const managerTypeNames = useMemo(() => {
+    const names = new Set<string>();
+    managers.forEach((u) => { if (u.manager_type_name) names.add(u.manager_type_name); });
+    return Array.from(names).sort();
+  }, [managers]);
+
   // ─── Actions ─────────────────────────────────────────────────────────────
 
   function assignedDepartments(userId: string) {
@@ -353,7 +368,13 @@ export default function ManagersOnboarding() {
       ? { name: departmentName, hod_user_id: userId }
       : { name: departmentName, manager_user_id: userId };
     await api.updateDepartment(departmentName, patch);
-    if (dept?.id && opts.setPrimary) await api.updateUser(userId, { department: departmentName });
+    // Keep the manager's own Company in sync with the department they now
+    // own — otherwise a manager assigned here via "Add division…" keeps
+    // whatever (possibly blank) division_id they had before, and silently
+    // drifts from the department's actual parent company.
+    if (dept?.id && opts.setPrimary) {
+      await api.updateUser(userId, { department: departmentName, division_id: dept.division_id ?? null });
+    }
   }
 
   async function unassignDepartmentManager(departmentName: string, role: "HOD" | "MANAGER") {
@@ -912,6 +933,13 @@ export default function ManagersOnboarding() {
             <option value="ALL">All Roles</option>
             <option value="HOD">HOD Only</option>
             <option value="MANAGER">Manager Only</option>
+            {managerTypeNames.length > 0 && (
+              <optgroup label="By Type">
+                {managerTypeNames.map((name) => (
+                  <option key={name} value={`TYPE:${name}`}>{name}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
 
           <button className="button small-button button-subtle" type="button" onClick={() => { void load(); void reloadStaff(); }} disabled={loading || staffLoading}>

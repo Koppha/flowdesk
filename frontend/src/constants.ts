@@ -102,11 +102,22 @@ const TERMINAL_ADVANCE_STATUSES = ["DRAFT", "PAID", "APPROVED", "REJECTED", "CAN
 // reliably reflect what's actually configured in the Workflow Builder.
 // Returns null when there's no chain to derive from (draft/legacy/terminal),
 // so callers can fall back to the status-based label.
-// Steps assigned to a whole org-level group are stored with a "Team: "
-// position_name/approval_group_name prefix so existing saved workflow steps
-// keep matching, but the org hierarchy now calls that level "Section".
+// Steps assigned to a whole org-level group are stored with a
+// position_name/approval_group_name prefix derived from the legacy table
+// name (divisions/departments/sections/teams) so existing saved workflow
+// steps keep matching, but the org hierarchy now calls those levels
+// Company/Division/Department/Section respectively.
+const ORG_GROUP_PREFIX_MAP: Record<string, string> = {
+  "Division: ": "Company: ",
+  "Department: ": "Division: ",
+  "Section: ": "Department: ",
+  "Team: ": "Section: ",
+};
 export function displayOrgGroupName(name: string): string {
-  return name.startsWith("Team: ") ? `Section: ${name.slice("Team: ".length)}` : name;
+  for (const [raw, display] of Object.entries(ORG_GROUP_PREFIX_MAP)) {
+    if (name.startsWith(raw)) return display + name.slice(raw.length);
+  }
+  return name;
 }
 
 export function currentApprovalStepLabel(advance: any): string | null {

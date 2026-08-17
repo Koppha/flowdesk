@@ -8,6 +8,8 @@ import { EMAIL_ACTION_PURPOSE, type EmailActionDocType } from "../../lib/emailAc
 import { performAdvanceApprove, performAdvanceReject, getAdvanceNotificationContext } from "../advances/advances.routes.js";
 import { performClaimApprove, performClaimReject, getClaimNotificationContext } from "../claims/claims.routes.js";
 import { performCustomRequestAction } from "../custom-requests/custom-requests.routes.js";
+import { performOvertimeRequestApprove, performOvertimeRequestReject, performOvertimeClaimApprove, performOvertimeClaimReject } from "../overtime/overtime.routes.js";
+import { performStandbyClaimApprove, performStandbyClaimReject } from "../standby/standby.routes.js";
 import { emailActionLimiter } from "../../middleware/rateLimit.js";
 
 export const emailActionsRouter = Router();
@@ -125,7 +127,7 @@ function renderErrorPage(message: string) {
 </head><body><h1>Approval request</h1><p>${escapeHtml(message)}</p></body></html>`;
 }
 
-type TokenRow = { id: string; jti: string; user_id: string; doc_type: EmailActionDocType; doc_id: string; step_order: number; used_at: string | null };
+type TokenRow = { id: string; jti: string; user_id: string; doc_type: EmailActionDocType; doc_id: string; step_order: number; route_version: number; used_at: string | null };
 
 async function resolveToken(token: string) {
   let decoded: any;
@@ -140,8 +142,8 @@ async function resolveToken(token: string) {
   if (!row) throw badRequest("This link is invalid.");
   if (row.used_at) throw badRequest("This link has already been used.");
 
-  const actor = (await query<{ id: string; full_name: string | null; role: string; department: string | null }>(
-    `SELECT id, full_name, role, department FROM users WHERE id = $1 AND is_active = true`,
+  const actor = (await query<{ id: string; full_name: string | null; role: string; department: string | null; section_id: string | null }>(
+    `SELECT id, full_name, role, department, section_id FROM users WHERE id = $1 AND is_active = true`,
     [row.user_id]
   ))[0];
   if (!actor) throw badRequest("This approver account is no longer active.");
@@ -152,26 +154,54 @@ async function resolveToken(token: string) {
 const TERMINAL_STATUSES: Record<EmailActionDocType, string[]> = {
   ADVANCE: ["APPROVED", "PAID", "REJECTED", "CANCELLED"],
   CLAIM: ["SETTLED", "REJECTED"],
-  CUSTOM_REQUEST: ["APPROVED", "REJECTED", "CLOSED"]
+  CUSTOM_REQUEST: ["APPROVED", "REJECTED", "CLOSED"],
+  OVERTIME_REQUEST: ["APPROVED", "REJECTED", "WITHDRAWN"],
+  // FINANCE_PROCESSING/PAYMENT_PENDING count as terminal for email-approval
+  // purposes even though the claim itself isn't done - once it's past the
+  // approval chain there's no more approver action for this link to take.
+  OVERTIME_CLAIM: ["REJECTED", "WITHDRAWN", "CLOSED", "FINANCE_PROCESSING", "PAYMENT_PENDING"],
+  STANDBY_CLAIM: ["REJECTED", "CLOSED", "FINANCE_PROCESSING", "PAYMENT_PENDING"]
 };
 
-async function getLiveStep(docType: EmailActionDocType, docId: string): Promise<{ stepOrder: number; status: string } | null> {
+async function getLiveStep(docType: EmailActionDocType, docId: string): Promise<{ stepOrder: number; routeVersion: number; status: string } | null> {
   if (docType === "ADVANCE") {
     const rows = await query<{ workflow_step_order: number | null; status: string }>(
       `SELECT workflow_step_order, status FROM advance_requests WHERE id = $1`, [docId]
     );
-    return rows[0] ? { stepOrder: rows[0].workflow_step_order ?? 0, status: rows[0].status } : null;
+    return rows[0] ? { stepOrder: rows[0].workflow_step_order ?? 0, routeVersion: 0, status: rows[0].status } : null;
   }
   if (docType === "CLAIM") {
     const rows = await query<{ workflow_step_order: number | null; status: string }>(
       `SELECT workflow_step_order, status FROM clearance_claims WHERE id = $1`, [docId]
     );
-    return rows[0] ? { stepOrder: rows[0].workflow_step_order ?? 0, status: rows[0].status } : null;
+    return rows[0] ? { stepOrder: rows[0].workflow_step_order ?? 0, routeVersion: 0, status: rows[0].status } : null;
   }
-  const rows = await query<{ current_step_order: number; status: string }>(
-    `SELECT current_step_order, status FROM custom_request_submissions WHERE id = $1`, [docId]
+  if (docType === "CUSTOM_REQUEST") {
+    const rows = await query<{ current_step_order: number; status: string }>(
+      `SELECT current_step_order, status FROM custom_request_submissions WHERE id = $1`, [docId]
+    );
+    return rows[0] ? { stepOrder: rows[0].current_step_order, routeVersion: 0, status: rows[0].status } : null;
+  }
+  // OVERTIME_REQUEST/OVERTIME_CLAIM/STANDBY_CLAIM track approval steps in a
+  // normalized child table keyed by (parent_id, route_version, step_order) -
+  // a send-back bumps route_version and resets step_order, so both fields are
+  // needed here (unlike the three chain-based types above, always route 0).
+  if (docType === "OVERTIME_REQUEST") {
+    const rows = await query<{ current_step_order: number; current_route_version: number; status: string }>(
+      `SELECT current_step_order, current_route_version, status FROM overtime_requests WHERE id = $1`, [docId]
+    );
+    return rows[0] ? { stepOrder: rows[0].current_step_order, routeVersion: rows[0].current_route_version, status: rows[0].status } : null;
+  }
+  if (docType === "OVERTIME_CLAIM") {
+    const rows = await query<{ current_step_order: number; current_route_version: number; status: string }>(
+      `SELECT current_step_order, current_route_version, status FROM overtime_claims WHERE id = $1`, [docId]
+    );
+    return rows[0] ? { stepOrder: rows[0].current_step_order, routeVersion: rows[0].current_route_version, status: rows[0].status } : null;
+  }
+  const rows = await query<{ current_step_order: number; current_route_version: number; status: string }>(
+    `SELECT current_step_order, current_route_version, status FROM standby_claims WHERE id = $1`, [docId]
   );
-  return rows[0] ? { stepOrder: rows[0].current_step_order, status: rows[0].status } : null;
+  return rows[0] ? { stepOrder: rows[0].current_step_order, routeVersion: rows[0].current_route_version, status: rows[0].status } : null;
 }
 
 async function buildSummary(docType: EmailActionDocType, docId: string) {
@@ -185,17 +215,41 @@ async function buildSummary(docType: EmailActionDocType, docId: string) {
     if (!ctx) return null;
     return { docLabel: "Clearance Claim", requester: ctx.full_name, amount: Number(ctx.claim_total), status: ctx.status };
   }
-  const rows = await query<{ status: string; request_type_name: string; requester_name: string | null }>(
-    `SELECT s.status, rt.name AS request_type_name, u.full_name AS requester_name
-       FROM custom_request_submissions s
-       JOIN custom_request_types rt ON rt.id = s.request_type_id
-       JOIN users u ON u.id = s.requester_id
-      WHERE s.id = $1`,
-    [docId]
+  if (docType === "CUSTOM_REQUEST") {
+    const rows = await query<{ status: string; request_type_name: string; requester_name: string | null }>(
+      `SELECT s.status, rt.name AS request_type_name, u.full_name AS requester_name
+         FROM custom_request_submissions s
+         JOIN custom_request_types rt ON rt.id = s.request_type_id
+         JOIN users u ON u.id = s.requester_id
+        WHERE s.id = $1`,
+      [docId]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return { docLabel: row.request_type_name, requester: row.requester_name, amount: null, status: row.status };
+  }
+  if (docType === "OVERTIME_REQUEST") {
+    const rows = await query<{ status: string; full_name: string | null }>(
+      `SELECT r.status, u.full_name FROM overtime_requests r JOIN users u ON u.id = r.employee_id WHERE r.id = $1`, [docId]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return { docLabel: "Overtime Request", requester: row.full_name, amount: null, status: row.status };
+  }
+  if (docType === "OVERTIME_CLAIM") {
+    const rows = await query<{ status: string; total_amount: string | number | null; full_name: string | null }>(
+      `SELECT c.status, c.total_amount, u.full_name FROM overtime_claims c JOIN users u ON u.id = c.employee_id WHERE c.id = $1`, [docId]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return { docLabel: "Overtime Claim", requester: row.full_name, amount: row.total_amount != null ? Number(row.total_amount) : null, status: row.status };
+  }
+  const rows = await query<{ status: string; calculated_amount: string | number | null; full_name: string | null }>(
+    `SELECT c.status, c.calculated_amount, u.full_name FROM standby_claims c JOIN users u ON u.id = c.employee_id WHERE c.id = $1`, [docId]
   );
   const row = rows[0];
   if (!row) return null;
-  return { docLabel: row.request_type_name, requester: row.requester_name, amount: null, status: row.status };
+  return { docLabel: "Standby Claim", requester: row.full_name, amount: row.calculated_amount != null ? Number(row.calculated_amount) : null, status: row.status };
 }
 
 // GET /email-actions/:token — safe, read-only. Powers the confirmation page;
@@ -207,7 +261,7 @@ emailActionsRouter.get("/:token", async (req, res, next) => {
     const live = await getLiveStep(row.doc_type, row.doc_id);
     if (!live) throw notFound("This request no longer exists.");
 
-    const alreadyActioned = live.stepOrder !== row.step_order || TERMINAL_STATUSES[row.doc_type].includes(live.status);
+    const alreadyActioned = live.stepOrder !== row.step_order || live.routeVersion !== row.route_version || TERMINAL_STATUSES[row.doc_type].includes(live.status);
     const summary = await buildSummary(row.doc_type, row.doc_id);
 
     if (wantsHtml) {
@@ -245,20 +299,25 @@ emailActionsRouter.post("/:token/confirm", async (req, res, next) => {
     const { row, actor } = await resolveToken(req.params.token);
     const live = await getLiveStep(row.doc_type, row.doc_id);
     if (!live) throw notFound("This request no longer exists.");
-    if (live.stepOrder !== row.step_order || TERMINAL_STATUSES[row.doc_type].includes(live.status)) {
+    if (live.stepOrder !== row.step_order || live.routeVersion !== row.route_version || TERMINAL_STATUSES[row.doc_type].includes(live.status)) {
       throw badRequest("This step has already been actioned — please check the app for the latest status.");
     }
     if (parsed.data.action === "REJECT" && !parsed.data.comment) {
       throw badRequest("A comment is required to reject.");
     }
 
-    const actorArg = { userId: actor.id, role: actor.role, department: actor.department };
+    const actorArg = { userId: actor.id, role: actor.role, sectionId: actor.section_id };
     let result: { status: string };
 
     if (row.doc_type === "ADVANCE") {
       if (parsed.data.action === "APPROVE") {
+        // Preserve any amount adjustment a prior approver already made
+        // in-app — falling back to requested_total only if nobody has
+        // adjusted approved_total yet — rather than always resetting to the
+        // original requested amount and silently discarding that edit.
         const ctx = await getAdvanceNotificationContext(row.doc_id);
-        result = await performAdvanceApprove(row.doc_id, actorArg, Number(ctx?.requested_total ?? 0));
+        const approvedTotal = Number(ctx?.approved_total || ctx?.requested_total || 0);
+        result = await performAdvanceApprove(row.doc_id, actorArg, approvedTotal);
       } else {
         result = await performAdvanceReject(row.doc_id, actorArg, parsed.data.comment!);
       }
@@ -266,13 +325,28 @@ emailActionsRouter.post("/:token/confirm", async (req, res, next) => {
       result = parsed.data.action === "APPROVE"
         ? await performClaimApprove(row.doc_id, actorArg)
         : await performClaimReject(row.doc_id, actorArg, parsed.data.comment!);
-    } else {
+    } else if (row.doc_type === "CUSTOM_REQUEST") {
       result = await performCustomRequestAction(
         row.doc_id,
         { userId: actor.id, role: actor.role, fullName: actor.full_name },
         parsed.data.action,
         parsed.data.comment
       );
+    } else {
+      const actorRole = { userId: actor.id, role: actor.role };
+      if (row.doc_type === "OVERTIME_REQUEST") {
+        result = parsed.data.action === "APPROVE"
+          ? await performOvertimeRequestApprove(row.doc_id, actorRole, parsed.data.comment)
+          : await performOvertimeRequestReject(row.doc_id, actorRole, parsed.data.comment!);
+      } else if (row.doc_type === "OVERTIME_CLAIM") {
+        result = parsed.data.action === "APPROVE"
+          ? await performOvertimeClaimApprove(row.doc_id, actorRole, parsed.data.comment)
+          : await performOvertimeClaimReject(row.doc_id, actorRole, parsed.data.comment!);
+      } else {
+        result = parsed.data.action === "APPROVE"
+          ? await performStandbyClaimApprove(row.doc_id, actorRole, parsed.data.comment)
+          : await performStandbyClaimReject(row.doc_id, actorRole, parsed.data.comment!);
+      }
     }
 
     await query(`UPDATE email_action_tokens SET used_at = now() WHERE id = $1`, [row.id]);

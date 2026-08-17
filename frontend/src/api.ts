@@ -131,6 +131,7 @@ export const api = {
   me: () => req("/auth/me"),
   roles: () => req("/auth/roles"),
   updateFavoritePages: (favorite_pages: string[]) => req("/auth/me/favorites", { method: "PATCH", body: JSON.stringify({ favorite_pages }) }),
+  updateMyProfileContact: (data: { phone: string }) => req("/auth/me/profile", { method: "PATCH", body: JSON.stringify(data) }),
   verifyPassword: (password: string) => req("/auth/verify-password", { method: "POST", body: JSON.stringify({ password }) }),
   departments: () => req("/auth/departments"),
   groups: () => req("/auth/groups"),
@@ -180,7 +181,12 @@ export const api = {
   createEmploymentType: (data: { code: string; name: string; sort_order?: number }) => req("/auth/employment-types", { method: "POST", body: JSON.stringify(data) }),
   updateEmploymentType: (id: string, data: { name?: string; active?: boolean; sort_order?: number }) => req(`/auth/employment-types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteEmploymentType: (id: string) => req(`/auth/employment-types/${id}`, { method: "DELETE" }),
-  delegations: () => req("/auth/delegations"),
+  delegations: (params?: { team_id?: string; request_type?: string }) => {
+    const q: string[] = [];
+    if (params?.team_id) q.push(`team_id=${encodeURIComponent(params.team_id)}`);
+    if (params?.request_type) q.push(`request_type=${encodeURIComponent(params.request_type)}`);
+    return req(`/auth/delegations${q.length ? `?${q.join("&")}` : ""}`);
+  },
   delegationEligibility: () => req("/auth/delegations/eligibility"),
   workflows: (requestType?: string, department?: string) => {
     const params: string[] = [];
@@ -227,6 +233,10 @@ export const api = {
     req(`/auth/permission-groups/${encodeURIComponent(name)}/members/${userId}`, { method: "DELETE" }),
 
   advances: () => req("/advances?mine=true"),
+  // Org-wide (not "mine=true") — gated server-side by the report_advances
+  // feature permission. Used only by the Reports screens, never by the
+  // personal My Advances/My Clearances pages.
+  allAdvances: () => req("/advances"),
   reconciliationReport: (from: string, to: string) =>
     req(`/advances/reconciliation-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   clearanceStatusReport: () => req("/advances/clearance-status-report"),
@@ -239,6 +249,7 @@ export const api = {
   revokeAdvance: (id: string) => req(`/advances/${id}/revoke`, { method: "POST", body: JSON.stringify({}) }),
   remindAdvance: (id: string) => req(`/advances/${id}/remind`, { method: "POST", body: JSON.stringify({}) }),
   claims: () => req("/claims?mine=true"),
+  allClaims: () => req("/claims"),
   createClaim: (data: any) => req("/claims", { method: "POST", body: JSON.stringify(data) }),
   updateClaim: (id: string, data: any) => req(`/claims/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   updateClaimTrips: (id: string, data: any) => req(`/claims/${id}/trips`, { method: "PUT", body: JSON.stringify(data) }),
@@ -253,23 +264,44 @@ export const api = {
   attendanceDetail: (id: string) => req(`/attendance/${id}`),
   saveAttendance: (data: any) => req("/attendance", { method: "POST", body: JSON.stringify(data) }),
   updateAttendance: (id: string, data: any) => req(`/attendance/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  attendanceFinanceQueue: () => req("/attendance/finance/queue"),
+  processAttendanceFinance: (id: string, comments?: string) => req(`/attendance/${id}/finance-process`, { method: "POST", body: JSON.stringify({ comments }) }),
+  returnAttendanceFinance: (id: string, comments: string) => req(`/attendance/${id}/finance-return`, { method: "POST", body: JSON.stringify({ comments }) }),
   overtimeRequests: () => req("/overtime/requests"),
   overtimeRequestDetail: (id: string) => req(`/overtime/requests/${id}`),
-  saveOvertimeRequest: (data: any) => req("/overtime/requests", { method: "POST", body: JSON.stringify(data) }),
-  updateOvertimeRequest: (id: string, data: any) => req(`/overtime/requests/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  overtimeRequestApproveSupervisor: (id: string) => req(`/overtime/requests/${id}/approve-supervisor`, { method: "POST" }),
-  overtimeRequestApproveHod: (id: string) => req(`/overtime/requests/${id}/approve-hod`, { method: "POST" }),
-  overtimeRequestApproveCto: (id: string) => req(`/overtime/requests/${id}/approve-cto`, { method: "POST" }),
-  overtimeRequestReject: (id: string, reason?: string) => req(`/overtime/requests/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
+  createOvertimeRequest: (data: any) => req("/overtime/requests", { method: "POST", body: JSON.stringify(data) }),
+  updateOvertimeRequest: (id: string, data: any) => req(`/overtime/requests/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  submitOvertimeRequest: (id: string) => req(`/overtime/requests/${id}/submit`, { method: "POST" }),
+  withdrawOvertimeRequest: (id: string) => req(`/overtime/requests/${id}/withdraw`, { method: "POST" }),
+  overtimeRequestApprovals: () => req("/overtime/request-approvals"),
+  approveOvertimeRequest: (id: string, comments?: string) => req(`/overtime/requests/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
+  rejectOvertimeRequest: (id: string, comments: string) => req(`/overtime/requests/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
+  sendBackOvertimeRequest: (id: string, comments: string) => req(`/overtime/requests/${id}/send-back`, { method: "POST", body: JSON.stringify({ comments }) }),
+  generateOvertimeClaim: (requestId: string) => req(`/overtime/requests/${requestId}/generate-claim`, { method: "POST" }),
+
   overtimeClaims: () => req("/overtime/claims"),
   overtimeClaimDetail: (id: string) => req(`/overtime/claims/${id}`),
-  saveOvertimeClaim: (data: any) => req("/overtime/claims", { method: "POST", body: JSON.stringify(data) }),
-  updateOvertimeClaim: (id: string, data: any) => req(`/overtime/claims/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  overtimeClaimAuthorise: (id: string) => req(`/overtime/claims/${id}/authorise`, { method: "POST" }),
-  overtimeClaimHrNote: (id: string, data: any) => req(`/overtime/claims/${id}/hr-note`, { method: "POST", body: JSON.stringify(data) }),
-  overtimeClaimFinanceVerify: (id: string, data: any) => req(`/overtime/claims/${id}/finance-verify`, { method: "POST", body: JSON.stringify(data) }),
-  overtimeClaimRecordEarnings: (id: string, data: any) => req(`/overtime/claims/${id}/record-earnings`, { method: "POST", body: JSON.stringify(data) }),
-  overtimeClaimTransferSummary: (id: string, data: any) => req(`/overtime/claims/${id}/transfer-summary`, { method: "POST", body: JSON.stringify(data) }),
+  updateOvertimeClaim: (id: string, data: any) => req(`/overtime/claims/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  submitOvertimeClaim: (id: string) => req(`/overtime/claims/${id}/submit`, { method: "POST" }),
+  withdrawOvertimeClaim: (id: string) => req(`/overtime/claims/${id}/withdraw`, { method: "POST" }),
+  overtimeApprovals: () => req("/overtime/approvals"),
+  approveOvertimeClaim: (id: string, comments?: string) => req(`/overtime/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
+  rejectOvertimeClaim: (id: string, comments: string) => req(`/overtime/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
+  sendBackOvertimeClaim: (id: string, comments: string) => req(`/overtime/claims/${id}/send-back`, { method: "POST", body: JSON.stringify({ comments }) }),
+
+  overtimeFinanceQueue: (status?: string) => req(`/overtime/finance/queue${status ? `?status=${status}` : ""}`),
+  processOvertimeClaimFinance: (id: string, data: any) => req(`/overtime/claims/${id}/finance-process`, { method: "POST", body: JSON.stringify(data) }),
+  returnOvertimeClaimFinance: (id: string, comments: string) => req(`/overtime/claims/${id}/finance-return`, { method: "POST", body: JSON.stringify({ comments }) }),
+  markOvertimeClaimSettled: (id: string) => req(`/overtime/claims/${id}/mark-settled`, { method: "POST" }),
+
+  overtimeEligibleApprovers: (search: string) => req(`/overtime/eligible-approvers?search=${encodeURIComponent(search)}`),
+  publicHolidays: () => req("/overtime/public-holidays"),
+  createPublicHoliday: (data: { holiday_date: string; name: string }) => req("/overtime/public-holidays", { method: "POST", body: JSON.stringify(data) }),
+  deletePublicHoliday: (id: string) => req(`/overtime/public-holidays/${id}`, { method: "DELETE" }),
+  overtimeSettings: () => req("/overtime/settings"),
+  updateOvertimeSettings: (data: any) => req("/overtime/settings", { method: "PUT", body: JSON.stringify(data) }),
+  overtimeReportsSummary: () => req("/overtime/reports/summary"),
+  overtimeDashboard: () => req("/overtime/dashboard"),
   aiAnomalies: () => req("/ai/anomalies"),
   aiNlReport: (prompt: string) => req("/ai/nl-report", { method: "POST", body: JSON.stringify({ prompt }) }),
   aiOcrExtract: (text: string) => req("/ai/ocr-extract", { method: "POST", body: JSON.stringify({ text }) }),
@@ -341,6 +373,9 @@ export const api = {
   deleteRequestType: (id: string) => req(`/request-types/${id}`, { method: "DELETE" }),
   updateRequestTypeFields: (id: string, fields: any[]) => req(`/request-types/${id}/fields`, { method: "PUT", body: JSON.stringify(fields) }),
   requestTypePermissions: (id: string) => req(`/request-types/${id}/permissions`),
+  moduleFlags: () => req("/request-types/module-flags"),
+  updateModuleFlags: (data: { overtime_enabled?: boolean; standby_enabled?: boolean }) =>
+    req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
   addRequestTypePermission: (id: string, data: any) => req(`/request-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
 
@@ -448,5 +483,72 @@ export const api = {
   deductionsAccess: () => req("/deductions/access"),
   deductions: () => req("/deductions"),
   setDeductionActioned: (id: string, deducted: boolean) =>
-    req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) })
+    req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) }),
+
+  standbyDashboard: () => req("/standby/dashboard"),
+  standbyTeams: () => req("/standby/teams"),
+  standbyRosters: (teamId?: string) => req(`/standby/rosters${teamId ? `?team_id=${teamId}` : ""}`),
+  createStandbyRoster: (data: { team_id: string; roster_month: string }) =>
+    req("/standby/rosters", { method: "POST", body: JSON.stringify(data) }),
+  standbyRoster: (id: string) => req(`/standby/rosters/${id}`),
+  addStandbyAssignment: (rosterId: string, data: any) =>
+    req(`/standby/rosters/${rosterId}/assignments`, { method: "POST", body: JSON.stringify(data) }),
+  deleteStandbyAssignment: (rosterId: string, assignmentId: string) =>
+    req(`/standby/rosters/${rosterId}/assignments/${assignmentId}`, { method: "DELETE" }),
+  publishStandbyRoster: (rosterId: string) => req(`/standby/rosters/${rosterId}/publish`, { method: "POST" }),
+  cancelStandbyRoster: (rosterId: string) => req(`/standby/rosters/${rosterId}`, { method: "DELETE" }),
+
+  myStandby: (month: string) => req(`/standby/my?month=${month}`),
+  generateStandbyClaim: (month: string) => req("/standby/claims/generate", { method: "POST", body: JSON.stringify({ month }) }),
+  standbyClaims: () => req("/standby/claims"),
+  standbyClaim: (id: string) => req(`/standby/claims/${id}`),
+  updateStandbyClaim: (id: string, data: any) => req(`/standby/claims/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  submitStandbyClaim: (id: string) => req(`/standby/claims/${id}/submit`, { method: "POST" }),
+
+  standbyApprovals: () => req("/standby/approvals"),
+  approveStandbyClaim: (id: string, comments?: string) =>
+    req(`/standby/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
+  rejectStandbyClaim: (id: string, comments: string) =>
+    req(`/standby/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
+  sendBackStandbyClaim: (id: string, comments: string) =>
+    req(`/standby/claims/${id}/send-back`, { method: "POST", body: JSON.stringify({ comments }) }),
+
+  standbyFinanceQueue: (status?: string) => req(`/standby/finance/queue${status ? `?status=${status}` : ""}`),
+  processStandbyFinance: (id: string, data: any) =>
+    req(`/standby/claims/${id}/finance-process`, { method: "POST", body: JSON.stringify(data) }),
+  returnStandbyFinance: (id: string, comments: string) =>
+    req(`/standby/claims/${id}/finance-return`, { method: "POST", body: JSON.stringify({ comments }) }),
+  markStandbyClaimPaid: (id: string) => req(`/standby/claims/${id}/mark-paid`, { method: "POST" }),
+
+  standbyEligibleApprovers: (search: string) => req(`/standby/eligible-approvers?search=${encodeURIComponent(search)}`),
+
+  standbyRosterView: (scope: string, range: string, date: string) =>
+    req(`/standby/roster-view?scope=${scope}&range=${range}&date=${date}`),
+
+  updateStandbyTeamSettings: (teamId: string, data: { required_roles: string[] }) =>
+    req(`/standby/teams/${teamId}/settings`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  standbyFinanceSections: () => req("/standby/finance-sections"),
+  updateStandbyFinanceSection: (id: string, data: { is_standby_finance: boolean }) =>
+    req(`/standby/finance-sections/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  standbyClaimAdjustments: (claimId: string) => req(`/standby/claims/${claimId}/adjustments`),
+  createStandbyAdjustment: (claimId: string, data: { reason: string; lines: { standby_date: string; start_time?: string; end_time?: string; hours: number }[] }) =>
+    req(`/standby/claims/${claimId}/adjustments`, { method: "POST", body: JSON.stringify(data) }),
+
+  standbyOperationalReport: () => req("/standby/reports/operational"),
+  standbyFinancialReport: () => req("/standby/reports/financial"),
+
+  standbySettings: () => req("/standby/settings"),
+  updateStandbySettings: (data: { compensable_rate_pct: number; default_hourly_rate: number }) =>
+    req("/standby/settings", { method: "PUT", body: JSON.stringify(data) }),
+  standbyClaimPdf: (id: string) => fetchBlob(`/standby/claims/${id}/pdf`),
+
+  standbyFinanceCodes: (kind?: string, all?: boolean) =>
+    req(`/standby/finance-codes?${kind ? `kind=${kind}&` : ""}${all ? "all=true" : ""}`),
+  createStandbyFinanceCode: (data: { kind: string; name: string }) =>
+    req("/standby/finance-codes", { method: "POST", body: JSON.stringify(data) }),
+  updateStandbyFinanceCode: (id: string, data: { name?: string; active?: boolean }) =>
+    req(`/standby/finance-codes/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteStandbyFinanceCode: (id: string) => req(`/standby/finance-codes/${id}`, { method: "DELETE" })
 };

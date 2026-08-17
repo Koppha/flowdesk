@@ -342,8 +342,9 @@ function FormPreview({ fields }: { fields: FormField[] }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function RequestTypes({ onNavigate }: { onNavigate?: (page: string) => void }) {
+export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (page: string) => void; isAdmin?: boolean }) {
   const [requestTypes, setRequestTypes] = useState<RequestType[]>([]);
+  const [moduleFlags, setModuleFlags] = useState<{ overtime_enabled: boolean; standby_enabled: boolean }>({ overtime_enabled: true, standby_enabled: true });
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -389,14 +390,33 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [data, ds] = await Promise.all([api.requestTypes(), api.departmentsWithSections().catch(() => [])]);
+      const [data, ds, flags] = await Promise.all([
+        api.requestTypes(),
+        api.departmentsWithSections().catch(() => []),
+        api.moduleFlags().catch(() => ({ overtime_enabled: true, standby_enabled: true }))
+      ]);
       setRequestTypes(Array.isArray(data) ? data : []);
       setDeptSections(Array.isArray(ds) ? ds : []);
+      setModuleFlags({
+        overtime_enabled: flags?.overtime_enabled !== false,
+        standby_enabled: flags?.standby_enabled !== false
+      });
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function toggleModule(key: "overtime_enabled" | "standby_enabled") {
+    const next = !moduleFlags[key];
+    setModuleFlags((f) => ({ ...f, [key]: next }));
+    try {
+      await api.updateModuleFlags({ [key]: next });
+    } catch (err: any) {
+      setModuleFlags((f) => ({ ...f, [key]: !next }));
+      alert(err?.message || "Failed to update module status.");
+    }
+  }
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -622,28 +642,47 @@ export default function RequestTypes({ onNavigate }: { onNavigate?: (page: strin
         </div>
         <div style={{ display: "flex", gap: 12, padding: "14px 18px", flexWrap: "wrap" }}>
           {[
-            { icon: "💼", label: "Advance Requests", desc: "Request cash advances for travel and expenses.", page: "MY_REQUESTS" },
-            { icon: "⏱️", label: "Overtime Requests", desc: "Submit overtime hours for supervisor and management approval.", page: "OVERTIME" },
-          ].map((t) => (
-            <div key={t.page + t.label}
-              onClick={() => onNavigate?.(t.page)}
-              style={{
-                display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px",
-                border: "1px solid var(--border)", borderRadius: 8, cursor: onNavigate ? "pointer" : "default",
-                background: "var(--surface-soft)", flex: "1 1 220px", minWidth: 200, maxWidth: 320,
-                transition: "border-color 0.15s"
-              }}
-              onMouseEnter={(e) => { if (onNavigate) (e.currentTarget as HTMLDivElement).style.borderColor = "#2563eb"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "var(--border)"; }}
-            >
-              <span style={{ fontSize: 24 }}>{t.icon}</span>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{t.label}</div>
-                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{t.desc}</div>
-                {onNavigate && <div style={{ fontSize: 12, color: "#2563eb", marginTop: 6, fontWeight: 500 }}>Open →</div>}
+            { icon: "💼", label: "Advance Requests", desc: "Request cash advances for travel and expenses.", page: "MY_REQUESTS", flagKey: null },
+            { icon: "⏱️", label: "Overtime Requests", desc: "Submit overtime hours for supervisor and management approval.", page: "OVERTIME", flagKey: "overtime_enabled" as const },
+            { icon: "📞", label: "Standby Requests", desc: "Schedule and claim compensation for standby duty.", page: "STANDBY", flagKey: "standby_enabled" as const },
+          ].map((t) => {
+            const active = t.flagKey ? moduleFlags[t.flagKey] : true;
+            return (
+              <div key={t.page + t.label}
+                onClick={() => onNavigate?.(t.page)}
+                style={{
+                  display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px",
+                  border: "1px solid var(--border)", borderRadius: 8, cursor: onNavigate ? "pointer" : "default",
+                  background: "var(--surface-soft)", flex: "1 1 220px", minWidth: 200, maxWidth: 320,
+                  transition: "border-color 0.15s", opacity: active ? 1 : 0.65
+                }}
+                onMouseEnter={(e) => { if (onNavigate) (e.currentTarget as HTMLDivElement).style.borderColor = "#2563eb"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "var(--border)"; }}
+              >
+                <span style={{ fontSize: 24 }}>{t.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{t.label}</div>
+                    {t.flagKey && (
+                      isAdmin ? (
+                        <label
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 500, color: active ? "#059669" : "var(--muted)", cursor: "pointer" }}
+                        >
+                          <input type="checkbox" checked={active} onChange={() => void toggleModule(t.flagKey!)} style={{ cursor: "pointer" }} />
+                          {active ? "Active" : "Inactive"}
+                        </label>
+                      ) : (
+                        <span style={{ fontSize: 11, fontWeight: 500, color: active ? "#059669" : "var(--muted)" }}>{active ? "Active" : "Inactive"}</span>
+                      )
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{t.desc}</div>
+                  {onNavigate && <div style={{ fontSize: 12, color: "#2563eb", marginTop: 6, fontWeight: 500 }}>Open →</div>}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

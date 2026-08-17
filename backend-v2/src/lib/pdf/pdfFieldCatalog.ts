@@ -1,5 +1,6 @@
 import { query } from "../db.js";
 import { formatDate, formatDateTime, formatMoney, formatRequestNumber } from "./pdfHelpers.js";
+import { getNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../systemSettings.js";
 import type { ChainStep } from "../workflowEngine.js";
 
 export const PDF_REQUEST_TYPES = [
@@ -8,6 +9,7 @@ export const PDF_REQUEST_TYPES = [
   "ACCOMMODATION_REQUEST",
   "OVERTIME_REQUEST",
   "OVERTIME_CLAIM",
+  "STANDBY_CLAIM",
   "CUSTOM_REQUEST"
 ] as const;
 export type PdfRequestType = (typeof PDF_REQUEST_TYPES)[number];
@@ -41,7 +43,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "request_type_label", label: "Request Type", group: "Requester" },
     { key: "requester_name", label: "Traveller Name", group: "Requester" },
     { key: "requester_employee_no", label: "Employee No.", group: "Requester" },
-    { key: "traveller_type", label: "Traveller Type", group: "Requester" },
+    { key: "traveller_type", label: "Employment Type", group: "Requester" },
     { key: "department", label: "Division", group: "Requester" },
     { key: "status", label: "Status", group: "Requester" },
     { key: "type_label", label: "Type of Travel", group: "Trip" },
@@ -106,29 +108,72 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "rejection_comments", label: "Rejection Comments", group: "Payment" }
   ],
   OVERTIME_REQUEST: [
+    { key: "request_no", label: "Request No.", group: "Employee" },
     { key: "employee_name", label: "Employee Name", group: "Employee" },
     { key: "employee_no", label: "Employee No", group: "Employee" },
     { key: "job_title", label: "Job Title", group: "Employee" },
-    { key: "section_name", label: "Department", group: "Employee" },
+    { key: "section_name", label: "Section", group: "Employee" },
     { key: "year", label: "Year", group: "Employee" },
     { key: "month", label: "Month", group: "Employee" },
     { key: "status", label: "Status", group: "Employee" },
+    { key: "noc", label: "NOC", group: "Details" },
     { key: "car_reg", label: "Car Reg", group: "Details" },
-    { key: "remarks", label: "Remarks", group: "Details" }
+    { key: "remarks", label: "Remarks", group: "Details" },
+    { key: "submitted_at", label: "Submitted At", group: "Dates" }
   ],
   OVERTIME_CLAIM: [
+    { key: "claim_no", label: "Claim No.", group: "Employee" },
     { key: "employee_name", label: "Employee Name", group: "Employee" },
     { key: "employee_no", label: "Employee No", group: "Employee" },
     { key: "job_title", label: "Job Title", group: "Employee" },
-    { key: "division", label: "Company", group: "Employee" },
+    { key: "section_name", label: "Section", group: "Employee" },
     { key: "year", label: "Year", group: "Employee" },
     { key: "month", label: "Month", group: "Employee" },
     { key: "status", label: "Status", group: "Employee" },
+    { key: "source_request_no", label: "Source Request No.", group: "Employee" },
     { key: "total_overtime", label: "Total Overtime", group: "Totals" },
-    { key: "compensated_hours", label: "Compensated Hours", group: "Totals" },
-    { key: "pay_days", label: "Pay Days", group: "Totals" },
+    { key: "converted_hours", label: "Converted to Number of Hours", group: "Totals" },
+    { key: "equivalent_days", label: "Equivalent Days", group: "Totals" },
+    { key: "compensation_preference", label: "Pay / Days", group: "Totals" },
     { key: "hourly_rate", label: "Hourly Rate", group: "Totals" },
-    { key: "total_amount", label: "Total Amount", group: "Totals" }
+    { key: "total_amount", label: "Total Amount", group: "Totals" },
+    { key: "cost_centre", label: "Cost Centre", group: "Finance" },
+    { key: "account_project", label: "Account / Project", group: "Finance" },
+    { key: "payroll_period", label: "Payroll Period", group: "Finance" },
+    { key: "finance_reference", label: "Finance Reference", group: "Finance" },
+    { key: "finance_comments", label: "Finance Comments", group: "Finance" },
+    { key: "submitted_at", label: "Submitted At", group: "Dates" },
+    { key: "finance_processed_at", label: "Finance Processed At", group: "Dates" },
+    { key: "paid_at", label: "Settled At", group: "Dates" }
+  ],
+  STANDBY_CLAIM: [
+    { key: "claim_no", label: "Claim No.", group: "Employee" },
+    { key: "employee_name", label: "Employee Name", group: "Employee" },
+    { key: "employee_no", label: "Employee No", group: "Employee" },
+    { key: "job_title", label: "Job Title", group: "Employee" },
+    { key: "division_name", label: "Company", group: "Employee" },
+    { key: "section_name", label: "Division", group: "Employee" },
+    { key: "team_name", label: "Section", group: "Employee" },
+    { key: "claim_month", label: "Claim Month", group: "Employee" },
+    { key: "status", label: "Status", group: "Employee" },
+    { key: "compensation_preference", label: "Compensation Preference", group: "Employee" },
+    { key: "comments", label: "Comments", group: "Employee" },
+    { key: "is_adjustment", label: "Adjustment Claim", group: "Employee" },
+    { key: "original_claim_no", label: "Original Claim No.", group: "Employee" },
+    { key: "total_standby_hours", label: "Total Standby Hours", group: "Totals" },
+    { key: "compensable_hours", label: "Compensable Hours", group: "Totals" },
+    { key: "equivalent_days", label: "Equivalent Days", group: "Totals" },
+    { key: "hourly_rate", label: "Hourly Rate", group: "Totals" },
+    { key: "calculated_amount", label: "Calculated Amount", group: "Totals" },
+    { key: "cost_centre", label: "Cost Centre", group: "Finance" },
+    { key: "account_project", label: "Account / Project", group: "Finance" },
+    { key: "payroll_period", label: "Payroll Period", group: "Finance" },
+    { key: "finance_reference", label: "Finance Reference", group: "Finance" },
+    { key: "finance_comments", label: "Finance Comments", group: "Finance" },
+    { key: "submitted_at", label: "Submitted At", group: "Dates" },
+    { key: "finance_processed_at", label: "Finance Processed At", group: "Dates" },
+    { key: "paid_at", label: "Paid At", group: "Dates" },
+    { key: "closed_at", label: "Closed At", group: "Dates" }
   ]
 };
 
@@ -363,21 +408,32 @@ export async function resolveAccommodationPdfData(id: string): Promise<ResolvedP
 }
 
 export async function resolveOvertimeRequestPdfData(id: string): Promise<ResolvedPdfData> {
-  const rows = await query<any>(`SELECT * FROM overtime_requests WHERE id = $1`, [id]);
+  const rows = await query<any>(
+    `SELECT r.*, u.full_name AS employee_name, u.employee_no, u.title AS job_title, t.name AS section_name
+       FROM overtime_requests r
+       JOIN users u ON u.id = r.employee_id
+       LEFT JOIN teams t ON t.id = u.team_id
+      WHERE r.id = $1`,
+    [id]
+  );
   const req = rows[0];
   if (!req) throw new Error("Overtime request not found");
   const lines = Array.isArray(req.lines) ? req.lines : [];
 
-  const approvalChain: ApprovalChainDisplayItem[] = [];
-  if (req.recommended_by_supervisor) approvalChain.push({ title: "Supervisor", approverName: req.recommended_by_supervisor, decision: "Recommended", decidedAt: req.supervisor_date || undefined });
-  if (req.approved_by_hod) approvalChain.push({ title: "HOD", approverName: req.approved_by_hod, decision: "Approved", decidedAt: formatDateTime(req.hod_approved_at) });
-  if (req.approved_by_cto) approvalChain.push({ title: "CTO", approverName: req.approved_by_cto, decision: "Approved", decidedAt: formatDateTime(req.cto_approved_at) });
+  const steps = await query<any>(
+    `SELECT s.title, s.status, s.decided_at, u.full_name AS approver_name, u.title AS approver_job_title
+       FROM overtime_request_approval_steps s JOIN users u ON u.id = s.approver_user_id
+      WHERE s.request_id=$1 AND s.route_version=$2 ORDER BY s.step_order`,
+    [id, req.current_route_version]
+  );
 
   return {
     scalars: {
+      request_no: req.request_no || "",
       employee_name: req.employee_name || "", employee_no: req.employee_no || "", job_title: req.job_title || "",
       section_name: req.section_name || "", year: String(req.year ?? ""), month: String(req.month ?? ""),
-      status: req.status || "", car_reg: req.car_reg || "", remarks: req.remarks || ""
+      status: req.status || "", noc: req.noc || "", car_reg: req.car_reg || "", remarks: req.remarks || "",
+      submitted_at: formatDateTime(req.submitted_at)
     },
     tables: {
       lines: lines.map((l: any) => ({
@@ -385,40 +441,146 @@ export async function resolveOvertimeRequestPdfData(id: string): Promise<Resolve
         actual_start: l.actual_start || "", actual_end: l.actual_end || "", reason: l.reason || ""
       }))
     },
-    approvalChain,
+    // The route step only ever records the action taken (Checked by /
+    // Approved by / Ordered by) - the position printed alongside it (e.g.
+    // "CHECKED BY Supervisor") is always the approver's own current job
+    // title, pulled live rather than typed in when the route was built.
+    approvalChain: steps.map((s) => ({
+      title: [s.title, s.approver_job_title].filter(Boolean).join(" "),
+      approverName: s.approver_name || "",
+      decision: s.status,
+      decidedAt: s.decided_at ? formatDateTime(s.decided_at) : undefined
+    })),
     meta: { id, requestType: "OVERTIME_REQUEST", generatedAt: new Date().toISOString() }
   };
 }
 
 export async function resolveOvertimeClaimPdfData(id: string): Promise<ResolvedPdfData> {
-  const rows = await query<any>(`SELECT * FROM overtime_claims WHERE id = $1`, [id]);
+  const rows = await query<any>(
+    `SELECT c.*, u.full_name AS employee_name, u.employee_no, u.title AS job_title, t.name AS section_name,
+            orq.request_no AS source_request_no
+       FROM overtime_claims c
+       JOIN users u ON u.id = c.employee_id
+       LEFT JOIN teams t ON t.id = u.team_id
+       LEFT JOIN overtime_requests orq ON orq.id = c.overtime_request_id
+      WHERE c.id = $1`,
+    [id]
+  );
   const claim = rows[0];
   if (!claim) throw new Error("Overtime claim not found");
   const lines = Array.isArray(claim.lines) ? claim.lines : [];
 
-  const approvalChain: ApprovalChainDisplayItem[] = [];
-  if (claim.checked_by_supervisor) approvalChain.push({ title: "Checked By Supervisor", approverName: claim.checked_by_supervisor });
-  if (claim.authorised_by) approvalChain.push({ title: "Authorised By", approverName: claim.authorised_by });
-  if (claim.approved_by_manager) approvalChain.push({ title: "Approved By Manager", approverName: claim.approved_by_manager, decidedAt: formatDateTime(claim.manager_authorised_at) });
-  if (claim.approved_by_cto) approvalChain.push({ title: "Approved By CTO", approverName: claim.approved_by_cto });
+  const steps = await query<any>(
+    `SELECT s.title, s.status, s.decided_at, u.full_name AS approver_name, u.title AS approver_job_title
+       FROM overtime_claim_approval_steps s JOIN users u ON u.id = s.approver_user_id
+      WHERE s.claim_id=$1 AND s.route_version=$2 ORDER BY s.step_order`,
+    [id, claim.current_route_version]
+  );
+
+  const workingHoursPerDay = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.workingHoursPerDay, 8);
 
   return {
     scalars: {
+      claim_no: claim.claim_no || "",
       employee_name: claim.employee_name || "", employee_no: claim.employee_no || "", job_title: claim.job_title || "",
-      division: claim.division || "", year: String(claim.year ?? ""), month: String(claim.month ?? ""),
-      status: claim.status || "", total_overtime: String(claim.total_overtime ?? "0"),
-      compensated_hours: String(claim.compensated_hours ?? "0"), pay_days: String(claim.pay_days ?? "0"),
-      hourly_rate: formatMoney(claim.hourly_rate), total_amount: formatMoney(claim.total_amount)
+      section_name: claim.section_name || "", year: String(claim.year ?? ""), month: String(claim.month ?? ""),
+      status: claim.status || "", source_request_no: claim.source_request_no || "",
+      total_overtime: String(claim.total_overtime ?? "0"),
+      converted_hours: String(claim.converted_hours ?? "0"),
+      equivalent_days: String(claim.equivalent_days ?? (workingHoursPerDay > 0 ? Math.round((Number(claim.converted_hours || 0) / workingHoursPerDay) * 1000) / 1000 : 0)),
+      compensation_preference: claim.compensation_preference || "",
+      hourly_rate: claim.hourly_rate != null ? formatMoney(claim.hourly_rate) : "",
+      total_amount: claim.total_amount != null ? formatMoney(claim.total_amount) : "",
+      cost_centre: claim.cost_centre || "",
+      account_project: claim.account_project || "",
+      payroll_period: claim.payroll_period || "",
+      finance_reference: claim.finance_reference || "",
+      finance_comments: claim.finance_comments || "",
+      submitted_at: formatDateTime(claim.submitted_at),
+      finance_processed_at: formatDateTime(claim.finance_processed_at),
+      paid_at: formatDateTime(claim.paid_at)
     },
     tables: {
       lines: lines.map((l: any) => ({
-        date: l.date || "", from_time: l.from_time || "", to_time: l.to_time || "",
+        date: l.date || "", day: l.day || "", from_time: l.from_time || "", to_time: l.to_time || "", ordered_by: l.ordered_by || "",
         hours_125: String(l.hours_125 ?? "0"), hours_150: String(l.hours_150 ?? "0"), hours_200: String(l.hours_200 ?? "0"),
-        activity_name: l.activity_name || ""
+        converted_hours: String(l.converted_hours ?? "0"), account_number: l.account_number || "", account_name: l.account_name || ""
       }))
     },
-    approvalChain,
+    approvalChain: steps.map((s) => ({
+      title: [s.title, s.approver_job_title].filter(Boolean).join(" "),
+      approverName: s.approver_name || "",
+      decision: s.status,
+      decidedAt: s.decided_at ? formatDateTime(s.decided_at) : undefined
+    })),
     meta: { id, requestType: "OVERTIME_CLAIM", generatedAt: new Date().toISOString() }
+  };
+}
+
+export async function resolveStandbyClaimPdfData(id: string): Promise<ResolvedPdfData> {
+  const rows = await query<any>(
+    `SELECT sc.*, u.full_name AS employee_name, u.employee_no, u.title AS job_title,
+            dv.name AS division_name, s.name AS section_name, t.name AS team_name,
+            oc.claim_no AS original_claim_no
+       FROM standby_claims sc
+       JOIN users u ON u.id = sc.employee_id
+       LEFT JOIN divisions dv ON dv.id = u.division_id
+       LEFT JOIN sections s ON s.id = u.section_id
+       LEFT JOIN teams t ON t.id = u.team_id
+       LEFT JOIN standby_claims oc ON oc.id = sc.original_claim_id
+      WHERE sc.id = $1`,
+    [id]
+  );
+  const claim = rows[0];
+  if (!claim) throw new Error("Standby claim not found");
+
+  const lines = await query<any>(`SELECT standby_date, start_time, end_time, hours FROM standby_claim_lines WHERE claim_id=$1 ORDER BY standby_date`, [id]);
+  const steps = await query<any>(
+    `SELECT sas.title, sas.status, sas.decided_at, u.full_name AS approver_name
+       FROM standby_approval_steps sas JOIN users u ON u.id = sas.approver_user_id
+      WHERE sas.claim_id=$1 AND sas.route_version=$2 ORDER BY sas.step_order`,
+    [id, claim.current_route_version]
+  );
+  const workingHoursPerDay = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.workingHoursPerDay, 8);
+  const equivalentDays = workingHoursPerDay > 0 ? Math.round((Number(claim.compensable_hours || 0) / workingHoursPerDay) * 1000) / 1000 : 0;
+
+  return {
+    scalars: {
+      claim_no: claim.claim_no || "",
+      employee_name: claim.employee_name || "",
+      employee_no: claim.employee_no || "",
+      job_title: claim.job_title || "",
+      division_name: claim.division_name || "",
+      section_name: claim.section_name || "",
+      team_name: claim.team_name || "",
+      claim_month: formatDate(claim.claim_month),
+      status: claim.status || "",
+      compensation_preference: claim.compensation_preference || "",
+      comments: claim.comments || "",
+      is_adjustment: claim.is_adjustment ? "Yes" : "No",
+      original_claim_no: claim.original_claim_no || "",
+      total_standby_hours: String(claim.total_standby_hours ?? "0"),
+      compensable_hours: String(claim.compensable_hours ?? "0"),
+      equivalent_days: String(equivalentDays),
+      hourly_rate: claim.hourly_rate != null ? formatMoney(claim.hourly_rate) : "",
+      calculated_amount: claim.calculated_amount != null ? formatMoney(claim.calculated_amount) : "",
+      cost_centre: claim.cost_centre || "",
+      account_project: claim.account_project || "",
+      payroll_period: claim.payroll_period || "",
+      finance_reference: claim.finance_reference || "",
+      finance_comments: claim.finance_comments || "",
+      submitted_at: formatDateTime(claim.submitted_at),
+      finance_processed_at: formatDateTime(claim.finance_processed_at),
+      paid_at: formatDateTime(claim.paid_at),
+      closed_at: formatDateTime(claim.closed_at)
+    },
+    tables: {
+      lines: lines.map((l) => ({
+        standby_date: formatDate(l.standby_date), start_time: l.start_time || "", end_time: l.end_time || "", hours: String(l.hours ?? "0")
+      }))
+    },
+    approvalChain: steps.map((s) => ({ title: s.title, approverName: s.approver_name || "", decision: s.status, decidedAt: s.decided_at ? formatDateTime(s.decided_at) : undefined })),
+    meta: { id, requestType: "STANDBY_CLAIM", generatedAt: new Date().toISOString() }
   };
 }
 
@@ -472,6 +634,7 @@ export async function resolvePdfData(requestType: PdfRequestType, id: string): P
     case "ACCOMMODATION_REQUEST": return resolveAccommodationPdfData(id);
     case "OVERTIME_REQUEST": return resolveOvertimeRequestPdfData(id);
     case "OVERTIME_CLAIM": return resolveOvertimeClaimPdfData(id);
+    case "STANDBY_CLAIM": return resolveStandbyClaimPdfData(id);
     case "CUSTOM_REQUEST": return resolveCustomRequestPdfData(id);
   }
 }
@@ -499,6 +662,10 @@ export async function pickSampleRecordId(requestType: PdfRequestType, customRequ
     }
     case "OVERTIME_CLAIM": {
       const rows = await query<{ id: string }>(`SELECT id FROM overtime_claims ORDER BY created_at DESC LIMIT 1`);
+      return rows[0]?.id ?? null;
+    }
+    case "STANDBY_CLAIM": {
+      const rows = await query<{ id: string }>(`SELECT id FROM standby_claims ORDER BY created_at DESC LIMIT 1`);
       return rows[0]?.id ?? null;
     }
     case "CUSTOM_REQUEST": {

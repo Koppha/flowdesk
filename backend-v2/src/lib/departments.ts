@@ -197,6 +197,21 @@ export async function ensureUserOrgColumns() {
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS section_id uuid REFERENCES sections(id)`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id uuid REFERENCES teams(id)`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_type_id uuid REFERENCES manager_types(id)`);
+  // One-time backfill: a user's Company (division_id) used to only get set
+  // when they were created/edited through the org picker. Assigning someone
+  // as a department's manager/HOD elsewhere (e.g. Management page's "Add
+  // division…" picker) set their department but left division_id untouched,
+  // so managers placed that way silently showed up as "Unassigned" instead
+  // of their department's actual company. Only fills blanks - never
+  // overwrites a division_id someone deliberately set.
+  await query(`
+    UPDATE users u
+       SET division_id = d.division_id
+      FROM departments d
+     WHERE u.division_id IS NULL
+       AND d.division_id IS NOT NULL
+       AND trim(u.department) = d.name
+  `);
 }
 
 // Returns division/section/team names for a user's org IDs
@@ -982,7 +997,8 @@ export async function ensureManagerTypesTable(): Promise<void> {
       ('Senior Manager',     'MANAGER', 'Senior-level department manager',  2),
       ('Manager',            'MANAGER', 'Department manager',               3),
       ('Section Manager',    'MANAGER', 'Manages a specific section',       4),
-      ('Team Leader',        'MANAGER', 'Leads a team within a section',    5)
+      ('Team Leader',        'MANAGER', 'Leads a team within a section',    5),
+      ('Exco Member',        'EXCO',    'Executive committee member',       6)
     ON CONFLICT (name) DO NOTHING
   `);
 }

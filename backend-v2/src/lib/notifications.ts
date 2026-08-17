@@ -232,15 +232,26 @@ async function getRecipients(role: Role, department?: string | null) {
   return rows.filter((r) => r.email);
 }
 
-// Finance approval authority comes from org structure (Department: Finance)
-// rather than a dedicated FINANCE role.
+// Used by the generic Advance/Clearance workflow's FINANCE step. Shares the
+// same admin-assigned is_compensation_finance section flag as
+// getCompensationFinanceRecipients below (formerly a separate legacy
+// free-text department === 'finance' match, which silently excluded any
+// company whose finance unit wasn't literally named "Finance" - e.g. SEFS's
+// "Finance Operations" - from ever being notified of a pending FINANCE step).
 async function getFinanceRecipients() {
+  return getCompensationFinanceRecipients();
+}
+
+// Standby/Overtime compensation-claim Finance authority — mirrors
+// isCompensationFinanceUser (lib/financeAuthority.ts): whichever
+// Departments (sections table) an admin has flagged, via users.section_id.
+async function getCompensationFinanceRecipients() {
   const rows = await query<{ email: string; full_name: string | null }>(
-    `SELECT email, full_name
-       FROM users
-      WHERE is_active = true
-        AND trim(lower(coalesce(department, ''))) = 'finance'
-      ORDER BY full_name NULLS LAST, email`,
+    `SELECT u.email, u.full_name
+       FROM users u
+       JOIN sections s ON s.id = u.section_id
+      WHERE u.is_active = true AND s.is_compensation_finance = true
+      ORDER BY u.full_name NULLS LAST, u.email`,
     []
   );
   return rows.filter((r) => r.email);
@@ -469,7 +480,8 @@ export async function notifyAdvanceTask(args: {
         COUNTERSIGNED:        `Your advance request has been approved by your manager and is now pending HOD / EXCO review.`,
         HR_OFFICER:           `Your advance request has been approved and is being processed for payment.`,
         APPROVED:             `Great news! Your advance request has been fully approved and forwarded to Finance for payment.`,
-        REJECTED:             `Your advance request has been reviewed and unfortunately has been rejected.${args.comments ? `\n\nReason: ${args.comments}` : ""}`
+        REJECTED:             `Your advance request has been reviewed and unfortunately has been rejected.${args.comments ? `\n\nReason: ${args.comments}` : ""}`,
+        DRAFT:                `Your advance request has been sent back for correction.${args.comments ? `\n\nReason: ${args.comments}` : ""}`
       };
 
       const statusMsg = requesterMessages[args.status];
@@ -1142,96 +1154,6 @@ export async function notifyProfileCompleted(args: {
   }
 }
 
-// ─── notifyOvertimeSubmitted ──────────────────────────────────────────────────
-
-export async function notifyOvertimeSubmitted(args: {
-  requestId: string;
-  employeeName: string | null;
-  employeeEmail?: string | null;
-  department: string | null;
-  month: number;
-  year: number;
-  type: "request" | "claim";
-}) {
-  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const periodLabel = `${MONTHS[(args.month - 1)] ?? args.month} ${args.year}`;
-  const employee = args.employeeName || "Employee";
-  const typeLabel = args.type === "claim" ? "Overtime Claim" : "Overtime Request";
-
-  const details = detailBlock([
-    ["Employee",   employee],
-    ["Division", args.department],
-    ["Period",     periodLabel],
-    ["Type",       typeLabel]
-  ]);
-
-  try {
-    // Notify department manager
-    const managers = await getAssignedDepartmentOwnerRecipients(args.department, "manager_user_id");
-    if (managers.length > 0) {
-      const body = [
-        header(`${typeLabel.toUpperCase()} — SUBMITTED`),
-        ``,
-        `Hello,`,
-        ``,
-        `A ${typeLabel.toLowerCase()} has been submitted and requires your review.`,
-        ``,
-        details,
-        ``,
-        `Please log in to review this submission.`,
-        ``,
-        footer()
-      ].join("\n");
-
-      await sendMail({
-        to: managers.map((r) => r.email),
-        subject: `[Review Required] ${typeLabel} submitted by ${employee}`,
-        text: body
-      });
-
-      sendTeamsCard({
-        title: `${typeLabel} — Submitted`,
-        summary: `${typeLabel} submitted by ${employee} for ${periodLabel}`,
-        subtitle: "Requires manager review",
-        color: "f59e0b",
-        facts: [
-          { name: "Employee", value: employee },
-          { name: "Division", value: args.department || "—" },
-          { name: "Period", value: periodLabel },
-          { name: "Type", value: typeLabel }
-        ]
-      }).catch((e) => logger.warn("teams_overtime_manager_failed", { error: serializeError(e) }));
-    }
-
-    // Confirm submission to the employee
-    if (args.employeeEmail) {
-      const confirmBody = [
-        header(`${typeLabel.toUpperCase()} — SUBMISSION CONFIRMED`),
-        ``,
-        `Hello ${employee},`,
-        ``,
-        `Your ${typeLabel.toLowerCase()} has been submitted successfully.`,
-        ``,
-        details,
-        ``,
-        `You will be notified once it has been reviewed.`,
-        ``,
-        footer()
-      ].join("\n");
-
-      await sendMail({
-        to: [args.employeeEmail],
-        subject: `[Submitted] Your ${typeLabel.toLowerCase()} for ${periodLabel}`,
-        text: confirmBody
-      });
-    }
-  } catch (error) {
-    logger.warn("overtime_notification_failed", {
-      request_id: args.requestId, type: args.type, error: serializeError(error)
-    });
-  }
-}
-
 // ─── Custom request types (e.g. Change Requests) ─────────────────────────────
 
 export async function notifyCustomRequestStep(args: {
@@ -1881,5 +1803,544 @@ export async function notifyDelegationEnded(args: {
         delegation_id: args.delegationId, error: serializeError(error)
       });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Standby Roster & Claim Management
+// ---------------------------------------------------------------------------
+
+export async function notifyStandbyRosterPublished(args: {
+  rosterId: string;
+  teamName: string | null;
+  month: string;
+  recipients: { name: string | null; email: string }[];
+}) {
+  if (!args.recipients.length) return;
+  try {
+    const body = [
+      header("STANDBY ROSTER PUBLISHED"),
+      ``,
+      `Your standby roster for ${args.month} has been published.`,
+      ``,
+      detailBlock([["Section", args.teamName], ["Month", args.month]]),
+      ``,
+      `Log in to FlowDesk to view your standby schedule.`,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: args.recipients.map((r) => r.email), subject: `[Standby] Your standby roster for ${args.month} has been published`, text: body });
+    sendTeamsCard({
+      title: "Standby Roster Published",
+      summary: `${args.teamName || "Section"} standby roster for ${args.month} is now published`,
+      color: "22c55e",
+      facts: [["Section", args.teamName || "—"], ["Month", args.month]].map(([name, value]) => ({ name, value }))
+    }).catch((e) => logger.warn("teams_standby_roster_published_failed", { error: serializeError(e) }));
+  } catch (error) {
+    logger.warn("standby_roster_published_notification_failed", { roster_id: args.rosterId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyClaimSubmitted(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  approverName: string | null;
+  approverEmail: string | null;
+  title: string;
+  approverId?: string | null;
+  stepOrder?: number;
+  routeVersion?: number;
+}) {
+  if (!args.approverEmail) return;
+  try {
+    let emailActionLine = "";
+    if (args.approverId && args.stepOrder !== undefined) {
+      try {
+        const token = await createEmailActionToken({
+          userId: args.approverId, docType: "STANDBY_CLAIM", docId: args.claimId, stepOrder: args.stepOrder, routeVersion: args.routeVersion
+        });
+        emailActionLine = `EmailAction: ${buildEmailActionUrl(token)}\n`;
+      } catch (e) {
+        logger.warn("standby_claim_email_action_token_failed", { claim_id: args.claimId, error: serializeError(e) });
+      }
+    }
+    const body = [
+      header("STANDBY CLAIM — REVIEW REQUIRED"),
+      ``,
+      `Hello ${args.approverName || ""},`,
+      ``,
+      `A standby claim requires your review as ${args.title}.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
+      ``,
+      emailActionLine,
+      `Please log in to review this claim.`,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.approverEmail], subject: `[Review Required] Standby claim ${args.claimNo} from ${args.employeeName || "an employee"}`, text: body });
+  } catch (error) {
+    logger.warn("standby_claim_submitted_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyClaimReturned(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  reason: string;
+  action: "REJECTED" | "RETURNED";
+}) {
+  if (!args.employeeEmail) return;
+  const label = args.action === "REJECTED" ? "rejected" : "sent back for correction";
+  try {
+    const body = [
+      header(`STANDBY CLAIM ${args.action}`),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your standby claim ${args.claimNo} has been ${label}.`,
+      ``,
+      detailBlock([["Reason", args.reason]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Standby] Your claim ${args.claimNo} was ${label}`, text: body });
+  } catch (error) {
+    logger.warn("standby_claim_returned_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyClaimFinanceReady(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+}) {
+  try {
+    const recipients = await getCompensationFinanceRecipients();
+    if (!recipients.length) return;
+    const body = [
+      header("STANDBY CLAIM READY FOR FINANCE"),
+      ``,
+      `A standby claim is ready for finance processing.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: recipients.map((r) => r.email), subject: `[Finance] Standby claim ${args.claimNo} ready for processing`, text: body });
+  } catch (error) {
+    logger.warn("standby_claim_finance_ready_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyClaimProcessed(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  amount: number;
+}) {
+  if (!args.employeeEmail) return;
+  try {
+    const body = [
+      header("STANDBY CLAIM PROCESSED"),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your standby claim has been processed by Finance and sent for payment.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Amount", fmt(args.amount, "LSL")]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Standby] Claim ${args.claimNo} processed and sent for payment`, text: body });
+  } catch (error) {
+    logger.warn("standby_claim_processed_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyClaimPaid(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  amount: number;
+}) {
+  if (!args.employeeEmail) return;
+  try {
+    const body = [
+      header("STANDBY CLAIM PAID"),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your standby claim payment has been completed.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Amount", fmt(args.amount, "LSL")]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Standby] Claim ${args.claimNo} has been paid`, text: body });
+  } catch (error) {
+    logger.warn("standby_claim_paid_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+// ─── Overtime request/claim — mirrors the Standby notification set above ────
+
+export async function notifyOvertimeRequestSubmitted(args: {
+  requestId: string;
+  requestNo: string;
+  employeeName: string | null;
+  approverName: string | null;
+  approverEmail: string | null;
+  title: string;
+  // The approver's user id + the workflow step (and route_version, since a
+  // send-back bumps this) they're being asked to act on - required to mint a
+  // one-click email-approve/reject link bound to that exact step.
+  approverId?: string | null;
+  stepOrder?: number;
+  routeVersion?: number;
+}) {
+  if (!args.approverEmail) return;
+  try {
+    let emailActionLine = "";
+    if (args.approverId && args.stepOrder !== undefined) {
+      try {
+        const token = await createEmailActionToken({
+          userId: args.approverId, docType: "OVERTIME_REQUEST", docId: args.requestId, stepOrder: args.stepOrder, routeVersion: args.routeVersion
+        });
+        emailActionLine = `EmailAction: ${buildEmailActionUrl(token)}\n`;
+      } catch (e) {
+        logger.warn("overtime_request_email_action_token_failed", { request_id: args.requestId, error: serializeError(e) });
+      }
+    }
+    const body = [
+      header("OVERTIME REQUEST — REVIEW REQUIRED"),
+      ``,
+      `Hello ${args.approverName || ""},`,
+      ``,
+      `An overtime request requires your review as ${args.title}.`,
+      ``,
+      detailBlock([["Request No.", args.requestNo], ["Employee", args.employeeName]]),
+      ``,
+      emailActionLine,
+      `Please log in to review this request.`,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.approverEmail], subject: `[Review Required] Overtime request ${args.requestNo} from ${args.employeeName || "an employee"}`, text: body });
+  } catch (error) {
+    logger.warn("overtime_request_submitted_notification_failed", { request_id: args.requestId, error: serializeError(error) });
+  }
+}
+
+export async function notifyOvertimeRequestReturned(args: {
+  requestId: string;
+  requestNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  reason: string;
+  action: "REJECTED" | "RETURNED";
+}) {
+  if (!args.employeeEmail) return;
+  const label = args.action === "REJECTED" ? "rejected" : "sent back for correction";
+  try {
+    const body = [
+      header(`OVERTIME REQUEST ${args.action}`),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your overtime request ${args.requestNo} has been ${label}.`,
+      ``,
+      detailBlock([["Reason", args.reason]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Overtime] Your request ${args.requestNo} was ${label}`, text: body });
+  } catch (error) {
+    logger.warn("overtime_request_returned_notification_failed", { request_id: args.requestId, error: serializeError(error) });
+  }
+}
+
+export async function notifyOvertimeClaimSubmitted(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  approverName: string | null;
+  approverEmail: string | null;
+  title: string;
+  approverId?: string | null;
+  stepOrder?: number;
+  routeVersion?: number;
+}) {
+  if (!args.approverEmail) return;
+  try {
+    let emailActionLine = "";
+    if (args.approverId && args.stepOrder !== undefined) {
+      try {
+        const token = await createEmailActionToken({
+          userId: args.approverId, docType: "OVERTIME_CLAIM", docId: args.claimId, stepOrder: args.stepOrder, routeVersion: args.routeVersion
+        });
+        emailActionLine = `EmailAction: ${buildEmailActionUrl(token)}\n`;
+      } catch (e) {
+        logger.warn("overtime_claim_email_action_token_failed", { claim_id: args.claimId, error: serializeError(e) });
+      }
+    }
+    const body = [
+      header("OVERTIME CLAIM — REVIEW REQUIRED"),
+      ``,
+      `Hello ${args.approverName || ""},`,
+      ``,
+      `An overtime claim requires your review as ${args.title}.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
+      ``,
+      emailActionLine,
+      `Please log in to review this claim.`,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.approverEmail], subject: `[Review Required] Overtime claim ${args.claimNo} from ${args.employeeName || "an employee"}`, text: body });
+  } catch (error) {
+    logger.warn("overtime_claim_submitted_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyOvertimeClaimReturned(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  reason: string;
+  action: "REJECTED" | "RETURNED";
+}) {
+  if (!args.employeeEmail) return;
+  const label = args.action === "REJECTED" ? "rejected" : "sent back for correction";
+  try {
+    const body = [
+      header(`OVERTIME CLAIM ${args.action}`),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your overtime claim ${args.claimNo} has been ${label}.`,
+      ``,
+      detailBlock([["Reason", args.reason]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Overtime] Your claim ${args.claimNo} was ${label}`, text: body });
+  } catch (error) {
+    logger.warn("overtime_claim_returned_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyOvertimeClaimFinanceReady(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+}) {
+  try {
+    const recipients = await getCompensationFinanceRecipients();
+    if (!recipients.length) return;
+    const body = [
+      header("OVERTIME CLAIM READY FOR FINANCE"),
+      ``,
+      `An overtime claim is ready for finance processing.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: recipients.map((r) => r.email), subject: `[Finance] Overtime claim ${args.claimNo} ready for processing`, text: body });
+  } catch (error) {
+    logger.warn("overtime_claim_finance_ready_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyOvertimeClaimProcessed(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  amount: number;
+}) {
+  if (!args.employeeEmail) return;
+  try {
+    const body = [
+      header("OVERTIME CLAIM PROCESSED"),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your overtime claim has been processed by Finance and sent for settlement.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Amount", fmt(args.amount, "LSL")]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Overtime] Claim ${args.claimNo} processed and sent for settlement`, text: body });
+  } catch (error) {
+    logger.warn("overtime_claim_processed_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyOvertimeClaimSettled(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  amount: number;
+  preference: string | null;
+}) {
+  if (!args.employeeEmail) return;
+  const isDays = String(args.preference || "").toUpperCase() === "DAYS";
+  try {
+    const body = [
+      header("OVERTIME CLAIM SETTLED"),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      isDays ? `Your overtime claim has been settled as time credit.` : `Your overtime claim payment has been completed.`,
+      ``,
+      detailBlock(isDays ? [["Claim No.", args.claimNo]] : [["Claim No.", args.claimNo], ["Amount", fmt(args.amount, "LSL")]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Overtime] Claim ${args.claimNo} has been settled`, text: body });
+  } catch (error) {
+    logger.warn("overtime_claim_settled_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyDelegationAssigned(args: {
+  delegationId: string;
+  managerName: string | null;
+  delegateName: string | null;
+  delegateEmail: string | null;
+  teamName: string | null;
+  fromDate: string | null;
+  toDate: string | null;
+}) {
+  if (!args.delegateEmail) return;
+  const period = args.fromDate && args.toDate ? `${args.fromDate} to ${args.toDate}` : args.fromDate ? `from ${args.fromDate}` : "until further notice";
+  try {
+    const body = [
+      header("STANDBY ROSTER DELEGATION"),
+      ``,
+      `Hello ${args.delegateName || ""},`,
+      ``,
+      `${args.managerName || "Your Section Manager"} has granted you authority to create and maintain the standby roster for ${args.teamName || "their Section"}.`,
+      ``,
+      detailBlock([["Section", args.teamName], ["Period", period]]),
+      ``,
+      `You can create and edit rosters for this Section, but publishing remains with the Section Manager.`,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.delegateEmail], subject: `[Standby] You can now create rosters for ${args.teamName || "a Section"}`, text: body });
+  } catch (error) {
+    logger.warn("standby_delegation_assigned_notification_failed", { delegation_id: args.delegationId, error: serializeError(error) });
+  }
+}
+
+// ─── Attendance — connects into the same compensation-finance authority ─────
+// (sections.is_compensation_finance / getCompensationFinanceRecipients) as
+// the Standby and Overtime finance queues above.
+
+export async function notifyAttendanceFinanceReady(args: {
+  recordId: string;
+  employeeName: string | null;
+  month: number;
+  year: number;
+}) {
+  try {
+    const recipients = await getCompensationFinanceRecipients();
+    if (!recipients.length) return;
+    const body = [
+      header("ATTENDANCE RECORD READY FOR FINANCE"),
+      ``,
+      `An attendance record is ready for finance review.`,
+      ``,
+      detailBlock([["Employee", args.employeeName], ["Period", `${args.month}/${args.year}`]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: recipients.map((r) => r.email), subject: `[Finance] Attendance record ready for review — ${args.employeeName || "employee"}`, text: body });
+  } catch (error) {
+    logger.warn("attendance_finance_ready_notification_failed", { record_id: args.recordId, error: serializeError(error) });
+  }
+}
+
+export async function notifyAttendanceFinanceProcessed(args: {
+  recordId: string;
+  submitterName: string | null;
+  submitterEmail: string | null;
+  employeeName: string | null;
+  month: number;
+  year: number;
+}) {
+  if (!args.submitterEmail) return;
+  try {
+    const body = [
+      header("ATTENDANCE RECORD PROCESSED"),
+      ``,
+      `Hello ${args.submitterName || ""},`,
+      ``,
+      `The attendance record for ${args.employeeName || "the employee"} has been reviewed and processed by Finance.`,
+      ``,
+      detailBlock([["Period", `${args.month}/${args.year}`]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.submitterEmail], subject: `[Attendance] Record for ${args.employeeName || "employee"} processed by Finance`, text: body });
+  } catch (error) {
+    logger.warn("attendance_finance_processed_notification_failed", { record_id: args.recordId, error: serializeError(error) });
+  }
+}
+
+export async function notifyAttendanceFinanceReturned(args: {
+  recordId: string;
+  submitterName: string | null;
+  submitterEmail: string | null;
+  employeeName: string | null;
+  month: number;
+  year: number;
+  reason: string;
+}) {
+  if (!args.submitterEmail) return;
+  try {
+    const body = [
+      header("ATTENDANCE RECORD RETURNED"),
+      ``,
+      `Hello ${args.submitterName || ""},`,
+      ``,
+      `The attendance record for ${args.employeeName || "the employee"} has been sent back by Finance for correction.`,
+      ``,
+      detailBlock([["Period", `${args.month}/${args.year}`], ["Reason", args.reason]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.submitterEmail], subject: `[Attendance] Record for ${args.employeeName || "employee"} sent back for correction`, text: body });
+  } catch (error) {
+    logger.warn("attendance_finance_returned_notification_failed", { record_id: args.recordId, error: serializeError(error) });
   }
 }

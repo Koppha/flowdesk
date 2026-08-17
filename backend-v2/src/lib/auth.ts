@@ -5,6 +5,7 @@ import { env } from "../config/env.js";
 import { forbidden, unauthorized } from "./errors.js";
 import { query } from "./db.js";
 import { getUserGroups } from "./permissionGroups.js";
+import { isCompensationFinanceUser } from "./financeAuthority.js";
 
 export type Role =
   | "EMPLOYEE"
@@ -85,16 +86,19 @@ export function requireRole(roles: Role[]) {
   };
 }
 
-// Finance approval authority now comes from org structure (Department: Finance)
-// rather than a dedicated FINANCE role.
-export function isFinanceDept(department?: string | null): boolean {
-  return String(department || "").trim().toLowerCase() === "finance";
-}
-
-export function requireFinance(req: AuthedRequest, _res: Response, next: NextFunction) {
+// Finance approval authority comes from the admin-assigned is_compensation_finance
+// flag on a user's section (see financeAuthority.ts) - not from a free-text
+// department name match, which broke for any company whose finance unit
+// isn't literally named "Finance" (e.g. SEFS's "Finance Operations").
+export async function requireFinance(req: AuthedRequest, _res: Response, next: NextFunction) {
   if (!req.user) return next(unauthorized());
-  if (req.user.role !== "ADMIN" && !isFinanceDept(req.user.department)) return next(forbidden());
-  return next();
+  try {
+    const allowed = await isCompensationFinanceUser(req);
+    if (!allowed) return next(forbidden());
+    return next();
+  } catch (err) {
+    return next(err);
+  }
 }
 
 // Generic admin-configurable feature-permission check: ADMIN always passes;

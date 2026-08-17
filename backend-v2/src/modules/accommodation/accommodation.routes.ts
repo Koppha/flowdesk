@@ -3,7 +3,8 @@ import path from "path";
 import multer from "multer";
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, isFinanceDept, requireAuth, requireFinance, requireRole } from "../../lib/auth.js";
+import { AuthedRequest, requireAuth, requireFinance, requireRole } from "../../lib/auth.js";
+import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
@@ -232,8 +233,8 @@ async function getAccommodationById(id: string) {
   return { ...row, quotations };
 }
 
-function canViewAccommodation(args: { role: string; department?: string | null; userId: string; row: any }) {
-  if (args.role === "ADMIN" || isFinanceDept(args.department)) return true;
+async function canViewAccommodation(args: { role: string; sectionId?: string | null; userId: string; row: any }) {
+  if (args.role === "ADMIN" || (await isCompensationFinanceSection(args.sectionId))) return true;
   if (args.row.created_by_id === args.userId) return true;
   if (args.row.requester_id === args.userId) return true;
   return false;
@@ -248,7 +249,7 @@ accommodationRouter.get("/", async (req: AuthedRequest, res, next) => {
     if (mine) {
       params.push(req.user!.userId);
       where = "WHERE acc.created_by_id=$1 OR acc.requester_id=$1";
-    } else if (req.user!.role === "ADMIN" || isFinanceDept(req.user!.department)) {
+    } else if (req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId))) {
       where = "";
     } else {
       // Anyone who booked it (e.g. HR Operations staff, regardless of role)
@@ -295,7 +296,7 @@ accommodationRouter.post("/", async (req: AuthedRequest, res, next) => {
       const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "ADVANCE_REQUEST");
       let currentStep: ChainStep | undefined;
       for (const idx of group.indices) {
-        if (await canApproveStep(chain[idx], req.user!.userId, role, delegatedManagerIds, req.user!.department)) { currentStep = chain[idx]; break; }
+        if (await canApproveStep(chain[idx], req.user!.userId, role, delegatedManagerIds, req.user!.sectionId)) { currentStep = chain[idx]; break; }
       }
       if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
     }
@@ -468,7 +469,7 @@ accommodationRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
     const row = await getAccommodationById(req.params.id);
     if (!row) throw notFound();
-    if (!canViewAccommodation({ role: req.user!.role, department: req.user!.department, userId: req.user!.userId, row })) throw forbidden();
+    if (!(await canViewAccommodation({ role: req.user!.role, sectionId: req.user!.sectionId, userId: req.user!.userId, row }))) throw forbidden();
     const isOwner = row.requester_id === req.user!.userId || row.created_by_id === req.user!.userId;
     const can_view_pdf = await canAccessPdf({ requestType: "ACCOMMODATION_REQUEST", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" });
     return res.json({ ...row, can_view_pdf });
@@ -481,7 +482,7 @@ accommodationRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
   try {
     const row = await getAccommodationById(req.params.id);
     if (!row) throw notFound();
-    if (!canViewAccommodation({ role: req.user!.role, department: req.user!.department, userId: req.user!.userId, row })) throw forbidden();
+    if (!(await canViewAccommodation({ role: req.user!.role, sectionId: req.user!.sectionId, userId: req.user!.userId, row }))) throw forbidden();
     const isOwner = row.requester_id === req.user!.userId || row.created_by_id === req.user!.userId;
     if (!(await canAccessPdf({ requestType: "ACCOMMODATION_REQUEST", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" }))) {
       throw forbidden();

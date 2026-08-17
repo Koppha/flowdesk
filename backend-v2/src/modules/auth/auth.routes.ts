@@ -151,7 +151,11 @@ const CreateDelegationSchema = z.object({
   reason: z.string().trim().max(200).optional(),
   comments: z.string().trim().max(2000).optional(),
   // Empty/omitted means "all request types" — the original, unscoped behavior.
-  request_types: z.array(z.string()).optional()
+  request_types: z.array(z.string()).optional(),
+  // Only meaningful (and required) when request_types includes
+  // "STANDBY_ROSTER" — scopes the delegation to one Section (team) instead
+  // of the delegator's whole department, see the eligibility branch below.
+  team_id: z.string().uuid().optional()
 });
 
 const EndDelegationSchema = z.object({ reason: z.string().trim().max(1000).optional() });
@@ -346,6 +350,12 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
     );
     let user = users[0] ?? null;
 
+    // AD_FALLBACK_LOCAL=false means "AD is the sole source of truth" — that
+    // must also hold when AD is reachable and explicitly rejects the
+    // credentials, not just when the AD call itself errors (the pre-existing
+    // check below). Set inside the try/catch, checked after it, so the
+    // resulting throw isn't accidentally swallowed by the adjacent catch.
+    let adExplicitlyRejected = false;
     if (env.AD_AUTH_ENABLED) {
       try {
         const ad = await authenticateAgainstAd({ email: loginUser, password });
@@ -408,10 +418,12 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
           return res.json(toAuthResponse(user, loginDisplay));
         }
         logger.warn("auth_login_failed_ad_false", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
+        adExplicitlyRejected = true;
       } catch (adErr) {
         logger.warn("auth_login_failed_ad_error_fallback", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null, error: serializeError(adErr) });
         if (!env.AD_FALLBACK_LOCAL) throw unauthorized("AD authentication unavailable");
       }
+      if (adExplicitlyRejected && !env.AD_FALLBACK_LOCAL) throw unauthorized("Invalid credentials");
     }
 
     if (!user) {
@@ -473,12 +485,15 @@ authRouter.get("/me", async (req: AuthedRequest, res, next) => {
         profile_completed: boolean | null;
         is_active: boolean;
         favorite_pages: string[] | null;
+        phone: string | null;
+        is_compensation_finance: boolean | null;
       }>(
         `SELECT u.id, u.email, u.role, u.full_name, u.employee_no, u.department, u.title,
                 u.division_id, dv.name AS division_name,
                 u.section_id, s.name AS section_name,
                 u.team_id, t.name AS team_name,
-                u.employment_type, u.profile_completed, u.is_active, u.favorite_pages
+                u.employment_type, u.profile_completed, u.is_active, u.favorite_pages, u.phone,
+                s.is_compensation_finance
            FROM users u
            LEFT JOIN divisions dv ON dv.id = u.division_id
            LEFT JOIN sections s ON s.id = u.section_id
@@ -489,7 +504,16 @@ authRouter.get("/me", async (req: AuthedRequest, res, next) => {
     )[0];
     if (!user) throw notFound();
     const groups = await getUserGroups(user.id);
-    return res.json({ ...user, favorite_pages: user.favorite_pages ?? [], groups, profile_completed: isProfileComplete(user) });
+    return res.json({
+      ...user,
+      // Same authority Standby/Overtime gate their Finance queues on
+      // (sections.is_compensation_finance), surfaced here once so other
+      // modules (e.g. Attendance) don't need a bespoke access-check endpoint.
+      is_compensation_finance: user.role === "ADMIN" || Boolean(user.is_compensation_finance),
+      favorite_pages: user.favorite_pages ?? [],
+      groups,
+      profile_completed: isProfileComplete(user)
+    });
   } catch (err) {
     return next(err);
   }
@@ -511,6 +535,23 @@ authRouter.patch("/me/favorites", async (req: AuthedRequest, res, next) => {
   }
 });
 
+const ProfileContactSchema = z.object({ phone: z.string().trim().max(30).optional() });
+
+// PATCH /auth/me/profile — self-service update of contact fields not
+// covered by the onboarding wizard (e.g. phone), used so features like the
+// standby "who's on standby" contact list have somewhere for that data
+// to come from.
+authRouter.patch("/me/profile", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = ProfileContactSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid profile payload", parsed.error.flatten());
+    await query(`UPDATE users SET phone=$1 WHERE id=$2`, [parsed.data.phone?.trim() || null, req.user!.userId]);
+    return res.json({ ok: true, phone: parsed.data.phone?.trim() || null });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 const VerifyPasswordSchema = z.object({ password: z.string().min(1) });
 
 authRouter.post("/verify-password", async (req: AuthedRequest, res, next) => {
@@ -524,14 +565,19 @@ authRouter.post("/verify-password", async (req: AuthedRequest, res, next) => {
     // AD-authenticated users have a synthetic, unknowable local password_hash
     // (see the login route above) — their real password is whatever they log
     // in with via AD, so verify against AD first, same as login does.
+    let adExplicitlyRejected = false;
     if (env.AD_AUTH_ENABLED) {
       try {
         const ad = await authenticateAgainstAd({ email: user.email.split("@")[0], password });
         if (ad.authenticated) return res.json({ verified: true });
+        adExplicitlyRejected = true;
       } catch (adErr) {
         logger.warn("verify_password_ad_error_fallback", { user_id: req.user!.userId, error: serializeError(adErr) });
         if (!env.AD_FALLBACK_LOCAL) throw unauthorized("AD authentication unavailable");
       }
+      // Same fallback rule as login — explicit AD rejection must also be
+      // blocked when AD_FALLBACK_LOCAL=false, not just an AD-call error.
+      if (adExplicitlyRejected && !env.AD_FALLBACK_LOCAL) throw unauthorized("Invalid password");
     }
 
     const ok = await comparePassword(password, user.password_hash);
@@ -1054,14 +1100,36 @@ authRouter.post(["/users/:id/department", "/users/:id/group"], requireRole(["ADM
 // account's role.
 async function isDelegationEligible(userId: string): Promise<boolean> {
   const rows = await query<{ eligible: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1
-         FROM workflow_steps ws
-         JOIN workflows w ON w.id = ws.workflow_id
-        WHERE ws.assigned_user_id = $1
-          AND ws.allow_delegation = true
-          AND ws.is_active = true
-          AND w.status = 'ACTIVE'
+    `SELECT (
+       EXISTS (
+         SELECT 1
+           FROM workflow_steps ws
+           JOIN workflows w ON w.id = ws.workflow_id
+          WHERE ws.assigned_user_id = $1
+            AND ws.allow_delegation = true
+            AND ws.is_active = true
+            AND w.status = 'ACTIVE'
+       )
+       OR EXISTS (
+         -- Standby's employee-built Approval Route lives outside the
+         -- Workflow Builder's workflow_steps table entirely, so an assigned
+         -- standby approver needs its own eligibility branch here.
+         SELECT 1 FROM standby_approval_steps sas
+           JOIN standby_claims sc ON sc.id = sas.claim_id
+          WHERE sas.approver_user_id = $1 AND sas.status = 'PENDING' AND sc.status = 'SUBMITTED'
+       )
+       OR EXISTS (
+         -- Same for Overtime's employee-built Approval Routes (requests and
+         -- claims), rebuilt this session on the same pattern as Standby.
+         SELECT 1 FROM overtime_request_approval_steps oras
+           JOIN overtime_requests orq ON orq.id = oras.request_id
+          WHERE oras.approver_user_id = $1 AND oras.status = 'PENDING' AND orq.status = 'SUBMITTED'
+       )
+       OR EXISTS (
+         SELECT 1 FROM overtime_claim_approval_steps ocas
+           JOIN overtime_claims oc ON oc.id = ocas.claim_id
+          WHERE ocas.approver_user_id = $1 AND ocas.status = 'PENDING' AND oc.status = 'SUBMITTED'
+       )
      ) AS eligible`,
     [userId]
   );
@@ -1084,8 +1152,23 @@ authRouter.get("/delegations/eligibility", async (req: AuthedRequest, res, next)
 authRouter.get("/delegations", async (req: AuthedRequest, res, next) => {
   try {
     const isAdmin = req.user!.role === "ADMIN";
-    const condition = isAdmin ? `` : `WHERE md.manager_id = $1`;
-    const params = isAdmin ? [] : [req.user!.userId];
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (!isAdmin) {
+      params.push(req.user!.userId);
+      filters.push(`md.manager_id = $${params.length}`);
+    }
+    const teamId = String(req.query.team_id || "").trim();
+    if (teamId) {
+      params.push(teamId);
+      filters.push(`md.team_id = $${params.length}`);
+    }
+    const requestType = String(req.query.request_type || "").trim();
+    if (requestType) {
+      params.push(requestType);
+      filters.push(`EXISTS (SELECT 1 FROM delegation_request_types drt WHERE drt.delegation_id = md.id AND drt.request_type_code = $${params.length})`);
+    }
+    const condition = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
     const rows = await query<any>(
       `SELECT md.id,
               md.manager_id,
@@ -1093,7 +1176,11 @@ authRouter.get("/delegations", async (req: AuthedRequest, res, next) => {
               manager.department AS manager_department,
               md.delegate_id,
               delegate.full_name AS delegate_name,
+              delegate.employee_no AS delegate_employee_no,
+              delegate.title AS delegate_title,
               md.department,
+              md.team_id,
+              team.name AS team_name,
               md.from_date,
               md.to_date,
               md.active,
@@ -1118,6 +1205,7 @@ authRouter.get("/delegations", async (req: AuthedRequest, res, next) => {
          JOIN users delegate ON delegate.id = md.delegate_id
          LEFT JOIN users creator ON creator.id = md.created_by
          LEFT JOIN users ender ON ender.id = md.ended_by
+         LEFT JOIN teams team ON team.id = md.team_id
          ${condition}
         ORDER BY md.created_at DESC`,
       params
@@ -1136,45 +1224,91 @@ authRouter.post("/delegations", async (req: AuthedRequest, res, next) => {
     const managerId = req.user!.role !== "ADMIN" ? req.user!.userId : parsed.data.manager_id;
     if (!managerId) throw badRequest("Manager is required for delegation");
 
-    const users = await query<{ id: string; role: string; department: string | null; section_id: string | null; full_name: string | null; email: string }>(
-      `SELECT id, role, department, section_id, full_name, email FROM users WHERE id IN ($1, $2)`,
+    const isStandbyRoster = Boolean(parsed.data.request_types?.includes("STANDBY_ROSTER"));
+    const isStandbyClaim = Boolean(parsed.data.request_types?.includes("STANDBY_CLAIM"));
+    const isOvertimeApproval = Boolean(parsed.data.request_types?.some((t) => t === "OVERTIME_REQUEST" || t === "OVERTIME_CLAIM"));
+
+    const users = await query<{ id: string; role: string; department: string | null; section_id: string | null; team_id: string | null; full_name: string | null; email: string }>(
+      `SELECT id, role, department, section_id, team_id, full_name, email FROM users WHERE id IN ($1, $2)`,
       [managerId, parsed.data.delegate_id]
     );
     const manager = users.find((user) => user.id === managerId);
     const delegate = users.find((user) => user.id === parsed.data.delegate_id);
-    // A manager-tier role can always delegate; anyone else must actually be
-    // assigned to a workflow step with delegation allowed (e.g. an
-    // EMPLOYEE-role payment officer on a MARK_PAID step) - role alone isn't
-    // the real eligibility rule, the step assignment is.
-    const managerRoleEligible = !!manager && ["MANAGER", "HOD", "EXCO", "CEO"].includes(manager.role);
-    if (!manager || (!managerRoleEligible && !(await isDelegationEligible(manager.id)))) {
-      throw badRequest("User must be a Manager, Exco member, CEO, or assigned to a workflow step that allows delegation");
-    }
+    if (!manager) throw badRequest("Manager not found");
     if (!delegate) throw badRequest("Delegate user not found");
-    if (delegate.id === manager.id) throw badRequest("Delegate cannot be the same user");
+    if (delegate.id === managerId) throw badRequest("Delegate cannot be the same user");
 
-    // CEO is an org-wide role with no single department, so any active delegate
-    // is acceptable; everyone else's delegate must share the manager's
-    // department or section.
-    let managerDept = String(manager.department || "").trim();
-    if (manager.role !== "CEO") {
-      const delegateDept = String(delegate.department || "").trim();
-      const sameDept = Boolean(managerDept) && managerDept === delegateDept;
-      const sameSection = Boolean(manager.section_id) && manager.section_id === delegate.section_id;
-      if (!sameDept && !sameSection) {
-        throw badRequest("Delegate must be in the same department or section as the manager");
+    let managerDept = String(manager?.department || "").trim();
+    let team: { id: string; name: string } | null = null;
+
+    if (isStandbyRoster) {
+      // Roster-creation delegation: scoped to one Section (team) rather than
+      // department-wide approval authority, so eligibility is "leads this
+      // Section" instead of holding a manager-tier role, and the delegate
+      // must be an active member of that same Section rather than sharing
+      // the delegator's department/section.
+      if (!parsed.data.team_id) throw badRequest("team_id is required for a STANDBY_ROSTER delegation");
+      const teamRows = await query<{ id: string; name: string; leader_user_id: string | null }>(
+        `SELECT id, name, leader_user_id FROM teams WHERE id=$1`,
+        [parsed.data.team_id]
+      );
+      if (!teamRows[0]) throw badRequest("Section not found");
+      if (req.user!.role !== "ADMIN" && teamRows[0].leader_user_id !== managerId) {
+        throw forbidden("Only the Section Manager can delegate roster creation for this Section");
+      }
+      team = { id: teamRows[0].id, name: teamRows[0].name };
+      if (delegate.team_id !== parsed.data.team_id) {
+        throw badRequest("The delegate must be an active member of this Section");
+      }
+      managerDept = team.name;
+    } else if (isStandbyClaim) {
+      // Standby claim-approval delegation: the "manager" here is whoever an
+      // employee named as an approver on their claim's Approval Route — any
+      // role, not just Manager/HOD/EXCO/CEO, and not tied to a workflow_steps
+      // row (standby's approval route is its own table, covered by
+      // isDelegationEligible's standby branch). No department/section
+      // restriction on the delegate since the original approver pick had none.
+      if (req.user!.role !== "ADMIN" && !(await isDelegationEligible(managerId))) {
+        throw badRequest("User must currently be the assigned approver on a pending standby claim to delegate that approval");
+      }
+    } else if (isOvertimeApproval) {
+      // Same reasoning as isStandbyClaim above, for Overtime's request- and
+      // claim-stage employee-built Approval Routes (own tables, covered by
+      // isDelegationEligible's overtime branches).
+      if (req.user!.role !== "ADMIN" && !(await isDelegationEligible(managerId))) {
+        throw badRequest("User must currently be the assigned approver on a pending overtime request or claim to delegate that approval");
       }
     } else {
-      managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
+      // A manager-tier role can always delegate; anyone else must actually be
+      // assigned to a workflow step with delegation allowed (e.g. an
+      // EMPLOYEE-role payment officer on a MARK_PAID step) - role alone isn't
+      // the real eligibility rule, the step assignment is.
+      const managerRoleEligible = ["MANAGER", "HOD", "EXCO", "CEO"].includes(manager.role);
+      if (!managerRoleEligible && !(await isDelegationEligible(manager.id))) {
+        throw badRequest("User must be a Manager, Exco member, CEO, or assigned to a workflow step that allows delegation");
+      }
+      // CEO is an org-wide role with no single department, so any active delegate
+      // is acceptable; everyone else's delegate must share the manager's
+      // department or section.
+      if (manager.role !== "CEO") {
+        const delegateDept = String(delegate.department || "").trim();
+        const sameDept = Boolean(managerDept) && managerDept === delegateDept;
+        const sameSection = Boolean(manager.section_id) && manager.section_id === delegate.section_id;
+        if (!sameDept && !sameSection) {
+          throw badRequest("Delegate must be in the same department or section as the manager");
+        }
+      } else {
+        managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
+      }
     }
 
     const reference = await generateDelegationReference();
     const createdSource = req.user!.role === "ADMIN" && managerId !== req.user!.userId ? "ADMIN" : "MANAGER_SELF_SERVICE";
     const rows = await query(
-      `INSERT INTO manager_delegations (id, manager_id, delegate_id, department, from_date, to_date, reference, reason, comments, created_by, created_source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING id, manager_id, delegate_id, department, from_date, to_date, active, reference, reason, comments, created_by, created_source, created_at, updated_at`,
-      [randomUUID(), manager.id, delegate.id, managerDept, parsed.data.from_date ?? null, parsed.data.to_date ?? null,
+      `INSERT INTO manager_delegations (id, manager_id, delegate_id, department, team_id, from_date, to_date, reference, reason, comments, created_by, created_source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id, manager_id, delegate_id, department, team_id, from_date, to_date, active, reference, reason, comments, created_by, created_source, created_at, updated_at`,
+      [randomUUID(), managerId, delegate.id, managerDept, team?.id ?? null, parsed.data.from_date ?? null, parsed.data.to_date ?? null,
        reference, parsed.data.reason ?? null, parsed.data.comments ?? null, req.user!.userId, createdSource]
     );
     const delegation = rows[0] as any;
@@ -1734,13 +1868,13 @@ authRouter.delete("/users/:id/permanent", requireRole(["ADMIN"]), async (req: Au
 
 const CreateManagerTypeSchema = z.object({
   name: z.string().trim().min(2, "Name is required"),
-  role: z.enum(["MANAGER", "HOD"]).default("MANAGER"),
+  role: z.enum(["MANAGER", "HOD", "EXCO"]).default("MANAGER"),
   description: z.string().trim().optional().nullable()
 });
 
 const UpdateManagerTypeSchema = z.object({
   name: z.string().trim().min(2, "Name is required"),
-  role: z.enum(["MANAGER", "HOD"]),
+  role: z.enum(["MANAGER", "HOD", "EXCO"]),
   description: z.string().trim().optional().nullable(),
   active: z.boolean().optional()
 });
@@ -1912,9 +2046,9 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   // "ADMIN or Finance dept"; Capture Inbox's only real actors are ADMIN and
   // whoever is in the Treasury & Financial Accounting team's ANY_ONE group.
   payments:              ["ADMIN", "Department: Finance"],
-  capture:               ["ADMIN", "Team: Treasury & Financial Accounting"],
+  capture:               ["ADMIN", "Section: Treasury & Financial Accounting"],
   clearance_status_report: [
-    "ADMIN", "Department: Finance", "Team: Treasury & Financial Accounting",
+    "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
     "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
   ],
   overtime_request:      ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],

@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { env } from "../config/env.js";
 import { query } from "./db.js";
 
-export type EmailActionDocType = "ADVANCE" | "CLAIM" | "CUSTOM_REQUEST";
+export type EmailActionDocType = "ADVANCE" | "CLAIM" | "CUSTOM_REQUEST" | "OVERTIME_REQUEST" | "OVERTIME_CLAIM" | "STANDBY_CLAIM";
 
 export const EMAIL_ACTION_PURPOSE = "EMAIL_ACTION";
 
@@ -19,11 +19,15 @@ export async function createEmailActionToken(args: {
   docType: EmailActionDocType;
   docId: string;
   stepOrder: number;
+  // Overtime/Standby's approval-step tables are keyed by (doc_id, route_version,
+  // step_order) - see the comment on the email_action_tokens table. Defaults to
+  // 0, which is also what ADVANCE/CLAIM/CUSTOM_REQUEST always pass implicitly.
+  routeVersion?: number;
 }): Promise<string> {
   const jti = randomUUID();
   await query(
-    `INSERT INTO email_action_tokens (jti, user_id, doc_type, doc_id, step_order) VALUES ($1,$2,$3,$4,$5)`,
-    [jti, args.userId, args.docType, args.docId, args.stepOrder]
+    `INSERT INTO email_action_tokens (jti, user_id, doc_type, doc_id, step_order, route_version) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [jti, args.userId, args.docType, args.docId, args.stepOrder, args.routeVersion ?? 0]
   );
   return jwt.sign({ jti, purpose: EMAIL_ACTION_PURPOSE }, env.JWT_SECRET, { expiresIn: "7d" });
 }

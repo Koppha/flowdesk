@@ -1,6 +1,6 @@
 import { query } from "./db.js";
 import { getDepartmentLeadership } from "./departments.js";
-import { isFinanceDept } from "./auth.js";
+import { isCompensationFinanceSection } from "./financeAuthority.js";
 import { getUserGroups } from "./permissionGroups.js";
 import { normalizeWorkflowRouteCode } from "./workflowRouting.js";
 import type { AdvanceStatus } from "../modules/advances/advances.types.js";
@@ -339,7 +339,14 @@ export function chainStepToStatus(chain: ChainStep[], stepIndex: number): Advanc
 
   switch (step.position_type_code) {
     case "MANAGER":      return "SUBMITTED";
-    case "HOD":           return "COUNTERSIGNED";
+    // HOD/EXCO/CEO steps all come after the initial Manager step, so they
+    // share the "COUNTERSIGNED" bucket rather than EXCO/CEO falling through
+    // to the default and looking identical to a request that was *just*
+    // submitted (AdvanceStatus is a small closed enum — there's no separate
+    // bucket per position, only "how far along" it roughly is).
+    case "HOD":
+    case "EXCO":
+    case "CEO":           return "COUNTERSIGNED";
     case "FINANCE":      return "HR_OFFICER";
     default:             return "SUBMITTED";
   }
@@ -353,7 +360,7 @@ export async function canApproveStep(
   userId: string,
   userRole: string,
   delegatedManagerIds?: string[] | null,
-  userDepartment?: string | null
+  userSectionId?: string | null
 ): Promise<boolean> {
   // ANY_ONE steps (e.g. "Team: X", "Section: X", or "Department: X") can be
   // actioned by any member of the named permission group, regardless of who
@@ -380,9 +387,11 @@ export async function canApproveStep(
     return false;
   }
   // No specific approver resolved via org structure — FINANCE is based on
-  // department membership (Department: Finance); everything else has no
-  // role-based fallback. A step with no org-structure approver simply has
-  // no one who can act on it until it's assigned a person or department.
-  if (step.position_type_code === "FINANCE") return isFinanceDept(userDepartment);
+  // the admin-assigned is_compensation_finance flag on the user's section
+  // (see financeAuthority.ts), not a free-text department name; everything
+  // else has no role-based fallback. A step with no org-structure approver
+  // simply has no one who can act on it until it's assigned a person or
+  // department.
+  if (step.position_type_code === "FINANCE") return isCompensationFinanceSection(userSectionId);
   return false;
 }

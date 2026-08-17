@@ -6,6 +6,8 @@ import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canCreateAdvanceOnBehalf, getUserAccountState, isProfileComplete } from "../../lib/userProfile.js";
 import { getUserOrgPath } from "../../lib/departments.js";
+import { isCompensationFinanceUser } from "../../lib/financeAuthority.js";
+import { notifyAttendanceFinanceReady, notifyAttendanceFinanceProcessed, notifyAttendanceFinanceReturned } from "../../lib/notifications.js";
 
 const DayCodeSchema = z.object({
   day: z.coerce.number().int().min(1).max(31),
@@ -66,6 +68,7 @@ attendanceRouter.use(requireAuth);
 attendanceRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const mine = req.query.mine !== "false";
+    if (!mine && req.user!.role !== "ADMIN") throw forbidden("Only admin can list all attendance records");
     const rows = mine
       ? await query(
           `SELECT ar.*, u.full_name AS employee_name, u.employee_no
@@ -112,7 +115,22 @@ attendanceRouter.post("/", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = AttendanceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid attendance payload", parsed.error.flatten());
-    await ensureAttendancePermissions(req.user!.userId, parsed.data.employee_id);
+    const employee = await ensureAttendancePermissions(req.user!.userId, parsed.data.employee_id);
+
+    // This is an upsert (ON CONFLICT below) keyed on (employee_id, month,
+    // year) — check ownership/status against any existing row for that key
+    // up front, the same way PUT /:id does by id, so a user who isn't the
+    // original compiled_by_id can't silently overwrite someone else's
+    // record, and Finance-processed records can't be edited back to DRAFT
+    // out from under a completed review.
+    const existingForKey = (await query<{ compiled_by_id: string; status: string }>(
+      `SELECT compiled_by_id, status FROM attendance_records WHERE employee_id=$1 AND month=$2 AND year=$3`,
+      [parsed.data.employee_id, parsed.data.month, parsed.data.year]
+    ))[0];
+    if (existingForKey) {
+      if (existingForKey.compiled_by_id !== req.user!.userId && req.user!.role !== "ADMIN") throw forbidden();
+      if (existingForKey.status === "FINANCE_PROCESSED") throw badRequest("This record has already been processed by Finance and can no longer be edited");
+    }
     // Auto-fill division/section from user's org profile if not provided
     let division = parsed.data.division ?? null;
     let sectionName = parsed.data.section_name ?? null;
@@ -170,6 +188,9 @@ attendanceRouter.post("/", async (req: AuthedRequest, res, next) => {
         parsed.data.status
       ]
     );
+    if (parsed.data.status === "SUBMITTED") {
+      void notifyAttendanceFinanceReady({ recordId: rows[0].id, employeeName: employee.full_name, month: parsed.data.month, year: parsed.data.year });
+    }
     return res.status(201).json({ id: rows[0].id });
   } catch (err) {
     return next(err);
@@ -180,10 +201,11 @@ attendanceRouter.put("/:id", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = AttendanceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid attendance payload", parsed.error.flatten());
-    const existing = (await query<{ compiled_by_id: string; employee_id: string }>(`SELECT compiled_by_id, employee_id FROM attendance_records WHERE id=$1`, [req.params.id]))[0];
+    const existing = (await query<{ compiled_by_id: string; employee_id: string; status: string }>(`SELECT compiled_by_id, employee_id, status FROM attendance_records WHERE id=$1`, [req.params.id]))[0];
     if (!existing) throw notFound();
     if (existing.compiled_by_id !== req.user!.userId && req.user!.role !== "ADMIN") throw forbidden();
-    await ensureAttendancePermissions(req.user!.userId, parsed.data.employee_id);
+    if (existing.status === "FINANCE_PROCESSED") throw badRequest("This record has already been processed by Finance and can no longer be edited");
+    const employee = await ensureAttendancePermissions(req.user!.userId, parsed.data.employee_id);
     const totals = summarizeDayCodes(parsed.data.day_codes);
     await query(
       `UPDATE attendance_records
@@ -229,6 +251,108 @@ attendanceRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         parsed.data.status
       ]
     );
+    if (parsed.data.status === "SUBMITTED") {
+      void notifyAttendanceFinanceReady({ recordId: req.params.id, employeeName: employee.full_name, month: parsed.data.month, year: parsed.data.year });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Finance — reuses the same compensation-finance authority
+// (isCompensationFinanceUser / sections.is_compensation_finance) as the
+// Standby and Overtime Finance queues.
+// ---------------------------------------------------------------------------
+
+attendanceRouter.get("/finance/queue", async (req: AuthedRequest, res, next) => {
+  try {
+    if (!(await isCompensationFinanceUser(req))) throw forbidden();
+    const rows = await query(
+      `SELECT ar.*, u.full_name AS employee_name, u.employee_no
+         FROM attendance_records ar
+         JOIN users u ON u.id = ar.employee_id
+        WHERE ar.status='SUBMITTED'
+        ORDER BY ar.updated_at`
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+attendanceRouter.post("/:id/finance-process", async (req: AuthedRequest, res, next) => {
+  try {
+    if (!(await isCompensationFinanceUser(req))) throw forbidden();
+    const body = z.object({ comments: z.string().trim().optional() }).safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid payload", body.error.flatten());
+    const record = (
+      await query<any>(
+        `SELECT ar.*, u.full_name AS employee_name, submitter.full_name AS submitter_name, submitter.email AS submitter_email
+           FROM attendance_records ar
+           JOIN users u ON u.id = ar.employee_id
+           JOIN users submitter ON submitter.id = ar.compiled_by_id
+          WHERE ar.id=$1`,
+        [req.params.id]
+      )
+    )[0];
+    if (!record) throw notFound();
+    if (record.status !== "SUBMITTED") throw badRequest("Record is not awaiting Finance review");
+
+    await query(
+      `UPDATE attendance_records
+          SET status='FINANCE_PROCESSED', finance_processed_by_id=$2, finance_processed_at=now(), finance_comments=$3, updated_at=now()
+        WHERE id=$1`,
+      [req.params.id, req.user!.userId, body.data.comments || null]
+    );
+
+    void notifyAttendanceFinanceProcessed({
+      recordId: req.params.id,
+      submitterName: record.submitter_name,
+      submitterEmail: record.submitter_email,
+      employeeName: record.employee_name,
+      month: record.month,
+      year: record.year
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+attendanceRouter.post("/:id/finance-return", async (req: AuthedRequest, res, next) => {
+  try {
+    if (!(await isCompensationFinanceUser(req))) throw forbidden();
+    const body = z.object({ comments: z.string().trim().min(1, "A reason is required") }).safeParse(req.body);
+    if (!body.success) throw badRequest("A reason is required to return a record");
+    const record = (
+      await query<any>(
+        `SELECT ar.*, u.full_name AS employee_name, submitter.full_name AS submitter_name, submitter.email AS submitter_email
+           FROM attendance_records ar
+           JOIN users u ON u.id = ar.employee_id
+           JOIN users submitter ON submitter.id = ar.compiled_by_id
+          WHERE ar.id=$1`,
+        [req.params.id]
+      )
+    )[0];
+    if (!record) throw notFound();
+    if (record.status !== "SUBMITTED") throw badRequest("Record is not with Finance");
+
+    await query(
+      `UPDATE attendance_records SET status='DRAFT', finance_comments=$2, updated_at=now() WHERE id=$1`,
+      [req.params.id, body.data.comments]
+    );
+
+    void notifyAttendanceFinanceReturned({
+      recordId: req.params.id,
+      submitterName: record.submitter_name,
+      submitterEmail: record.submitter_email,
+      employeeName: record.employee_name,
+      month: record.month,
+      year: record.year,
+      reason: body.data.comments
+    });
     return res.json({ ok: true });
   } catch (err) {
     return next(err);

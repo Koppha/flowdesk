@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import { z } from "zod";
+import { logger } from "../lib/logger.js";
 
 dotenv.config({ override: process.env.NODE_ENV !== "test" });
 
@@ -61,20 +62,26 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 
-// Guard against two easy-to-miss prod misconfigurations that don't fit the
+// Guard against two easy-to-miss misconfigurations that don't fit the
 // per-field zod schema above: an unset CORS_ORIGIN makes app.ts fall back to
 // reflecting any origin while still allowing credentials (any site could
 // make authenticated requests), and the default admin seed password is
-// public (this repo's own .env.example).
-if (env.NODE_ENV === "production") {
+// public (this repo's own .env.example). Checked regardless of NODE_ENV —
+// a real UAT/staging/prod box that's accidentally left on the default
+// NODE_ENV=development must not silently ship either — but only a hard
+// failure in "production" to keep zero-config local dev convenient.
+{
   const problems: string[] = [];
   if (!env.CORS_ORIGIN) {
-    problems.push("CORS_ORIGIN must be set in production (reflecting all origins with credentials enabled is unsafe)");
+    problems.push("CORS_ORIGIN is unset (reflecting all origins with credentials enabled is unsafe on any network-reachable deployment)");
   }
   if (env.ADMIN_SEED_PASSWORD === "pass123") {
-    problems.push("ADMIN_SEED_PASSWORD must be overridden in production (the default is public in .env.example)");
+    problems.push("ADMIN_SEED_PASSWORD is left at its default (the value is public in this repo's .env.example)");
   }
   if (problems.length > 0) {
-    throw new Error(`Invalid production environment: ${problems.join("; ")}`);
+    if (env.NODE_ENV === "production") {
+      throw new Error(`Invalid production environment: ${problems.join("; ")}`);
+    }
+    logger.warn("env_misconfiguration", { node_env: env.NODE_ENV, problems });
   }
 }
