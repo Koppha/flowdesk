@@ -23,6 +23,7 @@ import { customRequestsRouter } from "./modules/custom-requests/custom-requests.
 import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
+import { refundableRouter } from "./modules/refundable/refundable.routes.js";
 import { standbyRouter } from "./modules/standby/standby.routes.js";
 
 export function createApp() {
@@ -77,6 +78,7 @@ export function createApp() {
   app.use("/email-actions", emailActionsRouter);
   app.use("/pdf-templates", pdfTemplatesRouter);
   app.use("/deductions", deductionsRouter);
+  app.use("/refundable", refundableRouter);
   app.use("/ai", aiRouter);
 
   app.use(errorHandler);

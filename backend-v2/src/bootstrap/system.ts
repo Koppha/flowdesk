@@ -1616,6 +1616,13 @@ async function ensureDeductionsSchema() {
   // tracks the one-step "actioned" confirmation per claim.
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_at timestamptz`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS deducted_by_id uuid REFERENCES users(id)`);
+  // Refundable page mirrors Deductions for the opposite balance_amount sign
+  // (see refundable.routes.ts) - same one-step "actioned" confirmation, just
+  // tracked as its own column so a claim's deduction and refund history
+  // (which are mutually exclusive per claim, but kept separate for clarity)
+  // don't share one audit trail.
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS refunded_at timestamptz`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS refunded_by_id uuid REFERENCES users(id)`);
 }
 
 // Ensure core organizational structure sections exist (e.g., Treasury section

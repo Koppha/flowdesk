@@ -2042,6 +2042,7 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   advance_recovery_settings: ["ADMIN", "FINANCE"],
   manager_delegations:   ["ADMIN"],
   deductions:            ["ADMIN"],
+  refundable:            ["ADMIN"],
   // Preserve today's real behavior exactly: Payments was hardcoded to
   // "ADMIN or Finance dept"; Capture Inbox's only real actors are ADMIN and
   // whoever is in the Treasury & Financial Accounting team's ANY_ONE group.

@@ -487,6 +487,10 @@ export const api = {
   deductions: () => req("/deductions"),
   setDeductionActioned: (id: string, deducted: boolean) =>
     req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) }),
+  refundableAccess: () => req("/refundable/access"),
+  refundable: () => req("/refundable"),
+  setRefundableActioned: (id: string, refunded: boolean) =>
+    req(`/refundable/${id}/refunded`, { method: "PATCH", body: JSON.stringify({ refunded }) }),
 
   standbyDashboard: () => req("/standby/dashboard"),
   standbyTeams: () => req("/standby/teams"),
