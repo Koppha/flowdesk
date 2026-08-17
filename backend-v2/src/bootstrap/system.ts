@@ -1667,12 +1667,42 @@ async function ensureOrgStructureSections() {
   }
 }
 
+// Deactivates any current active reporting_lines row for employeeId and
+// writes a fresh one to managerId - a no-op if it's already correctly set.
+async function upsertReportingLine(employeeId: string, managerId: string, reason: string) {
+  const active = (await query<{ manager_id: string | null }>(
+    `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
+    [employeeId]
+  ))[0];
+  if (active && active.manager_id === managerId) return;
+
+  await query(
+    `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true`,
+    [employeeId]
+  );
+  await query(
+    `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, reason)
+     VALUES ($1, $2, $3, CURRENT_DATE, $4)`,
+    [randomUUID(), employeeId, managerId, reason]
+  );
+}
+
 // SEFS's EXCO Member (Moeketsi Mafereka - GM Sasai Econet Financial
-// Services) sits directly at Division level with no department underneath,
-// so /reporting-lines/auto-generate's per-department loop never reaches him
-// and he was left with no reporting manager. Wire him straight to the CEO,
-// same as every other EXCO member, idempotently on every startup so this
-// applies to UAT and prod alike without a one-off manual data fix in either.
+// Services) sits directly at Division level with no department underneath
+// him, above every SEFS department. /reporting-lines/auto-generate's
+// per-department loop never reaches him (he has no users.department to
+// match), and none of SEFS's departments had exco_user_id pointed at him
+// either, so nobody under him ever resolved a "Reports To" - not even
+// himself. Idempotently, on every startup (so this applies to UAT and prod
+// alike without a one-off manual data fix in either):
+//   1. Wire Mafereka -> CEO, same as any other EXCO member.
+//   2. Set every SEFS department's exco_user_id -> Mafereka, matching
+//      "all SEFS divisions report to him".
+//   3. Wire every active SEFS employee's reporting line the same way
+//      /reporting-lines/auto-generate would (HOD -> EXCO, MANAGER -> HOD or
+//      EXCO, everyone else -> MANAGER or HOD or EXCO), since the admin list
+//      view reads actual reporting_lines rows rather than falling back to
+//      department leadership on the fly.
 async function ensureSefsExcoReportsToCeo() {
   const mafereka = (await query<{ id: string }>(
     `SELECT id FROM users WHERE lower(email) = 'maferekam@etl.co.ls' AND is_active = true`
@@ -1684,19 +1714,35 @@ async function ensureSefsExcoReportsToCeo() {
   ))[0];
   if (!ceo) return;
 
-  const active = (await query<{ manager_id: string | null }>(
-    `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
-    [mafereka.id]
-  ))[0];
-  if (active && active.manager_id === ceo.id) return;
+  await upsertReportingLine(mafereka.id, ceo.id, "SEFS EXCO reports to CEO - auto-fixed for division-level org placement");
 
-  await query(
-    `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true`,
-    [mafereka.id]
+  const sefs = (await query<{ id: string }>(`SELECT id FROM divisions WHERE name = 'SEFS'`))[0];
+  if (!sefs) return;
+
+  const sefsDepartments = await query<{ name: string; hod_user_id: string | null; manager_user_id: string | null }>(
+    `SELECT name, hod_user_id, manager_user_id FROM departments WHERE division_id = $1`,
+    [sefs.id]
   );
-  await query(
-    `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, reason)
-     VALUES ($1, $2, $3, CURRENT_DATE, 'SEFS EXCO reports to CEO - auto-fixed for division-level org placement')`,
-    [randomUUID(), mafereka.id, ceo.id]
-  );
+
+  for (const dept of sefsDepartments) {
+    await query(`UPDATE departments SET exco_user_id = $1 WHERE name = $2`, [mafereka.id, dept.name]);
+
+    const employees = await query<{ id: string; role: string }>(
+      `SELECT id, role::text AS role FROM users
+        WHERE lower(trim(department)) = lower(trim($1))
+          AND is_active = true
+          AND role::text NOT IN ('ADMIN', 'CEO')
+          AND id != $2`,
+      [dept.name, mafereka.id]
+    );
+
+    for (const emp of employees) {
+      const reportsTo = emp.role === "HOD"
+        ? mafereka.id
+        : emp.role === "MANAGER"
+        ? (dept.hod_user_id ?? mafereka.id)
+        : (dept.manager_user_id ?? dept.hod_user_id ?? mafereka.id);
+      await upsertReportingLine(emp.id, reportsTo, "SEFS EXCO reports to CEO - auto-fixed for division-level org placement");
+    }
+  }
 }
