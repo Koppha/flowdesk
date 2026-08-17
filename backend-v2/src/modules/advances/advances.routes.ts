@@ -10,7 +10,7 @@ import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isP
 import type { AdvanceStatus } from "./advances.types.js";
 import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
-import { assertAdvanceTypeAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
+import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
 import { canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
@@ -47,6 +47,7 @@ const CreateAdvanceSchema = z.object({
   bank_account_number: z.string().optional(),
   bank_branch: z.string().optional(),
   requested_total: z.coerce.number().nonnegative(),
+  payback_months: z.coerce.number().int().positive().optional(),
   beneficiary_user_id: z.string().uuid().optional(),
   override_chain: z.array(z.object({
     label: z.string().trim().min(1),
@@ -81,6 +82,7 @@ const UpdateAdvanceSchema = z.object({
   bank_account_number: z.string().optional(),
   bank_branch: z.string().optional(),
   requested_total: z.coerce.number().nonnegative().optional(),
+  payback_months: z.coerce.number().int().positive().optional(),
   salary_month: z.string().optional()
 }).superRefine((data, ctx) => {
   if (data.payment_method === "ECOCASH") {
@@ -874,6 +876,7 @@ advancesRouter.post("/", async (req: AuthedRequest, res, next) => {
     const parsed = CreateAdvanceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
     const type = await assertAdvanceTypeAllowed(parsed.data.type);
+    await assertPaybackMonthsAllowed(type, parsed.data.payback_months);
 
     // The cap check (assertSingleOutstandingTravelAdvance, inside
     // resolveAdvanceRequester) and this INSERT run in one transaction,
@@ -927,6 +930,9 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     const parsedData: Record<string, unknown> = { ...parsed.data };
     if (typeof parsedData.type === "string") {
       parsedData.type = await assertAdvanceTypeAllowed(parsedData.type);
+    }
+    if (parsedData.payback_months !== undefined) {
+      await assertPaybackMonthsAllowed((parsedData.type as string | undefined) ?? adv.type, parsedData.payback_months as number);
     }
     if (parsedData.payment_method) {
       parsedData.payment_account = toPaymentAccount(parsed.data as any);

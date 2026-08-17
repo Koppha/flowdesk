@@ -9,7 +9,11 @@ export const SYSTEM_SETTING_KEYS = {
   overtimeRateSundayHolidayPct: "overtime_rate_sunday_holiday_pct",
   workingHoursPerDay: "working_hours_per_day",
   overtimeModuleEnabled: "overtime_module_enabled",
-  standbyModuleEnabled: "standby_module_enabled"
+  standbyModuleEnabled: "standby_module_enabled",
+  salaryAdvanceEnabled: "salary_advance_enabled",
+  loanAdvanceEnabled: "loan_advance_enabled",
+  salaryAdvanceMaxPaybackMonths: "salary_advance_max_payback_months",
+  loanAdvanceMaxPaybackMonths: "loan_advance_max_payback_months"
 } as const;
 
 export async function getNumericSystemSetting(key: string, fallback = 0) {

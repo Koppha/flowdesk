@@ -462,6 +462,10 @@ export default function App() {
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
   const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(true);
   const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(true);
+  const [salaryAdvanceEnabled, setSalaryAdvanceEnabled] = useState(true);
+  const [loanAdvanceEnabled, setLoanAdvanceEnabled] = useState(true);
+  const [salaryAdvanceMaxMonths, setSalaryAdvanceMaxMonths] = useState(6);
+  const [loanAdvanceMaxMonths, setLoanAdvanceMaxMonths] = useState(6);
   const [hasDeductionsAccess, setHasDeductionsAccess] = useState(false);
   const [deductionsCount, setDeductionsCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
@@ -1352,7 +1356,11 @@ export default function App() {
       optionalStartupData<{ total?: number }>(api.payments({ status: "pending" }), { total: 0 }, "Payments"),
       optionalStartupData<{ allowed?: boolean }>(api.paymentsAccess(), { allowed: false }, "Payments access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
-      optionalStartupData<{ overtime_enabled?: boolean; standby_enabled?: boolean }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true }, "Module flags"),
+      optionalStartupData<{
+        overtime_enabled?: boolean; standby_enabled?: boolean;
+        salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
+        salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
+      }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true }, "Module flags"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -1394,6 +1402,10 @@ export default function App() {
     setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
     setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
     setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
+    setSalaryAdvanceEnabled(moduleFlagsResp?.salary_advance_enabled !== false);
+    setLoanAdvanceEnabled(moduleFlagsResp?.loan_advance_enabled !== false);
+    setSalaryAdvanceMaxMonths(Number(moduleFlagsResp?.salary_advance_max_payback_months) || 6);
+    setLoanAdvanceMaxMonths(Number(moduleFlagsResp?.loan_advance_max_payback_months) || 6);
     setHasDeductionsAccess(Boolean(deductionsAccessResp?.allowed));
     setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
     if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
@@ -2948,16 +2960,8 @@ export default function App() {
       }, {})
     );
     setMonthField(detail.salary_month || "");
-    setSalaryPaybackDuration(
-      detail.type === "SALARY"
-        ? (detail.salary_payback_duration || detail.payback_duration || "")
-        : ""
-    );
-    setLoanPaybackDuration(
-      detail.type === "LOAN"
-        ? (detail.loan_payback_duration || detail.payback_duration || "")
-        : ""
-    );
+    setSalaryPaybackDuration(detail.type === "SALARY" && detail.payback_months ? String(detail.payback_months) : "");
+    setLoanPaybackDuration(detail.type === "LOAN" && detail.payback_months ? String(detail.payback_months) : "");
     setPaymentMethod((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"));
     const parsedPayment = parsePaymentAccount((detail.payment_method === "BANK" ? "BANK" : "ECOCASH"), detail.payment_account || "");
     setEcocashNumber(parsedPayment.ecocash_number);
@@ -6213,8 +6217,8 @@ export default function App() {
                     ))}
                   </optgroup>
                   <optgroup label="Other advances">
-                    <option value="SALARY">Salary</option>
-                    <option value="LOAN">Loan</option>
+                    {salaryAdvanceEnabled && <option value="SALARY">Salary</option>}
+                    {loanAdvanceEnabled && <option value="LOAN">Loan</option>}
                   </optgroup>
                 </select>
               </div>
@@ -6244,10 +6248,9 @@ export default function App() {
                   <label>Payback Duration</label>
                   <select value={salaryPaybackDuration} onChange={(e) => setSalaryPaybackDuration(e.target.value)}>
                     <option value="">Select duration</option>
-                    <option value="1_MONTH">1 Month</option>
-                    <option value="2_MONTHS">2 Months</option>
-                    <option value="3_MONTHS">3 Months</option>
-                    <option value="6_MONTHS">6 Months</option>
+                    {Array.from({ length: salaryAdvanceMaxMonths }, (_, i) => i + 1).map((n) => (
+                      <option key={n} value={String(n)}>{n} Month{n === 1 ? "" : "s"}</option>
+                    ))}
                   </select>
                 </div>
               )}
@@ -6256,10 +6259,9 @@ export default function App() {
                   <label>Payback Duration</label>
                   <select value={loanPaybackDuration} onChange={(e) => setLoanPaybackDuration(e.target.value)}>
                     <option value="">Select duration</option>
-                    <option value="1_MONTH">1 Month</option>
-                    <option value="2_MONTHS">2 Months</option>
-                    <option value="3_MONTHS">3 Months</option>
-                    <option value="6_MONTHS">6 Months</option>
+                    {Array.from({ length: loanAdvanceMaxMonths }, (_, i) => i + 1).map((n) => (
+                      <option key={n} value={String(n)}>{n} Month{n === 1 ? "" : "s"}</option>
+                    ))}
                   </select>
                 </div>
               )}
@@ -6822,16 +6824,14 @@ export default function App() {
                       if (advanceType === "SALARY") {
                         base.requested_total = Number(salaryAmount) || 0;
                         base.salary_month = monthField;
-                        base.salary_payback_duration = salaryPaybackDuration;
-                        base.payback_duration = salaryPaybackDuration;
+                        base.payback_months = Number(salaryPaybackDuration) || undefined;
                       }
                       if (isTravelAdvanceSelected) {
                         base.requested_total = Number(totalRequested()) || 0;
                       }
                       if (advanceType === "LOAN") {
                         base.requested_total = Number(loanAmount) || 0;
-                        base.loan_payback_duration = loanPaybackDuration;
-                        base.payback_duration = loanPaybackDuration;
+                        base.payback_months = Number(loanPaybackDuration) || undefined;
                       }
                       if (editingAdvanceId) {
                         // update existing request

@@ -344,7 +344,16 @@ function FormPreview({ fields }: { fields: FormField[] }) {
 
 export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (page: string) => void; isAdmin?: boolean }) {
   const [requestTypes, setRequestTypes] = useState<RequestType[]>([]);
-  const [moduleFlags, setModuleFlags] = useState<{ overtime_enabled: boolean; standby_enabled: boolean }>({ overtime_enabled: true, standby_enabled: true });
+  const [moduleFlags, setModuleFlags] = useState<{
+    overtime_enabled: boolean; standby_enabled: boolean;
+    salary_advance_enabled: boolean; loan_advance_enabled: boolean;
+    salary_advance_max_payback_months: number; loan_advance_max_payback_months: number;
+  }>({
+    overtime_enabled: true, standby_enabled: true,
+    salary_advance_enabled: true, loan_advance_enabled: true,
+    salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6
+  });
+  const [savingMaxMonths, setSavingMaxMonths] = useState<"salary_advance_max_payback_months" | "loan_advance_max_payback_months" | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -393,13 +402,21 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
       const [data, ds, flags] = await Promise.all([
         api.requestTypes(),
         api.departmentsWithSections().catch(() => []),
-        api.moduleFlags().catch(() => ({ overtime_enabled: true, standby_enabled: true }))
+        api.moduleFlags().catch(() => ({
+          overtime_enabled: true, standby_enabled: true,
+          salary_advance_enabled: true, loan_advance_enabled: true,
+          salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6
+        }))
       ]);
       setRequestTypes(Array.isArray(data) ? data : []);
       setDeptSections(Array.isArray(ds) ? ds : []);
       setModuleFlags({
         overtime_enabled: flags?.overtime_enabled !== false,
-        standby_enabled: flags?.standby_enabled !== false
+        standby_enabled: flags?.standby_enabled !== false,
+        salary_advance_enabled: flags?.salary_advance_enabled !== false,
+        loan_advance_enabled: flags?.loan_advance_enabled !== false,
+        salary_advance_max_payback_months: Number(flags?.salary_advance_max_payback_months) || 6,
+        loan_advance_max_payback_months: Number(flags?.loan_advance_max_payback_months) || 6
       });
     } catch { /* ignore */ }
     finally { setLoading(false); }
@@ -407,7 +424,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
 
   useEffect(() => { void load(); }, [load]);
 
-  async function toggleModule(key: "overtime_enabled" | "standby_enabled") {
+  async function toggleModule(key: "overtime_enabled" | "standby_enabled" | "salary_advance_enabled" | "loan_advance_enabled") {
     const next = !moduleFlags[key];
     setModuleFlags((f) => ({ ...f, [key]: next }));
     try {
@@ -415,6 +432,21 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
     } catch (err: any) {
       setModuleFlags((f) => ({ ...f, [key]: !next }));
       alert(err?.message || "Failed to update module status.");
+    }
+  }
+
+  async function saveMaxMonths(key: "salary_advance_max_payback_months" | "loan_advance_max_payback_months", value: number) {
+    if (!Number.isInteger(value) || value < 1) return;
+    const previous = moduleFlags[key];
+    setModuleFlags((f) => ({ ...f, [key]: value }));
+    setSavingMaxMonths(key);
+    try {
+      await api.updateModuleFlags({ [key]: value });
+    } catch (err: any) {
+      setModuleFlags((f) => ({ ...f, [key]: previous }));
+      alert(err?.message || "Failed to update payback duration.");
+    } finally {
+      setSavingMaxMonths(null);
     }
   }
 
@@ -638,13 +670,15 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
       <div className="ep-panel" style={{ marginBottom: 20 }}>
         <div className="ep-panel-head">
           <div className="ep-panel-title">Built-in Request Types</div>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>System modules — not configurable here</span>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>System modules — toggle on/off, admin-only</span>
         </div>
         <div style={{ display: "flex", gap: 12, padding: "14px 18px", flexWrap: "wrap" }}>
           {[
-            { icon: "💼", label: "Advance Requests", desc: "Request cash advances for travel and expenses.", page: "MY_REQUESTS", flagKey: null },
-            { icon: "⏱️", label: "Overtime Requests", desc: "Submit overtime hours for supervisor and management approval.", page: "OVERTIME", flagKey: "overtime_enabled" as const },
-            { icon: "📞", label: "Standby Requests", desc: "Schedule and claim compensation for standby duty.", page: "STANDBY", flagKey: "standby_enabled" as const },
+            { icon: "💼", label: "Advance Requests", desc: "Request cash advances for travel and expenses.", page: "MY_REQUESTS", flagKey: null, maxMonthsKey: null },
+            { icon: "⏱️", label: "Overtime Requests", desc: "Submit overtime hours for supervisor and management approval.", page: "OVERTIME", flagKey: "overtime_enabled" as const, maxMonthsKey: null },
+            { icon: "📞", label: "Standby Requests", desc: "Schedule and claim compensation for standby duty.", page: "STANDBY", flagKey: "standby_enabled" as const, maxMonthsKey: null },
+            { icon: "💰", label: "Salary Advance", desc: "Request an advance against salary, repaid over a set number of months.", page: "MY_REQUESTS", flagKey: "salary_advance_enabled" as const, maxMonthsKey: "salary_advance_max_payback_months" as const },
+            { icon: "🏦", label: "Loan Advance", desc: "Request a loan, repaid over a set number of months.", page: "MY_REQUESTS", flagKey: "loan_advance_enabled" as const, maxMonthsKey: "loan_advance_max_payback_months" as const },
           ].map((t) => {
             const active = t.flagKey ? moduleFlags[t.flagKey] : true;
             return (
@@ -678,6 +712,31 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                     )}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{t.desc}</div>
+                  {t.maxMonthsKey && active && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: "var(--muted)" }}
+                    >
+                      <span>Max payback:</span>
+                      {isAdmin ? (
+                        <>
+                          <input
+                            type="number"
+                            min={1}
+                            max={360}
+                            value={moduleFlags[t.maxMonthsKey]}
+                            onChange={(e) => setModuleFlags((f) => ({ ...f, [t.maxMonthsKey!]: Number(e.target.value) || 1 }))}
+                            onBlur={(e) => void saveMaxMonths(t.maxMonthsKey!, Number(e.target.value) || 1)}
+                            disabled={savingMaxMonths === t.maxMonthsKey}
+                            style={{ width: 48, padding: "2px 4px", fontSize: 12, border: "1px solid var(--border)", borderRadius: 4 }}
+                          />
+                          <span>months</span>
+                        </>
+                      ) : (
+                        <strong>{moduleFlags[t.maxMonthsKey]} months</strong>
+                      )}
+                    </div>
+                  )}
                   {onNavigate && <div style={{ fontSize: 12, color: "#2563eb", marginTop: 6, fontWeight: 500 }}>Open →</div>}
                 </div>
               </div>

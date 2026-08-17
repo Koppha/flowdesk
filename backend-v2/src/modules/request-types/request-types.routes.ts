@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { getBooleanSystemSetting, setBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { getBooleanSystemSetting, setBooleanSystemSetting, getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 
 export const requestTypesRouter = Router();
 requestTypesRouter.use(requireAuth);
@@ -119,11 +119,19 @@ requestTypesRouter.get("/", async (req: AuthedRequest, res, next) => {
 // path, must precede /:id so it isn't swallowed by the :id param.
 requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) => {
   try {
-    const [overtime_enabled, standby_enabled] = await Promise.all([
+    const [overtime_enabled, standby_enabled, salary_advance_enabled, loan_advance_enabled, salary_advance_max_payback_months, loan_advance_max_payback_months] = await Promise.all([
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.overtimeModuleEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, true)
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, true),
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, true),
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceEnabled, true),
+      getNumericSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceMaxPaybackMonths, 6),
+      getNumericSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths, 6)
     ]);
-    return res.json({ overtime_enabled, standby_enabled });
+    return res.json({
+      overtime_enabled, standby_enabled,
+      salary_advance_enabled, loan_advance_enabled,
+      salary_advance_max_payback_months, loan_advance_max_payback_months
+    });
   } catch (err) {
     return next(err);
   }
@@ -134,7 +142,11 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
   try {
     const parsed = z.object({
       overtime_enabled: z.boolean().optional(),
-      standby_enabled: z.boolean().optional()
+      standby_enabled: z.boolean().optional(),
+      salary_advance_enabled: z.boolean().optional(),
+      loan_advance_enabled: z.boolean().optional(),
+      salary_advance_max_payback_months: z.number().int().positive().max(360).optional(),
+      loan_advance_max_payback_months: z.number().int().positive().max(360).optional()
     }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
     if (parsed.data.overtime_enabled !== undefined) {
@@ -142,6 +154,18 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
     }
     if (parsed.data.standby_enabled !== undefined) {
       await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, parsed.data.standby_enabled);
+    }
+    if (parsed.data.salary_advance_enabled !== undefined) {
+      await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, parsed.data.salary_advance_enabled);
+    }
+    if (parsed.data.loan_advance_enabled !== undefined) {
+      await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceEnabled, parsed.data.loan_advance_enabled);
+    }
+    if (parsed.data.salary_advance_max_payback_months !== undefined) {
+      await setNumericSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceMaxPaybackMonths, parsed.data.salary_advance_max_payback_months);
+    }
+    if (parsed.data.loan_advance_max_payback_months !== undefined) {
+      await setNumericSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths, parsed.data.loan_advance_max_payback_months);
     }
     return res.json({ ok: true });
   } catch (err) {

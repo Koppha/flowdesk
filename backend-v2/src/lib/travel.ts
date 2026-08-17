@@ -1,5 +1,6 @@
 import { badRequest } from "./errors.js";
 import { query } from "./db.js";
+import { getBooleanSystemSetting, getNumericSystemSetting, SYSTEM_SETTING_KEYS } from "./systemSettings.js";
 
 export type TravelLocationMode = "DISTRICT" | "COUNTRY_CITY";
 export type TravelRateKind = "MEAL" | "DAILY";
@@ -165,10 +166,33 @@ export async function isTravelAdvanceType(code: string) {
 
 export async function assertAdvanceTypeAllowed(type: string) {
   const normalized = normalizeTravelCode(type);
+  if (normalized === "SALARY" && !(await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, true))) {
+    throw badRequest("Salary advances are currently disabled");
+  }
+  if (normalized === "LOAN" && !(await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceEnabled, true))) {
+    throw badRequest("Loan advances are currently disabled");
+  }
   if (RESERVED_ADVANCE_TYPES.has(normalized)) return normalized;
   const travelType = await getTravelTypeByCode(normalized);
   if (!travelType?.active) throw badRequest("Select an active travel type");
   return normalized;
+}
+
+// SALARY/LOAN only - admin sets a per-type max via
+// SYSTEM_SETTING_KEYS.salary/loanAdvanceMaxPaybackMonths (default 6,
+// matching the previous hardcoded max). Returns the validated month count.
+export async function assertPaybackMonthsAllowed(type: string, months: number | undefined) {
+  const normalized = normalizeTravelCode(type);
+  if (!RESERVED_ADVANCE_TYPES.has(normalized)) return null;
+  const key = normalized === "SALARY" ? SYSTEM_SETTING_KEYS.salaryAdvanceMaxPaybackMonths : SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths;
+  const max = await getNumericSystemSetting(key, 6);
+  if (!Number.isInteger(months) || (months as number) < 1) {
+    throw badRequest("Please choose a payback duration.");
+  }
+  if ((months as number) > max) {
+    throw badRequest(`Payback duration cannot exceed ${max} month${max === 1 ? "" : "s"}`);
+  }
+  return months as number;
 }
 
 export async function getTravelRateForCode(code: string, requesterRole?: string | null) {

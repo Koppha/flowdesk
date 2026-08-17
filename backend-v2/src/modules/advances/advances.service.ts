@@ -57,13 +57,14 @@ export async function createAdvance(
     payment_method: "ECOCASH" | "BANK";
     payment_account?: string | null;
     requested_total: number;
+    payback_months?: number | null;
     override_chain?: Array<{ label: string; user_id: string; user_name: string }> | null;
   },
   client?: PoolClient
 ) {
   const sql = `INSERT INTO advance_requests
-      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, override_chain, sequence_no)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, nextval('advance_request_seq'))
+      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, sequence_no)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, nextval('advance_request_seq'))
      RETURNING id`;
   const params = [
     args.requesterId,
@@ -74,6 +75,7 @@ export async function createAdvance(
     args.payment_method,
     args.payment_account ?? null,
     args.requested_total,
+    args.payback_months ?? null,
     args.override_chain?.length ? JSON.stringify(args.override_chain) : null
   ];
   const rows = client ? (await client.query<{ id: string }>(sql, params)).rows : await query<{ id: string }>(sql, params);

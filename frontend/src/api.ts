@@ -374,8 +374,11 @@ export const api = {
   updateRequestTypeFields: (id: string, fields: any[]) => req(`/request-types/${id}/fields`, { method: "PUT", body: JSON.stringify(fields) }),
   requestTypePermissions: (id: string) => req(`/request-types/${id}/permissions`),
   moduleFlags: () => req("/request-types/module-flags"),
-  updateModuleFlags: (data: { overtime_enabled?: boolean; standby_enabled?: boolean }) =>
-    req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
+  updateModuleFlags: (data: {
+    overtime_enabled?: boolean; standby_enabled?: boolean;
+    salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
+    salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
+  }) => req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
   addRequestTypePermission: (id: string, data: any) => req(`/request-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
 

@@ -122,6 +122,10 @@ async function ensureUserSchema() {
   // Dashboard shortcuts — page keys the user has pinned for quick access.
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS favorite_pages text[] NOT NULL DEFAULT '{}'`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS created_by_id uuid REFERENCES users(id)`);
+  // Repayment term for Salary/Loan advances, in whole months - admin sets a
+  // per-type max (SYSTEM_SETTING_KEYS.salary/loanAdvanceMaxPaybackMonths)
+  // that bounds what the requester can pick.
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS payback_months integer`);
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS location text`);
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS meals_count integer NOT NULL DEFAULT 0`);
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS meal_value numeric(12,2) NOT NULL DEFAULT 0`);
