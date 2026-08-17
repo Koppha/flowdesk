@@ -120,8 +120,13 @@ export default function TeamRoster() {
       const deptName = emp.department ?? "Unassigned Division";
       const secKey  = emp.section_id  ?? "__none_sec__";
       const secName = emp.section_name ?? "Unassigned Department";
-      const teamKey  = emp.team_id    ?? "__none_team__";
-      const teamName = emp.team_name  ?? "Unassigned Section";
+      // HOD/Manager/EXCO lead their whole section/department, above any
+      // individual team - having no team_id is expected for them, not a
+      // gap. Bucket them under "Leadership" instead of lumping them in with
+      // genuinely unplaced regular staff under "Unassigned Section".
+      const isLeadershipRole = emp.role === "HOD" || emp.role === "MANAGER" || emp.role === "EXCO";
+      const teamKey  = emp.team_id ?? (isLeadershipRole ? "__leadership__" : "__none_team__");
+      const teamName = emp.team_name ?? (isLeadershipRole ? "Leadership" : "Unassigned Section");
 
       if (!divMap.has(divKey))  divMap.set(divKey,  { id: emp.division_id, name: divName, departments: new Map() });
       const div = divMap.get(divKey)!;
