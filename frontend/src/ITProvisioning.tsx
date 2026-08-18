@@ -256,27 +256,27 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
       </div>
 
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
-          <div className="ep-search" style={{ flex: "1 1 220px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr repeat(4, 1fr) auto", gap: 10, padding: "14px 20px", alignItems: "center" }}>
+          <div className="ep-search" style={{ minWidth: 0 }}>
             <Search size={14} />
             <input placeholder="Search requests, employee, asset…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <select className="ep-form-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select className="ep-form-select" style={{ minWidth: 0 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">All Status</option>
             {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
-          <select className="ep-form-select" value={computerTypeFilter} onChange={(e) => setComputerTypeFilter(e.target.value)}>
+          <select className="ep-form-select" style={{ minWidth: 0 }} value={computerTypeFilter} onChange={(e) => setComputerTypeFilter(e.target.value)}>
             <option value="">All Computer Types</option>
             <option value="LAPTOP">Laptop</option>
             <option value="DESKTOP">Desktop</option>
           </select>
-          <select className="ep-form-select" value={requestTypeFilter} onChange={(e) => setRequestTypeFilter(e.target.value)}>
+          <select className="ep-form-select" style={{ minWidth: 0 }} value={requestTypeFilter} onChange={(e) => setRequestTypeFilter(e.target.value)}>
             <option value="">All Processes</option>
             <option value="NEW">New</option>
             <option value="REPLACEMENT">Replacement</option>
             <option value="UPGRADE">Upgrade</option>
           </select>
-          <select className="ep-form-select" value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>
+          <select className="ep-form-select" style={{ minWidth: 0 }} value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>
             <option value="">All Departments</option>
             {uniqueDepartments.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
@@ -954,6 +954,7 @@ function AssetHistory({ onBack }: { onBack: () => void }) {
 
 function ReportsView({ onBack }: { onBack: () => void }) {
   const [summary, setSummary] = useState<any>(null);
+  const [tab, setTab] = useState<"status" | "department" | "computerType" | "process">("status");
   useEffect(() => { api.itProvisioningReportsSummary().then(setSummary).catch(() => {}); }, []);
 
   function Bars({ title, rows, keyName, valueName }: { title: string; rows: any[]; keyName: string; valueName: string }) {
@@ -993,10 +994,22 @@ function ReportsView({ onBack }: { onBack: () => void }) {
       </div>
       {!summary ? <p>Loading…</p> : (
         <>
-          <Bars title="By Status" rows={summary.byStatus} keyName="status" valueName="count" />
-          <Bars title="By Department" rows={summary.byDepartment} keyName="department" valueName="count" />
-          <Bars title="By Computer Type" rows={summary.byComputerType} keyName="computerType" valueName="count" />
-          <Bars title="By Process" rows={summary.byRequestType} keyName="requestType" valueName="count" />
+          <div className="ep-tabs">
+            {([
+              { key: "status", label: "By Status" },
+              { key: "department", label: "By Department" },
+              { key: "computerType", label: "By Computer Type" },
+              { key: "process", label: "By Process" }
+            ] as const).map((t) => (
+              <button key={t.key} type="button" className={`ep-tab ${tab === t.key ? "active" : ""}`} onClick={() => setTab(t.key)}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {tab === "status" && <Bars title="By Status" rows={summary.byStatus} keyName="status" valueName="count" />}
+          {tab === "department" && <Bars title="By Department" rows={summary.byDepartment} keyName="department" valueName="count" />}
+          {tab === "computerType" && <Bars title="By Computer Type" rows={summary.byComputerType} keyName="computerType" valueName="count" />}
+          {tab === "process" && <Bars title="By Process" rows={summary.byRequestType} keyName="requestType" valueName="count" />}
         </>
       )}
     </div>
