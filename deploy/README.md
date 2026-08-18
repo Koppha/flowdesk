@@ -109,12 +109,14 @@ TLS terminates at the load balancer: it holds the certificate for
 `flowdesk.etl.co.ls`, listens on 443, and forwards decrypted HTTP to the
 port-80 pool above (`X-Forwarded-Proto` is already forwarded by the nginx
 vhost, so the app sees the request as HTTPS). This is what makes
-`https://flowdesk.etl.co.ls` - no port - the one public URL; the previous
-direct `flowdesk.etl.co.ls:5174` link no longer works once `serve` is bound
-to loopback (see `deploy/ecosystem.config.cjs`), since nginx on port 80/443
-via the LB is the only path in. Firewall port 4000 (backend) on both PROD
-nodes to the LB and the email-action external proxy host only - see step 8 -
-not the open internet.
+`https://flowdesk.etl.co.ls` - no port - the intended public URL. `serve`
+itself still listens on all interfaces on 5174 (binding it to loopback
+crash-loops the installed `serve` version - see the note in
+`deploy/ecosystem.config.cjs`), so **firewall port 5174, same as port 4000
+(backend), on both PROD nodes to the LB and the email-action external proxy
+host only** - see step 8 - not the open internet. Without that firewall
+rule, the direct `flowdesk.etl.co.ls:5174` link still works and bypasses the
+LB/TLS entirely.
 
 Note: the frontend is built with `VITE_API=/api`, so it calls
 `/api/<route>` (e.g. `/api/auth/login`); the nginx config proxies `/api/` to

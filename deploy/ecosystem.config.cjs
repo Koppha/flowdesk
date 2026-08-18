@@ -20,9 +20,13 @@ module.exports = {
       // different (and incompatible) argv parsing from the actual npm
       // package's CLI.
       script: "/usr/lib/node_modules/serve/build/main.js",
-      // Loopback only - the public entry point is the load balancer
-      // (https://flowdesk.etl.co.ls) -> nginx -> here, not this port directly.
-      args: ["-s", "dist", "-l", "tcp://127.0.0.1:5174"],
+      // NOTE: don't add "-l tcp://127.0.0.1:5174" here to restrict this to
+      // loopback - the installed `serve` version mis-parses that URI form
+      // and crash-loops ("getaddrinfo ENOTFOUND -l"), which took prod down
+      // on 2026-08-18. Restrict external access to this port via firewall
+      // instead (see deploy/README.md step 7) until a working `serve`
+      // syntax is confirmed against the actual PROD binary.
+      args: ["-s", "dist", "-l", "5174"],
       env: {
         NODE_ENV: "production"
       }

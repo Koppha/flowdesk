@@ -4,15 +4,16 @@
 #
 # TLS terminates at the load balancer (https://flowdesk.etl.co.ls, no port -
 # see deploy/README.md step 7), which forwards plain HTTP to this vhost on
-# port 80 on both PROD1 and PROD2. This is the only public entry point:
-# `serve` is bound to 127.0.0.1:5174 (deploy/ecosystem.config.cjs), so the
-# frontend is unreachable except through here.
+# port 80 on both PROD1 and PROD2. `serve` itself still binds all interfaces
+# on 5174 (deploy/ecosystem.config.cjs - loopback-only crashes the installed
+# `serve` version), so port 5174 must be firewalled from outside each PROD
+# node for this to be the only public entry point - see step 7.
 
 server {
     listen 80;
     server_name _;
 
-    # Frontend (served by `serve -s dist -l tcp://127.0.0.1:5174` via PM2)
+    # Frontend (served by `serve -s dist -l 5174` via PM2)
     location / {
         proxy_pass http://127.0.0.1:5174;
         proxy_set_header Host $host;
