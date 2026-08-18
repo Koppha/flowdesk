@@ -723,7 +723,15 @@ export default function Inbox(props: {
                               <td>
                                 <div className="inbox-stage-cell">
                                   <span className={`status-pill ${statusTone(it.status)}`}>{itemStatusLabel(it)}</span>
-                                  <small>{itemStageProgress(it)}</small>
+                                  {(() => {
+                                    const label = itemStatusLabel(it);
+                                    const stage = itemStageProgress(it);
+                                    // Skip the caption when it's just a shorter echo of the pill
+                                    // above it ("Paid" / "Paid", "Pending Approval" / "Pending") -
+                                    // it adds no information and reads as an unfinished duplicate.
+                                    const redundant = !stage || label.toLowerCase().startsWith(stage.toLowerCase());
+                                    return redundant ? null : <small>{stage}</small>;
+                                  })()}
                                 </div>
                               </td>
                               <td className="inbox-money">{itemAmount(it)}</td>

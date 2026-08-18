@@ -1574,6 +1574,7 @@ html[data-theme="dark"] .inbox-error {
 .inbox-stage-cell {
   display: grid;
   gap: 4px;
+  justify-items: start;
 }
 
 .inbox-stage-cell small {
