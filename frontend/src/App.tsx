@@ -16,6 +16,7 @@ import WorkflowBuilder from "./WorkflowBuilder";
 import Standby from "./Standby";
 import ReportingLines from "./ReportingLines";
 import PdfDesigner from "./PdfDesigner";
+import DataCleanup from "./DataCleanup";
 import RequestTypes from "./RequestTypes";
 import CustomRequestsHub from "./CustomRequestsHub";
 import EmailActionConfirm from "./EmailActionConfirm";
@@ -408,7 +409,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -4210,6 +4211,9 @@ export default function App() {
             </div>
           )}
           <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings</a>
+          {role === "ADMIN" && (
+            <a href="#" className={navItemClass(page === "DATA_CLEANUP")} onClick={(e) => { e.preventDefault(); setPage("DATA_CLEANUP"); }}><span className="sidebar-nav-icon"><Trash2 size={18} aria-hidden /></span>Data Cleanup</a>
+          )}
           <div className="sidebar-spacer" />
           <div className="sidebar-user-card">
             <span className="avatar">{userInitials}</span>
@@ -4280,6 +4284,8 @@ export default function App() {
             <ReportingLines />
           ) : page === "PDF_DESIGNER" ? (
             <PdfDesigner />
+          ) : page === "DATA_CLEANUP" ? (
+            <DataCleanup onBack={() => setPage("SETTINGS")} />
           ) : page === "ORG_STRUCTURE" ? (
             <OrgStructure />
           ) : page === "TEAM_ROSTER" ? (

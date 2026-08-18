@@ -492,6 +492,12 @@ export const api = {
   setRefundableActioned: (id: string, refunded: boolean) =>
     req(`/refundable/${id}/refunded`, { method: "PATCH", body: JSON.stringify({ refunded }) }),
 
+  dataCleanupCategories: () => req("/admin/data-cleanup/categories"),
+  dataCleanupWipe: (categories: string[]) =>
+    req("/admin/data-cleanup", { method: "POST", body: JSON.stringify({ categories, confirm: "WIPE" }) }),
+  dataCleanupFullReset: (keepAdminEmail: string) =>
+    req("/admin/data-cleanup/full-reset", { method: "POST", body: JSON.stringify({ confirm: "RESET EVERYTHING", keepAdminEmail }) }),
+
   itProvisioningAccess: () => req("/it-provisioning/access"),
   itProvisioningList: (params: Record<string, string> = {}) => {
     const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v))).toString();

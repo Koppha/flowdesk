@@ -26,6 +26,7 @@ import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
 import { refundableRouter } from "./modules/refundable/refundable.routes.js";
 import { itProvisioningRouter } from "./modules/it-provisioning/it-provisioning.routes.js";
 import { standbyRouter } from "./modules/standby/standby.routes.js";
+import { dataCleanupRouter } from "./modules/admin/data-cleanup.routes.js";
 
 export function createApp() {
   const app = express();
@@ -81,6 +82,7 @@ export function createApp() {
   app.use("/deductions", deductionsRouter);
   app.use("/refundable", refundableRouter);
   app.use("/it-provisioning", itProvisioningRouter);
+  app.use("/admin/data-cleanup", dataCleanupRouter);
   app.use("/ai", aiRouter);
 
   app.use(errorHandler);
