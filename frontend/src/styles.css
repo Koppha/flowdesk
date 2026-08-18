@@ -6549,6 +6549,13 @@ html[data-theme="dark"] .login-security-banner {
   font-weight: 650;
 }
 
+.sidebar-subnav .inbox-count-chip {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.14);
+  color: #e8f1ff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
 .sidebar-subnav .sidebar-link::before,
 .sidebar-subnav a::before {
   content: "";
