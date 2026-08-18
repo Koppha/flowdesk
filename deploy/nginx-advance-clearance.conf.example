@@ -1,13 +1,20 @@
-# Example nginx vhost for a PROD advance-clearance server.
+# Example nginx vhost for a PROD advance-clearance server. TREAT AS A
+# STARTING POINT, NOT GROUND TRUTH: as of 2026-08-18, PROD1 and PROD2 had
+# each drifted from this file and from each other (different listen ports,
+# PROD1 running an extra proxy layer because it's a Kubernetes/RKE2 node -
+# see deploy/README.md step 7 for the full, current, per-node picture and
+# deploy/k8s-ingress-prod1.yaml.example for what PROD1 additionally needs).
+# Confirm `nginx -T` on the actual box before trusting this file matches it.
+#
 # Copy to /etc/nginx/sites-available/, adjust server_name/ports, then symlink
 # into sites-enabled and reload nginx.
 #
-# TLS terminates at the load balancer (https://flowdesk.etl.co.ls, no port -
-# see deploy/README.md step 7), which forwards plain HTTP to this vhost on
-# port 80 on both PROD1 and PROD2. `serve` itself still binds all interfaces
-# on 5174 (deploy/ecosystem.config.cjs - loopback-only crashes the installed
-# `serve` version), so port 5174 must be firewalled from outside each PROD
-# node for this to be the only public entry point - see step 7.
+# There is no separate load balancer - flowdesk.etl.co.ls DNS round-robins
+# directly to each PROD node's own IP, and each node terminates its own TLS
+# with the same real cert (/etc/nginx/ssl/flowdesk.{crt,key}). `serve`
+# itself binds all interfaces (deploy/ecosystem.config.cjs - loopback-only
+# crashes the installed `serve` version), so its port must be firewalled
+# from outside each PROD node for nginx to be the only public entry point.
 
 server {
     listen 80;

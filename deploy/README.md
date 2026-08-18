@@ -100,23 +100,49 @@ the new code via the repointed `current` symlink with zero downtime.
 
 ## 7. nginx + load balancer
 
-On each PROD server, copy `deploy/nginx-advance-clearance.conf.example` to
-`/etc/nginx/sites-available/advance-clearance`, adjust as needed, symlink
-into `sites-enabled`, and `nginx -s reload`. Point the load balancer's plain
-HTTP backend pool at port 80 on both PROD1 and PROD2.
+**There is no separate load balancer.** `flowdesk.etl.co.ls` DNS round-robins
+directly to PROD1's and PROD2's own IPs (`10.3.10.49` / `10.3.10.69`) - each
+node terminates its own TLS with the same real cert
+(`/etc/nginx/ssl/flowdesk.{crt,key}` on each box). This was discovered the
+hard way on 2026-08-18 (see `deploy/nginx-advance-clearance.conf.example`'s
+header comment for the incident this caused) - the two nodes turned out to
+be set up quite differently from each other and from that example file,
+which is closer to a starting point than a description of either node.
 
-TLS terminates at the load balancer: it holds the certificate for
-`flowdesk.etl.co.ls`, listens on 443, and forwards decrypted HTTP to the
-port-80 pool above (`X-Forwarded-Proto` is already forwarded by the nginx
-vhost, so the app sees the request as HTTPS). This is what makes
-`https://flowdesk.etl.co.ls` - no port - the intended public URL. `serve`
-itself still listens on all interfaces on 5174 (binding it to loopback
-crash-loops the installed `serve` version - see the note in
-`deploy/ecosystem.config.cjs`), so **firewall port 5174, same as port 4000
-(backend), on both PROD nodes to the LB and the email-action external proxy
-host only** - see step 8 - not the open internet. Without that firewall
-rule, the direct `flowdesk.etl.co.ls:5174` link still works and bypasses the
-LB/TLS entirely.
+**PROD2 (`10.3.10.69`) - the simple case:** plain nginx listens on 80 and
+443 directly (`server_name 10.3.10.69 flowdesk.etl.co.ls;` in
+`/etc/nginx/conf.d/advance-clearance.conf` /
+`advance-clearance-ssl.conf`), proxying `/api/` to `127.0.0.1:4000` and `/`
+to `127.0.0.1:5174` (where `serve` listens directly - matches
+`deploy/ecosystem.config.cjs` as committed).
+
+**PROD1 (`10.3.10.49`) - runs RKE2 (Kubernetes), which changes everything:**
+its `rke2-ingress-nginx` controller DNATs ports 80/443 to its own pod
+(`iptables -t nat -L`, ports 80/443 → the ingress pod IP) *before* traffic
+ever reaches the host nginx. The host nginx here instead listens on 5174
+(plain) and 5443 (TLS) - one layer further in - and proxies `/` to
+`127.0.0.1:5175`, **not** 5174 (`serve` on this node is bootstrapped to
+5175, unlike PROD2's 5174 - the two nodes' `ecosystem.config.cjs` are not
+identical; check the live file on each box, don't assume it matches git).
+For `https://flowdesk.etl.co.ls` to reach the app on this node at all, a
+Kubernetes `Ingress` + `Service` + `Endpoints` + TLS `Secret` (namespace
+`default`, see `deploy/k8s-ingress-prod1.yaml.example`) had to be created
+pointing at `10.3.10.49:5174` / `10.3.10.69:5174` - without it, this node's
+ingress just 404s every request, which is exactly what happened on
+2026-08-18: DNS sent ~half of requests to a working PROD2 and half to a
+PROD1 with no route in, so the site alternated between working and 404 on
+every reload until this was applied.
+
+If PROD1 is ever rebuilt, re-apply `deploy/k8s-ingress-prod1.yaml.example`
+(fill in the cert paths, `kubectl apply -f -`) as part of setup - it's not
+automatic and nothing else re-creates it.
+
+`serve` on both nodes binds all interfaces (0.0.0.0), not loopback -
+restricting that to loopback crash-loops the installed `serve` version (see
+the note in `deploy/ecosystem.config.cjs`). **Firewall ports 5174/5175,
+same as port 4000 (backend), on both PROD nodes to intra-cluster/proxy
+traffic only** - see step 8 - not the open internet, since nothing enforces
+that at the app level.
 
 Note: the frontend is built with `VITE_API=/api`, so it calls
 `/api/<route>` (e.g. `/api/auth/login`); the nginx config proxies `/api/` to

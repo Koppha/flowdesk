@@ -1,0 +1,70 @@
+# Kubernetes resources for PROD1 (10.3.10.49) ONLY - see deploy/README.md
+# step 7 for why. PROD1 runs RKE2, whose bundled rke2-ingress-nginx
+# controller DNATs ports 80/443 to itself before the host nginx ever sees
+# the request, so without these resources https://flowdesk.etl.co.ls 404s
+# on every request that DNS happens to send to this node. PROD2 needs none
+# of this - it's plain nginx directly on 80/443.
+#
+# Apply with (namespace: default, matching the rest of this single-app
+# cluster - kube-system/argo/etc. are unrelated):
+#   export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+#   sudo -E kubectl create secret tls flowdesk-tls \
+#     --cert=/etc/nginx/ssl/flowdesk.crt --key=/etc/nginx/ssl/flowdesk.key -n default
+#   sudo -E kubectl apply -f deploy/k8s-ingress-prod1.yaml.example
+#
+# The Service/Endpoints below has no pod selector - the app runs as pm2
+# processes on the host (and on PROD2), not as pods, so this just tells the
+# ingress controller where to actually proxy: both PROD nodes' own nginx on
+# port 5174, which already handles /api/ (-> 4000) and / (-> serve)
+# internally. Listing both node IPs here means either PROD1's or PROD2's
+# app can serve a request that lands on PROD1's ingress, matching the
+# active-active design described in step 4.
+apiVersion: v1
+kind: Service
+metadata:
+  name: flowdesk-app
+  namespace: default
+spec:
+  ports:
+    - name: http
+      port: 5174
+      targetPort: 5174
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: flowdesk-app
+  namespace: default
+subsets:
+  - addresses:
+      - ip: 10.3.10.49
+      - ip: 10.3.10.69
+    ports:
+      - name: http
+        port: 5174
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flowdesk
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-set-header: |
+      X-Forwarded-Proto https
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - flowdesk.etl.co.ls
+      secretName: flowdesk-tls
+  rules:
+    - host: flowdesk.etl.co.ls
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: flowdesk-app
+                port:
+                  number: 5174

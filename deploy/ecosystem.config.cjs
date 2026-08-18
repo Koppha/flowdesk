@@ -1,7 +1,16 @@
 // PM2 config for PROD servers. Lives at /opt/advance-clearance/ecosystem.config.cjs
-// (copied there once during initial setup, not part of each release).
+// (copied there once during initial setup, not part of each release, so this
+// committed copy is a template, not a live mirror - always check the actual
+// file on the box before assuming it matches this).
 // Paths point at the "current" symlink, which remote-deploy.sh repoints at
 // the latest release on every deploy; `pm2 reload` then picks up the change.
+//
+// PROD1 and PROD2 have DIVERGED from this file and from each other: PROD1
+// (10.3.10.49) actually runs `serve` on port 5175, not 5174, because its
+// host nginx already occupies 5174 as an inner proxy layer in front of it
+// (see deploy/README.md step 7 - PROD1 runs Kubernetes, which complicates
+// things). Confirm the live args on each node with `pm2 jlist` before
+// editing this port.
 module.exports = {
   apps: [
     {
