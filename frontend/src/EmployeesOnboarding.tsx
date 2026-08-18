@@ -317,7 +317,7 @@ export default function EmployeesOnboarding() {
               {employees.length} record{employees.length !== 1 ? "s" : ""}
             </span>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="ep-filter-bar" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <div className="ep-search">
               <Search size={14} />
               <input placeholder="Search by name, email, employee no…" value={search} onChange={(e) => setSearch(e.target.value)} />

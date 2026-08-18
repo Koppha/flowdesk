@@ -749,7 +749,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
       <div className="ep-panel">
         <div className="ep-panel-head">
           <div className="ep-panel-title">All Processes</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div className="ep-filter-bar" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <div className="ep-search"><Search size={14} /><input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
             <select className="ep-select" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
               <option value="">All Categories</option>

@@ -176,7 +176,7 @@ export default function Payments(props: { onBack?: () => void }) {
       </div>
 
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
+        <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 220px" }}>
             <Search size={14} />
             <input placeholder="Search by payee, department, reference…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
@@ -219,7 +219,7 @@ export default function Payments(props: { onBack?: () => void }) {
         </div>
 
         {filtered.length > 0 && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
+          <div className="ep-filter-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
             <span style={{ fontSize: 13, color: "var(--muted)" }}>
               Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} entries
             </span>

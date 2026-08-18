@@ -10628,9 +10628,9 @@ html[data-theme="dark"] .tracking-empty {
 /* ── Filter bars (Deductions, Reports, My Advances, etc.): controls should
    size to content/flex-basis, not stretch to the global input/select 100%
    width, so they sit inline in a row instead of stacking one-per-line. ── */
-.ded-filter-bar select.ep-form-select,
+.ded-filter-bar select,
 .ded-filter-bar input.ep-form-select,
-.ep-filter-bar select.ep-form-select,
+.ep-filter-bar select,
 .ep-filter-bar input.ep-form-select {
   width: auto;
   flex: 0 0 auto;

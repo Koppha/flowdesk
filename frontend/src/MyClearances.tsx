@@ -154,7 +154,7 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
       </div>
 
       <div className="ep-panel">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 18px", alignItems: "center" }}>
+        <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 18px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 220px" }}>
             <input
               placeholder="Search by month or reference…"

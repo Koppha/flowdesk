@@ -97,7 +97,7 @@ export default function ReportReconciliation({ onBack, meUserId }: Props) {
 
       {/* Period controls */}
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
+        <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <Calendar size={16} style={{ color: "var(--muted)" }} />
           <select className="ep-form-select" value={mode} onChange={e => setMode(e.target.value as "month" | "custom")}>
             <option value="month">Month</option>

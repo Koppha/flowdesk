@@ -191,7 +191,7 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
 
       {/* Filters */}
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
+        <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 200px" }}>
             <input placeholder="Search actor, division, type…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
