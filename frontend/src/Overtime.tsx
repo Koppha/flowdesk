@@ -884,7 +884,7 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
               <thead>
                 <tr>
                   <th>Date</th><th>Day</th><th>From</th><th>To</th><th>Ordered By</th>
-                  <th>125%</th><th>150%</th><th>200%</th><th>Converted Hours</th><th>Account No.</th><th>Account Name</th>
+                  <th>Actual Hours</th><th>125%</th><th>150%</th><th>200%</th><th>Converted Hours</th><th>Account No.</th><th>Account Name</th>
                 </tr>
               </thead>
               <tbody>
@@ -902,6 +902,7 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
                       </>
                     )}
                     <td>{l.ordered_by || "—"}</td>
+                    <td>{(Number(l.hours_125 || 0) + Number(l.hours_150 || 0) + Number(l.hours_200 || 0)) || "—"}</td>
                     <td>{Number(l.hours_125 || 0) || "—"}</td><td>{Number(l.hours_150 || 0) || "—"}</td><td>{Number(l.hours_200 || 0) || "—"}</td>
                     <td>{l.converted_hours}</td><td>{l.account_number || "—"}</td><td>{l.account_name || "—"}</td>
                   </tr>
