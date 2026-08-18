@@ -120,7 +120,7 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Workflow Analytics</h1>
-          <p className="ep-subtitle">Insight into workflow configuration, coverage, and complexity across all request types.</p>
+          <p className="ep-subtitle">Insight into workflow configuration, coverage, and complexity across all processes.</p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" onClick={() => void load()} disabled={loading}>
@@ -159,7 +159,7 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
 
             <div className="ep-panel">
-              <div className="ep-panel-head"><div className="ep-panel-title">Workflows by Request Type</div></div>
+              <div className="ep-panel-head"><div className="ep-panel-title">Workflows by Process</div></div>
               <div style={{ padding: "12px 20px" }}>
                 {byType.length === 0 ? (
                   <div className="ep-empty" style={{ padding: "20px 0" }}><p>No workflows configured.</p></div>
@@ -208,7 +208,7 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
                   <thead>
                     <tr>
                       <th>Workflow Name</th>
-                      <th>Request Type</th>
+                      <th>Process</th>
                       <th>Division</th>
                       <th>Department</th>
                       <th>Steps</th>

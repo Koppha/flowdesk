@@ -68,7 +68,8 @@ sudo $EDITOR /etc/advance-clearance/.env
 `/etc/advance-clearance/.env` should mirror `backend-v2/.env.example` but with
 production values, in particular:
 - `DATABASE_URL` pointing at the shared PROD Postgres (see step 5)
-- `CORS_ORIGIN` / `APP_URL` set to the public PROD URL (load balancer address)
+- `CORS_ORIGIN` / `APP_URL` set to `https://flowdesk.etl.co.ls` (the public
+  load-balancer URL - see step 7; no port, TLS terminates at the LB)
 - `NODE_ENV=production`
 
 ## 5. Shared PROD database
@@ -101,9 +102,19 @@ the new code via the repointed `current` symlink with zero downtime.
 
 On each PROD server, copy `deploy/nginx-advance-clearance.conf.example` to
 `/etc/nginx/sites-available/advance-clearance`, adjust as needed, symlink
-into `sites-enabled`, and `nginx -s reload`. Point the load balancer at port
-80 (or 443, if TLS is terminated on the PROD servers) on both PROD1 and
-PROD2.
+into `sites-enabled`, and `nginx -s reload`. Point the load balancer's plain
+HTTP backend pool at port 80 on both PROD1 and PROD2.
+
+TLS terminates at the load balancer: it holds the certificate for
+`flowdesk.etl.co.ls`, listens on 443, and forwards decrypted HTTP to the
+port-80 pool above (`X-Forwarded-Proto` is already forwarded by the nginx
+vhost, so the app sees the request as HTTPS). This is what makes
+`https://flowdesk.etl.co.ls` - no port - the one public URL; the previous
+direct `flowdesk.etl.co.ls:5174` link no longer works once `serve` is bound
+to loopback (see `deploy/ecosystem.config.cjs`), since nginx on port 80/443
+via the LB is the only path in. Firewall port 4000 (backend) on both PROD
+nodes to the LB and the email-action external proxy host only - see step 8 -
+not the open internet.
 
 Note: the frontend is built with `VITE_API=/api`, so it calls
 `/api/<route>` (e.g. `/api/auth/login`); the nginx config proxies `/api/` to
@@ -113,17 +124,35 @@ routes (`/auth`, `/advances`, etc.).
 ## 8. (Optional) Email-action proxy
 
 If approvers need to act on "Approve or Reject by Email" links from a
-network that can't reach the app directly, add the location block from
-`deploy/nginx-email-action-proxy.conf.example` to an already-reachable
-internal proxy (UAT uses `dt-internalproxy-1.etl.co.ls/flowdesk/uat/`, the
-same host already used for `/ldap/api`). It forwards *only* to this
-backend's `/email-actions` route — the backend renders a self-contained
+network that can't reach the app directly, add the **active** location block
+from `deploy/nginx-email-action-proxy.conf.example` — PROD, external,
+`dt-externalproxy-1.etl.co.ls/etl/flowdesk/prod/email-actions/` — to that
+proxy's server block. It forwards *only* to the backend's `/email-actions`
+route, directly on its port — not through the general `/flowdesk/prod/` app
+proxy block that already exists there, since that routes to the frontend for
+anything outside `/api/` and `emailActionsRouter` is mounted at the
+backend's root, not under `/api/`. The backend renders a self-contained
 HTML confirmation page for browser requests (see `email-actions.routes.ts`),
-so no frontend proxying or `/api/`/`/assets/` forwarding is needed, and
-nothing else under that path is reachable.
+so no frontend proxying or `/api/`/`/assets/` forwarding is needed either
+way.
 
-After it's live, set `EMAIL_ACTION_PUBLIC_URL=<that proxy's base URL>` (e.g.
-`http://dt-internalproxy-1.etl.co.ls/flowdesk/uat`, no trailing slash) in
-the backend `.env` so generated email links point there instead of the
-internal `APP_URL`. Leave it unset if this isn't needed — email links then
-fall back to `APP_URL` and only work from inside the network via the SPA.
+This block round-robins directly between PROD1 (`10.3.10.49`) and PROD2
+(`10.3.10.69`), bypassing the load balancer, since either instance can
+redeem a token via the shared DB. Port `4000` is assumed to match UAT's
+default — confirm it on the actual PROD hosts before relying on it.
+
+The example file also has two **inactive** (commented-out) blocks kept as
+reference/fallback, not part of the normal rollout:
+- UAT (`dt-internalproxy-1.etl.co.ls/flowdesk/uat/email-actions/`) — UAT is
+  a sandbox, not what gets shipped to prod.
+- PROD, internal (`dt-internalproxy-1.etl.co.ls/flowdesk/prod/email-actions/`)
+  — intranet-only; confirmed reachable and working as of this writing, but
+  superseded by the external block, since intranet approvers can still reach
+  an externally-hosted link but the reverse isn't true.
+
+Once the external block is live, set
+`EMAIL_ACTION_PUBLIC_URL=https://dt-externalproxy-1.etl.co.ls/etl/flowdesk/prod`
+(no trailing slash) in `/etc/advance-clearance/.env` on **both** PROD1 and
+PROD2 so generated email links point there instead of the internal
+`APP_URL`. Leave it unset if this isn't needed — email links then fall back
+to `APP_URL` and only work from inside the network via the SPA.

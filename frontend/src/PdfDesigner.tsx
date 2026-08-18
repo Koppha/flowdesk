@@ -12,7 +12,7 @@ const REQUEST_TYPE_LABELS: Record<PdfRequestType, string> = {
   OVERTIME_REQUEST: "Overtime Request",
   OVERTIME_CLAIM: "Overtime Claim",
   STANDBY_CLAIM: "Standby Claim",
-  CUSTOM_REQUEST: "Custom Request"
+  CUSTOM_REQUEST: "Custom Process"
 };
 const REQUEST_TYPES = Object.keys(REQUEST_TYPE_LABELS) as PdfRequestType[];
 
@@ -214,7 +214,7 @@ export default function PdfDesigner() {
         ) : (
           <div className="card" style={{ padding: 0 }}>
             <table className="ep-table">
-              <thead><tr><th>Request Type</th><th>Name</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Process</th><th>Name</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>
                 {REQUEST_TYPES.map((rt) => {
                   const rows = templates.filter((t) => t.request_type === rt);
@@ -404,7 +404,7 @@ function SectionEditor({ section, catalog, onChange }: { section: Section; catal
         </div>
         <label style={{ display: "block", marginTop: 10, marginBottom: 4 }}>Fields</label>
         <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border, #e2e8f0)", borderRadius: 8, padding: 8 }}>
-          {catalog.length === 0 && <div style={{ fontSize: 12, color: "var(--muted)" }}>Leave empty to show every submitted field (custom requests only).</div>}
+          {catalog.length === 0 && <div style={{ fontSize: 12, color: "var(--muted)" }}>Leave empty to show every submitted field (custom processes only).</div>}
           {catalog.map((f) => (
             <label key={f.key} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, padding: "3px 0" }}>
               <input
@@ -500,7 +500,7 @@ function SectionEditor({ section, catalog, onChange }: { section: Section; catal
           {renderSide("left")}
           {renderSide("right")}
         </div>
-        <p style={{ fontSize: 12, color: "var(--muted)" }}>Available field keys for this request type are listed in the "Available Fields" panel on the right.</p>
+        <p style={{ fontSize: 12, color: "var(--muted)" }}>Available field keys for this process are listed in the "Available Fields" panel on the right.</p>
       </div>
     );
   }
@@ -595,7 +595,7 @@ function PermissionsScreen({ template, onBack }: { template: Template; onBack: (
       <button className="button small-button button-subtle" type="button" onClick={onBack} style={{ marginBottom: 8 }}>&larr; Back</button>
       <h2 style={{ marginTop: 0 }}>PDF Permissions — {REQUEST_TYPE_LABELS[template.request_type]}</h2>
       <p style={{ fontSize: 13, color: "var(--muted)" }}>
-        Who can view or design PDFs for this request type — independent of who can view or approve the request itself.
+        Who can view or design PDFs for this process — independent of who can view or approve the request itself.
         A person can always view the PDF of their own submitted request.
       </p>
 

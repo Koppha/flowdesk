@@ -845,12 +845,12 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
         const active: RequestTypeSummary[] = (allTypes || []).filter((t: any) => t.status === "ACTIVE");
         setTypes(active);
         if (!active.length) {
-          setError("No request types have been configured yet.");
+          setError("No processes have been configured yet.");
           return;
         }
         setSelectedTypeId(active[0].id);
       } catch {
-        setError("Failed to load request types.");
+        setError("Failed to load processes.");
       } finally {
         setLoading(false);
       }
@@ -1445,10 +1445,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
             <span className="custom-requests-title-icon">
               <ClipboardList size={18} />
             </span>
-            <h2>Custom Requests</h2>
+            <h2>Custom Processes</h2>
           </div>
           <p className="custom-requests-subtitle">
-            Submit any configured request type and define who needs to approve it.
+            Submit any configured process and define who needs to approve it.
           </p>
         </div>
         <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
@@ -1456,7 +1456,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
 
       {types.length > 1 && (
         <div className="ep-form-group custom-request-type-picker">
-          <label>Request Type</label>
+          <label>Process</label>
           <select className="ep-form-select" value={selectedTypeId || ""} onChange={(e) => setSelectedTypeId(e.target.value)}>
             {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
@@ -1792,7 +1792,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                 {selectedType?.fixed_approval_chain?.length ? (
                   <>
                     <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>
-                      This request type has a fixed sign-off order. Choose the people for each role below.
+                      This process has a fixed sign-off order. Choose the people for each role below.
                     </div>
                     {selectedType.fixed_approval_chain.map((stepDef, idx) => (
                       <div key={idx} style={{ marginBottom: 8 }}>

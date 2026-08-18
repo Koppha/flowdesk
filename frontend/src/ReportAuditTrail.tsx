@@ -141,7 +141,7 @@ export default function ReportAuditTrail({ advances, claims, travelTypes, onBack
   }), [entries]);
 
   function exportCsv() {
-    const h = ["Timestamp","Action","Actor","Division","Request Type","Amount"];
+    const h = ["Timestamp","Action","Actor","Division","Process","Amount"];
     const rows = filtered.map(e => [fmtDate(e.timestamp), ACTION_CONFIG[e.action]?.label || e.action, e.actor, e.department, e.requestType, e.amount]);
     const csv = [h, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
     const el = document.createElement("a");

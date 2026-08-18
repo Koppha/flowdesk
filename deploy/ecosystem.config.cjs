@@ -20,7 +20,9 @@ module.exports = {
       // different (and incompatible) argv parsing from the actual npm
       // package's CLI.
       script: "/usr/lib/node_modules/serve/build/main.js",
-      args: ["-s", "dist", "-l", "5174"],
+      // Loopback only - the public entry point is the load balancer
+      // (https://flowdesk.etl.co.ls) -> nginx -> here, not this port directly.
+      args: ["-s", "dist", "-l", "tcp://127.0.0.1:5174"],
       env: {
         NODE_ENV: "production"
       }

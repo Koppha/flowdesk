@@ -1,13 +1,18 @@
 # Example nginx vhost for a PROD advance-clearance server.
 # Copy to /etc/nginx/sites-available/, adjust server_name/ports, then symlink
-# into sites-enabled and reload nginx. The load balancer fronts both PROD
-# servers on port 80/443.
+# into sites-enabled and reload nginx.
+#
+# TLS terminates at the load balancer (https://flowdesk.etl.co.ls, no port -
+# see deploy/README.md step 7), which forwards plain HTTP to this vhost on
+# port 80 on both PROD1 and PROD2. This is the only public entry point:
+# `serve` is bound to 127.0.0.1:5174 (deploy/ecosystem.config.cjs), so the
+# frontend is unreachable except through here.
 
 server {
     listen 80;
     server_name _;
 
-    # Frontend (served by `serve -s dist -l 5174` via PM2)
+    # Frontend (served by `serve -s dist -l tcp://127.0.0.1:5174` via PM2)
     location / {
         proxy_pass http://127.0.0.1:5174;
         proxy_set_header Host $host;

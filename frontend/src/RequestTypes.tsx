@@ -561,7 +561,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
 
   async function handleDelete(id: string, name: string) {
     const confirmed = await confirmAction({
-      title: "Delete request type?",
+      title: "Delete process?",
       text: `Delete "${name}"? This cannot be undone.`,
       confirmButtonText: "Delete"
     });
@@ -643,18 +643,18 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
     <div className="ep-page">
       {/* ── Breadcrumb ── */}
       <div className="ep-breadcrumb">
-        <span>Administration</span><ChevronRight size={13} /><span className="ep-breadcrumb-active">Request Types</span>
+        <span>Administration</span><ChevronRight size={13} /><span className="ep-breadcrumb-active">Process</span>
       </div>
 
       {/* ── Header ── */}
       <div className="ep-header">
         <div className="ep-header-text">
-          <h1 className="ep-title">Request Types</h1>
-          <p className="ep-subtitle">Define custom request types and design their input forms. Assign users or divisions who can submit or design each type.</p>
+          <h1 className="ep-title">Process</h1>
+          <p className="ep-subtitle">Define custom processes and design their input forms. Assign users or divisions who can submit or design each type.</p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" onClick={() => void load()}><RefreshCw size={14} />Refresh</button>
-          <button className="ep-btn" onClick={() => setShowCreate(true)}><Plus size={15} />New Request Type</button>
+          <button className="ep-btn" onClick={() => setShowCreate(true)}><Plus size={15} />New Process</button>
         </div>
       </div>
 
@@ -666,10 +666,10 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
         <div className="ep-kpi ep-kpi-purple"><div className="ep-kpi-icon"><ClipboardList size={26} /></div><div><div className="ep-kpi-value">{stats.withFields}</div><div className="ep-kpi-label">With Form Fields</div></div></div>
       </div>
 
-      {/* ── Built-in Request Types ── */}
+      {/* ── Built-in Processes ── */}
       <div className="ep-panel" style={{ marginBottom: 20 }}>
         <div className="ep-panel-head">
-          <div className="ep-panel-title">Built-in Request Types</div>
+          <div className="ep-panel-title">Built-in Processes</div>
           <span style={{ fontSize: 12, color: "var(--muted)" }}>System modules — toggle on/off, admin-only</span>
         </div>
         <div style={{ display: "flex", gap: 12, padding: "14px 18px", flexWrap: "wrap" }}>
@@ -745,10 +745,10 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
         </div>
       </div>
 
-      {/* ── Custom Request Types Table ── */}
+      {/* ── Custom Processes Table ── */}
       <div className="ep-panel">
         <div className="ep-panel-head">
-          <div className="ep-panel-title">All Request Types</div>
+          <div className="ep-panel-title">All Processes</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <div className="ep-search"><Search size={14} /><input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
             <select className="ep-select" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
@@ -766,12 +766,12 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
 
         <div className="ep-table-wrap">
           {loading ? (
-            <div className="ep-loading"><RefreshCw size={20} className="rl-spin" /><p>Loading request types…</p></div>
+            <div className="ep-loading"><RefreshCw size={20} className="rl-spin" /><p>Loading processes…</p></div>
           ) : filtered.length === 0 ? (
-            <div className="ep-empty"><Layers size={32} style={{ opacity: 0.25 }} /><p>No request types yet.<br />Click <strong>New Request Type</strong> to create one.</p></div>
+            <div className="ep-empty"><Layers size={32} style={{ opacity: 0.25 }} /><p>No processes yet.<br />Click <strong>New Process</strong> to create one.</p></div>
           ) : (
             <table className="ep-table">
-              <thead><tr><th>Request Type</th><th>Code</th><th>Category</th><th>Form Fields</th><th>Permissions</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Process</th><th>Code</th><th>Category</th><th>Form Fields</th><th>Permissions</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>
                 {filtered.map((rt) => (
                   <tr key={rt.id}>
@@ -816,7 +816,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
         <div className="ep-modal-overlay" onClick={() => setShowCreate(false)}>
           <div className="ep-modal" onClick={(e) => e.stopPropagation()}>
             <div className="ep-modal-head">
-              <div><h2 className="ep-modal-title">New Request Type</h2><p className="ep-modal-sub">Define a custom request type and its basic information.</p></div>
+              <div><h2 className="ep-modal-title">New Process</h2><p className="ep-modal-sub">Define a custom process and its basic information.</p></div>
               <button className="ep-icon-btn" onClick={() => setShowCreate(false)}><X size={18} /></button>
             </div>
             <div className="ep-modal-body">
@@ -832,7 +832,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
               </div>
               <div className="ep-form-group">
                 <label>Description</label>
-                <textarea className="ep-form-textarea" rows={2} value={createDesc} placeholder="Describe this request type…" onChange={(e) => setCreateDesc(e.target.value)} />
+                <textarea className="ep-form-textarea" rows={2} value={createDesc} placeholder="Describe this process…" onChange={(e) => setCreateDesc(e.target.value)} />
               </div>
               <div className="ep-form-row">
                 <div className="ep-form-group">
@@ -872,7 +872,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
             </div>
             <div className="ep-modal-footer">
               <button className="ep-btn-outline" onClick={() => setShowCreate(false)}>Cancel</button>
-              <button className="ep-btn" onClick={handleCreate} disabled={creating}>{creating ? "Creating…" : "Create Request Type"}</button>
+              <button className="ep-btn" onClick={handleCreate} disabled={creating}>{creating ? "Creating…" : "Create Process"}</button>
             </div>
           </div>
         </div>
@@ -941,7 +941,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                           },
                           {
                             done: isActive,
-                            label: "Activate the request type",
+                            label: "Activate the process",
                             detail: isActive ? "Status is Active" : `Currently ${detailData.status.toLowerCase()} — users cannot submit until it is set to Active.`,
                             action: () => setEditMeta(true),
                             actionLabel: "Edit Details",
@@ -950,7 +950,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                             done: false,
                             info: true,
                             label: "Set up an approval workflow",
-                            detail: "Go to Approval Workflow Builder and create a workflow for this request type so submissions have an approval chain.",
+                            detail: "Go to Approval Workflow Builder and create a workflow for this process so submissions have an approval chain.",
                             action: null,
                             actionLabel: null,
                           },
@@ -959,7 +959,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                           <div style={{ marginBottom: 18, border: "1px solid #fbbf24", borderRadius: 10, overflow: "hidden", background: "var(--surface)" }}>
                             <div style={{ background: "#fef3c7", padding: "10px 16px", display: "flex", alignItems: "center", gap: 8 }}>
                               <AlertTriangle size={15} style={{ color: "#d97706", flexShrink: 0 }} />
-                              <span style={{ fontWeight: 700, fontSize: "0.88rem", color: "#92400e" }}>Setup incomplete — complete these steps before this request type is usable</span>
+                              <span style={{ fontWeight: 700, fontSize: "0.88rem", color: "#92400e" }}>Setup incomplete — complete these steps before this process is usable</span>
                             </div>
                             <div style={{ padding: "4px 0" }}>
                               {steps.map((step, i) => (
@@ -988,7 +988,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                         <div>
                           <div className="ep-panel" style={{ marginBottom: 16 }}>
                             <div className="ep-panel-head">
-                              <span className="ep-panel-title">Request Type Information</span>
+                              <span className="ep-panel-title">Process Information</span>
                               <button className="ep-btn-outline" style={{ padding: "5px 10px", fontSize: "0.82rem" }} onClick={() => setEditMeta(true)}><Edit3 size={13} />Edit</button>
                             </div>
                             <div className="ep-panel-body">
@@ -1064,7 +1064,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                         <div>
                           <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>Form Designer</div>
-                          <div style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Define the input fields that users will fill in when submitting this request type.</div>
+                          <div style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Define the input fields that users will fill in when submitting this process.</div>
                         </div>
                         <div style={{ display: "flex", gap: 8 }}>
                           <button className="ep-btn-outline" onClick={addField}><Plus size={14} />Add Field</button>
@@ -1143,7 +1143,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                       {permissions.length === 0 ? (
                         <div className="ep-empty" style={{ padding: "32px 0" }}>
                           <Shield size={28} style={{ opacity: 0.25 }} />
-                          <p>No permissions set. Add a permission above to control who can submit or design this request type.</p>
+                          <p>No permissions set. Add a permission above to control who can submit or design this process.</p>
                         </div>
                       ) : (
                         <div className="ep-table-wrap">
@@ -1175,7 +1175,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
                     <div>
                       <div style={{ marginBottom: 16 }}>
                         <div style={{ fontWeight: 700, marginBottom: 4 }}>Form Preview</div>
-                        <div style={{ fontSize: "0.82rem", color: "var(--muted)" }}>This is how the form will appear to users when submitting this request type.</div>
+                        <div style={{ fontSize: "0.82rem", color: "var(--muted)" }}>This is how the form will appear to users when submitting this process.</div>
                       </div>
                       <div className="ep-panel">
                         <div className="ep-panel-head">

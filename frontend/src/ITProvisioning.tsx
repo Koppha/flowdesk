@@ -271,7 +271,7 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
             <option value="DESKTOP">Desktop</option>
           </select>
           <select className="ep-form-select" value={requestTypeFilter} onChange={(e) => setRequestTypeFilter(e.target.value)}>
-            <option value="">All Request Types</option>
+            <option value="">All Processes</option>
             <option value="NEW">New</option>
             <option value="REPLACEMENT">Replacement</option>
             <option value="UPGRADE">Upgrade</option>
@@ -297,7 +297,7 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
               <thead>
                 <tr>
                   <th>Request No.</th><th>Employee</th><th>Department</th><th>Computer</th>
-                  <th>Request Type</th><th>Approved On</th><th>Status</th><th>Assigned To</th><th />
+                  <th>Process</th><th>Approved On</th><th>Status</th><th>Assigned To</th><th />
                 </tr>
               </thead>
               <tbody>
@@ -378,7 +378,7 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
               <Field label="Position"><div>{task.position || "—"}</div></Field>
               <Field label="Computer Type"><div>{task.computer_type || "—"}</div></Field>
               <Field label="Employee No."><div>{task.requester_employee_no || "—"}</div></Field>
-              <Field label="Request Type"><div>{task.request_type || "—"}</div></Field>
+              <Field label="Process"><div>{task.request_type || "—"}</div></Field>
               <Field label="Phone"><div>{task.phone_no || "—"}</div></Field>
               <Field label="Submitted On"><div>{fmtDate(task.submitted_at)}</div></Field>
             </div>
@@ -996,7 +996,7 @@ function ReportsView({ onBack }: { onBack: () => void }) {
           <Bars title="By Status" rows={summary.byStatus} keyName="status" valueName="count" />
           <Bars title="By Department" rows={summary.byDepartment} keyName="department" valueName="count" />
           <Bars title="By Computer Type" rows={summary.byComputerType} keyName="computerType" valueName="count" />
-          <Bars title="By Request Type" rows={summary.byRequestType} keyName="requestType" valueName="count" />
+          <Bars title="By Process" rows={summary.byRequestType} keyName="requestType" valueName="count" />
         </>
       )}
     </div>

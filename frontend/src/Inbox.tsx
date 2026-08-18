@@ -2357,7 +2357,7 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
 
               {!canAct && isAssigneeTask && (
                 <div className="review-empty-note" style={{ padding: "0 14px 16px" }}>
-                  You've been named as an assignee on this request — go to Custom Requests &rsaquo; Assigned to Me to fill in implementation details and confirm.
+                  You've been named as an assignee on this request — go to Custom Processes &rsaquo; Assigned to Me to fill in implementation details and confirm.
                 </div>
               )}
               {!canAct && !isAssigneeTask && <div className="review-empty-note" style={{ padding: "0 14px 16px" }}>This request is not awaiting your action.</div>}

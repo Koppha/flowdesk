@@ -1501,7 +1501,7 @@ export default function WorkflowBuilder() {
       return;
     }
     if (!selectedWorkflowId && selectedRequestTypeValues.length === 0) {
-      void Swal.fire({ icon: "warning", title: "Select a request type", text: "Choose at least one request type for this workflow." });
+      void Swal.fire({ icon: "warning", title: "Select a process", text: "Choose at least one process for this workflow." });
       return;
     }
     try {
@@ -1731,7 +1731,7 @@ export default function WorkflowBuilder() {
       return;
     }
     if (selectedRequestTypeValues.length === 0) {
-      void Swal.fire({ icon: "warning", title: "Select a request type", text: "Choose at least one request type for this workflow." });
+      void Swal.fire({ icon: "warning", title: "Select a process", text: "Choose at least one process for this workflow." });
       return;
     }
     setScreen("TEMPLATE");
@@ -1796,7 +1796,7 @@ export default function WorkflowBuilder() {
         <div className="ep-header">
           <div className="ep-header-text">
             <h1 className="ep-title">Approval Workflow Builder</h1>
-            <p className="ep-subtitle">Design and configure approval workflows for different request types.</p>
+            <p className="ep-subtitle">Design and configure approval workflows for different processes.</p>
           </div>
           <div className="ep-actions">
             <button className="ep-btn" type="button" onClick={startNewWorkflow}><Plus size={15} aria-hidden />New Workflow</button>
@@ -1829,7 +1829,7 @@ export default function WorkflowBuilder() {
               <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search workflows by name..." />
             </label>
             <select value={requestTypeFilter} onChange={(event) => setRequestTypeFilter(event.target.value)}>
-              <option value="">All Request Types</option>
+              <option value="">All Processes</option>
               {requestTypeOptions.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
             </select>
             <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}>
@@ -1854,7 +1854,7 @@ export default function WorkflowBuilder() {
               <thead>
                 <tr>
                   <th>Workflow Name</th>
-                  <th>Request Type</th>
+                  <th>Process</th>
                   <th>Division</th>
                   <th>Approval Flow Preview</th>
                   <th>Steps</th>
@@ -2151,9 +2151,9 @@ export default function WorkflowBuilder() {
           </section>
 
           <aside className="workflow-panel workflow-request-type-card">
-            <h3>Request Type <sup>*</sup></h3>
+            <h3>Process <sup>*</sup></h3>
             <p>
-              Select one or more request types this workflow applies to. Checking more than one
+              Select one or more processes this workflow applies to. Checking more than one
               creates a separate copy of this workflow per type (same steps), so pick every type
               that should share this exact approval flow.
             </p>
@@ -2240,7 +2240,7 @@ export default function WorkflowBuilder() {
         <div className="page-heading workflow-page-heading">
           <div>
             <h2>{readOnly ? "Workflow Details" : "Approval Workflow Builder"}</h2>
-            <p>{readOnly ? "Review workflow configuration and approval routing." : "Design and configure approval workflows for different request types."}</p>
+            <p>{readOnly ? "Review workflow configuration and approval routing." : "Design and configure approval workflows for different processes."}</p>
           </div>
         </div>
 
@@ -2250,7 +2250,7 @@ export default function WorkflowBuilder() {
             <input value={metadata.name} onChange={(event) => updateMetadata({ name: event.target.value })} disabled={readOnly} />
           </label>
           <label className="workflow-config-field">
-            <span>Request Type</span>
+            <span>Process</span>
             <select
               value={SUB_TYPED_REQUEST_TYPES[metadata.requestType] && metadata.advanceSubType ? `${metadata.requestType}:${metadata.advanceSubType}` : metadata.requestType}
               onChange={(event) => handleStep1RequestTypeChange(event.target.value)}

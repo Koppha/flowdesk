@@ -351,7 +351,7 @@ function UserSearchSelect(props: {
 const DELEGATION_REQUEST_TYPE_OPTIONS = [
   { value: "ADVANCE_REQUEST", label: "Advance Requests (Salary / Loan / Travel)" },
   { value: "CLEARANCE_REQUEST", label: "Travel Clearances" },
-  { value: "CUSTOM_WORKFLOW", label: "Custom Requests (All Types)" },
+  { value: "CUSTOM_WORKFLOW", label: "Custom Processes (All Types)" },
   { value: "STANDBY_CLAIM", label: "Standby Claim Approvals" }
 ];
 
@@ -1168,11 +1168,11 @@ export default function App() {
     { key: "MY_CLEARANCES", label: "Clearances", icon: CheckCircle2, available: true },
     { key: "ATTENDANCE", label: "Attendance", icon: FileText, available: canAccessAttendance },
     { key: "OVERTIME", label: "Overtime", icon: Clock3, available: overtimeModuleEnabled },
-    { key: "CHANGE_REQUEST", label: "Custom Requests", icon: GitBranch, available: hasActiveCustomRequestTypes },
+    { key: "CHANGE_REQUEST", label: "Custom Processes", icon: GitBranch, available: hasActiveCustomRequestTypes },
     { key: "INBOX", label: "Approval Inbox", icon: Mail, available: true },
     { key: "REPORTS", label: "Reports", icon: BarChart3, available: true },
     { key: "TRAVEL_SETUP", label: "Travel Setup", icon: BriefcaseBusiness, available: canManageTravelSettings },
-    { key: "REQUEST_TYPES", label: "Request Types", icon: ClipboardList, available: canAccessFeature("request_types") },
+    { key: "REQUEST_TYPES", label: "Process", icon: ClipboardList, available: canAccessFeature("request_types") },
     { key: "USER_MANAGEMENT", label: "User Management", icon: Users, available: canAccessFeature("user_management") },
     { key: "ORG_STRUCTURE", label: "Org Structure", icon: Network, available: canAccessFeature("org_structure") },
     { key: "SETTINGS", label: "Settings", icon: SettingsIcon, available: true }
@@ -3570,7 +3570,7 @@ export default function App() {
                     <h3>Request Summary</h3>
                     <dl className="tracking-detail-list">
                       <div><dt>Request No.</dt><dd>{requestNumber(advance)}</dd></div>
-                      <div><dt>Request Type</dt><dd>{requestType}</dd></div>
+                      <div><dt>Process</dt><dd>{requestType}</dd></div>
                       <div><dt>Business Unit</dt><dd>{businessUnit}</dd></div>
                       <div><dt>Division</dt><dd>{department}</dd></div>
                       <div><dt>Amount Requested</dt><dd>{fmtMoney(amount)}</dd></div>
@@ -4111,13 +4111,23 @@ export default function App() {
           {standbyModuleEnabled && (
             <a href="#" className={navItemClass(page === "STANDBY")} onClick={(e) => { e.preventDefault(); setPage("STANDBY"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Standby</a>
           )}
-          {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Requests</a>}
+          {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Processes</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasRefundableAccess) && (
             <div className={`sidebar-group ${(financeMenuOpen || ["CAPTURE","PAYMENTS","DEDUCTIONS","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
               <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); setFinanceMenuOpen((v) => !v); }}>
                 <span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Finance
-                {(captureCount + paymentsCount + deductionsCount + refundableCount) > 0 && <b>{captureCount + paymentsCount + deductionsCount + refundableCount}</b>}
+                {(() => {
+                  // Only sum counts for sub-items this user can actually see below —
+                  // otherwise the header total includes e.g. refundableCount even when
+                  // hasRefundableAccess is false and no Refundable row is rendered,
+                  // showing a number with nothing underneath it to account for it.
+                  const financeTotal = (canAccessFeature("capture") ? captureCount : 0)
+                    + (hasPaymentsAccess ? paymentsCount : 0)
+                    + (hasDeductionsAccess ? deductionsCount : 0)
+                    + (hasRefundableAccess ? refundableCount : 0);
+                  return financeTotal > 0 && <b>{financeTotal}</b>;
+                })()}
                 <strong><ChevronDown size={14} aria-hidden /></strong>
               </a>
               <div className="sidebar-subnav">
@@ -4180,7 +4190,7 @@ export default function App() {
             <a href="#" className={navItemClass(page === "TRAVEL_SETUP")} onClick={(e) => { e.preventDefault(); setPage("TRAVEL_SETUP"); }}><span className="sidebar-nav-icon"><BriefcaseBusiness size={18} aria-hidden /></span>Travel Setup</a>
           )}
           {canAccessFeature("request_types") && (
-            <a href="#" className={navItemClass(page === "REQUEST_TYPES")} onClick={(e) => { e.preventDefault(); setPage("REQUEST_TYPES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Request Types</a>
+            <a href="#" className={navItemClass(page === "REQUEST_TYPES")} onClick={(e) => { e.preventDefault(); setPage("REQUEST_TYPES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Process</a>
           )}
           {(canAccessFeature("org_structure") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines") || canAccessFeature("pdf_designer")) && (
             <div className={`sidebar-group ${orgNavOpen ? "open" : ""}`}>
@@ -4366,7 +4376,7 @@ export default function App() {
                 <div className="ep-table-wrap">
                   <table className="ep-table">
                     <thead>
-                      <tr><th>Reference</th><th>Manager</th><th>Delegate</th><th>Department</th><th>Request Types</th><th>Period</th><th>Status</th><th></th></tr>
+                      <tr><th>Reference</th><th>Manager</th><th>Delegate</th><th>Department</th><th>Process</th><th>Period</th><th>Status</th><th></th></tr>
                     </thead>
                     <tbody>
                       {filteredDelegations.map((delegation) => {
@@ -4483,7 +4493,7 @@ export default function App() {
                           <input type="text" className="ep-form-input" placeholder="Add a note for the audit trail" value={delegationComments} onChange={(e) => setDelegationComments(e.target.value)} />
                         </div>
                         <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
-                          <label>Request Types <span className="ep-optional">(Optional)</span></label>
+                          <label>Process <span className="ep-optional">(Optional)</span></label>
                           <p style={{ margin: "0 0 6px", fontSize: 12, color: "var(--muted, #6b7280)" }}>
                             Leave unchecked to delegate every approval type. Check specific types to limit this delegation to only those.
                           </p>
@@ -4510,7 +4520,7 @@ export default function App() {
                           {customRequestTypeOptions.length > 0 && (
                             <div style={{ marginTop: 10, paddingLeft: 16, borderLeft: "2px solid var(--border)" }}>
                               <p style={{ margin: "0 0 6px", fontSize: 12, color: "var(--muted, #6b7280)" }}>
-                                Or limit to specific custom request types instead of all of them:
+                                Or limit to specific custom processes instead of all of them:
                               </p>
                               <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                                 {customRequestTypeOptions.map((opt) => (
@@ -4561,7 +4571,7 @@ export default function App() {
                         <div><strong>Delegate</strong><div>{detailDelegation.delegate_name || "—"}</div></div>
                         <div><strong>Department</strong><div>{detailDelegation.department || "—"}</div></div>
                         <div><strong>Period</strong><div>{formatDateOnly(detailDelegation.from_date)} → {formatDateOnly(detailDelegation.to_date)}</div></div>
-                        <div style={{ gridColumn: "1 / -1" }}><strong>Request Types</strong><div>
+                        <div style={{ gridColumn: "1 / -1" }}><strong>Process</strong><div>
                           {detailDelegation.request_types?.length
                             ? detailDelegation.request_types.map((t: string) => resolveDelegationTypeLabel(t)).join(", ")
                             : "All types"}
@@ -4645,7 +4655,7 @@ export default function App() {
                       { key: "managers",               label: "Managers",                 group: "Org Structure" },
                       { key: "leadership_assignments", label: "Leadership Assignments",   group: "Org Structure" },
                       { key: "workflow_builder",       label: "Approval Workflow Builder",group: "Org Structure" },
-                      { key: "request_types",          label: "Request Types",            group: "Org Structure" },
+                      { key: "request_types",          label: "Process",            group: "Org Structure" },
                       { key: "reporting_lines",        label: "Reporting Lines",          group: "Org Structure" },
                       { key: "pdf_designer",           label: "PDF Designer",             group: "Org Structure" },
                       { key: "advance_pdf",            label: "Download Advance PDF",     group: "Advances" },
@@ -5800,7 +5810,7 @@ export default function App() {
                     { icon: <Users size={26} />, color: "#059669", bg: "#d1fae5", title: "Approval Performance", desc: "Approval rates, processing times, and department breakdowns.", action: () => setPage("REPORT_APPROVAL"), live: true },
                   ] : []),
                   { icon: <BarChart3 size={26} />, color: "#8b5cf6", bg: "#ede9fe", title: "SLA Reports", desc: "Track processing times, breach rates, and SLA compliance by department.", action: () => setPage("SLA_REPORTS"), live: true },
-                  { icon: <GitBranch size={26} />, color: "#f59e0b", bg: "#fef3c7", title: "Workflow Analytics", desc: "Workflow coverage, step complexity, and usage by request type.", action: () => setPage("REPORT_WORKFLOW"), live: true },
+                  { icon: <GitBranch size={26} />, color: "#f59e0b", bg: "#fef3c7", title: "Workflow Analytics", desc: "Workflow coverage, step complexity, and usage by process.", action: () => setPage("REPORT_WORKFLOW"), live: true },
                   { icon: <ShieldCheck size={26} />, color: "#dc2626", bg: "#fee2e2", title: "Audit Trail", desc: "Chronological log of all advance and clearance activity.", action: () => setPage("REPORT_AUDIT"), live: true },
                   ...(canAccessFeature("report_reconciliation") ? [
                     { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Reconciliation", desc: "Opening/closing balances, requested, paid, and settled per requester for a period.", action: () => setPage("REPORT_RECONCILIATION"), live: true },
@@ -7755,8 +7765,8 @@ export default function App() {
                     <GitBranch size={22} color="#2563eb" aria-hidden />
                   </span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 15 }}>Custom Requests</div>
-                    <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Submit a change request, attendance register, or other configured request type</div>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>Custom Processes</div>
+                    <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Submit a change request, attendance register, or other configured process</div>
                   </div>
                   <button className="button button-primary" onClick={() => setPage("CHANGE_REQUEST")}>Open</button>
                 </div>

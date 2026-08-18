@@ -1,29 +1,98 @@
-# Email-action proxy location for dt-internalproxy-1.etl.co.ls
+# Email-action proxy locations for dt-internalproxy-1.etl.co.ls /
+# dt-externalproxy-1.etl.co.ls.
 #
-# This is a SNIPPET to add into the existing server block on
-# dt-internalproxy-1.etl.co.ls (the same internal proxy already used for
-# /ldap/api and the EmailActiveDirectoryAPI) - not a standalone vhost.
+# These are SNIPPETS to add into the existing server block on the relevant
+# proxy host - not a standalone vhost.
 #
-# It exposes ONLY the backend's /email-actions route (GET confirmation page +
-# POST approve/reject) under /flowdesk/uat/email-actions/, matching
-# EMAIL_ACTION_PUBLIC_URL=http://dt-internalproxy-1.etl.co.ls/flowdesk/uat in
-# backend-v2/.env. No frontend involved: the backend renders a fully
-# self-contained HTML page for browser requests (see
-# email-actions.routes.ts), so there's no /assets/ or /api/ path to forward -
-# this is the only location block needed.
-#
-# Adjust 10.3.10.59:4100 if the backend's host/PORT changes.
+# IMPORTANT: both proxies already have general-purpose blocks (e.g.
+# /flowdesk/uat/, /flowdesk/prod/, pointing at the "flowdeskuat" /
+# "flowdeskprod" upstreams - the whole app, frontend + /api/). Do NOT route
+# email actions through those: emailActionsRouter is mounted at the backend's
+# ROOT (/email-actions, not /api/email-actions), so a request through the
+# general block would hit the frontend SPA instead of the backend's
+# self-contained approval page. Each location below is a MORE SPECIFIC prefix
+# than its general counterpart, so nginx matches it first (longest-prefix
+# wins) and routes straight to the backend - no frontend or /api/ involved.
+# Add these alongside the existing general blocks, not in place of them.
 
-location /flowdesk/uat/email-actions/ {
-    proxy_pass http://10.3.10.59:4100/email-actions/;
+# ── UAT, EXTERNAL (dt-externalproxy-1.etl.co.ls) — ACTIVE ─────────────────
+# Same host as PROD's external block below, different path/upstream - single
+# backend (this UAT box), not round-robin. Matches
+# EMAIL_ACTION_PUBLIC_URL=https://dt-externalproxy-1.etl.co.ls/etl/flowdesk/uat
+# now set in backend-v2/.env.
+
+location /etl/flowdesk/uat/email-actions/ {
+    proxy_pass http://10.3.10.59:4000/email-actions/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# Defense in depth: nothing else under /flowdesk/uat/ should be reachable
-# from here - this proxy must never forward to the rest of the internal API.
-location /flowdesk/uat/ {
-    return 404;
+# ── UAT, INTERNAL (dt-internalproxy-1.etl.co.ls) ────────────────────────────
+# Inactive by default - kept as reference/fallback for intranet-only access.
+# Was confirmed working earlier in this rollout; started 502ing after the
+# external block above became the active choice for UAT, consistent with
+# this location having been removed/commented out on the live proxy at the
+# same time - check dt-internalproxy-1's actual config if intranet-only UAT
+# access is needed again.
+#
+# location /flowdesk/uat/email-actions/ {
+#     proxy_pass http://10.3.10.59:4000/email-actions/;
+#     proxy_set_header Host $host;
+#     proxy_set_header X-Real-IP $remote_addr;
+#     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#     proxy_set_header X-Forwarded-Proto $scheme;
+# }
+
+# ── PROD, EXTERNAL (dt-externalproxy-1.etl.co.ls) — ACTIVE ─────────────────
+# This is the one PROD actually uses. Same external-facing host as UAT's
+# block above, different path/upstream. PROD1/PROD2 are active-active behind
+# a load balancer and share one Postgres instance, so either backend can
+# redeem a given token - round-robin between them here rather than pinning
+# to a single host (unlike UAT above, which is one box). Confirmed this host
+# has a direct firewall route to PROD1/PROD2 on the backend port - if that
+# changes, this needs to route via the load balancer or dt-internalproxy-1
+# instead.
+#
+# PROD1 = 10.3.10.49, PROD2 = 10.3.10.69 (deploy/README.md's PROD1_HOST /
+# PROD2_HOST CI variables). Port 4000 is assumed to match UAT's default -
+# confirm on the actual hosts before relying on it, don't just assume; UAT's
+# port was found silently mismatched from this same default earlier.
+#
+# Set EMAIL_ACTION_PUBLIC_URL=https://dt-externalproxy-1.etl.co.ls/etl/flowdesk/prod
+# (no trailing slash) in /etc/advance-clearance/.env on BOTH PROD1 and PROD2 -
+# that file isn't in git, see deploy/README.md step 4/8.
+
+upstream flowdesk_prod_email_actions_external {
+    server 10.3.10.49:4000;
+    server 10.3.10.69:4000;
 }
+
+location /etl/flowdesk/prod/email-actions/ {
+    proxy_pass http://flowdesk_prod_email_actions_external/email-actions/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# ── PROD, INTERNAL (dt-internalproxy-1.etl.co.ls) ──────────────────────────
+# Inactive by default - kept only as an intranet-only fallback reference.
+# Confirmed reachable and working (returns the real backend's error page for
+# an invalid token) as of this writing, so it's a working alternative if the
+# external proxy above ever needs a fallback, but EMAIL_ACTION_PUBLIC_URL
+# should point at the external block above, not this one.
+#
+# upstream flowdesk_prod_email_actions {
+#     server 10.3.10.49:4000;
+#     server 10.3.10.69:4000;
+# }
+#
+# location /flowdesk/prod/email-actions/ {
+#     proxy_pass http://flowdesk_prod_email_actions/email-actions/;
+#     proxy_set_header Host $host;
+#     proxy_set_header X-Real-IP $remote_addr;
+#     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#     proxy_set_header X-Forwarded-Proto $scheme;
+# }
