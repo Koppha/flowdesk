@@ -6554,6 +6554,15 @@ html[data-theme="dark"] .login-security-banner {
   background: rgba(255, 255, 255, 0.14);
   color: #e8f1ff;
   border-color: rgba(255, 255, 255, 0.22);
+  /* .sidebar-link span (above) is a generic icon-bullet reset meant for
+     other spans in the sidebar - it also matches this chip (also a span
+     inside .sidebar-link) and zeroes its font-size/dimensions/radius.
+     Restore the chip's own sizing so the count digit actually renders. */
+  width: auto;
+  height: auto;
+  font-size: 0.76rem;
+  line-height: normal;
+  border-radius: 999px;
 }
 
 .sidebar-subnav .sidebar-link::before,
