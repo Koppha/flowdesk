@@ -76,6 +76,7 @@ import {
   Moon,
   PlusCircle,
   Network,
+  Phone,
   Plane,
   PlayCircle,
   Plus,
@@ -493,6 +494,7 @@ export default function App() {
   const [newTravelTypeCeoRate, setNewTravelTypeCeoRate] = useState("0");
   const [newTravelTypeCurrency, setNewTravelTypeCurrency] = useState("LSL");
   const [newTravelTypeRequiresAccommodation, setNewTravelTypeRequiresAccommodation] = useState(false);
+  const [newTravelTypeHasExtraCosts, setNewTravelTypeHasExtraCosts] = useState(false);
   const [newTravelTypeAllowedPaymentMethods, setNewTravelTypeAllowedPaymentMethods] = useState<("ECOCASH" | "BANK")[]>(["ECOCASH", "BANK"]);
   const [editingTravelType, setEditingTravelType] = useState<TravelType | null>(null);
   const [showAddTravelTypeModal, setShowAddTravelTypeModal] = useState(false);
@@ -832,6 +834,8 @@ export default function App() {
   const [salaryAmount, setSalaryAmount] = useState("0");
   const [loanPaybackDuration, setLoanPaybackDuration] = useState("");
   const [loanAmount, setLoanAmount] = useState("");
+  const [extraCostAmount, setExtraCostAmount] = useState("");
+  const [extraCostDescription, setExtraCostDescription] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<"ECOCASH" | "BANK">("ECOCASH");
   const [ecocashNumber, setEcocashNumber] = useState("");
   const [bankName, setBankName] = useState("");
@@ -973,8 +977,9 @@ export default function App() {
     },
     { meals: 0, amount: 0 }
   );
+  const extraCost = selectedTravelType?.has_extra_costs ? (Number(extraCostAmount) || 0) : 0;
   const totalRequested = () => {
-    if (isTravelAdvanceSelected) return rowTotals.amount;
+    if (isTravelAdvanceSelected) return rowTotals.amount + extraCost;
     if (advanceType === "SALARY") return Number(salaryAmount) || 0;
     if (advanceType === "LOAN") return Number(loanAmount) || 0;
     return 0;
@@ -1072,7 +1077,7 @@ export default function App() {
 
   useEffect(() => {
     setAmountInWords(numberToWords(totalRequested()));
-  }, [advanceType, salaryAmount, loanAmount, rows, mealValue, travelTypes]);
+  }, [advanceType, salaryAmount, loanAmount, extraCostAmount, rows, mealValue, travelTypes]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -1766,6 +1771,7 @@ export default function App() {
         currency: newTravelTypeCurrency,
         active: true,
         requires_accommodation: newTravelTypeRequiresAccommodation,
+        has_extra_costs: newTravelTypeHasExtraCosts,
         allowed_payment_methods: newTravelTypeAllowedPaymentMethods
       });
       setNewTravelTypeName("");
@@ -1774,6 +1780,7 @@ export default function App() {
       setNewTravelTypeCeoRate("0");
       setNewTravelTypeCurrency("LSL");
       setNewTravelTypeRequiresAccommodation(false);
+      setNewTravelTypeHasExtraCosts(false);
       setNewTravelTypeAllowedPaymentMethods(["ECOCASH", "BANK"]);
       await loadTravelTypes();
       alert("Travel type saved.");
@@ -1801,6 +1808,7 @@ export default function App() {
         currency: type.currency ?? "LSL",
         active: type.active !== false,
         requires_accommodation: type.requires_accommodation ?? false,
+        has_extra_costs: type.has_extra_costs ?? false,
         allowed_payment_methods: type.allowed_payment_methods
       });
       await loadTravelTypes();
@@ -2543,6 +2551,8 @@ export default function App() {
     setSalaryPaybackDuration("");
     setLoanPaybackDuration("");
     setLoanAmount("");
+    setExtraCostAmount("");
+    setExtraCostDescription("");
     setPaymentMethod("ECOCASH");
     setEcocashNumber("");
     setBankName("");
@@ -2982,6 +2992,8 @@ export default function App() {
     setAdvanceType(detail.type || null);
     setSalaryAmount(detail.type === "SALARY" ? String(detail.requested_total || 0) : "0");
     setLoanAmount(detail.type === "LOAN" ? String(detail.requested_total || 0) : "");
+    setExtraCostAmount(Number(detail.extra_cost_amount || 0) > 0 ? String(detail.extra_cost_amount) : "");
+    setExtraCostDescription(detail.extra_cost_description || "");
     setRows(detail.lines ? detail.lines.map((line: any) => travelRowFromLine(line)) : []);
     setAccommodationHotelChoices(
       (detail.lines || []).reduce((acc: Record<string, string>, line: any) => {
@@ -5450,6 +5462,10 @@ export default function App() {
                         <input type="checkbox" checked={newTravelTypeRequiresAccommodation} onChange={(e) => setNewTravelTypeRequiresAccommodation(e.target.checked)} />
                         <span>Requires accommodation booking</span>
                       </label>
+                      <label className="ep-checkbox-label">
+                        <input type="checkbox" checked={newTravelTypeHasExtraCosts} onChange={(e) => setNewTravelTypeHasExtraCosts(e.target.checked)} />
+                        <span>Has extra costs (e.g. ticket, visa, baggage fee)</span>
+                      </label>
                     </div>
                     <div className="ep-modal-footer">
                       <button className="ep-btn-outline" onClick={() => setShowAddTravelTypeModal(false)}>Cancel</button>
@@ -5539,6 +5555,10 @@ export default function App() {
                       <label className="ep-checkbox-label">
                         <input type="checkbox" checked={editingTravelType.requires_accommodation ?? false} onChange={(e) => setEditingTravelType({ ...editingTravelType, requires_accommodation: e.target.checked })} />
                         <span>Requires accommodation booking</span>
+                      </label>
+                      <label className="ep-checkbox-label">
+                        <input type="checkbox" checked={editingTravelType.has_extra_costs ?? false} onChange={(e) => setEditingTravelType({ ...editingTravelType, has_extra_costs: e.target.checked })} />
+                        <span>Has extra costs (e.g. ticket, visa, baggage fee)</span>
                       </label>
                     </div>
                     <div className="ep-modal-footer">
@@ -6280,6 +6300,8 @@ export default function App() {
                     setAdvanceType(e.target.value || null);
                     setRows([]);
                     setAccommodationHotelChoices({});
+                    setExtraCostAmount("");
+                    setExtraCostDescription("");
                   }}
                 >
                   <option value="">Select advance type</option>
@@ -6510,6 +6532,29 @@ export default function App() {
                     </tbody>
                   </table>
 
+                  {selectedTravelType?.has_extra_costs && (
+                    <div className="form-grid-2" style={{ marginTop: 10 }}>
+                      <div className="form-field">
+                        <label>Extra Cost Amount</label>
+                        <input
+                          type="number"
+                          value={extraCostAmount}
+                          onChange={(e) => setExtraCostAmount(e.target.value)}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label>Extra Cost Description</label>
+                        <input
+                          type="text"
+                          value={extraCostDescription}
+                          onChange={(e) => setExtraCostDescription(e.target.value)}
+                          placeholder="e.g. ticket, visa fee, excess baggage"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {/* ── Accommodation notice for local travel ── */}
                   {selectedTravelType?.location_mode === "DISTRICT" && rows.length > 0 && (() => {
                     // On a multi-day trip, the last row is assumed to be the
@@ -6541,25 +6586,33 @@ export default function App() {
                             {destinations.map((d) => {
                               const districtHotels = hotels.filter((h) => h.district === d);
                               const hotelListId = `request-hotel-options-${d}`;
+                              const chosenHotel = districtHotels.find((h) => h.name === accommodationHotelChoices[d]);
                               return (
-                                <div key={d} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                  <span className="accommodation-notice-district">
-                                    <Hotel size={11} /> {d}
-                                  </span>
-                                  <input
-                                    className="review-control"
-                                    style={{ maxWidth: 260 }}
-                                    list={hotelListId}
-                                    value={accommodationHotelChoices[d] || ""}
-                                    onChange={(e) => setAccommodationHotelChoices((prev) => ({ ...prev, [d]: e.target.value }))}
-                                    placeholder={districtHotels.length === 0 ? "No hotels listed for this district" : "Search or type hotel name (optional)"}
-                                    autoComplete="off"
-                                  />
-                                  <datalist id={hotelListId}>
-                                    {districtHotels.map((h) => (
-                                      <option key={h.id} value={h.name} />
-                                    ))}
-                                  </datalist>
+                                <div key={d} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                    <span className="accommodation-notice-district">
+                                      <Hotel size={11} /> {d}
+                                    </span>
+                                    <input
+                                      className="review-control"
+                                      style={{ maxWidth: 260 }}
+                                      list={hotelListId}
+                                      value={accommodationHotelChoices[d] || ""}
+                                      onChange={(e) => setAccommodationHotelChoices((prev) => ({ ...prev, [d]: e.target.value }))}
+                                      placeholder={districtHotels.length === 0 ? "No hotels listed for this district" : "Search or type hotel name (optional)"}
+                                      autoComplete="off"
+                                    />
+                                    <datalist id={hotelListId}>
+                                      {districtHotels.map((h) => (
+                                        <option key={h.id} value={h.name} />
+                                      ))}
+                                    </datalist>
+                                  </div>
+                                  {chosenHotel?.contact && (
+                                    <span style={{ fontSize: "0.8rem", color: "var(--muted)", display: "flex", alignItems: "center", gap: 4, marginLeft: 2 }}>
+                                      <Phone size={11} aria-hidden /> {chosenHotel.contact}
+                                    </span>
+                                  )}
                                 </div>
                               );
                             })}
@@ -6890,6 +6943,10 @@ export default function App() {
                       }
                       if (isTravelAdvanceSelected) {
                         base.requested_total = Number(totalRequested()) || 0;
+                        if (selectedTravelType?.has_extra_costs) {
+                          base.extra_cost_amount = extraCost;
+                          base.extra_cost_description = extraCostDescription.trim() || undefined;
+                        }
                       }
                       if (advanceType === "LOAN") {
                         base.requested_total = Number(loanAmount) || 0;

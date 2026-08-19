@@ -10,9 +10,19 @@ export interface ChainStep {
   position_type_code: string;
   position_name: string;
   approver_id: string | null;
+  // Every person assigned to this step — first to act satisfies it. Always
+  // includes approver_id as its first element when non-empty; approver_id is
+  // kept for readers (PDF signature blocks, SLA grouping, etc.) that only
+  // need a single primary approver.
+  approver_ids: string[];
   approver_name: string | null;
   approver_title: string | null;
   approver_email: string | null;
+  // Per-person contact details for every id in approver_ids, in the same
+  // order — lets notifications reach each assigned person individually
+  // instead of only the primary approver_email. Optional so chains persisted
+  // before this field existed still deserialize fine.
+  approvers?: { id: string; name: string | null; email: string | null; title: string | null }[];
   required: boolean;
   final_approval: boolean;
   approval_mode: string;
@@ -162,6 +172,7 @@ export async function resolveWorkflowChain(params: {
     assigned_user_name: string | null;
     assigned_user_title: string | null;
     assigned_user_email: string | null;
+    assigned_user_ids: string[] | null;
     is_required: boolean;
     skip_if_unassigned: boolean;
     is_final_approval: boolean;
@@ -176,6 +187,8 @@ export async function resolveWorkflowChain(params: {
     `SELECT ws.step_order, ws.position_type_code, ws.position_name,
             CASE WHEN u.id IS NOT NULL THEN ws.assigned_user_id ELSE NULL END AS assigned_user_id,
             u.full_name AS assigned_user_name, u.title AS assigned_user_title, u.email AS assigned_user_email,
+            -- Only keep still-active assigned users, same as the single-id CASE above.
+            ARRAY(SELECT au.id FROM users au WHERE au.id = ANY(ws.assigned_user_ids) AND au.is_active = true) AS assigned_user_ids,
             ws.is_required, ws.skip_if_unassigned, ws.is_final_approval,
             ws.approval_mode, ws.approval_group_name, ws.requires_accommodation, ws.parallel_with_previous, ws.action_type,
             ws.can_reject, ws.can_rollback
@@ -185,6 +198,13 @@ export async function resolveWorkflowChain(params: {
       ORDER BY ws.step_order ASC`,
     [(workflow as any).id]
   );
+  const allAssignedIds = Array.from(new Set(steps.flatMap((step) => step.assigned_user_ids || [])));
+  const assignedUserMap = allAssignedIds.length
+    ? new Map((await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+        `SELECT id, full_name, title, email FROM users WHERE id = ANY($1::uuid[])`,
+        [allAssignedIds]
+      )).map((u) => [u.id, u]))
+    : new Map<string, { id: string; full_name: string | null; title: string | null; email: string | null }>();
   // HR steps are routed to the org-structure leadership of the
   // "Human Resource" department, not the requester's own department.
   const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
@@ -198,7 +218,7 @@ export async function resolveWorkflowChain(params: {
   // that department has no EXCO member set up yet.
   const hasDeptExcoStep = steps.some((step) => {
     const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
-    return stepCode === "EXCO" && !step.assigned_user_id && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+    return stepCode === "EXCO" && !step.assigned_user_ids?.length && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
   });
   const deptExco = hasDeptExcoStep && department.trim()
     ? (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
@@ -216,7 +236,7 @@ export async function resolveWorkflowChain(params: {
   // for anybody, silently stranding every submission at that step.
   const hasDeptManagerStep = steps.some((step) => {
     const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
-    return stepCode === "MANAGER" && !step.assigned_user_id && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+    return stepCode === "MANAGER" && !step.assigned_user_ids?.length && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
   });
   const requesterManager = hasDeptManagerStep && requesterId ? await resolveRequesterManager(requesterId) : null;
 
@@ -266,38 +286,44 @@ export async function resolveWorkflowChain(params: {
     const isHrCode = code.startsWith("HR_");
     const isDeptExcoCode = code === "EXCO" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const isDeptManagerCode = code === "MANAGER" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+    const hasFixedAssignees = !!step.assigned_user_ids?.length;
 
-    const approverId =
-      override               ? override.id :
-      step.assigned_user_id ? step.assigned_user_id :
-      isHrCode              ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null) :
-      isDeptExcoCode         ? (deptExco?.id ?? null) :
-      isDeptManagerCode      ? (requesterManager?.id ?? null) :
-                              null;
+    // Multiple people can be assigned to one step — whoever acts first
+    // satisfies it. The other resolution paths (HR leadership, dept EXCO/
+    // Manager lookup, requester override) only ever resolve to a single
+    // person, so they stay single-element arrays.
+    const approverIds: string[] =
+      override               ? (override.id ? [override.id] : []) :
+      hasFixedAssignees      ? step.assigned_user_ids! :
+      isHrCode               ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : []) :
+      isDeptExcoCode          ? (deptExco?.id ? [deptExco.id] : []) :
+      isDeptManagerCode       ? (requesterManager?.id ? [requesterManager.id] : []) :
+                                [];
+    const approverId = approverIds[0] ?? null;
 
     const approverName =
       override               ? override.full_name :
-      step.assigned_user_id ? step.assigned_user_name :
-      isHrCode              ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
-      isDeptExcoCode         ? (deptExco?.full_name ?? null) :
-      isDeptManagerCode      ? (requesterManager?.full_name ?? null) :
-                              null;
+      hasFixedAssignees      ? approverIds.map((id) => assignedUserMap.get(id)?.full_name || assignedUserMap.get(id)?.email).filter(Boolean).join(", ") || null :
+      isHrCode               ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
+      isDeptExcoCode          ? (deptExco?.full_name ?? null) :
+      isDeptManagerCode       ? (requesterManager?.full_name ?? null) :
+                                null;
 
     const approverTitle =
       override               ? override.title :
-      step.assigned_user_id ? step.assigned_user_title :
-      isHrCode              ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
-      isDeptExcoCode         ? (deptExco?.title ?? null) :
-      isDeptManagerCode      ? (requesterManager?.title ?? null) :
-                              null;
+      hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.title ?? null) :
+      isHrCode               ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
+      isDeptExcoCode          ? (deptExco?.title ?? null) :
+      isDeptManagerCode       ? (requesterManager?.title ?? null) :
+                                null;
 
     const approverEmail =
       override               ? override.email :
-      step.assigned_user_id ? step.assigned_user_email :
-      isHrCode              ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
-      isDeptExcoCode         ? (deptExco?.email ?? null) :
-      isDeptManagerCode      ? (requesterManager?.email ?? null) :
-                              null;
+      hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.email ?? null) :
+      isHrCode               ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
+      isDeptExcoCode          ? (deptExco?.email ?? null) :
+      isDeptManagerCode       ? (requesterManager?.email ?? null) :
+                                null;
 
     // Group steps (ANY_ONE with approval_group_name) are never "unassigned" —
     // they're routed to whoever belongs to the group, not a specific individual.
@@ -306,11 +332,27 @@ export async function resolveWorkflowChain(params: {
 
     const positionLabel = step.position_name;
 
+    // Per-person contact details, in the same order as approverIds — the
+    // fixed-assignee path can have more than one; every other path resolves
+    // to at most one person, reusing the single name/title/email already computed.
+    const approvers = hasFixedAssignees
+      ? approverIds.map((id) => ({
+          id,
+          name: assignedUserMap.get(id)?.full_name ?? null,
+          email: assignedUserMap.get(id)?.email ?? null,
+          title: assignedUserMap.get(id)?.title ?? null
+        }))
+      : approverId
+      ? [{ id: approverId, name: approverName ?? null, email: approverEmail ?? null, title: approverTitle ?? null }]
+      : [];
+
     chain.push({
       step_order: step.step_order,
       position_type_code: code,
       position_name: positionLabel,
       approver_id: approverId,
+      approver_ids: approverIds,
+      approvers,
       approver_name: approverName ?? null,
       approver_title: approverTitle ?? null,
       approver_email: approverEmail ?? null,
@@ -378,12 +420,16 @@ export async function canApproveStep(
     if (groups.includes(step.approval_group_name)) return true;
   }
   if (step.approver_id) {
-    if (step.approver_id === userId) return true;
+    // A step can have more than one assigned person — first to act
+    // satisfies it, so any of them (or anyone delegating for any of them)
+    // can act.
+    const assignedIds = step.approver_ids?.length ? step.approver_ids : [step.approver_id];
+    if (assignedIds.includes(userId)) return true;
     // Delegation: allow if acting on behalf of any of the assigned approvers
     // delegating to this user, whatever their position type - delegation
     // eligibility (Manager/HOD/Exco/CEO) is already enforced when the
     // delegation itself is created.
-    if (delegatedManagerIds?.includes(step.approver_id)) return true;
+    if (delegatedManagerIds?.some((id) => assignedIds.includes(id))) return true;
     return false;
   }
   // No specific approver resolved via org structure — FINANCE is based on

@@ -59,12 +59,16 @@ export async function createAdvance(
     requested_total: number;
     payback_months?: number | null;
     override_chain?: Array<{ label: string; user_id: string; user_name: string }> | null;
+    // Extra cost (e.g. ticket/visa/baggage fee) on top of the day-by-day
+    // rows total, for travel types flagged has_extra_costs.
+    extra_cost_amount?: number | null;
+    extra_cost_description?: string | null;
   },
   client?: PoolClient
 ) {
   const sql = `INSERT INTO advance_requests
-      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, sequence_no)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, nextval('advance_request_seq'))
+      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, extra_cost_amount, extra_cost_description, sequence_no)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, nextval('advance_request_seq'))
      RETURNING id`;
   const params = [
     args.requesterId,
@@ -76,7 +80,9 @@ export async function createAdvance(
     args.payment_account ?? null,
     args.requested_total,
     args.payback_months ?? null,
-    args.override_chain?.length ? JSON.stringify(args.override_chain) : null
+    args.override_chain?.length ? JSON.stringify(args.override_chain) : null,
+    args.extra_cost_amount ?? 0,
+    args.extra_cost_description ?? null
   ];
   const rows = client ? (await client.query<{ id: string }>(sql, params)).rows : await query<{ id: string }>(sql, params);
 
@@ -174,9 +180,16 @@ export async function advanceWorkflowStep(args: {
           nextStatus = "PAID";
         }
         if (hasMore) {
-          nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
-            id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
-          }));
+          // Each step in the pending stage can now have more than one
+          // assigned person — expand to one notification target per person
+          // so everyone who can act on it is told, not just the first.
+          nextApprovers = getPendingGroup(newChain, nextIdx).steps.flatMap((s) =>
+            s.approvers?.length
+              ? s.approvers.map((a) => ({ id: a.id, name: a.name, email: a.email, title: a.title || s.position_name }))
+              : s.approver_id
+              ? [{ id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name }]
+              : []
+          );
         }
       }
     }

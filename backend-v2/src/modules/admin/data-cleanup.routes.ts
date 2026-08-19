@@ -244,7 +244,7 @@ dataCleanupRouter.post("/full-reset", async (req: AuthedRequest, res, next) => {
       // "who touched this" links are cleared) - same set as the standalone script.
       await client.query(`UPDATE workflows SET created_by_id = NULL WHERE created_by_id IS NOT NULL`);
       await client.query(`UPDATE workflow_rules SET additional_assigned_user_id = NULL WHERE additional_assigned_user_id IS NOT NULL`);
-      await client.query(`UPDATE workflow_steps SET assigned_user_id = NULL WHERE assigned_user_id IS NOT NULL`);
+      await client.query(`UPDATE workflow_steps SET assigned_user_id = NULL, assigned_user_ids = '{}' WHERE assigned_user_id IS NOT NULL OR array_length(assigned_user_ids, 1) IS NOT NULL`);
       await client.query(`UPDATE custom_request_types SET created_by_id = NULL WHERE created_by_id IS NOT NULL`);
       await client.query(`UPDATE request_type_permissions SET user_id = NULL, created_by_id = NULL WHERE user_id IS NOT NULL OR created_by_id IS NOT NULL`);
       await client.query(`UPDATE pdf_templates SET created_by_id = NULL WHERE created_by_id IS NOT NULL`);

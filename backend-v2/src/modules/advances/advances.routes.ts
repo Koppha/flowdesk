@@ -48,6 +48,8 @@ const CreateAdvanceSchema = z.object({
   bank_branch: z.string().optional(),
   requested_total: z.coerce.number().nonnegative(),
   payback_months: z.coerce.number().int().positive().optional(),
+  extra_cost_amount: z.coerce.number().nonnegative().optional(),
+  extra_cost_description: z.string().trim().optional(),
   beneficiary_user_id: z.string().uuid().optional(),
   override_chain: z.array(z.object({
     label: z.string().trim().min(1),
@@ -83,6 +85,8 @@ const UpdateAdvanceSchema = z.object({
   bank_branch: z.string().optional(),
   requested_total: z.coerce.number().nonnegative().optional(),
   payback_months: z.coerce.number().int().positive().optional(),
+  extra_cost_amount: z.coerce.number().nonnegative().optional(),
+  extra_cost_description: z.string().trim().optional(),
   salary_month: z.string().optional()
 }).superRefine((data, ctx) => {
   if (data.payment_method === "ECOCASH") {
@@ -1162,6 +1166,13 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     });
     const notificationContext = await getAdvanceNotificationContext(adv.id);
     if (notificationContext) {
+      // A step can have more than one assigned person — notify every one of
+      // them, not just the first, so whoever's free can act first.
+      const firstStepApprovers = chain[0]?.approvers?.length
+        ? chain[0].approvers.map((a) => ({ id: a.id, name: a.name, email: a.email, title: a.title || chain[0].position_name }))
+        : chain[0]
+        ? [{ id: chain[0].approver_id, name: chain[0].approver_name, email: chain[0].approver_email, title: chain[0].approver_title || chain[0].position_name }]
+        : [];
       await notifyAdvanceTask({
         advanceId: adv.id,
         status: firstStatus,
@@ -1171,11 +1182,24 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         department: notificationContext.department,
         requestedTotal: Number(notificationContext.requested_total),
         currency: notificationContext.currency,
-        nextApprover: chain[0]
-          ? { id: chain[0].approver_id, name: chain[0].approver_name, email: chain[0].approver_email, title: chain[0].approver_title || chain[0].position_name }
-          : null,
+        nextApprover: firstStepApprovers[0] ?? null,
         stepOrder: 0
       });
+      for (const extra of firstStepApprovers.slice(1)) {
+        if (!extra.email) continue;
+        await notifyAdvanceTask({
+          advanceId: adv.id,
+          status: firstStatus,
+          advanceType: notificationContext.type,
+          requesterName: notificationContext.full_name,
+          requesterEmail: notificationContext.email,
+          department: notificationContext.department,
+          requestedTotal: Number(notificationContext.requested_total),
+          currency: notificationContext.currency,
+          nextApprover: extra,
+          stepOrder: 0
+        });
+      }
     }
     return res.json({ ok: true, status: firstStatus });
   } catch (err) {

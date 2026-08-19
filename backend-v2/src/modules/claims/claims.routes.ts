@@ -723,6 +723,23 @@ export async function performClaimApprove(
       nextApprover: result.nextApprover,
       stepOrder: result.newStepOrder
     });
+    // A step can have more than one assigned person — notify the rest of
+    // the pending stage too, not just the first (mirrors performAdvanceApprove).
+    for (const extra of result.nextApprovers.slice(1)) {
+      if (!extra.email) continue;
+      await notifyClaimTask({
+        claimId: claim.id,
+        status: result.nextStatus,
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
+        claimType: notificationContext.claim_type,
+        nextApprover: extra,
+        stepOrder: result.newStepOrder
+      });
+    }
   }
   return { status: result.nextStatus };
 }

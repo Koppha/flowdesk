@@ -174,9 +174,16 @@ export async function advanceClaimWorkflowStep(args: {
       nextStatus = chainStepToClaimStatus(newChain, nextIdx);
       newStepOrder = hasMore ? nextIdx : newChain.length;
       if (hasMore) {
-        nextApprovers = getPendingGroup(newChain, nextIdx).steps.map((s) => ({
-          id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name
-        }));
+        // Each step in the pending stage can now have more than one assigned
+        // person — expand to one notification target per person so everyone
+        // who can act on it is told, not just the first.
+        nextApprovers = getPendingGroup(newChain, nextIdx).steps.flatMap((s) =>
+          s.approvers?.length
+            ? s.approvers.map((a) => ({ id: a.id, name: a.name, email: a.email, title: a.title || s.position_name }))
+            : s.approver_id
+            ? [{ id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name }]
+            : []
+        );
       }
     }
 

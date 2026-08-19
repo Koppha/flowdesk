@@ -10,6 +10,12 @@ const WorkflowStepSchema = z.object({
   step_order: z.coerce.number().int().min(1),
   position_type_code: z.string().trim().optional(),
   assigned_user_id: z.string().uuid().optional().nullable(),
+  // Multiple people can be assigned to a single step — whoever acts first
+  // satisfies it (same "any one approves" semantics as an ANY_ONE group
+  // step, just with a hand-picked list instead of a named permission group).
+  // When present, this is the source of truth; assigned_user_id above is
+  // kept in sync as its first element for older readers.
+  assigned_user_ids: z.array(z.string().uuid()).optional().default([]),
   approval_mode: z.enum(["SINGLE", "ANY_ONE"]).optional().default("SINGLE"),
   approval_group_name: z.string().trim().optional().nullable(),
   position_name: z.string().trim().min(1),
@@ -103,6 +109,8 @@ async function ensureActionTypesTable() {
 async function ensureAssignedUserColumn() {
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS position_type_code text`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS assigned_user_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS assigned_user_ids uuid[] NOT NULL DEFAULT '{}'`);
+  await query(`UPDATE workflow_steps SET assigned_user_ids = ARRAY[assigned_user_id] WHERE assigned_user_id IS NOT NULL AND (assigned_user_ids IS NULL OR array_length(assigned_user_ids, 1) IS NULL)`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS approval_mode text NOT NULL DEFAULT 'SINGLE'`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS approval_group_name text`);
   await query(`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS requires_accommodation boolean NOT NULL DEFAULT false`);
@@ -142,11 +150,17 @@ async function insertWorkflowSteps(workflowId: string, steps: z.infer<typeof Wor
   const params: unknown[] = [];
   steps.forEach((step) => {
     const baseIndex = params.length + 1;
+    // assigned_user_ids is the source of truth; assigned_user_id (singular,
+    // kept for older readers) is always its first element.
+    const assignedUserIds = Array.from(new Set(
+      step.assigned_user_ids?.length ? step.assigned_user_ids : (step.assigned_user_id ? [step.assigned_user_id] : [])
+    ));
     params.push(
       workflowId,
       step.step_order,
       normalizeWorkflowRouteCode(step.position_type_code, step.position_name),
-      step.assigned_user_id || null,
+      assignedUserIds[0] || null,
+      assignedUserIds,
       step.approval_mode ?? "SINGLE",
       step.approval_group_name || null,
       step.position_name,
@@ -166,13 +180,13 @@ async function insertWorkflowSteps(workflowId: string, steps: z.infer<typeof Wor
       step.can_rollback ?? true
     );
     values.push(
-      `($${baseIndex},$${baseIndex+1},$${baseIndex+2},$${baseIndex+3},$${baseIndex+4},$${baseIndex+5},$${baseIndex+6},$${baseIndex+7},$${baseIndex+8},$${baseIndex+9},$${baseIndex+10},$${baseIndex+11},$${baseIndex+12},$${baseIndex+13},$${baseIndex+14},$${baseIndex+15},$${baseIndex+16},$${baseIndex+17},$${baseIndex+18},$${baseIndex+19},$${baseIndex+20})`
+      `($${baseIndex},$${baseIndex+1},$${baseIndex+2},$${baseIndex+3},$${baseIndex+4},$${baseIndex+5},$${baseIndex+6},$${baseIndex+7},$${baseIndex+8},$${baseIndex+9},$${baseIndex+10},$${baseIndex+11},$${baseIndex+12},$${baseIndex+13},$${baseIndex+14},$${baseIndex+15},$${baseIndex+16},$${baseIndex+17},$${baseIndex+18},$${baseIndex+19},$${baseIndex+20},$${baseIndex+21})`
     );
   });
 
   await query(
     `INSERT INTO workflow_steps
-      (workflow_id, step_order, position_type_code, assigned_user_id, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active, requires_accommodation, parallel_with_previous, action_type, can_reject, can_rollback)
+      (workflow_id, step_order, position_type_code, assigned_user_id, assigned_user_ids, approval_mode, approval_group_name, position_name, description, is_required, skip_if_unassigned, allow_delegation, comments_required, escalation_days, is_final_approval, is_system_step, is_active, requires_accommodation, parallel_with_previous, action_type, can_reject, can_rollback)
      VALUES ${values.join(",")}`,
     params
   );
@@ -381,22 +395,36 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
     const hasHrStep = steps.some((step) => normalizeWorkflowRouteCode(step.position_type_code, step.position_name).startsWith("HR_"));
     const hrLeadership = hasHrStep ? await getDepartmentLeadership("Human Resource") : null;
 
+    // A step can now have more than one assigned person (first to act
+    // satisfies it) — resolve every id referenced across all steps in one pass.
+    const allAssignedIds = Array.from(new Set(steps.flatMap((step) => (step.assigned_user_ids as string[] | null) || [])));
+    const assignedUserMap = allAssignedIds.length
+      ? new Map((await query<{ id: string; full_name: string | null; email: string | null }>(
+          `SELECT id, full_name, email FROM users WHERE id = ANY($1::uuid[])`,
+          [allAssignedIds]
+        )).map((u) => [u.id, u]))
+      : new Map<string, { id: string; full_name: string | null; email: string | null }>();
+
     // HOD/MANAGER no longer dynamically resolve to the requester's department
-    // leadership — every step must carry an explicit assigned_user_id or be a
+    // leadership — every step must carry explicit assigned user(s) or be a
     // group/ANY_ONE step. HR_* steps still route to the Human Resource
     // department's leadership.
     const warnings: string[] = [];
     const chain = steps.flatMap((step) => {
       const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
       const isHrCode = code.startsWith("HR_");
-      const approverId =
+      const stepAssignedIds: string[] = (step.assigned_user_ids as string[] | null)?.length
+        ? (step.assigned_user_ids as string[])
+        : (step.assigned_user_id ? [step.assigned_user_id] : []);
+      const approverIds =
         isHrCode
-          ? (hrLeadership?.hod_user_id ?? hrLeadership?.manager_user_id ?? null)
-          : step.assigned_user_id || null;
+          ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : [])
+          : stepAssignedIds;
+      const approverId = approverIds[0] || null;
       const approverName =
         isHrCode
           ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null)
-          : step.assigned_user_name || null;
+          : approverIds.map((id) => assignedUserMap.get(id)?.full_name || assignedUserMap.get(id)?.email).filter(Boolean).join(", ") || null;
 
       if (!approverId && step.is_required && !step.skip_if_unassigned && isHrCode) {
         warnings.push(`${step.position_name} is required but the Human Resource department has no Manager/HOD assigned.`);
@@ -407,6 +435,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         step_order: step.step_order,
         position_name: step.position_name,
         position_type_code: code,
+        approver_ids: approverIds,
         approval_mode: step.approval_mode || "SINGLE",
         approval_group_name: step.approval_group_name || null,
         approver_id: approverId,

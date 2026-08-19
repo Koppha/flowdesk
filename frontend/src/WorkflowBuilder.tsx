@@ -52,7 +52,9 @@ type WorkflowStep = {
   stepOrder: number;
   positionTypeId?: string | null;
   positionTypeCode: string;
-  assignedUserId?: string | null;
+  // Everyone assigned to this step — first to act satisfies it. Empty means
+  // unassigned (falls back to role/org-structure resolution at approval time).
+  assignedUserIds: string[];
   approvalMode: "SINGLE" | "ANY_ONE";
   approvalGroupName: string | null;
   positionName: string;
@@ -775,7 +777,7 @@ export default function WorkflowBuilder() {
       description: personName
         ? `${personName} — ${scopeLabel || position.name}`
         : department ? `Unassigned — ${scopeLabel}` : position.description,
-      assignedUserId: personId
+      assignedUserIds: personId ? [personId] : []
     });
     setShowAddPosition(false);
   }
@@ -787,7 +789,7 @@ export default function WorkflowBuilder() {
       description: `Anyone in ${team.name}${team.departmentLabel ? ` — ${team.departmentLabel}` : ""}`,
       approvalMode: "ANY_ONE",
       approvalGroupName: `Team: ${team.name}`,
-      assignedUserId: null
+      assignedUserIds: []
     });
     setShowAddPosition(false);
   }
@@ -799,7 +801,7 @@ export default function WorkflowBuilder() {
       description: `Anyone in ${name}`,
       approvalMode: "ANY_ONE",
       approvalGroupName: `Department: ${name}`,
-      assignedUserId: null
+      assignedUserIds: []
     });
     setShowAddPosition(false);
   }
@@ -811,7 +813,7 @@ export default function WorkflowBuilder() {
       description: `Anyone in ${name}`,
       approvalMode: "ANY_ONE",
       approvalGroupName: `Section: ${name}`,
-      assignedUserId: null
+      assignedUserIds: []
     });
     setShowAddPosition(false);
   }
@@ -820,7 +822,7 @@ export default function WorkflowBuilder() {
     addStep("MANAGER", steps.length, {
       positionName: employee.full_name || employee.email,
       description: `${employee.full_name || employee.email}${employee.department ? ` — ${employee.department}` : ""}`,
-      assignedUserId: employee.id
+      assignedUserIds: [employee.id]
     });
     setShowAddPosition(false);
   }
@@ -1011,7 +1013,13 @@ export default function WorkflowBuilder() {
       stepOrder: Number(raw.step_order ?? raw.stepOrder ?? index + 1),
       positionTypeId: positionType?.id || null,
       positionTypeCode: positionType?.code || rawCode || "",
-      assignedUserId: raw.assigned_user_id || raw.assignedUserId || null,
+      assignedUserIds: Array.isArray(raw.assigned_user_ids) && raw.assigned_user_ids.length
+        ? raw.assigned_user_ids
+        : Array.isArray(raw.assignedUserIds) && raw.assignedUserIds.length
+        ? raw.assignedUserIds
+        : (raw.assigned_user_id || raw.assignedUserId)
+        ? [raw.assigned_user_id || raw.assignedUserId]
+        : [],
       approvalMode: (raw.approval_mode || raw.approvalMode || "SINGLE") as "SINGLE" | "ANY_ONE",
       approvalGroupName: raw.approval_group_name || raw.approvalGroupName || null,
       positionName: String(raw.position_name || raw.positionName || positionType?.name || ""),
@@ -1072,6 +1080,7 @@ export default function WorkflowBuilder() {
       positionTypeId: position.id,
       positionName: position.name,
       description: position.description,
+      assignedUserIds: [],
       isRequired: isEmployee || !["HOD"].includes(position.code),
       skipIfUnassigned: position.code === "HOD",
       allowDelegation: ["HOD", "MANAGER"].includes(position.code),
@@ -1099,7 +1108,7 @@ export default function WorkflowBuilder() {
       if (stepDef.description) overrides.description = stepDef.description;
       if (stepDef.approvalMode) overrides.approvalMode = stepDef.approvalMode;
       if (stepDef.approvalGroupName) overrides.approvalGroupName = stepDef.approvalGroupName;
-      if (stepDef.assignedUserId) overrides.assignedUserId = stepDef.assignedUserId;
+      if (stepDef.assignedUserId) overrides.assignedUserIds = [stepDef.assignedUserId];
       if (stepDef.actionType) overrides.actionType = stepDef.actionType;
       if (stepDef.allowDelegation !== undefined) overrides.allowDelegation = stepDef.allowDelegation;
       return makeStep(stepDef.code, index, overrides);
@@ -1242,7 +1251,7 @@ export default function WorkflowBuilder() {
       if (fromIndex === -1) return;
       moveStep(fromIndex, targetIndex);
     } else {
-      addStep(dragSource.id, targetIndex, dragSource.overrides ? { positionName: dragSource.overrides.positionName, description: dragSource.overrides.description, assignedUserId: dragSource.overrides.assignedUserId, approvalMode: dragSource.overrides.approvalMode, approvalGroupName: dragSource.overrides.approvalGroupName } : {});
+      addStep(dragSource.id, targetIndex, dragSource.overrides ? { positionName: dragSource.overrides.positionName, description: dragSource.overrides.description, assignedUserIds: dragSource.overrides.assignedUserId ? [dragSource.overrides.assignedUserId] : [], approvalMode: dragSource.overrides.approvalMode, approvalGroupName: dragSource.overrides.approvalGroupName } : {});
     }
     setDragSource(null);
     setDragOverIndex(null);
@@ -1455,7 +1464,8 @@ export default function WorkflowBuilder() {
         workflow_id: selectedWorkflowId || undefined,
         step_order: step.stepOrder,
         position_type_code: resolvePositionCode(step.positionTypeId, step.positionTypeCode),
-        assigned_user_id: step.assignedUserId || undefined,
+        assigned_user_id: step.assignedUserIds[0] || undefined,
+        assigned_user_ids: step.assignedUserIds,
         approval_mode: step.approvalMode,
         approval_group_name: step.approvalGroupName || undefined,
         position_name: step.positionName,
@@ -2427,31 +2437,42 @@ export default function WorkflowBuilder() {
                 <div className="workflow-step-detail-title">Step {selectedStep.stepOrder}: {displayPositionName(selectedStep.positionName)}</div>
                 {!selectedStep.isSystemStep && (() => {
                   const pool = usersForStep(selectedStep);
+                  const selectedIds = selectedStep.assignedUserIds;
+                  const selectedUsers = selectedIds
+                    .map(id => pool.find(u => u.id === id))
+                    .filter((u): u is typeof pool[number] => Boolean(u));
                   const q = (stepUserSearch[selectedStep.id] ?? "").toLowerCase();
-                  const filtered = q ? pool.filter(u =>
+                  const searchPool = pool.filter(u => !selectedIds.includes(u.id));
+                  const filtered = q ? searchPool.filter(u =>
                     (u.full_name || "").toLowerCase().includes(q) ||
                     (u.email || "").toLowerCase().includes(q) ||
                     (u.department || "").toLowerCase().includes(q) ||
                     (u.section_name || "").toLowerCase().includes(q) ||
                     (u.role || "").toLowerCase().includes(q)
-                  ) : pool;
-                  const selectedUser = pool.find(u => u.id === selectedStep.assignedUserId);
+                  ) : searchPool;
+                  function addAssignee(userId: string) {
+                    if (!selectedIds.includes(userId)) updateStep(selectedStep.id, { assignedUserIds: [...selectedIds, userId] });
+                    setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" }));
+                  }
+                  function removeAssignee(userId: string) {
+                    updateStep(selectedStep.id, { assignedUserIds: selectedIds.filter(id => id !== userId) });
+                  }
                   return (
                     <div>
                       <span style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                        Assigned To <span style={{ color: "var(--muted, #6b7280)", fontWeight: 400 }}>(optional)</span>
+                        Assigned To <span style={{ color: "var(--muted, #6b7280)", fontWeight: 400 }}>(optional — add more than one to let whoever's free act first)</span>
                       </span>
-                      {selectedUser && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
+                      {selectedUsers.map(selectedUser => (
+                        <div key={selectedUser.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
                           <User size={13} style={{ color: "var(--muted, #6b7280)", flexShrink: 0 }} aria-hidden />
                           <span style={{ flex: 1, fontWeight: 500 }}>{selectedUser.full_name || selectedUser.email}</span>
                           <span style={{ color: "var(--muted, #6b7280)", fontSize: 11 }}>{selectedUser.department || ""}</span>
                           {!readOnly && (
-                            <button type="button" onClick={() => { updateStep(selectedStep.id, { assignedUserId: null }); setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" })); }}
-                              className="ep-icon-btn" style={{ width: 22, height: 22 }} aria-label="Clear assigned user"><X size={13} aria-hidden /></button>
+                            <button type="button" onClick={() => removeAssignee(selectedUser.id)}
+                              className="ep-icon-btn" style={{ width: 22, height: 22 }} aria-label={`Remove ${selectedUser.full_name || selectedUser.email}`}><X size={13} aria-hidden /></button>
                           )}
                         </div>
-                      )}
+                      ))}
                       {!readOnly && (
                         <div style={{ position: "relative" }}>
                           <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted, #9ca3af)", pointerEvents: "none" }} aria-hidden />
@@ -2460,7 +2481,7 @@ export default function WorkflowBuilder() {
                             value={stepUserSearch[selectedStep.id] ?? ""}
                             onChange={e => setStepUserSearch(p => ({ ...p, [selectedStep.id]: e.target.value }))}
                             onBlur={() => setTimeout(() => setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" })), 100)}
-                            placeholder={pool.length ? `Search ${pool.length} available ${displayPositionName(selectedStep.positionName)} users…` : "Search available users…"}
+                            placeholder={searchPool.length ? `Search ${searchPool.length} available ${displayPositionName(selectedStep.positionName)} users…` : "Search available users…"}
                             className="ep-form-input"
                             style={{ width: "100%", paddingLeft: 30, boxSizing: "border-box" }}
                           />
@@ -2468,7 +2489,7 @@ export default function WorkflowBuilder() {
                             <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 50, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
                               {filtered.map(u => (
                                 <div key={u.id}
-                                  onMouseDown={e => { e.preventDefault(); updateStep(selectedStep.id, { assignedUserId: u.id }); setStepUserSearch(p => ({ ...p, [selectedStep.id]: "" })); }}
+                                  onMouseDown={e => { e.preventDefault(); addAssignee(u.id); }}
                                   style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 2 }}
                                   onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; }}
                                   onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = ""; }}

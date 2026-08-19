@@ -170,10 +170,11 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     // A plain (non-ANY_ONE-group) step whose approver isn't this user but is
     // one of their delegating managers - group membership is the user's own,
     // not a delegation, so it's excluded here regardless of delegatedManagerIds.
-    function delegatedFrom(step: { approver_id: string | null; approval_mode: string; approval_group_name: string | null }): string | null {
+    function delegatedFrom(step: { approver_id: string | null; approver_ids?: string[]; approval_mode: string; approval_group_name: string | null }): string | null {
       if (step.approval_mode === "ANY_ONE" && step.approval_group_name) return null;
-      if (!step.approver_id || step.approver_id === req.user!.userId) return null;
-      return delegatedManagerIds.includes(step.approver_id) ? step.approver_id : null;
+      const assignedIds = step.approver_ids?.length ? step.approver_ids : (step.approver_id ? [step.approver_id] : []);
+      if (assignedIds.includes(req.user!.userId)) return null;
+      return assignedIds.find((id) => delegatedManagerIds.includes(id)) ?? null;
     }
 
     const items: any[] = [];
@@ -277,10 +278,14 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             AND ar.workflow_step_order IS NOT NULL
             AND (ar.approval_chain->(ar.workflow_step_order::int)->>'action_type') = 'MARK_PAID'
             AND (
-              -- SINGLE step: specific named person
+              -- SINGLE step: specific named person(s) — approver_id (legacy
+              -- primary) or membership in the step's approver_ids array.
               (
                 (ar.approval_chain->(ar.workflow_step_order::int)->>'approval_mode') = 'SINGLE'
-                AND (ar.approval_chain->(ar.workflow_step_order::int)->>'approver_id') = $1
+                AND (
+                  (ar.approval_chain->(ar.workflow_step_order::int)->>'approver_id') = $1
+                  OR (ar.approval_chain->(ar.workflow_step_order::int)->'approver_ids') ? $1
+                )
               )
               OR
               -- ANY_ONE group step: any member of the named group
@@ -321,7 +326,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
               WHERE s->>'action_type' = 'MARK_PAID'
             )
             AND (ar.approval_chain->(jsonb_array_length(ar.approval_chain) - 1)->>'approval_mode') = 'SINGLE'
-            AND (ar.approval_chain->(jsonb_array_length(ar.approval_chain) - 1)->>'approver_id') = $1
+            AND (
+              (ar.approval_chain->(jsonb_array_length(ar.approval_chain) - 1)->>'approver_id') = $1
+              OR (ar.approval_chain->(jsonb_array_length(ar.approval_chain) - 1)->'approver_ids') ? $1
+            )
           ORDER BY ar.created_at DESC`,
         [userId]
       );

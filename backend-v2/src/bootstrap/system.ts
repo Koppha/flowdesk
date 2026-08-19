@@ -1664,6 +1664,11 @@ async function ensureAdvanceRecoverySchema() {
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS not_cleared_confirmed_by_id uuid REFERENCES users(id)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_deduction_amount numeric(12,2)`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS recovery_months_at_confirmation integer`);
+  // Extra cost (e.g. ticket/visa/baggage fee) on top of the day-by-day rows
+  // total, shown on the request form when the selected travel type has
+  // travel_types.has_extra_costs set.
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS extra_cost_amount numeric(12,2) NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS extra_cost_description text`);
 }
 
 // Admin-configurable idle-session timeout: how long a user can go without
