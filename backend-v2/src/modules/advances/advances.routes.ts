@@ -71,6 +71,9 @@ const CreateAdvanceSchema = z.object({
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_branch"], message: "Bank branch is required" });
     }
   }
+  if ((data.extra_cost_amount ?? 0) > 0 && !String(data.extra_cost_description || "").trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["extra_cost_description"], message: "Please justify the extra cost" });
+  }
 });
 
 const UpdateAdvanceSchema = z.object({
@@ -102,6 +105,9 @@ const UpdateAdvanceSchema = z.object({
     if (!String(data.bank_branch || "").trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_branch"], message: "Bank branch is required" });
     }
+  }
+  if ((data.extra_cost_amount ?? 0) > 0 && !String(data.extra_cost_description || "").trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["extra_cost_description"], message: "Please justify the extra cost" });
   }
 });
 

@@ -494,7 +494,6 @@ export default function App() {
   const [newTravelTypeCeoRate, setNewTravelTypeCeoRate] = useState("0");
   const [newTravelTypeCurrency, setNewTravelTypeCurrency] = useState("LSL");
   const [newTravelTypeRequiresAccommodation, setNewTravelTypeRequiresAccommodation] = useState(false);
-  const [newTravelTypeHasExtraCosts, setNewTravelTypeHasExtraCosts] = useState(false);
   const [newTravelTypeAllowedPaymentMethods, setNewTravelTypeAllowedPaymentMethods] = useState<("ECOCASH" | "BANK")[]>(["ECOCASH", "BANK"]);
   const [editingTravelType, setEditingTravelType] = useState<TravelType | null>(null);
   const [showAddTravelTypeModal, setShowAddTravelTypeModal] = useState(false);
@@ -977,7 +976,7 @@ export default function App() {
     },
     { meals: 0, amount: 0 }
   );
-  const extraCost = selectedTravelType?.has_extra_costs ? (Number(extraCostAmount) || 0) : 0;
+  const extraCost = isTravelAdvanceSelected ? (Number(extraCostAmount) || 0) : 0;
   const totalRequested = () => {
     if (isTravelAdvanceSelected) return rowTotals.amount + extraCost;
     if (advanceType === "SALARY") return Number(salaryAmount) || 0;
@@ -1771,7 +1770,6 @@ export default function App() {
         currency: newTravelTypeCurrency,
         active: true,
         requires_accommodation: newTravelTypeRequiresAccommodation,
-        has_extra_costs: newTravelTypeHasExtraCosts,
         allowed_payment_methods: newTravelTypeAllowedPaymentMethods
       });
       setNewTravelTypeName("");
@@ -1780,7 +1778,6 @@ export default function App() {
       setNewTravelTypeCeoRate("0");
       setNewTravelTypeCurrency("LSL");
       setNewTravelTypeRequiresAccommodation(false);
-      setNewTravelTypeHasExtraCosts(false);
       setNewTravelTypeAllowedPaymentMethods(["ECOCASH", "BANK"]);
       await loadTravelTypes();
       alert("Travel type saved.");
@@ -1808,7 +1805,6 @@ export default function App() {
         currency: type.currency ?? "LSL",
         active: type.active !== false,
         requires_accommodation: type.requires_accommodation ?? false,
-        has_extra_costs: type.has_extra_costs ?? false,
         allowed_payment_methods: type.allowed_payment_methods
       });
       await loadTravelTypes();
@@ -5462,10 +5458,6 @@ export default function App() {
                         <input type="checkbox" checked={newTravelTypeRequiresAccommodation} onChange={(e) => setNewTravelTypeRequiresAccommodation(e.target.checked)} />
                         <span>Requires accommodation booking</span>
                       </label>
-                      <label className="ep-checkbox-label">
-                        <input type="checkbox" checked={newTravelTypeHasExtraCosts} onChange={(e) => setNewTravelTypeHasExtraCosts(e.target.checked)} />
-                        <span>Has extra costs (e.g. ticket, visa, baggage fee)</span>
-                      </label>
                     </div>
                     <div className="ep-modal-footer">
                       <button className="ep-btn-outline" onClick={() => setShowAddTravelTypeModal(false)}>Cancel</button>
@@ -5555,10 +5547,6 @@ export default function App() {
                       <label className="ep-checkbox-label">
                         <input type="checkbox" checked={editingTravelType.requires_accommodation ?? false} onChange={(e) => setEditingTravelType({ ...editingTravelType, requires_accommodation: e.target.checked })} />
                         <span>Requires accommodation booking</span>
-                      </label>
-                      <label className="ep-checkbox-label">
-                        <input type="checkbox" checked={editingTravelType.has_extra_costs ?? false} onChange={(e) => setEditingTravelType({ ...editingTravelType, has_extra_costs: e.target.checked })} />
-                        <span>Has extra costs (e.g. ticket, visa, baggage fee)</span>
                       </label>
                     </div>
                     <div className="ep-modal-footer">
@@ -6532,10 +6520,10 @@ export default function App() {
                     </tbody>
                   </table>
 
-                  {selectedTravelType?.has_extra_costs && (
+                  {isTravelAdvanceSelected && (
                     <div className="form-grid-2" style={{ marginTop: 10 }}>
                       <div className="form-field">
-                        <label>Extra Cost Amount</label>
+                        <label>Extra Cost Amount <span style={{ color: "var(--muted, #6b7280)", fontWeight: 400 }}>(optional, on top of daily meals)</span></label>
                         <input
                           type="number"
                           value={extraCostAmount}
@@ -6544,12 +6532,12 @@ export default function App() {
                         />
                       </div>
                       <div className="form-field">
-                        <label>Extra Cost Description</label>
+                        <label>Justification{(Number(extraCostAmount) || 0) > 0 ? <sup>*</sup> : null}</label>
                         <input
                           type="text"
                           value={extraCostDescription}
                           onChange={(e) => setExtraCostDescription(e.target.value)}
-                          placeholder="e.g. ticket, visa fee, excess baggage"
+                          placeholder="What is this extra cost for? e.g. ticket, visa fee, excess baggage"
                         />
                       </div>
                     </div>
@@ -6837,6 +6825,10 @@ export default function App() {
                         alert("Please choose a payback duration.");
                         return;
                       }
+                      if (isTravelAdvanceSelected && extraCost > 0 && !extraCostDescription.trim()) {
+                        alert("Please justify the extra cost.");
+                        return;
+                      }
                       if (!trimmedPurpose) {
                         alert("Purpose is required.");
                         return;
@@ -6943,10 +6935,8 @@ export default function App() {
                       }
                       if (isTravelAdvanceSelected) {
                         base.requested_total = Number(totalRequested()) || 0;
-                        if (selectedTravelType?.has_extra_costs) {
-                          base.extra_cost_amount = extraCost;
-                          base.extra_cost_description = extraCostDescription.trim() || undefined;
-                        }
+                        base.extra_cost_amount = extraCost;
+                        base.extra_cost_description = extraCostDescription.trim() || undefined;
                       }
                       if (advanceType === "LOAN") {
                         base.requested_total = Number(loanAmount) || 0;

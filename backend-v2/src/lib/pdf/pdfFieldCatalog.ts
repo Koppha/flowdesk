@@ -56,7 +56,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "purpose", label: "Purpose", group: "Trip" },
     { key: "project_number", label: "Project Number", group: "Trip" },
     { key: "extra_cost_amount", label: "Extra Cost Amount", group: "Trip" },
-    { key: "extra_cost_description", label: "Extra Cost Description", group: "Trip" },
+    { key: "extra_cost_description", label: "Justification", group: "Trip" },
     { key: "requested_total", label: "Requested Amount", group: "Payment" },
     { key: "approved_total", label: "Approved Amount", group: "Payment" },
     { key: "payment_status", label: "Payment Status", group: "Payment" },

@@ -72,10 +72,6 @@ export type TravelType = {
   currency?: string;
   active?: boolean;
   requires_accommodation?: boolean;
-  // When set, the advance request form shows an extra-cost amount +
-  // description alongside the day-by-day rows (e.g. a ticket/visa/baggage
-  // fee not covered by the per-day meal/accommodation rate).
-  has_extra_costs?: boolean;
   allowed_payment_methods?: ("ECOCASH" | "BANK")[];
   locations?: TravelLocation[];
 };

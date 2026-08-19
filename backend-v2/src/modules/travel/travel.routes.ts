@@ -16,7 +16,6 @@ const TravelTypeSchema = z.object({
   currency: z.string().trim().min(2).max(5).default("LSL"),
   active: z.boolean().optional(),
   requires_accommodation: z.boolean().optional(),
-  has_extra_costs: z.boolean().optional(),
   allowed_payment_methods: z.array(z.enum(["ECOCASH", "BANK"])).min(1, "Select at least one payment method").default(["ECOCASH", "BANK"])
 });
 
@@ -56,8 +55,8 @@ travelRouter.post("/types", requireRole(["MANAGER", "ADMIN"]), async (req: Authe
     const row = (
       await query<{ id: string }>(
         `INSERT INTO travel_types
-          (code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, has_extra_costs, allowed_payment_methods, created_by_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          (code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods, created_by_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT (code) DO UPDATE
            SET name = EXCLUDED.name,
                location_mode = EXCLUDED.location_mode,
@@ -68,7 +67,6 @@ travelRouter.post("/types", requireRole(["MANAGER", "ADMIN"]), async (req: Authe
                currency = EXCLUDED.currency,
                active = EXCLUDED.active,
                requires_accommodation = EXCLUDED.requires_accommodation,
-               has_extra_costs = EXCLUDED.has_extra_costs,
                allowed_payment_methods = EXCLUDED.allowed_payment_methods,
                updated_at = now()
          RETURNING id`,
@@ -83,7 +81,6 @@ travelRouter.post("/types", requireRole(["MANAGER", "ADMIN"]), async (req: Authe
           parsed.data.currency,
           parsed.data.active ?? true,
           parsed.data.requires_accommodation ?? false,
-          parsed.data.has_extra_costs ?? false,
           parsed.data.allowed_payment_methods,
           req.user!.userId
         ]
