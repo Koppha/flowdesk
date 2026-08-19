@@ -5795,6 +5795,8 @@ html[data-theme="dark"] .summary-note {
 .login-card {
   width: min(570px, 78%);
   max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
   margin: 0;
   box-sizing: border-box;
   padding: clamp(30px, 4.4vh, 46px) 42px clamp(26px, 3.2vh, 34px);
