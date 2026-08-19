@@ -6346,16 +6346,6 @@ export default function App() {
                       <span>{selectedTravelType.name}</span>
                       <b>{fmtMoney(selectedTravelRate, selectedTravelType?.currency)} per {selectedTravelUnitLabel}</b>
                     </div>
-                    {(selectedTravelType.rate_exco > 0 || selectedTravelType.rate_ceo > 0) && (
-                      <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap", fontSize: 13, opacity: 0.78 }}>
-                        <span>General Staff: {fmtMoney(selectedTravelType.rate_general_staff, selectedTravelType.currency)}</span>
-                        <span>EXCO: {fmtMoney(selectedTravelType.rate_exco, selectedTravelType.currency)}</span>
-                        <span>CEO: {fmtMoney(selectedTravelType.rate_ceo, selectedTravelType.currency)}</span>
-                      </div>
-                    )}
-                    <div style={{ marginTop: 8, fontSize: 13, opacity: 0.78 }}>
-                      {selectedTravelType.location_mode === "DISTRICT" ? "Use Lesotho districts for local travel." : "Use country, city, and South African province where applicable."}
-                    </div>
                   </div>
                   <table className="travel-table">
                     <thead>
