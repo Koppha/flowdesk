@@ -266,6 +266,30 @@ itProvisioningRouter.put("/software-templates", async (req: AuthedRequest, res, 
   }
 });
 
+// GET /it-provisioning/it-staff — active users on the "IT" team (Technical
+// department > Billing & IS section > IT team), for the Assigned To /
+// Default Assignees pickers. Scoped this narrowly rather than reusing
+// /auth/users (a) because that endpoint lists every active employee
+// company-wide, not just IT, and (b) because it requires
+// user_management access, which an IT Officer who only has it_provisioning
+// access wouldn't have - this route only needs the module's own access
+// check (applied above via itProvisioningRouter.use), matching who's
+// actually allowed to be on this page at all.
+itProvisioningRouter.get("/it-staff", async (_req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query<{ id: string; full_name: string | null }>(
+      `SELECT u.id, u.full_name
+         FROM users u
+         JOIN teams t ON t.id = u.team_id
+        WHERE t.name = 'IT' AND u.is_active = true
+        ORDER BY u.full_name`
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // GET/PUT /it-provisioning/default-assignees — the IT Manager's preset pool
 // of IT Officers. Exactly one preset officer auto-assigns every new
 // Computer Request directly, same as before; more than one leaves new tasks

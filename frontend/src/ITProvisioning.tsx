@@ -111,7 +111,7 @@ export default function ITProvisioning({ initialStatus }: { initialStatus?: stri
   const [savingDefaultAssignees, setSavingDefaultAssignees] = useState(false);
 
   useEffect(() => {
-    api.adminUsers().then((rows: any[]) => setStaff(Array.isArray(rows) ? rows.filter((u) => u.is_active !== false) : [])).catch(() => {});
+    api.itProvisioningItStaff().then((rows: any[]) => setStaff(Array.isArray(rows) ? rows : [])).catch(() => {});
     api.itProvisioningDefaultAssignees().then((r: any) => setDefaultAssigneeIds((r?.assignees || []).map((a: any) => a.id))).catch(() => {});
   }, []);
 
@@ -478,7 +478,7 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
   const [handoverComments, setHandoverComments] = useState("");
 
   useEffect(() => {
-    api.adminUsers().then((rows: any[]) => setStaff(Array.isArray(rows) ? rows.filter((u) => u.is_active !== false) : [])).catch(() => {});
+    api.itProvisioningItStaff().then((rows: any[]) => setStaff(Array.isArray(rows) ? rows : [])).catch(() => {});
   }, []);
 
   async function saveAssignment() {

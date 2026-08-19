@@ -499,6 +499,7 @@ export const api = {
     req("/admin/data-cleanup/full-reset", { method: "POST", body: JSON.stringify({ confirm: "RESET EVERYTHING", keepAdminEmail }) }),
 
   itProvisioningAccess: () => req("/it-provisioning/access"),
+  itProvisioningItStaff: () => req("/it-provisioning/it-staff"),
   itProvisioningList: (params: Record<string, string> = {}) => {
     const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v))).toString();
     return req(`/it-provisioning${qs ? `?${qs}` : ""}`);
