@@ -9,6 +9,21 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
+/* Same fix as checkboxes above, for the same reason: the global
+   "input, select, textarea { width: 100%; min-height: 40-42px; ... }"
+   reset further down also applies to radio inputs, rendering them as a
+   giant box instead of a normal-sized radio button. */
+input[type="radio"] {
+  appearance: auto;
+  -webkit-appearance: auto;
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  accent-color: #1d4ed8;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 html {
   --bg: #eef3fb;
   --surface: #ffffff;
