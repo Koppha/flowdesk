@@ -6509,6 +6509,29 @@ export default function App() {
                             <td></td>
                           </tr>
                           <tr>
+                            <td>Extra Cost</td>
+                            <td colSpan={3}>
+                              <input
+                                type="text"
+                                value={extraCostDescription}
+                                onChange={(e) => setExtraCostDescription(e.target.value)}
+                                placeholder={`Justification${extraCost > 0 ? " (required)" : " — what is this extra cost for?"}`}
+                                style={{ width: "100%", boxSizing: "border-box" }}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="number"
+                                min="0"
+                                value={extraCostAmount}
+                                onChange={(e) => setExtraCostAmount(e.target.value)}
+                                placeholder="0"
+                                style={{ width: 100 }}
+                              />
+                            </td>
+                            <td></td>
+                          </tr>
+                          <tr>
                             <td>Total</td>
                             <td></td>
                             <td></td>
@@ -6519,29 +6542,6 @@ export default function App() {
                       )}
                     </tbody>
                   </table>
-
-                  {isTravelAdvanceSelected && (
-                    <div className="form-grid-2" style={{ marginTop: 10 }}>
-                      <div className="form-field">
-                        <label>Extra Cost Amount <span style={{ color: "var(--muted, #6b7280)", fontWeight: 400 }}>(optional, on top of daily meals)</span></label>
-                        <input
-                          type="number"
-                          value={extraCostAmount}
-                          onChange={(e) => setExtraCostAmount(e.target.value)}
-                          placeholder="0"
-                        />
-                      </div>
-                      <div className="form-field">
-                        <label>Justification{(Number(extraCostAmount) || 0) > 0 ? <sup>*</sup> : null}</label>
-                        <input
-                          type="text"
-                          value={extraCostDescription}
-                          onChange={(e) => setExtraCostDescription(e.target.value)}
-                          placeholder="What is this extra cost for? e.g. ticket, visa fee, excess baggage"
-                        />
-                      </div>
-                    </div>
-                  )}
 
                   {/* ── Accommodation notice for local travel ── */}
                   {selectedTravelType?.location_mode === "DISTRICT" && rows.length > 0 && (() => {
