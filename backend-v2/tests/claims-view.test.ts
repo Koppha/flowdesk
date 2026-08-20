@@ -35,7 +35,7 @@ describe("claim view access", () => {
     ).toBe(true);
   });
 
-  it("allows anyone in the claimant's management chain (org structure) to view the claim", async () => {
+  it("does not allow someone in the claimant's management chain to view the claim before it reaches them in the workflow", async () => {
     expect(
       await canViewClaim({
         role: "MANAGER",
@@ -43,7 +43,7 @@ describe("claim view access", () => {
         userId: "manager-1",
         managerChainIds: ["manager-1", "hod-1"]
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("denies a user with no relation to the claim", async () => {

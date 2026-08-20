@@ -38,7 +38,7 @@ describe("advance view access", () => {
     ).toBe(true);
   });
 
-  it("allows anyone in the requester's management chain (org structure) to view the advance", async () => {
+  it("does not allow someone in the requester's management chain to view the advance before it reaches them in the workflow", async () => {
     expect(
       await canViewAdvance({
         role: "MANAGER",
@@ -47,7 +47,7 @@ describe("advance view access", () => {
         userId: "manager-1",
         managerChainIds: ["manager-1", "hod-1"]
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("denies a user with no relation to the advance", async () => {
