@@ -29,7 +29,6 @@ interface DeductionItem {
   month: string | null;
   vr_date: string | null;
   has_receipts: boolean;
-  has_refund_proof: boolean;
   advance_amount: string | number;
   cleared_amount: string | number;
   amount_to_be_expensed: string | number;
@@ -242,7 +241,7 @@ export default function Deductions() {
       fmtDate(i.vr_date), i.has_receipts ? "Yes" : "No",
       Number(i.advance_amount || 0).toFixed(2), Number(i.cleared_amount || 0).toFixed(2),
       Number(i.amount_to_be_expensed || 0).toFixed(2), Number(i.salary_deduction || 0).toFixed(2),
-      Number(i.salary_deduction || 0) > 0 ? (i.has_refund_proof ? "Yes" : "No") : "",
+      Number(i.salary_deduction || 0) > 0 ? (i.has_receipts ? "Yes" : "No") : "",
       Number(i.payable || 0).toFixed(2), STATUS_LABEL[rowStatus(i)]
     ]);
     const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -396,8 +395,8 @@ export default function Deductions() {
                       <td style={{ color: Number(item.salary_deduction) > 0 ? "#dc2626" : "var(--muted)", fontWeight: 600 }}>
                         {formatMoney(item.salary_deduction, item.currency)}
                         {Number(item.salary_deduction) > 0 && (
-                          <div style={{ fontSize: 11, fontWeight: 600, marginTop: 2, color: item.has_refund_proof ? "#065f46" : "#b45309" }}>
-                            {item.has_refund_proof ? "Refund proof attached" : "No refund proof"}
+                          <div style={{ fontSize: 11, fontWeight: 600, marginTop: 2, color: item.has_receipts ? "#065f46" : "#b45309" }}>
+                            {item.has_receipts ? "Refund proof attached" : "No refund proof"}
                           </div>
                         )}
                       </td>

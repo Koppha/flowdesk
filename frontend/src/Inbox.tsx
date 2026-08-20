@@ -427,6 +427,16 @@ export function isCaptureItem(item: any) {
   return item.doc_type === "ADVANCE" && (isCaptureActionType(item.current_step_action_type) || item.capture_done === true);
 }
 
+// Same set as isCaptureItem, but narrowed to items still actually awaiting
+// this user's capture action - for the sidebar badge count, which should
+// only ever reflect outstanding work, not the whole list (isCaptureItem
+// deliberately keeps already-captured items visible in the Capture Inbox
+// itself so they can still be found/downloaded, but that would otherwise
+// leave the badge stuck showing them as pending forever).
+export function isCapturePendingItem(item: any) {
+  return isCaptureItem(item) && item.current_step_actionable_by_me === true;
+}
+
 // Items awaiting or already through payment — surfaced in the dedicated
 // Payments page instead of the general Approval Inbox. Checked three ways
 // because advances reach this state via three different inbox code paths
