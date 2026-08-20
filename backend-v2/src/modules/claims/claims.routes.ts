@@ -130,7 +130,7 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
   return { claimTotal };
 }
 
-export async function canViewClaim(args: { role: string; sectionId?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; workflowStepOrder?: number | null; managerChainIds?: string[] }) {
+export async function canViewClaim(args: { role: string; sectionId?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; workflowStepOrder?: number | null; managerChainIds?: string[]; delegatedManagerIds?: string[] | null }) {
   if (args.role === "ADMIN") return true;
   if (args.claimantId === args.userId) return true;
 
@@ -145,6 +145,17 @@ export async function canViewClaim(args: { role: string; sectionId?: string | nu
     const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
     const reached = chain.slice(0, maxReachedIdx + 1);
     if (reached.some(s => s.approver_id === args.userId)) return true;
+    // A delegate can view any reached step whose assigned approver(s)
+    // delegated to them - same match rule as canApproveStep, so a delegate
+    // never gets a "forbidden" screen for the exact claim they're standing
+    // in for their manager on.
+    if (args.delegatedManagerIds?.length) {
+      const isDelegatedStep = reached.some(s => {
+        const assignedIds = s.approver_ids?.length ? s.approver_ids : [s.approver_id];
+        return args.delegatedManagerIds!.some(id => assignedIds.includes(id));
+      });
+      if (isDelegatedStep) return true;
+    }
     // "Team: X" (ANY_ONE) steps list the department HOD as approver_id for
     // routing purposes, but any member of that permission group is a real
     // participant in the chain and should be able to track the request —
@@ -285,7 +296,8 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds }))) {
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
 
@@ -313,7 +325,8 @@ claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds }))) {
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
     const receipt = (await query<any>(`SELECT * FROM receipts WHERE id=$1 AND clearance_claim_id=$2`, [req.params.receiptId, req.params.id]))[0];
@@ -344,7 +357,8 @@ claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds }))) {
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
     const isOwner = claim.claimant_id === req.user!.userId;

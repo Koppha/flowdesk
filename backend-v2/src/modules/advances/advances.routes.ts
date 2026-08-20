@@ -260,6 +260,7 @@ export async function getAdvanceNotificationContext(advanceId: string) {
 export async function canViewAdvance(args: {
   role: string; requesterId: string; createdById: string; userId: string;
   approvalChain?: ChainStep[] | null; workflowStepOrder?: number | null; managerChainIds?: string[];
+  delegatedManagerIds?: string[] | null;
 }) {
   if (args.role === "ADMIN") return true;
   if (args.requesterId === args.userId) return true;
@@ -280,6 +281,17 @@ export async function canViewAdvance(args: {
     const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
     const reached = chain.slice(0, maxReachedIdx + 1);
     if (reached.some(s => s.approver_id === args.userId)) return true;
+    // A delegate can view any reached step whose assigned approver(s)
+    // delegated to them - same match rule as canApproveStep, so a delegate
+    // never gets a "forbidden" screen for the exact request they're
+    // standing in for their manager on.
+    if (args.delegatedManagerIds?.length) {
+      const isDelegatedStep = reached.some(s => {
+        const assignedIds = s.approver_ids?.length ? s.approver_ids : [s.approver_id];
+        return args.delegatedManagerIds!.some(id => assignedIds.includes(id));
+      });
+      if (isDelegatedStep) return true;
+    }
     // "Team: X" (ANY_ONE) steps list the department HOD as approver_id for
     // routing purposes, but any member of that permission group is a real
     // participant in the chain and should be able to track the request —
@@ -802,7 +814,8 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const canViewDueToRole = (await isCompensationFinanceSection(req.user!.sectionId)) && adv.status === "APPROVED";
     if (!canViewDueToRole) {
       const managerChainIds = await getManagerChainIds(adv.requester_id);
-      if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, workflowStepOrder: (adv as any).workflow_step_order, managerChainIds }))) {
+      const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "ADVANCE_REQUEST");
+      if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, workflowStepOrder: (adv as any).workflow_step_order, managerChainIds, delegatedManagerIds }))) {
         throw forbidden();
       }
     }
@@ -868,8 +881,9 @@ advancesRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     if (!adv) throw notFound();
     const pdfFilename = buildAdvancePdfFilename(adv.requester_name, adv.requester_employee_no, adv.sequence_no);
     const managerChainIds = await getManagerChainIds(adv.requester_id);
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "ADVANCE_REQUEST");
     const isOwner = adv.requester_id === req.user!.userId || adv.created_by_id === req.user!.userId;
-    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: adv.approval_chain, workflowStepOrder: adv.workflow_step_order, managerChainIds }))) {
+    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: adv.approval_chain, workflowStepOrder: adv.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
     if (!(await canAccessPdf({ requestType: "ADVANCE_REQUEST", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" }))) {
