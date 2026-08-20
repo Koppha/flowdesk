@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStaffDirectory, refreshStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
-import AttendanceModule from "./AttendanceModule";
 import Inbox, { isCaptureItem, isCapturePendingItem, isPaymentItem } from "./Inbox";
 import Payments from "./Payments";
 import Deductions from "./Deductions";
@@ -410,7 +409,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "ATTENDANCE" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -1160,10 +1159,6 @@ export default function App() {
   const canManageTravelSettings = canAccessFeature("travel_setup");
   const profileCompleted = Boolean(profile?.profile_completed ?? me?.profileCompleted);
   const employmentType = profile?.employment_type || me?.employmentType || "PERMANENT";
-  // Finance-authorized users (same authority Standby/Overtime gate their
-  // Finance queues on) also need Attendance open to review submitted
-  // records, even though they aren't interns/temporary staff themselves.
-  const canAccessAttendance = ["INTERN", "TEMPORARY"].includes(String(employmentType || "").toUpperCase()) || Boolean(profile?.is_compensation_finance);
 
   // Dashboard "shortcuts" — every process a user could plausibly pin, gated
   // by the same visibility rules as the sidebar so the picker never offers
@@ -1171,7 +1166,6 @@ export default function App() {
   const shortcutCatalog: { key: AppPage; label: string; icon: typeof ClipboardList; available: boolean }[] = [
     { key: "MY_ADVANCES", label: "Advance Requests", icon: ClipboardList, available: true },
     { key: "MY_CLEARANCES", label: "Clearances", icon: CheckCircle2, available: true },
-    { key: "ATTENDANCE", label: "Attendance", icon: FileText, available: canAccessAttendance },
     { key: "OVERTIME", label: "Overtime", icon: Clock3, available: overtimeModuleEnabled },
     { key: "CHANGE_REQUEST", label: "Custom Processes", icon: GitBranch, available: hasActiveCustomRequestTypes },
     { key: "INBOX", label: "Approval Inbox", icon: Mail, available: true },
@@ -4113,7 +4107,6 @@ export default function App() {
               <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><CheckCircle2 size={14} aria-hidden />Clearances</a>
             </div>
           </div>
-          {canAccessAttendance && <a href="#" className={navItemClass(page === "ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("ATTENDANCE"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Attendance</a>}
           {(canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled && (
             <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime</a>
           )}
@@ -4257,8 +4250,6 @@ export default function App() {
             <Refundable />
           ) : page === "IT_PROVISIONING" ? (
             <ITProvisioning />
-          ) : page === "ATTENDANCE" ? (
-            <AttendanceModule profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
           ) : page === "OVERTIME" ? (
             <Overtime
               profile={profile}
