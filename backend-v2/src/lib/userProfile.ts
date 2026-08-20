@@ -1,4 +1,4 @@
-import { badRequest, forbidden, notFound } from "./errors.js";
+import { badRequest, notFound } from "./errors.js";
 import { query } from "./db.js";
 
 export type UserAccountState = {
@@ -38,13 +38,15 @@ export async function getUserAccountState(userId: string) {
   return user;
 }
 
+// Despite the name, this only gates clearance submission (see claims.routes.ts) -
+// advances have their own eligibility check in resolveAdvanceRequester, which
+// already allows interns and temporary employees to self-request. Clearance
+// should be available to anyone who can hold an advance to begin with, so
+// this doesn't re-block them by employment type.
 export async function assertUserCanRequest(userId: string) {
   const user = await getUserAccountState(userId);
   if (!isProfileComplete(user)) {
-    throw badRequest("Complete your profile before requesting an advance");
-  }
-  if (user.employment_type === "INTERN" || user.employment_type === "TEMPORARY") {
-    throw forbidden("Interns and temporary employees cannot request advances");
+    throw badRequest("Complete your profile before requesting a clearance");
   }
   return user;
 }
