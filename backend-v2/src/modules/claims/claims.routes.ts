@@ -686,6 +686,7 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     });
 
     let status: ClaimStatus = "SUBMITTED";
+    let firstStepApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }> = [];
     if (workflowResult && workflowResult.chain.length > 0) {
       const { workflowId, chain } = workflowResult;
       status = chainStepToClaimStatus(chain, 0);
@@ -696,12 +697,24 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
          WHERE id=$1`,
         [req.params.id, status, workflowId, 0, JSON.stringify(chain)]
       );
+      // A step can have more than one assigned person — notify every one of
+      // them, not just the first, so whoever's free can act first (mirrors
+      // the advance-submit path in advances.routes.ts).
+      firstStepApprovers = chain[0]?.approvers?.length
+        ? chain[0].approvers.map((a) => ({ id: a.id, name: a.name, email: a.email, title: a.title || chain[0].position_name }))
+        : chain[0]
+        ? [{ id: chain[0].approver_id, name: chain[0].approver_name, email: chain[0].approver_email, title: chain[0].approver_title || chain[0].position_name }]
+        : [];
     } else {
       await query(`UPDATE clearance_claims SET status='SUBMITTED', submitted_at=now(), updated_at=now() WHERE id=$1`, [req.params.id]);
     }
 
     const notificationContext = await getClaimNotificationContext(req.params.id);
     if (notificationContext) {
+      // Passing nextApprover ties the email to the specific step-0 approver
+      // from the resolved chain - without it, notifyClaimTask falls back to
+      // a broad legacy role-based lookup (e.g. every MANAGER in the
+      // department) instead of the one person the workflow actually assigned.
       await notifyClaimTask({
         claimId: req.params.id,
         status,
@@ -710,8 +723,25 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         department: notificationContext.department,
         claimTotal: Number(notificationContext.claim_total),
         currency: notificationContext.currency,
-        claimType: notificationContext.claim_type
+        claimType: notificationContext.claim_type,
+        nextApprover: firstStepApprovers[0] ?? null,
+        stepOrder: 0
       });
+      for (const extra of firstStepApprovers.slice(1)) {
+        if (!extra.email) continue;
+        await notifyClaimTask({
+          claimId: req.params.id,
+          status,
+          claimantName: notificationContext.full_name,
+          claimantEmail: notificationContext.email,
+          department: notificationContext.department,
+          claimTotal: Number(notificationContext.claim_total),
+          currency: notificationContext.currency,
+          claimType: notificationContext.claim_type,
+          nextApprover: extra,
+          stepOrder: 0
+        });
+      }
     }
     return res.json({ ok: true, status });
   } catch (err) {
