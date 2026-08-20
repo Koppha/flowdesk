@@ -387,6 +387,24 @@ function isCaptureActionType(code: string | null | undefined) {
 
 // Button label for the current workflow step's action, derived from its
 // Action Label (action_type code) so a "Capture" step reads "Capture", etc.
+// Clearance settlements aren't a Finance choice: an employee refunding the
+// company can only hand over cash, and a reimbursement to the employee goes
+// out the same way their original advance was paid.
+function paymentMethodLabel(code: string | null | undefined) {
+  switch (code) {
+    case "ECOCASH": return "ECOCASH";
+    case "BANK": return "Bank Transfer";
+    case "CASH": return "Cash";
+    case "OTHER": return "Other";
+    default: return "Cash";
+  }
+}
+function deriveSettleMethod(decision: string | null | undefined, advancePaymentMethod: string | null | undefined): "PAYROLL" | "ECOCASH" | "BANK" | "CASH" | "OTHER" {
+  if (decision === "REFUND_FROM_EMPLOYEE") return "CASH";
+  if (decision === "REIMBURSE_EMPLOYEE") return (advancePaymentMethod as any) || "CASH";
+  return "CASH";
+}
+
 function actionTypeButtonLabel(code: string | null | undefined) {
   if (isCaptureActionType(code)) return "Capture";
   switch (code) {
@@ -867,9 +885,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const [error, setError] = useState<string | null>(null);
   const [comments, setComments] = useState("");
   const [settleRef, setSettleRef] = useState("");
-  // Cash is the only clearance settlement method, in either direction -
-  // there's nothing left to pick, so this stays fixed rather than a choice.
-  const settleMethod: "CASH" = "CASH";
   const [financeDecision, setFinanceDecision] = useState<"ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE" | "">("");
   const [settlementAmount, setSettlementAmount] = useState("");
   const [assigneeType, setAssigneeType] = useState<"INDIVIDUAL" | "TEAM">("TEAM");
@@ -1618,7 +1633,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                         finance_decision: financeDecision,
                         finance_comments: comments.trim(),
                         settlement_amount: settlementAmount ? Number(settlementAmount) : undefined,
-                        settled_method: settleMethod,
+                        settled_method: deriveSettleMethod(financeDecision, detail?.advance_payment_method),
                         settled_reference: settleRef.trim(),
                         assignee_user_id: assigneeType === "INDIVIDUAL" ? (assigneeUserId || undefined) : undefined,
                         assignee_group_name: assigneeType === "TEAM" ? (assigneeGroupName.trim() || undefined) : undefined,
@@ -1629,7 +1644,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     </button>
                   )}
                   {canMarkSettled && (
-                    <button className="button small-button button-success" disabled={busy} onClick={() => act(() => api.markClaimSettled(item.id, settleRef.trim() ? settleMethod : undefined, settleRef.trim() || undefined))}>
+                    <button className="button small-button button-success" disabled={busy} onClick={() => act(() => api.markClaimSettled(item.id, settleRef.trim() || undefined))}>
                       Mark Settled
                     </button>
                   )}
@@ -1689,7 +1704,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                           <div className="review-card-title review-card-subtitle">Settlement Details</div>
                           <label>
                             <span>Settlement Method</span>
-                            <div className="review-control" style={{ display: "flex", alignItems: "center" }}>Cash</div>
+                            <div className="review-control" style={{ display: "flex", alignItems: "center" }}>
+                              {paymentMethodLabel(deriveSettleMethod(financeDecision, detail?.advance_payment_method))}
+                              {financeDecision === "REIMBURSE_EMPLOYEE" && " (same as the original advance)"}
+                            </div>
                           </label>
                           <label>
                             <span>Payment Reference</span>
@@ -1752,7 +1770,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     <div className="review-settlement-fields" style={{ padding: 14 }}>
                       <label>
                         <span>Settlement Method</span>
-                        <div className="review-control" style={{ display: "flex", alignItems: "center" }}>Cash</div>
+                        <div className="review-control" style={{ display: "flex", alignItems: "center" }}>
+                          {paymentMethodLabel(detail?.settled_method)}
+                        </div>
                       </label>
                       <label>
                         <span>Payment Reference</span>

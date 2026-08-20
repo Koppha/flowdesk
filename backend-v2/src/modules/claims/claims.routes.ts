@@ -293,7 +293,15 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
 
 claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
-    const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
+    const claim = (
+      await query<any>(
+        `SELECT c.*, ar.payment_method AS advance_payment_method, ar.payment_account AS advance_payment_account
+           FROM clearance_claims c
+           LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
+          WHERE c.id=$1`,
+        [req.params.id]
+      )
+    )[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
     const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
@@ -929,8 +937,21 @@ claimsRouter.post("/:id/settle", requireFinance, async (req: AuthedRequest, res,
     if (claim.status !== "FINANCE_VERIFIED") throw badRequest(`Cannot record a finance decision from status ${claim.status}`);
 
     const decision: FinanceDecision = body.data.finance_decision;
-    if (decision !== "ACCEPTED" && (!body.data.settled_method || !body.data.settled_reference)) {
-      throw badRequest("Settlement method and reference are required for this decision");
+    if (decision !== "ACCEPTED" && !body.data.settled_reference) {
+      throw badRequest("Payment reference is required for this decision");
+    }
+    // Settlement method isn't a Finance choice - a refund from the employee
+    // can only be handed over as cash, and a reimbursement to the employee
+    // goes out the same way their original advance was paid (whatever the
+    // client sent is ignored so this can't be overridden from the UI).
+    let settledMethod: string | null = null;
+    if (decision === "REFUND_FROM_EMPLOYEE") {
+      settledMethod = "CASH";
+    } else if (decision === "REIMBURSE_EMPLOYEE") {
+      const linkedAdvance = claim.linked_advance_id
+        ? (await query<{ payment_method: string }>(`SELECT payment_method FROM advance_requests WHERE id=$1`, [claim.linked_advance_id]))[0]
+        : null;
+      settledMethod = linkedAdvance?.payment_method ?? "CASH";
     }
     const status = nextStatusForFinanceDecision(decision);
 
@@ -944,7 +965,7 @@ claimsRouter.post("/:id/settle", requireFinance, async (req: AuthedRequest, res,
        WHERE id=$1`,
       [
         claim.id, status, decision, body.data.finance_comments, body.data.settlement_amount ?? null,
-        body.data.settled_method ?? null, body.data.settled_reference ?? null,
+        settledMethod, body.data.settled_reference ?? null,
         body.data.assignee_user_id ?? null, body.data.assignee_group_name ?? null, body.data.expected_payment_date ?? null
       ]
     );
@@ -972,7 +993,6 @@ claimsRouter.post("/:id/settle", requireFinance, async (req: AuthedRequest, res,
 claimsRouter.post("/:id/mark-settled", requireFinance, async (req: AuthedRequest, res, next) => {
   try {
     const body = z.object({
-      settled_method: z.enum(["PAYROLL", "ECOCASH", "BANK", "CASH", "OTHER"]).optional(),
       settled_reference: z.string().optional()
     }).safeParse(req.body);
     if (!body.success) throw badRequest("Invalid payload", body.error.flatten());
@@ -981,16 +1001,18 @@ claimsRouter.post("/:id/mark-settled", requireFinance, async (req: AuthedRequest
     if (!claim) throw notFound();
     const status = nextClaimStatus(claim.status, "MARK_SETTLED");
 
+    // settled_method was already locked in by the finance decision (cash for
+    // a refund from the employee, the original advance's payment method for
+    // a reimbursement) - it isn't a choice to make again at this stage.
     await query(
       `UPDATE clearance_claims
        SET status=$2,
-           settled_method=COALESCE($3, settled_method),
-           settled_reference=COALESCE($4, settled_reference),
+           settled_reference=COALESCE($3, settled_reference),
            settled_at=COALESCE(settled_at, now()),
            closed_at=now(),
            updated_at=now()
        WHERE id=$1`,
-      [claim.id, status, body.data.settled_method ?? null, body.data.settled_reference ?? null]
+      [claim.id, status, body.data.settled_reference ?? null]
     );
     const notificationContext = await getClaimNotificationContext(claim.id);
     if (notificationContext) {

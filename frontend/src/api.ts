@@ -356,8 +356,8 @@ export const api = {
     assignee_group_name?: string;
     expected_payment_date?: string;
   }) => req(`/claims/${id}/settle`, { method: "POST", body: JSON.stringify(payload) }),
-  markClaimSettled: (id: string, settled_method?: "PAYROLL" | "ECOCASH" | "BANK" | "CASH" | "OTHER", settled_reference?: string) =>
-    req(`/claims/${id}/mark-settled`, { method: "POST", body: JSON.stringify({ settled_method, settled_reference }) }),
+  markClaimSettled: (id: string, settled_reference?: string) =>
+    req(`/claims/${id}/mark-settled`, { method: "POST", body: JSON.stringify({ settled_reference }) }),
   // Hotels (accommodation)
   hotels: () => req("/accommodation/hotels"),
   createHotel: (data: any) => req("/accommodation/hotels", { method: "POST", body: JSON.stringify(data) }),
