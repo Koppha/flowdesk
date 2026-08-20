@@ -9,7 +9,6 @@ import { accommodationRouter } from "./modules/accommodation/accommodation.route
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { advancesRouter } from "./modules/advances/advances.routes.js";
 import { aiRouter } from "./modules/ai/ai.routes.js";
-import { attendanceRouter } from "./modules/attendance/attendance.routes.js";
 import { claimsRouter } from "./modules/claims/claims.routes.js";
 import { claimsSlaRouter } from "./modules/claims/claims-sla.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
@@ -69,7 +68,6 @@ export function createApp() {
   app.use("/claims", claimsSlaRouter);
   app.use("/claims", claimsRouter);
   app.use("/inbox", inboxRouter);
-  app.use("/attendance", attendanceRouter);
   app.use("/overtime", overtimeRouter);
   app.use("/standby", standbyRouter);
   app.use("/travel", travelRouter);

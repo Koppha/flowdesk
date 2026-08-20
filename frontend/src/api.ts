@@ -260,13 +260,6 @@ export const api = {
 
   inbox: () => req("/inbox"),
   myInboxActions: (limit = 50) => req(`/inbox/my-actions?limit=${limit}`),
-  attendance: () => req("/attendance?mine=true"),
-  attendanceDetail: (id: string) => req(`/attendance/${id}`),
-  saveAttendance: (data: any) => req("/attendance", { method: "POST", body: JSON.stringify(data) }),
-  updateAttendance: (id: string, data: any) => req(`/attendance/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  attendanceFinanceQueue: () => req("/attendance/finance/queue"),
-  processAttendanceFinance: (id: string, comments?: string) => req(`/attendance/${id}/finance-process`, { method: "POST", body: JSON.stringify({ comments }) }),
-  returnAttendanceFinance: (id: string, comments: string) => req(`/attendance/${id}/finance-return`, { method: "POST", body: JSON.stringify({ comments }) }),
   overtimeRequests: () => req("/overtime/requests"),
   overtimeRequestDetail: (id: string) => req(`/overtime/requests/${id}`),
   createOvertimeRequest: (data: any) => req("/overtime/requests", { method: "POST", body: JSON.stringify(data) }),
