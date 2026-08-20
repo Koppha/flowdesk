@@ -867,7 +867,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const [error, setError] = useState<string | null>(null);
   const [comments, setComments] = useState("");
   const [settleRef, setSettleRef] = useState("");
-  const [settleMethod, setSettleMethod] = useState<"PAYROLL" | "ECOCASH" | "BANK" | "CASH">("ECOCASH");
+  // Cash is the only clearance settlement method, in either direction -
+  // there's nothing left to pick, so this stays fixed rather than a choice.
+  const settleMethod: "CASH" = "CASH";
   const [financeDecision, setFinanceDecision] = useState<"ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE" | "">("");
   const [settlementAmount, setSettlementAmount] = useState("");
   const [assigneeType, setAssigneeType] = useState<"INDIVIDUAL" | "TEAM">("TEAM");
@@ -900,14 +902,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       }
     })();
   }, [item.id]);
-
-  // Mark Settled reaches a claim after its finance decision is already
-  // recorded - if it's a refund from the employee, cash is the only valid
-  // method (same restriction as the earlier Finance Decision step), so
-  // correct the default here too rather than leaving ECOCASH pre-selected.
-  useEffect(() => {
-    if (detail?.finance_decision === "REFUND_FROM_EMPLOYEE") setSettleMethod("CASH");
-  }, [detail?.finance_decision]);
 
   const isTravelAdvance =
     item.doc_type === "ADVANCE" &&
@@ -1681,9 +1675,6 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                                 checked={financeDecision === value}
                                 onChange={() => {
                                   setFinanceDecision(value);
-                                  // An employee refunding the company can only hand over cash -
-                                  // Payroll/ECOCASH/Bank aren't ways to collect money back from them.
-                                  if (value === "REFUND_FROM_EMPLOYEE") setSettleMethod("CASH");
                                 }}
                               />
                               <RadioIcon checked={financeDecision === value} />
@@ -1698,22 +1689,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                           <div className="review-card-title review-card-subtitle">Settlement Details</div>
                           <label>
                             <span>Settlement Method</span>
-                            <div className="review-radio-row">
-                              {(financeDecision === "REFUND_FROM_EMPLOYEE"
-                                ? ([["CASH", "Cash"]] as const)
-                                : ([
-                                    ["PAYROLL", "Payroll"],
-                                    ["ECOCASH", "ECOCASH"],
-                                    ["BANK", "Bank Transfer"]
-                                  ] as const)
-                              ).map(([value, label]) => (
-                                <label key={value} className="review-radio-option">
-                                  <input type="radio" name="settle-method" className="review-radio-native" checked={settleMethod === value} onChange={() => setSettleMethod(value)} />
-                                  <RadioIcon checked={settleMethod === value} />
-                                  {label}
-                                </label>
-                              ))}
-                            </div>
+                            <div className="review-control" style={{ display: "flex", alignItems: "center" }}>Cash</div>
                           </label>
                           <label>
                             <span>Payment Reference</span>
@@ -1776,22 +1752,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     <div className="review-settlement-fields" style={{ padding: 14 }}>
                       <label>
                         <span>Settlement Method</span>
-                        <div className="review-radio-row">
-                          {(detail?.finance_decision === "REFUND_FROM_EMPLOYEE"
-                            ? ([["CASH", "Cash"]] as const)
-                            : ([
-                                ["PAYROLL", "Payroll"],
-                                ["ECOCASH", "ECOCASH"],
-                                ["BANK", "Bank Transfer"]
-                              ] as const)
-                          ).map(([value, label]) => (
-                            <label key={value} className="review-radio-option">
-                              <input type="radio" name="settle-method-mark" className="review-radio-native" checked={settleMethod === value} onChange={() => setSettleMethod(value)} />
-                              <RadioIcon checked={settleMethod === value} />
-                              {label}
-                            </label>
-                          ))}
-                        </div>
+                        <div className="review-control" style={{ display: "flex", alignItems: "center" }}>Cash</div>
                       </label>
                       <label>
                         <span>Payment Reference</span>
