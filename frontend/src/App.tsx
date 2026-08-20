@@ -3175,6 +3175,13 @@ export default function App() {
       alert("Please provide a reason for the overspend before submitting.");
       return null;
     }
+    // Positive balance means the employee owes the company back the unused
+    // portion — proof it's already been returned is required before submit,
+    // otherwise Finance has no basis not to deduct it from salary.
+    if (requireSettlementDetails && clearanceBalance > 0 && !clearanceReceipts.some((r) => r.category === "REFUND_PROOF")) {
+      alert("Please upload proof that you've returned the balance before submitting.");
+      return null;
+    }
 
     return {
       month: monthValue,
@@ -7420,6 +7427,41 @@ export default function App() {
                     </div>
                   )}
 
+                  {clearanceBalance > 0 && (
+                    <div className="form-field" style={{ marginTop: 16 }}>
+                      <label>Proof of Refund <span style={{ color: "#dc2626" }}>*</span></label>
+                      <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
+                        Upload proof you've already returned the balance (e.g. a bank deposit slip or cash receipt).
+                        If nothing is uploaded, this amount will be deducted from your salary.
+                      </div>
+                      {clearanceReceipts.filter((r) => r.category === "REFUND_PROOF").map((receipt) => (
+                        <div key={receipt.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 8 }}>
+                          <FileText size={18} style={{ color: "#dc2626", flexShrink: 0 }} aria-hidden />
+                          <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {String(receipt.file_path || "").split("/").pop() || receipt.file_path}
+                          </div>
+                          <button type="button" className="ep-icon-btn danger" title="Remove" onClick={() => void removeClearanceReceipt(receipt.id)}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      <label className="clearance-upload-button">
+                        <Upload size={15} aria-hidden /> Upload Proof of Refund
+                        <input
+                          type="file"
+                          multiple
+                          accept=".pdf,.jpg,.jpeg,.png"
+                          style={{ display: "none" }}
+                          onChange={(e) => {
+                            const files = Array.from(e.currentTarget.files || []);
+                            if (files.length > 0) void uploadClearanceReceipts(files, "REFUND_PROOF");
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  )}
+
                   <div className="clearance-info-note">
                     <Info size={16} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden />
                     <div>
@@ -7428,7 +7470,7 @@ export default function App() {
                         {clearanceBalance < 0
                           ? "Negative variance means the company owes you. Please ensure all receipts are attached."
                           : clearanceBalance > 0
-                            ? "Positive variance means you owe the company. A refund will be arranged via the settlement method selected above."
+                            ? "Positive variance means you owe the company. Upload proof of refund above, or this amount will be deducted from your salary."
                             : "This clearance is fully balanced. Attach any supporting documents needed for reconciliation."}
                       </div>
                     </div>

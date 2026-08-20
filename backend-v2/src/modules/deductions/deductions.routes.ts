@@ -32,6 +32,7 @@ type DeductionRow = {
   deducted_by_name: string | null;
   closed_at: string | null;
   currency: string | null;
+  has_refund_proof: boolean;
 };
 
 const LIST_QUERY = `
@@ -44,6 +45,7 @@ const LIST_QUERY = `
          c.month,
          ar.approved_at AS vr_date,
          EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
+         EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id AND r.category = 'REFUND_PROOF') AS has_refund_proof,
          COALESCE(c.currency, 'LSL') AS currency,
          c.advance_amount,
          c.claim_total AS cleared_amount,

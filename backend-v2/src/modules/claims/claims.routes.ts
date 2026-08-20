@@ -666,6 +666,18 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     if (Number(claim.balance_amount || 0) < 0 && !String(claim.reason_for_overspend || "").trim()) {
       throw badRequest("Please provide a reason for the overspend before submitting.");
     }
+    // balance_amount > 0 means the employee owes the company back the unused
+    // portion — require proof it's already been returned, otherwise Finance
+    // has no basis not to deduct it from salary (see the Deductions module).
+    if (Number(claim.balance_amount || 0) > 0) {
+      const refundProof = await query<{ id: string }>(
+        `SELECT id FROM receipts WHERE clearance_claim_id=$1 AND category='REFUND_PROOF' LIMIT 1`,
+        [req.params.id]
+      );
+      if (refundProof.length === 0) {
+        throw badRequest("Please upload proof that you've returned the balance before submitting.");
+      }
+    }
 
     // Resolve the workflow for clearance requests in the claimant's department/section.
     // A clearance always sticks with the linked advance's travel type — passed
