@@ -4152,6 +4152,7 @@ export default function App() {
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
                 )}
+                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
               </div>
             </div>
           )}

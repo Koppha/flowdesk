@@ -37,13 +37,12 @@ export function HolidayCalendarModal({
     onYearChange(y);
   }
 
-  function cellStyle(c: { date: string; day: number; weekday: number }): React.CSSProperties {
-    if (!c.date) return { background: "transparent" };
+  function cellClass(c: { date: string; day: number; weekday: number }): string {
+    if (!c.date) return "holiday-cal-cell holiday-cal-cell-empty";
     const holiday = lesothoHolidayName(c.date);
-    if (holiday) return { background: "#fee2e2", color: "#991b1b", fontWeight: 700 };
-    if (c.weekday === 0) return { background: "#fef2f2" }; // Sunday — 200%
-    if (c.weekday === 6) return { background: "#fefce8" }; // Saturday — 150%
-    return { background: "#f0fdf4" }; // weekday — 125%
+    if (holiday || c.weekday === 0) return "holiday-cal-cell holiday-cal-cell-holiday"; // Sunday / Holiday — 200%
+    if (c.weekday === 6) return "holiday-cal-cell holiday-cal-cell-saturday"; // Saturday — 150%
+    return "holiday-cal-cell holiday-cal-cell-weekday"; // weekday — 125%
   }
 
   return (
@@ -59,26 +58,26 @@ export function HolidayCalendarModal({
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
           {DAY_NAMES.map((d) => (
-            <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: "#94a3b8" }}>{d.slice(0, 3)}</div>
+            <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: "var(--muted)" }}>{d.slice(0, 3)}</div>
           ))}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 16 }}>
           {cells.map((c, i) => (
-            <div key={i} style={{ ...cellStyle(c), borderRadius: 6, padding: "6px 0", textAlign: "center", fontSize: 12, minHeight: 28 }}
+            <div key={i} className={cellClass(c)} style={{ borderRadius: 6, padding: "6px 0", textAlign: "center", fontSize: 12, minHeight: 28 }}
               title={c.date ? (lesothoHolidayName(c.date) || "") : ""}>
               {c.day || ""}
             </div>
           ))}
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11, color: "#64748b", marginBottom: 16 }}>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#f0fdf4", border: "1px solid #d1fae5", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />Weekday · 125%</span>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#fefce8", border: "1px solid #fde68a", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />Saturday · 150%</span>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />Sunday / Holiday · 200%</span>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11, color: "var(--muted)", marginBottom: 16 }}>
+          <span><span className="holiday-cal-swatch holiday-cal-cell-weekday" />Weekday · 125%</span>
+          <span><span className="holiday-cal-swatch holiday-cal-cell-saturday" />Saturday · 150%</span>
+          <span><span className="holiday-cal-swatch holiday-cal-cell-holiday" />Sunday / Holiday · 200%</span>
         </div>
 
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>Lesotho Public Holidays — {year}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6 }}>Lesotho Public Holidays — {year}</div>
           {holidaysThisMonth.length === 0 ? (
             <div style={{ fontSize: 12, color: "var(--muted)" }}>No public holidays this month.</div>
           ) : (

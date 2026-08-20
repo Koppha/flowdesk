@@ -533,9 +533,20 @@ export default function Inbox(props: {
   const [queuePageSize, setQueuePageSize] = useState(10);
   useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope]);
 
+  // Capture mode's item list deliberately keeps already-captured items visible
+  // (so they can still be found/downloaded), so "awaiting" counts need to
+  // exclude those explicitly rather than just using items.length - otherwise
+  // captured items keep inflating every count on this page even after they're
+  // done. The approval inbox's items are already just what's pending, so it's
+  // a no-op there.
+  const pendingItems = useMemo(
+    () => (mode === "capture" ? items.filter((it) => it.current_step_actionable_by_me === true) : items),
+    [items, mode]
+  );
+
   const metrics = useMemo(
     () => ({
-      awaiting: items.length,
+      awaiting: pendingItems.length,
       advances: items.filter((item) => item.doc_type === "ADVANCE").length,
       clearances: items.filter((item) => item.doc_type === "CLAIM").length,
       advanceValue: items
@@ -543,7 +554,7 @@ export default function Inbox(props: {
         .reduce((sum, item) => sum + itemAmountValue(item), 0),
       recentActions: myActions.length
     }),
-    [items, myActions]
+    [items, pendingItems, myActions]
   );
 
   const latestAction = myActions[0] || null;
@@ -622,7 +633,7 @@ export default function Inbox(props: {
               <h3>{mode === "capture" ? "Capture Queue" : "Approval Queue"}</h3>
               <p>{items.length === 0 ? "No work is waiting right now." : "Grouped by document type and current stage."}</p>
             </div>
-            <span className="inbox-count-chip">{items.length} total</span>
+            <span className="inbox-count-chip">{pendingItems.length} total</span>
           </div>
 
           {items.length === 0 ? (
