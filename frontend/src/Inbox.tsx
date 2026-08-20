@@ -18,6 +18,7 @@ type InboxItem =
       approved_total: number;
       purpose: string | null;
       requester_name: string;
+      currency?: string | null;
       advance_type?: string;
       workflow_step_order?: number | null;
       current_step_approver_id?: string | null;
@@ -48,6 +49,7 @@ type InboxItem =
       claim_total: number;
       advance_amount: number;
       balance_amount: number;
+      currency?: string | null;
       claimant_name: string;
       workflow_step_order?: number | null;
       current_step_approver_id?: string | null;
@@ -132,9 +134,12 @@ type MyInboxAction = {
   created_at: string;
 };
 
-function fmt(n: any) {
-  const x = Number(n || 0);
-  return `M${x.toFixed(2)}`;
+// Previously always prefixed "M" (Lesotho Maloti) regardless of the item's
+// actual currency, so every USD/EUR/etc. international advance or clearance
+// showed the wrong symbol throughout the inbox and review modal - currency
+// is now optional but should be passed everywhere it's available.
+function fmt(n: any, currency?: string | null) {
+  return formatMoney(n, currency);
 }
 
 function RadioIcon(props: { checked: boolean }) {
@@ -350,7 +355,7 @@ function itemAmountValue(item: InboxItem) {
 
 function itemAmount(item: InboxItem) {
   if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST") return "—";
-  return fmt(itemAmountValue(item));
+  return fmt(itemAmountValue(item), (item as any).currency);
 }
 
 function itemContext(item: InboxItem) {
@@ -360,7 +365,7 @@ function itemContext(item: InboxItem) {
   if (item.doc_type === "OVERTIME_REQUEST") return `${item.request_no} — ${monthLabel(item.year, item.month)}`;
   if (item.doc_type === "OVERTIME_CLAIM") return `${item.claim_no} — ${monthLabel(item.year, item.month)} (${item.converted_hours}h)`;
   if (item.doc_type === "STANDBY_CLAIM") return `${item.claim_no} — ${new Date(item.claim_month).toLocaleDateString(undefined, { year: "numeric", month: "long" })}`;
-  return `Advance ${fmt(item.advance_amount)} / Balance ${fmt(item.balance_amount)}`;
+  return `Advance ${fmt(item.advance_amount, item.currency)} / Balance ${fmt(item.balance_amount, item.currency)}`;
 }
 
 function initials(value: string | null | undefined) {
@@ -1507,15 +1512,15 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   <div className="recon-summary">
                     <div className="recon-stat">
                       <small>Advance Paid</small>
-                      <strong>{fmt(detail.advance_amount)}</strong>
+                      <strong>{fmt(detail.advance_amount, detail.currency)}</strong>
                     </div>
                     <div className="recon-stat">
                       <small>Actual Expenditure</small>
-                      <strong>{fmt(detail.claim_total)}</strong>
+                      <strong>{fmt(detail.claim_total, detail.currency)}</strong>
                     </div>
                     <div className="recon-stat">
                       <small>Variance (Over / Under)</small>
-                      <strong className={Number(detail.balance_amount) < 0 ? "recon-negative" : ""}>{fmt(detail.balance_amount)}</strong>
+                      <strong className={Number(detail.balance_amount) < 0 ? "recon-negative" : ""}>{fmt(detail.balance_amount, detail.currency)}</strong>
                     </div>
                   </div>
                   <div className="recon-settlement-banner">
@@ -1532,7 +1537,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     </div>
                     <div className="recon-settlement-amount">
                       <small>Settlement Amount</small>
-                      <strong>{fmt(Math.abs(Number(detail.balance_amount || 0)))}</strong>
+                      <strong>{fmt(Math.abs(Number(detail.balance_amount || 0)), detail.currency)}</strong>
                     </div>
                   </div>
                 </div>
@@ -1556,10 +1561,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                           <tr key={t.id}>
                             <td>{fmtDate(t.trip_date)}</td>
                             <td>{t.to_place ? `${t.from_place || "—"} → ${t.to_place}` : (t.from_place || "—")}</td>
-                            <td>{fmt(Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0))}</td>
-                            <td>{fmt(t.petrol_allowance)}</td>
-                            <td>{fmt(t.other_expenses)}</td>
-                            <td>{fmt(t.line_total)}</td>
+                            <td>{fmt(Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0), detail.currency)}</td>
+                            <td>{fmt(t.petrol_allowance, detail.currency)}</td>
+                            <td>{fmt(t.other_expenses, detail.currency)}</td>
+                            <td>{fmt(t.line_total, detail.currency)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1567,10 +1572,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                         <tfoot>
                           <tr className="review-table-totals-row">
                             <td colSpan={2}>Total</td>
-                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0), 0))}</td>
-                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.petrol_allowance || 0), 0))}</td>
-                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.other_expenses || 0), 0))}</td>
-                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.line_total || 0), 0))}</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0), 0), detail.currency)}</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.petrol_allowance || 0), 0), detail.currency)}</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.other_expenses || 0), 0), detail.currency)}</td>
+                            <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.line_total || 0), 0), detail.currency)}</td>
                           </tr>
                         </tfoot>
                       )}
@@ -1947,7 +1952,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     <strong style={{ color: "#dc2626" }}>Overdue Clearance</strong>
                     <span style={{ color: "var(--muted)", marginLeft: 8 }}>
                       {(item as any).not_cleared_confirmed_at
-                        ? `Confirmed not cleared. Recovery deduction: ${fmt((item as any).recovery_deduction_amount)}`
+                        ? `Confirmed not cleared. Recovery deduction: ${fmt((item as any).recovery_deduction_amount, item.currency)}`
                         : "This advance has passed its clearance duration without being cleared."}
                     </span>
                   </div>

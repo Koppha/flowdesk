@@ -188,9 +188,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
                 ar.workflow_step_order, ar.approval_chain,
-                u.full_name AS requester_name
+                u.full_name AS requester_name, tt.currency
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status NOT IN ('DRAFT','PAID','REJECTED','CANCELLED','APPROVED')
           ORDER BY ar.created_at DESC`
@@ -214,6 +215,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             approved_total: Number(a.approved_total),
             purpose: a.purpose,
             requester_name: a.requester_name,
+            currency: a.currency,
             workflow_step_order: a.workflow_step_order,
             current_step_approver_id: matched.approver_id,
             current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
@@ -247,6 +249,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
           requester_name: a.requester_name,
+          currency: a.currency,
           workflow_step_order: a.workflow_step_order,
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
           current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
@@ -270,9 +273,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       const userGroups = await getUserGroups(userId);
       const markPaidRows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                u.full_name AS requester_name
+                u.full_name AS requester_name, tt.currency
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status = 'APPROVED'
             AND ar.workflow_step_order IS NOT NULL
@@ -308,6 +312,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
           requester_name: a.requester_name,
+          currency: a.currency,
           is_final_step_approver: true
         });
       }
@@ -316,9 +321,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       // The named person who gave final approval can also mark as paid.
       const singleRows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                u.full_name AS requester_name
+                u.full_name AS requester_name, tt.currency
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status = 'APPROVED'
             AND NOT EXISTS (
@@ -344,6 +350,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
           requester_name: a.requester_name,
+          currency: a.currency,
           is_final_step_approver: true
         });
       }
@@ -369,9 +376,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       const captureViewOnly = !isAdmin && ((await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req)));
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name
+                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name, tt.currency
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
           ORDER BY ar.created_at DESC`
@@ -409,6 +417,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
           requester_name: a.requester_name,
+          currency: a.currency,
           workflow_step_order: a.workflow_step_order,
           current_step_approver_id: currentStep?.approver_id ?? null,
           current_step_position_name: currentStep ? group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ") : null,
@@ -473,7 +482,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     // act. Mirrors loadWorkflowAdvancesForUser, but for clearance_claims.
     const loadWorkflowClaimsForUser = async () => {
       const rows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount,
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency,
                 c.workflow_step_order, c.approval_chain,
                 u.full_name AS claimant_name
            FROM clearance_claims c
@@ -499,6 +508,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             claim_total: Number(c.claim_total),
             advance_amount: Number(c.advance_amount),
             balance_amount: Number(c.balance_amount),
+            currency: c.currency,
             claimant_name: c.claimant_name,
             workflow_step_order: c.workflow_step_order,
             current_step_approver_id: matched.approver_id,
@@ -527,6 +537,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           claim_total: Number(c.claim_total),
           advance_amount: Number(c.advance_amount),
           balance_amount: Number(c.balance_amount),
+          currency: c.currency,
           claimant_name: c.claimant_name,
           workflow_step_order: c.workflow_step_order,
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
@@ -552,9 +563,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     const loadAllWorkflowAdvancesForAdmin = async () => {
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name
+                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name, tt.currency
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status NOT IN ('DRAFT','PAID','REJECTED','CANCELLED','APPROVED')
           ORDER BY ar.created_at DESC`
@@ -573,6 +585,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
           requester_name: a.requester_name,
+          currency: a.currency,
           workflow_step_order: a.workflow_step_order,
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
           current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
@@ -587,7 +600,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
 
     const loadAllWorkflowClaimsForAdmin = async () => {
       const rows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount,
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency,
                 c.workflow_step_order, c.approval_chain, u.full_name AS claimant_name
            FROM clearance_claims c
            JOIN users u ON u.id = c.claimant_id
@@ -607,6 +620,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           claim_total: Number(c.claim_total),
           advance_amount: Number(c.advance_amount),
           balance_amount: Number(c.balance_amount),
+          currency: c.currency,
           claimant_name: c.claimant_name,
           workflow_step_order: c.workflow_step_order,
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
@@ -858,12 +872,13 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                u.full_name AS requester_name,
+                u.full_name AS requester_name, tt.currency,
                 NULL::text AS current_step_approver_id,
                 NULL::int  AS workflow_step_order
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
            LEFT JOIN departments d ON lower(trim(d.name)) = lower(trim(u.department))
+           LEFT JOIN travel_types tt ON tt.code = ar.type
           WHERE ar.status = $1${typeFilter}${ownershipFilter}
           ORDER BY ar.created_at DESC`,
         params
@@ -878,6 +893,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
           requester_name: a.requester_name,
+          currency: a.currency,
           workflow_step_order: a.workflow_step_order,
           current_step_approver_id: a.current_step_approver_id
         });
@@ -899,7 +915,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         ownershipFilter += " AND c.approval_chain IS NULL";
       }
       const rows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, u.full_name AS claimant_name
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency, u.full_name AS claimant_name
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
          LEFT JOIN departments d ON lower(trim(d.name)) = lower(trim(u.department))
@@ -915,6 +931,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           claim_total: Number(c.claim_total),
           advance_amount: Number(c.advance_amount),
           balance_amount: Number(c.balance_amount),
+          currency: c.currency,
           claimant_name: c.claimant_name
         });
       }
