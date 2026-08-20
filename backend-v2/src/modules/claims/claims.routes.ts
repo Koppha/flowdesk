@@ -130,19 +130,28 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
   return { claimTotal };
 }
 
-export async function canViewClaim(args: { role: string; sectionId?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; managerChainIds?: string[] }) {
+export async function canViewClaim(args: { role: string; sectionId?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; workflowStepOrder?: number | null; managerChainIds?: string[] }) {
   if (args.role === "ADMIN") return true;
   if (args.claimantId === args.userId) return true;
 
-  // Anyone in the workflow's resolved approval chain can view
+  // Anyone in the workflow's resolved approval chain can view — but only
+  // once the chain has actually reached them, same "reached, not future"
+  // cutoff as canViewAdvance (advances.routes.ts) and for the same reason:
+  // without it, an approver named several stages ahead could open the
+  // claim's full detail before anyone earlier in the chain had acted.
   if (args.approvalChain?.length) {
-    if (args.approvalChain.some(s => s.approver_id === args.userId)) return true;
+    const chain = args.approvalChain;
+    const group = getPendingGroup(chain, args.workflowStepOrder ?? 0);
+    const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
+    const reached = chain.slice(0, maxReachedIdx + 1);
+    if (reached.some(s => s.approver_id === args.userId)) return true;
     // "Team: X" (ANY_ONE) steps list the department HOD as approver_id for
     // routing purposes, but any member of that permission group is a real
-    // participant in the chain and should be able to track the request.
-    if (args.approvalChain.some(s => s.approval_group_name)) {
+    // participant in the chain and should be able to track the request —
+    // once reached, same cutoff as above.
+    if (reached.some(s => s.approval_group_name)) {
       const groups = await getUserGroups(args.userId);
-      if (args.approvalChain.some(s => s.approval_group_name && groups.includes(s.approval_group_name))) return true;
+      if (reached.some(s => s.approval_group_name && groups.includes(s.approval_group_name))) return true;
     }
   }
 
@@ -154,8 +163,12 @@ export async function canViewClaim(args: { role: string; sectionId?: string | nu
     return true;
   }
 
-  // Anyone in the claimant's management chain (org structure) can view
-  if (args.managerChainIds?.includes(args.userId)) return true;
+  // NOTE: this used to also grant view access to anyone in the claimant's
+  // management chain (org structure), unconditionally - removed for the
+  // same reason as canViewAdvance's equivalent grant: it let a department's
+  // EXCO/HOD see a subordinate's claim before the workflow had reached
+  // them. managerChainIds is kept as a parameter (now unused here) rather
+  // than removed from every call site.
 
   return false;
 }
@@ -272,7 +285,7 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds }))) {
       throw forbidden();
     }
 
@@ -300,7 +313,7 @@ claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds }))) {
       throw forbidden();
     }
     const receipt = (await query<any>(`SELECT * FROM receipts WHERE id=$1 AND clearance_claim_id=$2`, [req.params.receiptId, req.params.id]))[0];
@@ -331,7 +344,7 @@ claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, managerChainIds }))) {
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds }))) {
       throw forbidden();
     }
     const isOwner = claim.claimant_id === req.user!.userId;

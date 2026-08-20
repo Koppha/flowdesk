@@ -290,8 +290,16 @@ export async function canViewAdvance(args: {
     }
   }
 
-  // Anyone in the requester's management chain (org structure) can view
-  if (args.managerChainIds?.includes(args.userId)) return true;
+  // NOTE: this used to also grant view access to anyone in the requester's
+  // management chain (org structure), unconditionally - regardless of
+  // whether the workflow had reached them yet. Removed: a department's
+  // EXCO/HOD could see (and open the full detail of) a subordinate's
+  // request the moment it was submitted, before even the requester's own
+  // manager had acted, which is exactly the premature-visibility problem
+  // the "reached" cutoff above exists to prevent. managerChainIds is kept
+  // as a parameter (now unused here) rather than removed from every call
+  // site, so it's a one-line change to restore if a legitimate "manager
+  // can always track their team's requests" need shows up later.
 
   return false;
 }
