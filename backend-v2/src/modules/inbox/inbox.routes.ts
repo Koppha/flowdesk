@@ -381,16 +381,24 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         const chain = a.approval_chain as ChainStep[];
         const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
         if (!captureStep) continue;
+        const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
+        // A capture-feature holder's oversight grant is for once a request
+        // is actually relevant to them - not a preview of earlier stages
+        // (the requester's manager/EXCO approval, etc.) before the chain
+        // has reached the capture step at all. Without this cutoff, e.g.
+        // Finance/Treasury saw every travel advance from the moment it was
+        // submitted, regardless of whose turn it currently was.
+        const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
+        const captureStepReached = captureStep.approved || chain.indexOf(captureStep) <= maxReachedIdx;
         // Pending (not-yet-captured) items for non-admin users are already
         // surfaced by loadWorkflowAdvancesForUser above — only add them here
         // for ADMIN (whose main loader is skipped), a view-only capture-feature
-        // holder (who isn't a real chain participant either), or once already captured.
-        if (!captureStep.approved && !isAdmin && !captureViewOnly) continue;
+        // holder once the chain has actually reached them, or once already captured.
+        if (!captureStep.approved && !isAdmin && !(captureViewOnly && captureStepReached)) continue;
         if (!isAdmin && !captureViewOnly) {
           const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId);
           if (!eligible) continue;
         }
-        const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
         const currentStep = group.steps.find((s) => !s.approved) ?? null;
         items.push({
           doc_type: "ADVANCE",
@@ -524,6 +532,86 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
           current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
           current_step_actionable_by_me: false
+        });
+      }
+    };
+
+    // ADMIN ("ALL") backstop for workflow-driven advances/claims: the
+    // per-user loaders above (loadWorkflowAdvancesForUser,
+    // loadWorkflowClaimsForUser) are skipped entirely for ALL, and
+    // loadAdvanceByStatus/loadClaimByStatus below only cover pre-workflow
+    // legacy records (approval_chain IS NULL) plus the terminal APPROVED
+    // status — so without this, a workflow-driven advance or claim sitting
+    // at a normal, non-final approval step is invisible to every admin
+    // account, even though performAdvanceApprove/performClaimApprove both
+    // already accept an admin override for that exact step. Only the
+    // person actually named on the step could see or act on it. Doesn't
+    // do per-user step matching (admin can act on any pending step, same
+    // as the approve endpoints' own role === 'ADMIN' bypass) - just
+    // surfaces the current pending step's label for context.
+    const loadAllWorkflowAdvancesForAdmin = async () => {
+      const rows = await query<any>(
+        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+          WHERE ar.approval_chain IS NOT NULL
+            AND ar.status NOT IN ('DRAFT','PAID','REJECTED','CANCELLED','APPROVED')
+          ORDER BY ar.created_at DESC`
+      );
+      for (const a of rows) {
+        if (items.some((i: any) => i.id === a.id)) continue;
+        const chain = a.approval_chain as ChainStep[];
+        const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
+        if (!group.steps.length || group.steps.every((s) => s.approved)) continue;
+        items.push({
+          doc_type: "ADVANCE",
+          id: a.id,
+          status: a.status,
+          advance_type: a.type,
+          requested_total: Number(a.requested_total),
+          approved_total: Number(a.approved_total),
+          purpose: a.purpose,
+          requester_name: a.requester_name,
+          workflow_step_order: a.workflow_step_order,
+          current_step_approver_id: group.steps[0]?.approver_id ?? null,
+          current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
+          current_step_requires_accommodation: group.steps[0]?.requires_accommodation ?? false,
+          current_step_action_type: group.steps[0]?.action_type ?? null,
+          current_step_can_reject: group.steps[0]?.can_reject ?? true,
+          current_step_can_rollback: group.steps[0]?.can_rollback ?? true,
+          current_step_actionable_by_me: true
+        });
+      }
+    };
+
+    const loadAllWorkflowClaimsForAdmin = async () => {
+      const rows = await query<any>(
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount,
+                c.workflow_step_order, c.approval_chain, u.full_name AS claimant_name
+           FROM clearance_claims c
+           JOIN users u ON u.id = c.claimant_id
+          WHERE c.approval_chain IS NOT NULL
+            AND c.status NOT IN ('DRAFT','SETTLED','CLOSED','REJECTED','FINANCE_VERIFIED','PAYMENT_PROCESSING')
+          ORDER BY c.created_at DESC`
+      );
+      for (const c of rows) {
+        if (items.some((i: any) => i.id === c.id)) continue;
+        const chain = c.approval_chain as ChainStep[];
+        const group = getPendingGroup(chain, c.workflow_step_order ?? 0);
+        if (!group.steps.length || group.steps.every((s) => s.approved)) continue;
+        items.push({
+          doc_type: "CLAIM",
+          id: c.id,
+          status: c.status,
+          claim_total: Number(c.claim_total),
+          advance_amount: Number(c.advance_amount),
+          balance_amount: Number(c.balance_amount),
+          claimant_name: c.claimant_name,
+          workflow_step_order: c.workflow_step_order,
+          current_step_approver_id: group.steps[0]?.approver_id ?? null,
+          current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
+          current_step_actionable_by_me: true
         });
       }
     };
@@ -833,6 +921,11 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     };
 
     if (rule === "ALL") {
+      // Workflow-driven advances/claims at any pending step (see comment
+      // above these functions for why this is needed at all).
+      await loadAllWorkflowAdvancesForAdmin();
+      await loadAllWorkflowClaimsForAdmin();
+
       // Legacy (non-workflow) advances by status
       await loadAdvanceByStatus("SUBMITTED");
       await loadAdvanceByStatus("COUNTERSIGNED");

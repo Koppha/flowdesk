@@ -259,21 +259,34 @@ export async function getAdvanceNotificationContext(advanceId: string) {
 
 export async function canViewAdvance(args: {
   role: string; requesterId: string; createdById: string; userId: string;
-  approvalChain?: ChainStep[] | null; managerChainIds?: string[];
+  approvalChain?: ChainStep[] | null; workflowStepOrder?: number | null; managerChainIds?: string[];
 }) {
   if (args.role === "ADMIN") return true;
   if (args.requesterId === args.userId) return true;
   if (args.createdById === args.userId) return true;
 
-  // Anyone in the workflow's resolved approval chain can view
+  // Anyone in the workflow's resolved approval chain can view — but only
+  // once the chain has actually reached them. Without this cutoff, every
+  // approver named anywhere in the chain (including steps several stages
+  // in the future, not yet reached) could open the request the moment it's
+  // submitted - e.g. an EXCO member three steps out could see a travel
+  // advance's full detail before the requester's own manager has even
+  // acted on it. maxReachedIdx mirrors the same "reached, not future" cutoff
+  // used for inbox tracking visibility (see loadWorkflowAdvancesForUser's
+  // isChainParticipant loop in inbox.routes.ts).
   if (args.approvalChain?.length) {
-    if (args.approvalChain.some(s => s.approver_id === args.userId)) return true;
+    const chain = args.approvalChain;
+    const group = getPendingGroup(chain, args.workflowStepOrder ?? 0);
+    const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
+    const reached = chain.slice(0, maxReachedIdx + 1);
+    if (reached.some(s => s.approver_id === args.userId)) return true;
     // "Team: X" (ANY_ONE) steps list the department HOD as approver_id for
     // routing purposes, but any member of that permission group is a real
-    // participant in the chain and should be able to track the request.
-    if (args.approvalChain.some(s => s.approval_group_name)) {
+    // participant in the chain and should be able to track the request —
+    // once reached, same cutoff as above.
+    if (reached.some(s => s.approval_group_name)) {
       const groups = await getUserGroups(args.userId);
-      if (args.approvalChain.some(s => s.approval_group_name && groups.includes(s.approval_group_name))) return true;
+      if (reached.some(s => s.approval_group_name && groups.includes(s.approval_group_name))) return true;
     }
   }
 
@@ -781,7 +794,7 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const canViewDueToRole = (await isCompensationFinanceSection(req.user!.sectionId)) && adv.status === "APPROVED";
     if (!canViewDueToRole) {
       const managerChainIds = await getManagerChainIds(adv.requester_id);
-      if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, managerChainIds }))) {
+      if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: (adv as any).approval_chain, workflowStepOrder: (adv as any).workflow_step_order, managerChainIds }))) {
         throw forbidden();
       }
     }
@@ -848,7 +861,7 @@ advancesRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     const pdfFilename = buildAdvancePdfFilename(adv.requester_name, adv.requester_employee_no, adv.sequence_no);
     const managerChainIds = await getManagerChainIds(adv.requester_id);
     const isOwner = adv.requester_id === req.user!.userId || adv.created_by_id === req.user!.userId;
-    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: adv.approval_chain, managerChainIds }))) {
+    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: adv.approval_chain, workflowStepOrder: adv.workflow_step_order, managerChainIds }))) {
       throw forbidden();
     }
     if (!(await canAccessPdf({ requestType: "ADVANCE_REQUEST", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" }))) {
