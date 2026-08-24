@@ -481,35 +481,6 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
     api.itProvisioningItStaff().then((rows: any[]) => setStaff(Array.isArray(rows) ? rows : [])).catch(() => {});
   }, []);
 
-  async function saveAssignment() {
-    setSaving(true);
-    try {
-      await api.itProvisioningAssign(task.id, { assigned_to_id: assignedTo || null, device_source: deviceSource as any });
-      onReload();
-    } catch (e: any) {
-      alert(e.message || "Failed to save");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveDevice() {
-    if (!assetNumber.trim()) { alert("Asset number is required"); return; }
-    setSaving(true);
-    try {
-      await api.itProvisioningSetDevice(task.id, {
-        asset_number: assetNumber.trim(), serial_number: serialNumber || null, manufacturer: manufacturer || null,
-        model: model || null, operating_system: os || null, hostname: hostname || null,
-        network_details: network || null, warranty_expiry: warranty || null
-      });
-      onReload();
-    } catch (e: any) {
-      alert(e.message || "Failed to save device");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function saveChecklist(next: ChecklistItem[]) {
     setChecklist(next);
     try { await api.itProvisioningSetChecklist(task.id, next); } catch (e: any) { alert(e.message || "Failed to save checklist"); }
@@ -596,49 +567,37 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
           </div>
         </div>
       )}
-      <div className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Provisioning Details</div></div>
-        <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Field label="Assigned To">
-            <select style={fieldStyle()} value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
-              <option value="">Select IT Officer</option>
-              {staff.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
-            </select>
-          </Field>
-          <Field label="Provisioning Status"><div style={{ padding: "7px 0" }}><StatusBadge status={task.status} /></div></Field>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <Field label="Device Source">
-              <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
-                {[["NEW_STOCK", "New Stock"], ["EXISTING_STOCK", "Existing Stock"], ["REPLACEMENT_DEVICE", "Replacement Device"]].map(([v, l]) => (
-                  <label key={v} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: "pointer" }}>
-                    <input type="radio" checked={deviceSource === v} onChange={() => setDeviceSource(v)} /> {l}
-                  </label>
-                ))}
-              </div>
-            </Field>
-          </div>
-        </div>
-        <div style={{ padding: "0 20px 16px" }}>
-          <button className="ep-btn" onClick={saveAssignment} disabled={saving}>Save Assignment</button>
-        </div>
-      </div>
-
-      <div className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Device Information</div></div>
-        <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Field label="Asset Number *"><input style={fieldStyle()} value={assetNumber} onChange={(e) => setAssetNumber(e.target.value)} placeholder="ETL-LAP-00482" /></Field>
-          <Field label="Serial Number"><input style={fieldStyle()} value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} /></Field>
-          <Field label="Manufacturer"><input style={fieldStyle()} value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} placeholder="Lenovo" /></Field>
-          <Field label="Model"><input style={fieldStyle()} value={model} onChange={(e) => setModel(e.target.value)} placeholder="ThinkPad T14 Gen 5" /></Field>
-          <Field label="Operating System"><input style={fieldStyle()} value={os} onChange={(e) => setOs(e.target.value)} placeholder="Windows 11 Enterprise" /></Field>
-          <Field label="Hostname"><input style={fieldStyle()} value={hostname} onChange={(e) => setHostname(e.target.value)} /></Field>
-          <Field label="IP / Network Details"><input style={fieldStyle()} value={network} onChange={(e) => setNetwork(e.target.value)} /></Field>
-          <Field label="Warranty Expiry"><input type="date" style={fieldStyle()} value={warranty} onChange={(e) => setWarranty(e.target.value)} /></Field>
-        </div>
-        <div style={{ padding: "0 20px 16px" }}>
-          <button className="ep-btn" onClick={saveDevice} disabled={saving}>Save Device Info</button>
-        </div>
-      </div>
+      <AssignmentWizard
+        task={task}
+        staff={staff}
+        assignedTo={assignedTo} setAssignedTo={setAssignedTo}
+        deviceSource={deviceSource} setDeviceSource={setDeviceSource}
+        assetNumber={assetNumber} setAssetNumber={setAssetNumber}
+        serialNumber={serialNumber} setSerialNumber={setSerialNumber}
+        manufacturer={manufacturer} setManufacturer={setManufacturer}
+        model={model} setModel={setModel}
+        os={os} setOs={setOs}
+        hostname={hostname} setHostname={setHostname}
+        network={network} setNetwork={setNetwork}
+        warranty={warranty} setWarranty={setWarranty}
+        saving={saving}
+        onFinish={async () => {
+          setSaving(true);
+          try {
+            await api.itProvisioningAssign(task.id, { assigned_to_id: assignedTo || null, device_source: deviceSource as any });
+            await api.itProvisioningSetDevice(task.id, {
+              asset_number: assetNumber.trim(), serial_number: serialNumber || null, manufacturer: manufacturer || null,
+              model: model || null, operating_system: os || null, hostname: hostname || null,
+              network_details: network || null, warranty_expiry: warranty || null
+            });
+            onReload();
+          } catch (e: any) {
+            alert(e.message || "Failed to save");
+          } finally {
+            setSaving(false);
+          }
+        }}
+      />
 
       {task.request_type === "REPLACEMENT" && (
         <div className="ep-panel">
@@ -791,6 +750,144 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
         </div>
       )}
     </>
+  );
+}
+
+// ─── Assignment wizard (Assign Officer → Device Source → Confirm Device) ────
+
+const WIZARD_STEPS = [
+  { key: "officer", label: "Assign Officer" },
+  { key: "source", label: "Device Source" },
+  { key: "device", label: "Confirm Device" },
+] as const;
+
+function AssignmentWizard(props: {
+  task: Task;
+  staff: Array<{ id: string; full_name: string | null }>;
+  assignedTo: string; setAssignedTo: (v: string) => void;
+  deviceSource: string; setDeviceSource: (v: string) => void;
+  assetNumber: string; setAssetNumber: (v: string) => void;
+  serialNumber: string; setSerialNumber: (v: string) => void;
+  manufacturer: string; setManufacturer: (v: string) => void;
+  model: string; setModel: (v: string) => void;
+  os: string; setOs: (v: string) => void;
+  hostname: string; setHostname: (v: string) => void;
+  network: string; setNetwork: (v: string) => void;
+  warranty: string; setWarranty: (v: string) => void;
+  saving: boolean;
+  onFinish: () => void | Promise<void>;
+}) {
+  const { task, staff, assignedTo, setAssignedTo, deviceSource, setDeviceSource,
+    assetNumber, setAssetNumber, serialNumber, setSerialNumber, manufacturer, setManufacturer,
+    model, setModel, os, setOs, hostname, setHostname, network, setNetwork, warranty, setWarranty,
+    saving, onFinish } = props;
+
+  const alreadySet = Boolean(task.assigned_to_id && task.device?.asset_number);
+  const [editing, setEditing] = useState(!alreadySet);
+  const [step, setStep] = useState(0);
+
+  if (!editing) {
+    return (
+      <div className="ep-panel">
+        <div className="ep-panel-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div className="ep-panel-title">Assignment &amp; Device</div>
+          <button className="ep-btn-outline" onClick={() => { setStep(0); setEditing(true); }}>Edit</button>
+        </div>
+        <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="Assigned To"><div style={{ fontWeight: 600 }}>{task.assigned_to_name || "—"}</div></Field>
+          <Field label="Provisioning Status"><div style={{ padding: "7px 0" }}><StatusBadge status={task.status} /></div></Field>
+          <Field label="Device Source"><div>{deviceSource.replace(/_/g, " ")}</div></Field>
+          <Field label="Asset Number"><div>{assetNumber || "—"}</div></Field>
+        </div>
+      </div>
+    );
+  }
+
+  const canProceedFromOfficer = Boolean(assignedTo);
+  const canFinish = Boolean(assetNumber.trim());
+
+  function next() {
+    if (step === 0 && !canProceedFromOfficer) { alert("Select an IT Officer to continue"); return; }
+    setStep((s) => Math.min(s + 1, WIZARD_STEPS.length - 1));
+  }
+  function back() {
+    setStep((s) => Math.max(s - 1, 0));
+  }
+  async function finish() {
+    if (!canFinish) { alert("Asset number is required"); return; }
+    await onFinish();
+    setEditing(false);
+  }
+
+  return (
+    <div className="ep-panel">
+      <div className="ep-panel-head"><div className="ep-panel-title">Provisioning Details</div></div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 20px 0" }}>
+        {WIZARD_STEPS.map((s, i) => (
+          <React.Fragment key={s.key}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {i < step
+                ? <CheckCircle2 size={18} color="#059669" />
+                : <span style={{
+                    width: 18, height: 18, borderRadius: 99, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 11, fontWeight: 700, color: i === step ? "#fff" : "var(--muted)",
+                    background: i === step ? "#2563eb" : "transparent", border: i === step ? "none" : "1.5px solid var(--border)",
+                  }}>{i + 1}</span>}
+              <span style={{ fontSize: 13, fontWeight: i === step ? 600 : 400, color: i === step ? "var(--text)" : "var(--muted)" }}>{s.label}</span>
+            </div>
+            {i < WIZARD_STEPS.length - 1 && <div style={{ flex: 1, height: 1, background: "var(--border)" }} />}
+          </React.Fragment>
+        ))}
+      </div>
+
+      <div style={{ padding: "18px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        {step === 0 && (
+          <>
+            <Field label="Assigned To">
+              <select style={fieldStyle()} value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+                <option value="">Select IT Officer</option>
+                {staff.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
+              </select>
+            </Field>
+            <Field label="Provisioning Status"><div style={{ padding: "7px 0" }}><StatusBadge status={task.status} /></div></Field>
+          </>
+        )}
+
+        {step === 1 && (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <Field label="Device Source">
+              <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
+                {[["NEW_STOCK", "New Stock"], ["EXISTING_STOCK", "Existing Stock"], ["REPLACEMENT_DEVICE", "Replacement Device"]].map(([v, l]) => (
+                  <label key={v} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: "pointer" }}>
+                    <input type="radio" checked={deviceSource === v} onChange={() => setDeviceSource(v)} /> {l}
+                  </label>
+                ))}
+              </div>
+            </Field>
+          </div>
+        )}
+
+        {step === 2 && (
+          <>
+            <Field label="Asset Number *"><input style={fieldStyle()} value={assetNumber} onChange={(e) => setAssetNumber(e.target.value)} placeholder="ETL-LAP-00482" /></Field>
+            <Field label="Serial Number"><input style={fieldStyle()} value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} /></Field>
+            <Field label="Manufacturer"><input style={fieldStyle()} value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} placeholder="Lenovo" /></Field>
+            <Field label="Model"><input style={fieldStyle()} value={model} onChange={(e) => setModel(e.target.value)} placeholder="ThinkPad T14 Gen 5" /></Field>
+            <Field label="Operating System"><input style={fieldStyle()} value={os} onChange={(e) => setOs(e.target.value)} placeholder="Windows 11 Enterprise" /></Field>
+            <Field label="Hostname"><input style={fieldStyle()} value={hostname} onChange={(e) => setHostname(e.target.value)} /></Field>
+            <Field label="IP / Network Details"><input style={fieldStyle()} value={network} onChange={(e) => setNetwork(e.target.value)} /></Field>
+            <Field label="Warranty Expiry"><input type="date" style={fieldStyle()} value={warranty} onChange={(e) => setWarranty(e.target.value)} /></Field>
+          </>
+        )}
+      </div>
+
+      <div style={{ padding: "0 20px 18px", display: "flex", gap: 8 }}>
+        {step > 0 && <button className="ep-btn-outline" onClick={back} disabled={saving}>Back</button>}
+        {step < WIZARD_STEPS.length - 1 && <button className="ep-btn" onClick={next} disabled={saving}>Next</button>}
+        {step === WIZARD_STEPS.length - 1 && <button className="ep-btn" onClick={finish} disabled={saving || !canFinish}>Finish</button>}
+        {alreadySet && <button className="ep-btn-outline" onClick={() => setEditing(false)} disabled={saving}>Cancel</button>}
+      </div>
+    </div>
   );
 }
 
