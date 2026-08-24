@@ -348,10 +348,12 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
     overtime_enabled: boolean; standby_enabled: boolean;
     salary_advance_enabled: boolean; loan_advance_enabled: boolean;
     salary_advance_max_payback_months: number; loan_advance_max_payback_months: number;
+    vendor_contracts_enabled: boolean;
   }>({
     overtime_enabled: true, standby_enabled: true,
     salary_advance_enabled: true, loan_advance_enabled: true,
-    salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6
+    salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6,
+    vendor_contracts_enabled: true
   });
   const [savingMaxMonths, setSavingMaxMonths] = useState<"salary_advance_max_payback_months" | "loan_advance_max_payback_months" | null>(null);
   const [loading, setLoading] = useState(false);
@@ -405,7 +407,8 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
         api.moduleFlags().catch(() => ({
           overtime_enabled: true, standby_enabled: true,
           salary_advance_enabled: true, loan_advance_enabled: true,
-          salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6
+          salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6,
+          vendor_contracts_enabled: true
         }))
       ]);
       setRequestTypes(Array.isArray(data) ? data : []);
@@ -416,7 +419,8 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
         salary_advance_enabled: flags?.salary_advance_enabled !== false,
         loan_advance_enabled: flags?.loan_advance_enabled !== false,
         salary_advance_max_payback_months: Number(flags?.salary_advance_max_payback_months) || 6,
-        loan_advance_max_payback_months: Number(flags?.loan_advance_max_payback_months) || 6
+        loan_advance_max_payback_months: Number(flags?.loan_advance_max_payback_months) || 6,
+        vendor_contracts_enabled: flags?.vendor_contracts_enabled !== false
       });
     } catch { /* ignore */ }
     finally { setLoading(false); }
@@ -424,7 +428,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
 
   useEffect(() => { void load(); }, [load]);
 
-  async function toggleModule(key: "overtime_enabled" | "standby_enabled" | "salary_advance_enabled" | "loan_advance_enabled") {
+  async function toggleModule(key: "overtime_enabled" | "standby_enabled" | "salary_advance_enabled" | "loan_advance_enabled" | "vendor_contracts_enabled") {
     const next = !moduleFlags[key];
     setModuleFlags((f) => ({ ...f, [key]: next }));
     try {
@@ -679,6 +683,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
             { icon: "📞", label: "Standby Requests", desc: "Schedule and claim compensation for standby duty.", page: "STANDBY", flagKey: "standby_enabled" as const, maxMonthsKey: null },
             { icon: "💰", label: "Salary Advance", desc: "Request an advance against salary, repaid over a set number of months.", page: "MY_REQUESTS", flagKey: "salary_advance_enabled" as const, maxMonthsKey: "salary_advance_max_payback_months" as const },
             { icon: "🏦", label: "Loan Advance", desc: "Request a loan, repaid over a set number of months.", page: "MY_REQUESTS", flagKey: "loan_advance_enabled" as const, maxMonthsKey: "loan_advance_max_payback_months" as const },
+            { icon: "📄", label: "Vendor Contracts", desc: "Track procurement agreements, payment schedules, and renewals.", page: "VENDOR_CONTRACTS", flagKey: "vendor_contracts_enabled" as const, maxMonthsKey: null },
           ].map((t) => {
             const active = t.flagKey ? moduleFlags[t.flagKey] : true;
             return (

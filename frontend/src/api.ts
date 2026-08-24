@@ -371,6 +371,7 @@ export const api = {
     overtime_enabled?: boolean; standby_enabled?: boolean;
     salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
     salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
+    vendor_contracts_enabled?: boolean;
   }) => req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
   addRequestTypePermission: (id: string, data: any) => req(`/request-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
