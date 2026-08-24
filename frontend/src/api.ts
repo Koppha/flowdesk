@@ -371,7 +371,7 @@ export const api = {
     overtime_enabled?: boolean; standby_enabled?: boolean;
     salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
     salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
-    vendor_contracts_enabled?: boolean;
+    vendor_contracts_enabled?: boolean; service_contracts_enabled?: boolean;
   }) => req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
   addRequestTypePermission: (id: string, data: any) => req(`/request-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
@@ -500,6 +500,31 @@ export const api = {
   uploadVendorContractDocument: (id: string, form: FormData) => req(`/vendor-contracts/${id}/documents`, { method: "POST", body: form }),
   vendorContractDocumentBlob: (contractId: string, documentId: string) => fetchBlob(`/vendor-contracts/${contractId}/documents/${documentId}`),
   vendorContractsMailReport: () => req("/vendor-contracts/reports/mail"),
+
+  serviceContractsAccess: () => req("/service-contracts/access"),
+  serviceContractsDashboard: () => req("/service-contracts/dashboard"),
+  serviceContracts: (type: "individual" | "company", params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v))).toString();
+    return req(`/service-contracts/${type}${qs ? `?${qs}` : ""}`);
+  },
+  serviceContractDetail: (type: "individual" | "company", id: string) => req(`/service-contracts/${type}/${id}`),
+  createServiceContract: (type: "individual" | "company", data: any) => req(`/service-contracts/${type}`, { method: "POST", body: JSON.stringify(data) }),
+  updateServiceContract: (type: "individual" | "company", id: string, data: any) => req(`/service-contracts/${type}/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  setServiceContractActive: (type: "individual" | "company", id: string, isActive: boolean) =>
+    req(`/service-contracts/${type}/${id}/active`, { method: "PATCH", body: JSON.stringify({ isActive }) }),
+  serviceContractsReports: (params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v))).toString();
+    return req(`/service-contracts/reports${qs ? `?${qs}` : ""}`);
+  },
+  serviceContractLookups: (kind: "service-categories" | "service-packages" | "durations" | "statuses") => req(`/service-contracts/lookups/${kind}`),
+  createServiceContractLookup: (kind: "service-categories" | "service-packages" | "durations" | "statuses", data: any) =>
+    req(`/service-contracts/lookups/${kind}`, { method: "POST", body: JSON.stringify(data) }),
+  updateServiceContractLookup: (kind: "service-categories" | "service-packages" | "durations" | "statuses", id: string, data: any) =>
+    req(`/service-contracts/lookups/${kind}/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  serviceContractApiKeys: () => req("/service-contracts/api-keys"),
+  createServiceContractApiKey: (label: string) => req("/service-contracts/api-keys", { method: "POST", body: JSON.stringify({ label }) }),
+  setServiceContractApiKeyActive: (id: string, isActive: boolean) =>
+    req(`/service-contracts/api-keys/${id}/active`, { method: "PATCH", body: JSON.stringify({ isActive }) }),
 
   dataCleanupCategories: () => req("/admin/data-cleanup/categories"),
   dataCleanupWipe: (categories: string[]) =>

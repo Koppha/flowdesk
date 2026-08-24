@@ -4,6 +4,7 @@ import { query } from "../lib/db.js";
 import { ensureStandbySchema } from "../modules/standby/standby.routes.js";
 import { ensureOvertimeSchema } from "../modules/overtime/overtime.routes.js";
 import { ensureVendorContractsSchema } from "../modules/vendor-contracts/vendor-contracts.routes.js";
+import { ensureServiceContractsSchema } from "../modules/service-contracts/service-contracts.schema.js";
 import { env } from "../config/env.js";
 import { ensureDepartmentGroups, ensureManagerTypesTable, ensureUserOrgColumns } from "../lib/departments.js";
 import { ensureTravelSchema } from "../lib/travel.js";
@@ -40,6 +41,7 @@ export async function bootstrapSystem() {
   await ensureFinanceAuthoritySchema();
   await ensureOvertimeSchema();
   await ensureVendorContractsSchema();
+  await ensureServiceContractsSchema();
 }
 
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;
