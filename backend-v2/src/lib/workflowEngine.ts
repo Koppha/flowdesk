@@ -63,7 +63,7 @@ export function getPendingGroup(chain: ChainStep[], stepIdx: number): { indices:
 // active reporting_lines manager, falling back to their department's
 // leadership chain (HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else ->
 // MANAGER/HOD/EXCO) when no reporting_lines row exists yet.
-async function resolveRequesterManager(
+export async function resolveRequesterManager(
   requesterId: string
 ): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
   const lineRows = await query<{ manager_id: string | null }>(
@@ -227,16 +227,20 @@ export async function resolveWorkflowChain(params: {
       ))[0] ?? null
     : null;
 
-  // A plain (non-ANY_ONE-group) MANAGER step with no fixed assigned_user_id
-  // routes to the REQUESTER's own manager (reporting_lines, falling back to
-  // department leadership the same way getFallbackManagerId in
-  // reporting-lines.routes.ts does when no reporting_lines row exists yet).
+  // A plain (non-ANY_ONE-group) MANAGER or HOD step with no fixed
+  // assigned_user_id routes to the REQUESTER's own manager (reporting_lines,
+  // falling back to department leadership the same way getFallbackManagerId
+  // in reporting-lines.routes.ts does when no reporting_lines row exists
+  // yet). HOD is included here because a requester's reporting_lines
+  // manager is very often the person holding the HOD title for their
+  // section — e.g. a MANAGER-role requester whose manager is an HOD; a
+  // step explicitly assigned to specific people always wins over this.
   // Without this, a single company-wide workflow (e.g. the one Clearance
-  // workflow covering every department) can never resolve its Manager step
-  // for anybody, silently stranding every submission at that step.
+  // workflow covering every department) can never resolve its Manager/HOD
+  // step for anybody, silently stranding every submission at that step.
   const hasDeptManagerStep = steps.some((step) => {
     const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
-    return stepCode === "MANAGER" && !step.assigned_user_ids?.length && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+    return (stepCode === "MANAGER" || stepCode === "HOD") && !step.assigned_user_ids?.length && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
   });
   const requesterManager = hasDeptManagerStep && requesterId ? await resolveRequesterManager(requesterId) : null;
 
@@ -264,6 +268,11 @@ export async function resolveWorkflowChain(params: {
 
   const chain: ChainStep[] = [];
   let previousStepPushed = false;
+  // Tracks whether a MANAGER step already dynamically resolved to
+  // requesterManager earlier in this chain - a later dynamic HOD step must
+  // not resolve to that same person again (see secondLevelManager below).
+  let dynamicManagerAlreadyResolved = false;
+  let secondLevelManager: Awaited<ReturnType<typeof resolveRequesterManager>> | undefined;
   for (const step of steps) {
     const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
 
@@ -278,15 +287,27 @@ export async function resolveWorkflowChain(params: {
     // countersigner/approver for a travel advance).
     const override = overrideByActionType.get(step.action_type);
 
-    // HOD/MANAGER no longer dynamically resolve to the requester's department
-    // leadership — every step must carry an explicit assigned_user_id (a
-    // specific person) or be a group/ANY_ONE step. HR_* steps still route to
-    // the Human Resource department's leadership; plain EXCO steps route to
-    // the requester's own department's EXCO member (see deptExco above).
+    // HOD and MANAGER steps with no explicit assignee resolve dynamically to
+    // the requester's own reporting_lines manager (see requesterManager
+    // above) — an explicitly assigned step always wins over this. HR_* steps
+    // still route to the Human Resource department's leadership; plain EXCO
+    // steps route to the requester's own department's EXCO member (see
+    // deptExco above).
     const isHrCode = code.startsWith("HR_");
     const isDeptExcoCode = code === "EXCO" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const isDeptManagerCode = code === "MANAGER" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+    const isDeptHodCode = code === "HOD" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const hasFixedAssignees = !!step.assigned_user_ids?.length;
+
+    // A chain with a distinct earlier MANAGER step already used
+    // requesterManager - resolving HOD to that same person would put the
+    // same approver on two consecutive steps, so escalate one level further
+    // up the reporting line instead (lazily resolved and cached).
+    let hodManager = requesterManager;
+    if (isDeptHodCode && dynamicManagerAlreadyResolved && requesterManager) {
+      if (secondLevelManager === undefined) secondLevelManager = await resolveRequesterManager(requesterManager.id);
+      hodManager = secondLevelManager;
+    }
 
     // Multiple people can be assigned to one step — whoever acts first
     // satisfies it. The other resolution paths (HR leadership, dept EXCO/
@@ -298,8 +319,10 @@ export async function resolveWorkflowChain(params: {
       isHrCode               ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : []) :
       isDeptExcoCode          ? (deptExco?.id ? [deptExco.id] : []) :
       isDeptManagerCode       ? (requesterManager?.id ? [requesterManager.id] : []) :
+      isDeptHodCode           ? (hodManager?.id ? [hodManager.id] : []) :
                                 [];
     const approverId = approverIds[0] ?? null;
+    if (isDeptManagerCode && approverId) dynamicManagerAlreadyResolved = true;
 
     const approverName =
       override               ? override.full_name :
@@ -307,6 +330,7 @@ export async function resolveWorkflowChain(params: {
       isHrCode               ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
       isDeptExcoCode          ? (deptExco?.full_name ?? null) :
       isDeptManagerCode       ? (requesterManager?.full_name ?? null) :
+      isDeptHodCode           ? (hodManager?.full_name ?? null) :
                                 null;
 
     const approverTitle =
@@ -315,6 +339,7 @@ export async function resolveWorkflowChain(params: {
       isHrCode               ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
       isDeptExcoCode          ? (deptExco?.title ?? null) :
       isDeptManagerCode       ? (requesterManager?.title ?? null) :
+      isDeptHodCode           ? (hodManager?.title ?? null) :
                                 null;
 
     const approverEmail =
@@ -323,6 +348,7 @@ export async function resolveWorkflowChain(params: {
       isHrCode               ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
       isDeptExcoCode          ? (deptExco?.email ?? null) :
       isDeptManagerCode       ? (requesterManager?.email ?? null) :
+      isDeptHodCode           ? (hodManager?.email ?? null) :
                                 null;
 
     // Group steps (ANY_ONE with approval_group_name) are never "unassigned" —

@@ -5,6 +5,7 @@ import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
 import { normalizeWorkflowRouteCode, workflowRouteLabel } from "../../lib/workflowRouting.js";
+import { resolveRequesterManager } from "../../lib/workflowEngine.js";
 
 const WorkflowStepSchema = z.object({
   step_order: z.coerce.number().int().min(1),
@@ -405,25 +406,47 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         )).map((u) => [u.id, u]))
       : new Map<string, { id: string; full_name: string | null; email: string | null }>();
 
-    // HOD/MANAGER no longer dynamically resolve to the requester's department
-    // leadership — every step must carry explicit assigned user(s) or be a
-    // group/ANY_ONE step. HR_* steps still route to the Human Resource
-    // department's leadership.
+    // MANAGER/HOD steps with no explicit assignee resolve dynamically to the
+    // requester's own reporting_lines manager (mirrors resolveWorkflowChain
+    // in workflowEngine.ts — this route is only a preview of that same
+    // chain, so it must resolve the same way or the preview lies about what
+    // actually happens on submit). If the chain also has a separate,
+    // dynamically-resolved MANAGER step, the HOD step escalates one level
+    // further up rather than repeating the same person on both steps.
+    const isDynamicManagerOrHod = (step: (typeof steps)[number]) => {
+      const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
+      const hasAssignee = !!(step.assigned_user_ids as string[] | null)?.length || !!step.assigned_user_id;
+      const isGroupStep = step.approval_mode === "ANY_ONE" && !!step.approval_group_name;
+      return { code, isManager: code === "MANAGER" && !hasAssignee && !isGroupStep, isHod: code === "HOD" && !hasAssignee && !isGroupStep };
+    };
+    const hasUnassignedManagerStep = steps.some((step) => isDynamicManagerOrHod(step).isManager);
+    const hasUnassignedHodStep = steps.some((step) => isDynamicManagerOrHod(step).isHod);
+    const requesterManager = (hasUnassignedManagerStep || hasUnassignedHodStep) ? await resolveRequesterManager(req.user!.userId) : null;
+    const hodEscalatedManager = (hasUnassignedManagerStep && hasUnassignedHodStep && requesterManager)
+      ? await resolveRequesterManager(requesterManager.id)
+      : null;
+
     const warnings: string[] = [];
     const chain = steps.flatMap((step) => {
       const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
       const isHrCode = code.startsWith("HR_");
+      const { isManager: isDynamicManager, isHod: isDynamicHod } = isDynamicManagerOrHod(step);
+      const dynamicManager = isDynamicManager ? requesterManager : isDynamicHod ? (hasUnassignedManagerStep ? hodEscalatedManager : requesterManager) : null;
       const stepAssignedIds: string[] = (step.assigned_user_ids as string[] | null)?.length
         ? (step.assigned_user_ids as string[])
         : (step.assigned_user_id ? [step.assigned_user_id] : []);
       const approverIds =
         isHrCode
           ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : [])
+          : (isDynamicManager || isDynamicHod)
+          ? (dynamicManager?.id ? [dynamicManager.id] : [])
           : stepAssignedIds;
       const approverId = approverIds[0] || null;
       const approverName =
         isHrCode
           ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null)
+          : (isDynamicManager || isDynamicHod)
+          ? (dynamicManager?.full_name ?? null)
           : approverIds.map((id) => assignedUserMap.get(id)?.full_name || assignedUserMap.get(id)?.email).filter(Boolean).join(", ") || null;
 
       if (!approverId && step.is_required && !step.skip_if_unassigned && isHrCode) {
