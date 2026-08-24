@@ -75,7 +75,13 @@ export function createApp() {
   app.use("/standby", standbyRouter);
   app.use("/vendor-contracts", vendorContractsRouter);
   app.use("/service-contracts", serviceContractsRouter);
-  app.use("/api/v1/service-contracts", serviceContractsExternalRouter);
+  // Public path is https://flowdesk.etl.co.ls/api/v1/service-contracts/... -
+  // PROD's nginx strips the /api/ prefix before proxying to this backend
+  // (see deploy/nginx conf: `location /api/ { proxy_pass .../; }`), so the
+  // path that actually reaches Express is /v1/service-contracts/..., not
+  // /api/v1/service-contracts/... Mounting under plain /v1 here is what
+  // makes the OpenAPI spec's published server URL resolve correctly.
+  app.use("/v1/service-contracts", serviceContractsExternalRouter);
   app.use("/travel", travelRouter);
   app.use("/workflows", workflowsRouter);
   app.use("/reporting-lines", reportingLinesRouter);

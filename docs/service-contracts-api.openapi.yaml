@@ -20,8 +20,8 @@ info:
 servers:
   - url: https://flowdesk.etl.co.ls/api/v1
     description: Production
-  - url: http://10.3.10.59:4000/api/v1
-    description: UAT
+  - url: http://10.3.10.59:4000/v1
+    description: UAT (direct to the backend port, bypassing nginx's /api/ prefix stripping)
 
 security:
   - ApiKeyAuth: []
