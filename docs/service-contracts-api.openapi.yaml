@@ -1,0 +1,588 @@
+openapi: 3.0.3
+info:
+  title: FlowDesk Service Contracts API
+  description: |
+    External integration API for the **Service Contracts** sub-module of FlowDesk's Contracts
+    module (individual & company telecom subscriber service contracts — e.g. ADSL, Mobile
+    Postpaid packages).
+
+    This API is for **system-to-system integration** — another system creating and keeping
+    service contracts in sync with FlowDesk. It is separate from FlowDesk's normal user-facing
+    login/session auth, which powers the portal UI only.
+
+    Not covered here: the **Vendor Contracts** sub-module (procurement/counterparty contracts)
+    has no external API — it's managed entirely through the FlowDesk portal.
+  version: "1.0.0"
+  contact:
+    name: FlowDesk Admin
+    email: pmo@etl.co.ls
+
+servers:
+  - url: https://flowdesk.etl.co.ls/api/v1
+    description: Production
+  - url: http://10.3.10.59:4000/api/v1
+    description: UAT
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Individual Service Contracts
+  - name: Company Service Contracts
+  - name: Lookups
+    description: Reference data the caller must resolve values against before submitting a contract.
+
+paths:
+  /service-contracts/individual:
+    post:
+      tags: [Individual Service Contracts]
+      summary: Create an individual service contract
+      description: Fails with 409 if `accountNumber` already exists — use `PUT` on the account-number endpoint to update an existing one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IndividualServiceContractInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndividualServiceContract'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: A contract with this accountNumber already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /service-contracts/individual/{accountNumber}:
+    parameters:
+      - $ref: '#/components/parameters/AccountNumberPath'
+    get:
+      tags: [Individual Service Contracts]
+      summary: Fetch an individual service contract by account number
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndividualServiceContract'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Individual Service Contracts]
+      summary: Create or update an individual service contract (upsert)
+      description: |
+        Creates a new contract if `accountNumber` doesn't exist yet, otherwise updates the
+        existing one in place. This is the primary endpoint for keeping FlowDesk in sync with
+        an ongoing feed — safe to call repeatedly with the same account number.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IndividualServiceContractInput'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndividualServiceContract'
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndividualServiceContract'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /service-contracts/company:
+    post:
+      tags: [Company Service Contracts]
+      summary: Create a company service contract
+      description: Fails with 409 if `accountNumber` already exists — use `PUT` on the account-number endpoint to update an existing one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyServiceContractInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyServiceContract'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: A contract with this accountNumber already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /service-contracts/company/{accountNumber}:
+    parameters:
+      - $ref: '#/components/parameters/AccountNumberPath'
+    get:
+      tags: [Company Service Contracts]
+      summary: Fetch a company service contract by account number
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyServiceContract'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Company Service Contracts]
+      summary: Create or update a company service contract (upsert)
+      description: |
+        Creates a new contract if `accountNumber` doesn't exist yet, otherwise updates the
+        existing one in place. Safe to call repeatedly with the same account number.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyServiceContractInput'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyServiceContract'
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyServiceContract'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /service-contracts/lookups/service-categories:
+    get:
+      tags: [Lookups]
+      summary: List active service categories (e.g. ADSL, Mobile Postpaid)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServiceCategory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /service-contracts/lookups/service-packages:
+    get:
+      tags: [Lookups]
+      summary: List active service packages, optionally filtered by category
+      parameters:
+        - name: categoryCode
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter to packages under this service category.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServicePackage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /service-contracts/lookups/durations:
+    get:
+      tags: [Lookups]
+      summary: List active contract durations
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContractDuration'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /service-contracts/lookups/statuses:
+    get:
+      tags: [Lookups]
+      summary: List active contract statuses
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContractStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: A key issued per integrating system, managed by a FlowDesk admin. Not a user session token.
+
+  parameters:
+    AccountNumberPath:
+      name: accountNumber
+      in: path
+      required: true
+      schema:
+        type: string
+      description: The subscriber account number — the natural key used for upsert/lookup.
+
+  responses:
+    ValidationError:
+      description: Request failed validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorBody'
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: No contract found for this account number
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Invalid API key"
+
+    ValidationErrorBody:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Invalid payload"
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            accountNumber: ["accountNumber is required"]
+            servicePackageStartDate: ["must be a valid date"]
+
+    ServiceCategory:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "ADSL"
+        name:
+          type: string
+          example: "ADSL"
+        isActive:
+          type: boolean
+
+    ServicePackage:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "ADSL-45GB-OFFICE"
+        categoryCode:
+          type: string
+          example: "ADSL"
+        name:
+          type: string
+          example: "ADSL(office/home) 45GB @ M600.00"
+        price:
+          type: number
+          format: double
+          example: 600.00
+        isActive:
+          type: boolean
+
+    ContractDuration:
+      type: object
+      properties:
+        months:
+          type: integer
+          example: 12
+        label:
+          type: string
+          example: "12 Months"
+        isActive:
+          type: boolean
+
+    ContractStatus:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "OPEN"
+        name:
+          type: string
+          example: "Open"
+        isActive:
+          type: boolean
+
+    # ---- Individual ----
+    IndividualServiceContractInput:
+      type: object
+      required:
+        - firstName
+        - surname
+        - idNumber
+        - msisdn
+        - accountNumber
+        - serviceCategoryCode
+        - servicePackageCode
+        - servicePackageStartDate
+        - contractDurationMonths
+      properties:
+        firstName:
+          type: string
+          example: "Ntsikelelo"
+        surname:
+          type: string
+          example: "Ndleleni"
+        titleCode:
+          type: string
+          nullable: true
+          example: "MR"
+        idNumber:
+          type: string
+          example: "5967890125"
+        birthDate:
+          type: string
+          format: date
+          nullable: true
+          example: "1985-05-24"
+        email:
+          type: string
+          format: email
+          nullable: true
+        msisdn:
+          type: string
+          example: "62226558"
+        alternativeNumber:
+          type: string
+          nullable: true
+        accountNumber:
+          type: string
+          description: Natural key — used for upsert and lookup.
+          example: "622222222"
+        physicalAddressLine1:
+          type: string
+          nullable: true
+        physicalAddressLine2:
+          type: string
+          nullable: true
+        physicalAddressLine3:
+          type: string
+          nullable: true
+        keyAccountManagerEmail:
+          type: string
+          format: email
+          nullable: true
+          description: Resolved to a FlowDesk user by email. Left unassigned if omitted or unmatched.
+        serviceCategoryCode:
+          type: string
+          example: "ADSL"
+        servicePackageCode:
+          type: string
+          example: "ADSL-45GB-OFFICE"
+        servicePackageStartDate:
+          type: string
+          format: date
+          example: "2026-01-02"
+        contractDurationMonths:
+          type: integer
+          example: 12
+        statusCode:
+          type: string
+          nullable: true
+          description: Defaults to "OPEN" if omitted.
+          example: "OPEN"
+
+    IndividualServiceContract:
+      allOf:
+        - $ref: '#/components/schemas/IndividualServiceContractInput'
+        - type: object
+          properties:
+            id:
+              type: integer
+              readOnly: true
+            contractNumber:
+              type: string
+              readOnly: true
+              example: "IND-000123"
+            expiryDate:
+              type: string
+              format: date
+              readOnly: true
+              description: Computed from servicePackageStartDate + contractDurationMonths.
+              example: "2027-01-02"
+            isActive:
+              type: boolean
+              readOnly: true
+              description: Portal visibility, controlled by a FlowDesk admin — not settable via this API.
+            createdAt:
+              type: string
+              format: date-time
+              readOnly: true
+            updatedAt:
+              type: string
+              format: date-time
+              readOnly: true
+
+    # ---- Company ----
+    CompanyServiceContractInput:
+      type: object
+      required:
+        - companyName
+        - companyRegistrationNumber
+        - contactName
+        - accountNumber
+        - serviceCategoryCode
+        - servicePackageCode
+        - servicePackageStartDate
+        - contractDurationMonths
+      properties:
+        companyName:
+          type: string
+          example: "Amavundle (Pty) Ltd"
+        companyRegistrationNumber:
+          type: string
+          example: "CO2019/0456"
+        contactName:
+          type: string
+        contactEmail:
+          type: string
+          format: email
+          nullable: true
+        contactNumber:
+          type: string
+          nullable: true
+        contractUserName:
+          type: string
+          nullable: true
+          description: The named individual using the account day-to-day.
+        contractUserEmail:
+          type: string
+          format: email
+          nullable: true
+        contractUserBirthDate:
+          type: string
+          format: date
+          nullable: true
+        msisdn:
+          type: string
+        alternativeNumber:
+          type: string
+          nullable: true
+        accountNumber:
+          type: string
+          description: Natural key — used for upsert and lookup.
+        physicalAddressLine1:
+          type: string
+          nullable: true
+        physicalAddressLine2:
+          type: string
+          nullable: true
+        physicalAddressLine3:
+          type: string
+          nullable: true
+        keyAccountManagerEmail:
+          type: string
+          format: email
+          nullable: true
+        serviceCategoryCode:
+          type: string
+        servicePackageCode:
+          type: string
+        servicePackageStartDate:
+          type: string
+          format: date
+        contractDurationMonths:
+          type: integer
+        statusCode:
+          type: string
+          nullable: true
+          description: Defaults to "OPEN" if omitted.
+
+    CompanyServiceContract:
+      allOf:
+        - $ref: '#/components/schemas/CompanyServiceContractInput'
+        - type: object
+          properties:
+            id:
+              type: integer
+              readOnly: true
+            contractNumber:
+              type: string
+              readOnly: true
+              example: "COM-000045"
+            expiryDate:
+              type: string
+              format: date
+              readOnly: true
+            isActive:
+              type: boolean
+              readOnly: true
+              description: Portal visibility, controlled by a FlowDesk admin — not settable via this API.
+            createdAt:
+              type: string
+              format: date-time
+              readOnly: true
+            updatedAt:
+              type: string
+              format: date-time
+              readOnly: true

@@ -5,6 +5,7 @@ import Inbox, { isCaptureItem, isCapturePendingItem, isPaymentItem } from "./Inb
 import Payments from "./Payments";
 import Deductions from "./Deductions";
 import Refundable from "./Refundable";
+import VendorContracts from "./VendorContracts";
 import ITProvisioning from "./ITProvisioning";
 import Overtime from "./Overtime";
 import EmployeesOnboarding from "./EmployeesOnboarding";
@@ -409,7 +410,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -478,8 +479,10 @@ export default function App() {
   const [hasItProvisioningAccess, setHasItProvisioningAccess] = useState(false);
   const [itProvisioningCount, setItProvisioningCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
+  const [hasVendorContractsAccess, setHasVendorContractsAccess] = useState(false);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
   const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
+  const [contractsMenuOpen, setContractsMenuOpen] = useState(false);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
   const favoritePagesInitialized = useRef(false);
   const shortcutPickerRef = useRef<HTMLDivElement>(null);
@@ -1344,7 +1347,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, itProvisioningAccessResp, moduleFlagsResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, itProvisioningAccessResp, moduleFlagsResp, vendorContractsAccessResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1373,6 +1376,7 @@ export default function App() {
         salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
         salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
       }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true }, "Module flags"),
+      optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.vendorContractsAccess(), { allowed: false }, "Vendor Contracts access"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -1424,6 +1428,7 @@ export default function App() {
     setRefundableCount(refundableAccessResp?.pendingCount || 0);
     setHasItProvisioningAccess(Boolean(itProvisioningAccessResp?.allowed));
     setItProvisioningCount((itProvisioningAccessResp?.awaitingProvisioning || 0) + (itProvisioningAccessResp?.inProgress || 0));
+    setHasVendorContractsAccess(Boolean(vendorContractsAccessResp?.allowed));
     if (featPermResp && typeof featPermResp === "object" && "features" in featPermResp && featPermResp.features) {
       setFeaturePermissions(featPermResp.features as Record<string, string[]>);
     }
@@ -4152,6 +4157,17 @@ export default function App() {
           {hasItProvisioningAccess && (
             <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>
           )}
+          {hasVendorContractsAccess && (
+            <div className={`sidebar-group ${(contractsMenuOpen || ["VENDOR_CONTRACTS"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(page === "VENDOR_CONTRACTS")} onClick={(e) => { e.preventDefault(); setContractsMenuOpen((v) => !v); }}>
+                <span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Contracts
+                <strong><ChevronDown size={14} aria-hidden /></strong>
+              </a>
+              <div className="sidebar-subnav">
+                <a href="#" className={navItemClass(page === "VENDOR_CONTRACTS")} onClick={(e) => { e.preventDefault(); setPage("VENDOR_CONTRACTS"); }}><FileText size={14} aria-hidden />Vendor Contracts</a>
+              </div>
+            </div>
+          )}
           <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page) ? "open" : ""}`}>
             <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
@@ -4286,6 +4302,8 @@ export default function App() {
             <PdfDesigner />
           ) : page === "DATA_CLEANUP" ? (
             <DataCleanup onBack={() => setPage("SETTINGS")} />
+          ) : page === "VENDOR_CONTRACTS" ? (
+            <VendorContracts />
           ) : page === "ORG_STRUCTURE" ? (
             <OrgStructure />
           ) : page === "TEAM_ROSTER" ? (
@@ -4678,6 +4696,8 @@ export default function App() {
                       { key: "capture",                label: "Capture Inbox",            group: "Finance Operations" },
                       { key: "overtime_request",       label: "Overtime Request",         group: "Overtime" },
                       { key: "overtime_claim",         label: "Overtime Claim",            group: "Overtime" },
+                      { key: "vendor_contracts",        label: "Vendor Contracts (View)",  group: "Contracts" },
+                      { key: "vendor_contracts_manage", label: "Vendor Contracts (Manage)", group: "Contracts" },
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
@@ -4710,6 +4730,8 @@ export default function App() {
                       capture:                ["ADMIN","Section: Treasury & Financial Accounting"],
                       overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
+                      vendor_contracts:        ["ADMIN"],
+                      vendor_contracts_manage: ["ADMIN"],
                     };
                     function toggleRole(featureKey: string, roleKey: string) {
                       if (roleKey === "ADMIN") return;

@@ -3,6 +3,7 @@ import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
 import { ensureStandbySchema } from "../modules/standby/standby.routes.js";
 import { ensureOvertimeSchema } from "../modules/overtime/overtime.routes.js";
+import { ensureVendorContractsSchema } from "../modules/vendor-contracts/vendor-contracts.routes.js";
 import { env } from "../config/env.js";
 import { ensureDepartmentGroups, ensureManagerTypesTable, ensureUserOrgColumns } from "../lib/departments.js";
 import { ensureTravelSchema } from "../lib/travel.js";
@@ -38,6 +39,7 @@ export async function bootstrapSystem() {
   await ensureStandbySchema();
   await ensureFinanceAuthoritySchema();
   await ensureOvertimeSchema();
+  await ensureVendorContractsSchema();
 }
 
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;

@@ -10,6 +10,7 @@ export const SYSTEM_SETTING_KEYS = {
   workingHoursPerDay: "working_hours_per_day",
   overtimeModuleEnabled: "overtime_module_enabled",
   standbyModuleEnabled: "standby_module_enabled",
+  vendorContractsModuleEnabled: "vendor_contracts_module_enabled",
   salaryAdvanceEnabled: "salary_advance_enabled",
   loanAdvanceEnabled: "loan_advance_enabled",
   salaryAdvanceMaxPaybackMonths: "salary_advance_max_payback_months",

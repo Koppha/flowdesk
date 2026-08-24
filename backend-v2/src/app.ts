@@ -26,6 +26,7 @@ import { refundableRouter } from "./modules/refundable/refundable.routes.js";
 import { itProvisioningRouter } from "./modules/it-provisioning/it-provisioning.routes.js";
 import { standbyRouter } from "./modules/standby/standby.routes.js";
 import { dataCleanupRouter } from "./modules/admin/data-cleanup.routes.js";
+import { vendorContractsRouter } from "./modules/vendor-contracts/vendor-contracts.routes.js";
 
 export function createApp() {
   const app = express();
@@ -70,6 +71,7 @@ export function createApp() {
   app.use("/inbox", inboxRouter);
   app.use("/overtime", overtimeRouter);
   app.use("/standby", standbyRouter);
+  app.use("/vendor-contracts", vendorContractsRouter);
   app.use("/travel", travelRouter);
   app.use("/workflows", workflowsRouter);
   app.use("/reporting-lines", reportingLinesRouter);

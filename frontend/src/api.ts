@@ -485,6 +485,21 @@ export const api = {
   setRefundableActioned: (id: string, refunded: boolean) =>
     req(`/refundable/${id}/refunded`, { method: "PATCH", body: JSON.stringify({ refunded }) }),
 
+  vendorContractsAccess: () => req("/vendor-contracts/access"),
+  vendorContractsDashboard: () => req("/vendor-contracts/dashboard"),
+  vendorContracts: () => req("/vendor-contracts"),
+  vendorContractDetail: (id: string) => req(`/vendor-contracts/${id}`),
+  createVendorContract: (data: any) => req("/vendor-contracts", { method: "POST", body: JSON.stringify(data) }),
+  updateVendorContract: (id: string, data: any) => req(`/vendor-contracts/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  setVendorContractActive: (id: string, isActive: boolean) =>
+    req(`/vendor-contracts/${id}/active`, { method: "PATCH", body: JSON.stringify({ isActive }) }),
+  createVendorContractPayment: (id: string, data: any) => req(`/vendor-contracts/${id}/payments`, { method: "POST", body: JSON.stringify(data) }),
+  markVendorContractPaymentPaid: (contractId: string, paymentId: string) =>
+    req(`/vendor-contracts/${contractId}/payments/${paymentId}/mark-paid`, { method: "POST" }),
+  uploadVendorContractDocument: (id: string, form: FormData) => req(`/vendor-contracts/${id}/documents`, { method: "POST", body: form }),
+  vendorContractDocumentBlob: (contractId: string, documentId: string) => fetchBlob(`/vendor-contracts/${contractId}/documents/${documentId}`),
+  vendorContractsMailReport: () => req("/vendor-contracts/reports/mail"),
+
   dataCleanupCategories: () => req("/admin/data-cleanup/categories"),
   dataCleanupWipe: (categories: string[]) =>
     req("/admin/data-cleanup", { method: "POST", body: JSON.stringify({ categories, confirm: "WIPE" }) }),

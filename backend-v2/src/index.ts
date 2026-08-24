@@ -3,6 +3,7 @@ import { env } from "./config/env.js";
 import { logger } from "./lib/logger.js";
 import { bootstrapSystem } from "./bootstrap/system.js";
 import { sendPendingChangeRequestFollowUps } from "./modules/custom-requests/custom-requests.routes.js";
+import { startVendorContractReminderWorker } from "./modules/vendor-contracts/vendor-contracts.routes.js";
 
 await bootstrapSystem();
 
@@ -16,6 +17,8 @@ async function runFollowUpScheduler() {
 }
 runFollowUpScheduler();
 setInterval(runFollowUpScheduler, 24 * 60 * 60 * 1000);
+
+startVendorContractReminderWorker();
 
 const app = createApp();
 app.listen(env.PORT, "0.0.0.0", () => {

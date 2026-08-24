@@ -2259,3 +2259,36 @@ export async function notifyStandbyDelegationAssigned(args: {
   }
 }
 
+// ─── Vendor Contracts — expiry reminders ───────────────────────────────────
+const VENDOR_CONTRACT_CHECKPOINT_LABELS: Record<string, string> = {
+  CONTRACT_EXPIRY_3_MONTH: "expires in about 3 months",
+  CONTRACT_EXPIRY_2_MONTH: "expires in about 2 months",
+  CONTRACT_EXPIRY_1_MONTH: "expires in about 1 month",
+  CONTRACT_EXPIRY_1_DAY: "expires tomorrow",
+  CONTRACT_EXPIRY_SAME_DAY: "has expired"
+};
+
+export async function notifyVendorContractExpiring(args: {
+  contractId: string;
+  contractNumber: string;
+  contractTitle: string;
+  notificationEmail: string;
+  endDate: string;
+  checkpointType: string;
+}) {
+  const recipients = args.notificationEmail.split(/[;,]/).map((e) => e.trim()).filter(Boolean);
+  if (!recipients.length) return;
+  const stageLabel = VENDOR_CONTRACT_CHECKPOINT_LABELS[args.checkpointType] || "is approaching its expiry date";
+  const body = [
+    header("VENDOR CONTRACT — EXPIRY REMINDER"),
+    ``,
+    `Contract ${args.contractNumber} (${args.contractTitle}) ${stageLabel}.`,
+    ``,
+    detailBlock([["Contract Number", args.contractNumber], ["Title", args.contractTitle], ["End Date", args.endDate]]),
+    ``,
+    footer()
+  ].join("\n");
+
+  await sendMail({ to: recipients, subject: `[Vendor Contracts] ${args.contractNumber} ${stageLabel}`, text: body });
+}
+
