@@ -12,7 +12,7 @@ import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notif
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
-import { canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { buildAdHocChain, canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
@@ -196,11 +196,20 @@ async function countOutstandingTravelAdvances(requesterId: string, client?: Pool
 // via pg_advisory_xact_lock — otherwise two concurrent requests from the
 // same requester near the cap could both read a count under the limit and
 // both insert, exceeding it.
-async function assertSingleOutstandingTravelAdvance(requester: { id: string }, type: string, client?: PoolClient) {
+// Permanent employees may carry more outstanding travel advances at once
+// than interns/temporary staff - reflects that permanent staff travel more
+// frequently and PROD's earlier "at most one" cap was blocking legitimate
+// back-to-back travel for them.
+function travelAdvanceCap(requester: { employment_type?: string | null }): number {
+  return isPermanentEmployee({ employment_type: requester.employment_type ?? null }) ? 5 : 3;
+}
+
+async function assertSingleOutstandingTravelAdvance(requester: { id: string; employment_type?: string | null }, type: string, client?: PoolClient) {
   if (isReservedAdvanceType(type)) return;
+  const cap = travelAdvanceCap(requester);
   const outstanding = await countOutstandingTravelAdvances(requester.id, client);
-  if (outstanding >= 1) {
-    throw badRequest("You already have a travel advance outstanding - clear it before requesting another");
+  if (outstanding >= cap) {
+    throw badRequest(`You already have ${cap} travel advance(s) outstanding - clear one before requesting another`);
   }
 }
 
@@ -1136,61 +1145,126 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     ))[0];
     if (!requester) throw badRequest("Requester not found");
 
-    // A requester-chosen countersigner/approver (override_chain) is only honored
-    // for travel advances, and only from a role-appropriate pool — validate
-    // server-side rather than trusting the frontend's pool filtering.
-    let overrideChain: { label: string; user_id: string; user_name?: string }[] | undefined;
-    if (adv.override_chain?.length && (await isTravelAdvanceType(adv.type))) {
-      const overrideUserIds = adv.override_chain.map((o) => o.user_id);
-      const overrideUsers = await query<{ id: string; role: string; section_id: string | null; department: string | null }>(
-        `SELECT id, role, section_id, department FROM users WHERE id = ANY($1)`,
-        [overrideUserIds]
-      );
+    // A requester-chosen countersigner/approver (override_chain) is only
+    // honored for travel advances. Which validation applies depends on
+    // whether a real workflow exists for this department/section: if one
+    // does, only CEO/EXCO/MANAGER may override who fills its existing
+    // Counter-Sign/Approve step (the long-standing behavior). If none does,
+    // the "Custom Approval Chain" fallback lets *any* role build an ad-hoc
+    // 4-step chain from scratch — otherwise nobody in an unconfigured
+    // department could ever submit a travel advance at all. Named approvers
+    // are re-validated server-side either way, never trusting the
+    // frontend's pool filtering.
+    const overrideChainInput = adv.override_chain?.length && (await isTravelAdvanceType(adv.type)) ? adv.override_chain : undefined;
+    const overrideUsers = overrideChainInput
+      ? await query<{ id: string; role: string; section_id: string | null; department: string | null }>(
+          `SELECT id, role, section_id, department FROM users WHERE id = ANY($1)`,
+          [overrideChainInput.map((o) => o.user_id)]
+        )
+      : [];
 
-      const isEligible = (u: { id: string; role: string; section_id: string | null; department: string | null } | undefined) => {
-        if (!u) return false;
-        // A requester can never name themself as their own countersigner/approver.
-        if (u.id === adv.requester_id) return false;
-        if (requester.role === "CEO" || requester.role === "EXCO") return u.role === "EXCO";
-        if (requester.role === "MANAGER") {
-          return (
-            u.role === "EXCO" ||
-            (!!requester.section_id && u.section_id === requester.section_id) ||
-            (!!requester.department && u.department === requester.department)
-          );
-        }
-        return false;
-      };
-
-      if (!["CEO", "EXCO", "MANAGER"].includes(requester.role)) {
-        throw badRequest("Only CEO, Exco, or Manager requesters may choose their own countersigner/approver");
-      }
-      for (const o of adv.override_chain) {
-        const u = overrideUsers.find((x) => x.id === o.user_id);
-        if (!isEligible(u)) throw badRequest(`Selected approver for "${o.label}" is not eligible for this role`);
-      }
-      overrideChain = adv.override_chain;
-    }
-
-    // Resolve the workflow for this advance type and department
-    const workflowResult = await resolveWorkflowChain({
+    // Probe first (no override applied yet) purely to learn whether a real
+    // workflow exists for this department/section - selection never depends
+    // on override_chain content, only on which validation branch to take.
+    const probeResult = await resolveWorkflowChain({
       requestType: "ADVANCE_REQUEST",
       department: adv.requester_department || "",
       division: requester.division || "",
       section: adv.requester_section || "",
       advanceSubType: adv.type,
       needsAccommodation,
-      overrideChain,
       requesterRole: requester.role,
       requesterId: adv.requester_id
     });
-    if (!workflowResult || workflowResult.chain.length === 0) {
+
+    let workflowId: string | null;
+    let chain: ChainStep[];
+
+    if (probeResult) {
+      // A real workflow exists - only CEO/EXCO/MANAGER may override its
+      // Counter-Sign/Approve step, from a role-appropriate pool.
+      let overrideChain: { label: string; user_id: string; user_name?: string }[] | undefined;
+      if (overrideChainInput) {
+        const isEligible = (u: { id: string; role: string; section_id: string | null; department: string | null } | undefined) => {
+          if (!u) return false;
+          if (u.id === adv.requester_id) return false;
+          if (requester.role === "CEO" || requester.role === "EXCO") return u.role === "EXCO";
+          if (requester.role === "MANAGER") {
+            return (
+              u.role === "EXCO" ||
+              (!!requester.section_id && u.section_id === requester.section_id) ||
+              (!!requester.department && u.department === requester.department)
+            );
+          }
+          return false;
+        };
+        if (!["CEO", "EXCO", "MANAGER"].includes(requester.role)) {
+          throw badRequest("Only CEO, Exco, or Manager requesters may choose their own countersigner/approver");
+        }
+        for (const o of overrideChainInput) {
+          const u = overrideUsers.find((x) => x.id === o.user_id);
+          if (!isEligible(u)) throw badRequest(`Selected approver for "${o.label}" is not eligible for this role`);
+        }
+        overrideChain = overrideChainInput;
+      }
+      const resolved = overrideChain
+        ? await resolveWorkflowChain({
+            requestType: "ADVANCE_REQUEST",
+            department: adv.requester_department || "",
+            division: requester.division || "",
+            section: adv.requester_section || "",
+            advanceSubType: adv.type,
+            needsAccommodation,
+            overrideChain,
+            requesterRole: requester.role,
+            requesterId: adv.requester_id
+          })
+        : probeResult;
+      workflowId = resolved!.workflowId;
+      chain = resolved!.chain;
+    } else {
+      // No real workflow - build an ad-hoc chain from the requester's own
+      // custom picks, ending in the same Treasury capture/mark-paid group
+      // steps every real workflow uses. Named approvers must hold
+      // Manager/HOD/EXCO standing in the requester's own section or
+      // department (or be EXCO) - the same pool the picker itself offers.
+      if (!overrideChainInput || overrideChainInput.length !== 2) {
+        throw badRequest(
+          "No active approval workflow is configured for this request type and department. " +
+          "Define a Counter Signer and Approver below to submit anyway."
+        );
+      }
+      const isEligibleForAdHoc = (u: { id: string; role: string; section_id: string | null; department: string | null } | undefined) => {
+        if (!u) return false;
+        if (u.id === adv.requester_id) return false;
+        if (!["MANAGER", "HOD", "EXCO"].includes(u.role)) return false;
+        // An account with no department/section on record yet (freshly
+        // invited by email via /auth/resolve-or-invite-approver, or simply
+        // never onboarded) has nothing to org-chart-match against - trust
+        // the self-declared role + the audit_log entry already written when
+        // they were invited, same as an existing employee is trusted once
+        // their real role/section is confirmed to match.
+        if (!u.department && !u.section_id) return true;
+        return (
+          (!!requester.section_id && u.section_id === requester.section_id) ||
+          (!!requester.department && u.department === requester.department)
+        );
+      };
+      for (const o of overrideChainInput) {
+        const u = overrideUsers.find((x) => x.id === o.user_id);
+        if (!isEligibleForAdHoc(u)) throw badRequest(`Selected approver for "${o.label}" is not eligible for this role`);
+      }
+      const adHoc = await buildAdHocChain(overrideChainInput);
+      workflowId = null;
+      chain = adHoc;
+    }
+
+    if (!chain.length) {
       throw badRequest(
         "No active approval workflow is configured for this request type and department. " +
         "Please contact your administrator to set up an approval workflow in the Workflow Builder."
       );
     }
-    const { workflowId, chain } = workflowResult;
     const firstStatus = chainStepToStatus(chain, 0);
 
     await query(
