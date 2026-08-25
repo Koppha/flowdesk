@@ -1095,8 +1095,11 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
         runningTotal += total;
       }
 
-      await client.query(`UPDATE advance_requests SET requested_total=$2, updated_at=now() WHERE id=$1`, [req.params.id, runningTotal]);
-      return runningTotal;
+      // Same as /submit's recompute - lines-only would silently drop any
+      // extra cost the requester already added on the request itself.
+      const totalWithExtra = runningTotal + Number(adv.extra_cost_amount || 0);
+      await client.query(`UPDATE advance_requests SET requested_total=$2, updated_at=now() WHERE id=$1`, [req.params.id, totalWithExtra]);
+      return totalWithExtra;
     });
 
     await writeAdvanceAudit({
@@ -1126,10 +1129,15 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       // More than one travel day implies an overnight stay requiring accommodation.
       needsAccommodation = Number(row.count) > 1;
       const lines = await query<{ breakfast: string; lunch: string; dinner: string; line_total: string }>(`SELECT breakfast, lunch, dinner, line_total FROM advance_lines WHERE advance_request_id=$1`, [adv.id]);
-      const total = lines.reduce((sum, line) => {
+      const linesTotal = lines.reduce((sum, line) => {
         const storedTotal = Number(line.line_total || 0);
         return sum + (storedTotal > 0 ? storedTotal : Number(line.breakfast || 0) + Number(line.lunch || 0) + Number(line.dinner || 0));
       }, 0);
+      // Recomputing purely from travel lines silently dropped any extra
+      // cost the requester added (e.g. a driver's separate travel
+      // allowance) - the frontend includes it in its own total, but this
+      // recompute must too or the stored total falls back to lines-only.
+      const total = linesTotal + Number(adv.extra_cost_amount || 0);
       await query(`UPDATE advance_requests SET requested_total=$2 WHERE id=$1`, [adv.id, total]);
       if (total <= 0) throw badRequest("Total must be > 0");
     } else {
