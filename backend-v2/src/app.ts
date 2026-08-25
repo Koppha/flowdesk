@@ -26,6 +26,7 @@ import { refundableRouter } from "./modules/refundable/refundable.routes.js";
 import { itProvisioningRouter } from "./modules/it-provisioning/it-provisioning.routes.js";
 import { standbyRouter } from "./modules/standby/standby.routes.js";
 import { dataCleanupRouter } from "./modules/admin/data-cleanup.routes.js";
+import { approvalMaintenanceRouter } from "./modules/admin/approval-maintenance.routes.js";
 import { vendorContractsRouter } from "./modules/vendor-contracts/vendor-contracts.routes.js";
 import { serviceContractsRouter } from "./modules/service-contracts/service-contracts.routes.js";
 import { serviceContractsExternalRouter } from "./modules/service-contracts/service-contracts.external.routes.js";
@@ -93,6 +94,7 @@ export function createApp() {
   app.use("/refundable", refundableRouter);
   app.use("/it-provisioning", itProvisioningRouter);
   app.use("/admin/data-cleanup", dataCleanupRouter);
+  app.use("/admin/approval-maintenance", approvalMaintenanceRouter);
   app.use("/ai", aiRouter);
 
   app.use(errorHandler);

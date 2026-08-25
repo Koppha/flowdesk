@@ -535,6 +535,8 @@ export const api = {
   dataCleanupFullReset: (keepAdminEmail: string) =>
     req("/admin/data-cleanup/full-reset", { method: "POST", body: JSON.stringify({ confirm: "RESET EVERYTHING", keepAdminEmail }) }),
 
+  runApprovalReassignmentSweep: () => req("/admin/approval-maintenance/reassign-pending-approvals", { method: "POST" }),
+
   itProvisioningAccess: () => req("/it-provisioning/access"),
   itProvisioningItStaff: () => req("/it-provisioning/it-staff"),
   itProvisioningList: (params: Record<string, string> = {}) => {

@@ -1,8 +1,18 @@
 import { useEffect, useState } from "react";
 import { api, getUserFromToken } from "./api";
-import { AlertTriangle, Trash2, ArrowLeft, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Trash2, ArrowLeft, RefreshCw, Wrench } from "lucide-react";
 
 type Category = { key: string; label: string; count: number };
+
+type ReassignmentResult = {
+  module: "advance" | "claim";
+  requestId: string;
+  requestType: string;
+  positionType: string;
+  oldApproverName: string | null;
+  newApproverName: string | null;
+};
+type ReassignmentWarning = { module: "advance" | "claim"; requestId: string; reason: string };
 
 export default function DataCleanup({ onBack }: { onBack: () => void }) {
   const me = getUserFromToken();
@@ -12,6 +22,24 @@ export default function DataCleanup({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Record<string, number> | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [sweepBusy, setSweepBusy] = useState(false);
+  const [sweepResult, setSweepResult] = useState<{ reassignments: ReassignmentResult[]; warnings: ReassignmentWarning[] } | null>(null);
+  const [sweepError, setSweepError] = useState<string | null>(null);
+
+  async function runSweep() {
+    setSweepBusy(true);
+    setSweepError(null);
+    setSweepResult(null);
+    try {
+      const resp = await api.runApprovalReassignmentSweep();
+      setSweepResult(resp);
+    } catch (e: any) {
+      setSweepError(e?.message || "Failed to run the reassignment sweep.");
+    } finally {
+      setSweepBusy(false);
+    }
+  }
 
   const [resetOpen, setResetOpen] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
@@ -95,6 +123,66 @@ export default function DataCleanup({ onBack }: { onBack: () => void }) {
         <div className="ep-actions">
           <button className="ep-btn-outline" onClick={onBack}><ArrowLeft size={14} /> Back</button>
           <button className="ep-btn-outline" onClick={() => void load()}><RefreshCw size={14} /> Refresh counts</button>
+        </div>
+      </div>
+
+      <div className="ep-panel" style={{ marginBottom: 18, borderLeft: "3px solid #2563eb" }}>
+        <div className="ep-panel-head">
+          <div className="ep-panel-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Wrench size={16} /> Approval Chain Maintenance
+          </div>
+        </div>
+        <div className="ep-panel-body">
+          <p style={{ fontSize: 13, marginBottom: 12 }}>
+            Not destructive — this re-checks every pending advance and clearance claim's currently-dynamic
+            approval step (Manager/HOD/EXCO, not fixed picks or group steps) against who that position resolves
+            to right now, and reassigns + notifies the newly-correct approver where it's changed. The same sweep
+            runs automatically once a day; run it here on demand after fixing a workflow, a reporting line, or a
+            department's leadership.
+          </p>
+          <button className="ep-btn" onClick={() => void runSweep()} disabled={sweepBusy}>
+            <RefreshCw size={14} className={sweepBusy ? "rl-spin" : undefined} /> {sweepBusy ? "Running…" : "Run Sweep Now"}
+          </button>
+
+          {sweepError && <pre className="inbox-error" style={{ marginTop: 12 }}>{sweepError}</pre>}
+
+          {sweepResult && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 10 }}>
+                <CheckCircle2 size={16} color="#16a34a" />
+                <strong>Done.</strong> {sweepResult.reassignments.length} reassigned, {sweepResult.warnings.length} need manual review.
+              </div>
+              {sweepResult.reassignments.length > 0 && (
+                <div style={{ marginBottom: 12, overflowX: "auto" }}>
+                  <table className="table" style={{ fontSize: 12.5 }}>
+                    <thead>
+                      <tr><th>Module</th><th>Position</th><th>Old Approver</th><th>New Approver</th></tr>
+                    </thead>
+                    <tbody>
+                      {sweepResult.reassignments.map((r, i) => (
+                        <tr key={i}>
+                          <td>{r.module}</td>
+                          <td>{r.positionType}</td>
+                          <td>{r.oldApproverName || "—"}</td>
+                          <td>{r.newApproverName || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {sweepResult.warnings.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {sweepResult.warnings.map((w, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12.5, color: "#b45309" }}>
+                      <AlertTriangle size={14} style={{ flex: "0 0 auto", marginTop: 2 }} />
+                      <span>{w.module} {w.requestId.slice(0, 8)}: {w.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
