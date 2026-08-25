@@ -1085,10 +1085,14 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     };
     const chainStages = chain.map((step: any, idx: number) => {
       const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
-      // Prefer the workflow's own step label (position_name) over the
-      // approver's personal job title — the tracker should reflect what's
-      // configured in the Workflow Builder, not whoever happens to be assigned.
-      const label = step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
+      // Show the assigned approver's real job title instead of the generic
+      // workflow step name - a senior title being labeled down to "Manager"/
+      // "Head of Department" misrepresents who actually holds approval
+      // authority here. Group/team steps and steps with no approver on
+      // record still fall back to the workflow label.
+      const label = !isTeamGroup && step.approver_title
+        ? step.approver_title
+        : step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
       const isDone = Boolean(step.approved) || stepOrder > idx;
       const isActive = !isDone && pendingStage.has(idx);
       return {
