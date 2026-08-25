@@ -32,6 +32,7 @@ export async function getAdvanceById(id: string) {
     currency: string | null;
     extra_cost_amount: string;
     extra_cost_description: string | null;
+    travel_rate_kind: string | null;
   }>(
     `SELECT ar.id, ar.requester_id, ar.created_by_id, ar.status, ar.requested_total, ar.approved_total, ar.type, ar.purpose, ar.payment_account,
             ar.override_chain, ar.workflow_id, ar.workflow_step_order, ar.approval_chain,
@@ -39,7 +40,8 @@ export async function getAdvanceById(id: string) {
             u.department AS requester_department,
             u.role AS requester_role,
             s.name AS requester_section,
-            tt.currency
+            tt.currency,
+            tt.rate_kind AS travel_rate_kind
        FROM advance_requests ar
        JOIN users u ON u.id = ar.requester_id
        LEFT JOIN sections s ON s.id = u.section_id

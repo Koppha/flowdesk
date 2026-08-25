@@ -939,7 +939,9 @@ export default function App() {
       const meals = Number(value) || 0;
       // Day 1 (breakfast/lunch/dinner) allows up to 3 meals; subsequent days
       // exclude breakfast (assumed eaten before departure that day), so 2.
-      const maxMeals = selectedTravelType?.rate_kind === "DAILY" ? Infinity : (index === 0 ? 3 : 2);
+      // DAILY-rate rows hold a day count instead, capped at 180 (matches the
+      // server-side LinesSchema max).
+      const maxMeals = selectedTravelType?.rate_kind === "DAILY" ? 180 : (index === 0 ? 3 : 2);
       (copy[index] as any).meals = Math.min(Math.max(meals, 0), maxMeals);
     } else {
       (copy[index] as any)[field] = value;
@@ -1606,13 +1608,27 @@ export default function App() {
         // an existing claim, populateClearanceForm overrides this with saved
         // actuals instead.
         if (!editingClaimId) {
+          // A DAILY-rate line (CMA/international per diem) can cover several
+          // days on one line_date - expand it into one clearance row per day
+          // so the settlement form keeps the same per-day breakdown as
+          // before, instead of collapsing a multi-day trip into one row.
+          const isDailyRateAdvance = detail.travel_rate_kind === "DAILY";
           setClearanceTrips(
             lines.length
-              ? lines.map((line: any) => ({
-                  ...emptyClearanceTripRow(normalizeDateInputValue(line.line_date)),
-                  from_place: line.location || "",
-                  lunch: advanceLineAmount(line)
-                }))
+              ? lines.flatMap((line: any) => {
+                  const dayCount = isDailyRateAdvance ? Math.max(1, Number(line.meals_count) || 1) : 1;
+                  const perDayAmount = advanceLineAmount(line) / dayCount;
+                  return Array.from({ length: dayCount }, (_, day) => {
+                    const rowDate = day === 0
+                      ? normalizeDateInputValue(line.line_date)
+                      : normalizeDateInputValue(new Date(new Date(line.line_date).getTime() + day * 86400000).toISOString().slice(0, 10));
+                    return {
+                      ...emptyClearanceTripRow(rowDate),
+                      from_place: line.location || "",
+                      lunch: perDayAmount
+                    };
+                  });
+                })
               : [emptyClearanceTripRow()]
           );
         }
@@ -6521,11 +6537,18 @@ export default function App() {
                           )}
                           <td>
                             {selectedTravelType?.rate_kind === "DAILY" ? (
-                              // A daily-rate trip pays a flat per-day allowance, not a
-                              // per-meal amount - each row already is one calendar day
-                              // (its own Date), so there's nothing for the traveller to
-                              // enter here; it's always exactly 1 day.
-                              <span>1 day</span>
+                              // A daily-rate trip (CMA/international per diem) pays a flat
+                              // amount per day - one row can now cover a multi-day leg of
+                              // the trip instead of forcing one row per calendar day.
+                              <input
+                                type="number"
+                                min="1"
+                                max="180"
+                                step="1"
+                                value={String(Number.isFinite(Number(r.meals)) && Number(r.meals) > 0 ? r.meals : 1)}
+                                onChange={e => updateRow(idx, "meals", e.target.value === "" ? 1 : Number(e.target.value))}
+                                style={{ width: 80 }}
+                              />
                             ) : (
                               <input
                                 type="number"
@@ -6538,7 +6561,7 @@ export default function App() {
                               />
                             )}
                           </td>
-                          <td>{fmtMoney(selectedTravelType?.rate_kind === "DAILY" ? selectedTravelRate : (Number.isFinite(Number(r.meals)) ? Math.max(0, Number(r.meals)) : 0) * selectedTravelRate, selectedTravelType?.currency)}</td>
+                          <td>{fmtMoney((Number.isFinite(Number(r.meals)) ? Math.max(selectedTravelType?.rate_kind === "DAILY" ? 1 : 0, Number(r.meals)) : (selectedTravelType?.rate_kind === "DAILY" ? 1 : 0)) * selectedTravelRate, selectedTravelType?.currency)}</td>
                           <td>
                             <button
                               className="travel-delete-btn"

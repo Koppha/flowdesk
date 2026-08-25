@@ -90,13 +90,18 @@ async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string, exc
 }
 
 async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: string) {
-  const advanceLines = await query<{ line_date: string; location: string | null; lunch: string; dinner: string }>(
-    `SELECT line_date, location, lunch, dinner
+  const advanceLines = await query<{ line_date: string; location: string | null; lunch: string; dinner: string; meals_count: string | null }>(
+    `SELECT line_date, location, lunch, dinner, meals_count
        FROM advance_lines
       WHERE advance_request_id=$1
       ORDER BY line_date`,
     [linkedAdvanceId]
   );
+  const travelTypeRow = (await query<{ rate_kind: string }>(
+    `SELECT tt.rate_kind FROM advance_requests ar LEFT JOIN travel_types tt ON tt.code = ar.type WHERE ar.id=$1`,
+    [linkedAdvanceId]
+  ))[0];
+  const isDailyRateAdvance = travelTypeRow?.rate_kind === "DAILY";
 
   // Delete + per-line insert run in one transaction — previously separate
   // unwrapped calls, so a crash/restart mid-loop could leave the claim with
@@ -106,21 +111,31 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
     await client.query(`DELETE FROM claim_trips WHERE clearance_claim_id=$1`, [claimId]);
 
     for (const line of advanceLines) {
-      const lineTotal = Number(line.lunch || 0) + Number(line.dinner || 0);
-      await client.query(
-        `INSERT INTO claim_trips
-         (clearance_claim_id, trip_date, from_place, to_place, depart_time, arrive_time, km_travelled, petrol_allowance,
-          breakfast, lunch, dinner, other_expenses, purpose, line_total)
-         VALUES ($1,$2,$3,null,null,null,0,0,0,$4,$5,0,null,$6)`,
-        [
-          claimId,
-          line.line_date,
-          line.location ?? null,
-          Number(line.lunch || 0),
-          Number(line.dinner || 0),
-          lineTotal
-        ]
-      );
+      // A DAILY-rate line (CMA/international per diem) can cover several
+      // days on one line_date - expand it into one clearance trip per day
+      // so settlement keeps the same per-day breakdown as before, instead
+      // of collapsing a multi-day trip into a single dated line.
+      const dayCount = isDailyRateAdvance ? Math.max(1, Number(line.meals_count) || 1) : 1;
+      const perDayLunch = Number(line.lunch || 0) / dayCount;
+      const perDayDinner = Number(line.dinner || 0) / dayCount;
+      const perDayTotal = perDayLunch + perDayDinner;
+      for (let day = 0; day < dayCount; day++) {
+        const tripDate = day === 0 ? line.line_date : new Date(new Date(line.line_date).getTime() + day * 86400000).toISOString().slice(0, 10);
+        await client.query(
+          `INSERT INTO claim_trips
+           (clearance_claim_id, trip_date, from_place, to_place, depart_time, arrive_time, km_travelled, petrol_allowance,
+            breakfast, lunch, dinner, other_expenses, purpose, line_total)
+           VALUES ($1,$2,$3,null,null,null,0,0,0,$4,$5,0,null,$6)`,
+          [
+            claimId,
+            tripDate,
+            line.location ?? null,
+            perDayLunch,
+            perDayDinner,
+            perDayTotal
+          ]
+        );
+      }
     }
   });
 

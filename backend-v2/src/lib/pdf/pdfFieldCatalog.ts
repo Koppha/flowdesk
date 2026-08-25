@@ -227,7 +227,7 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   const currency = adv.currency || "LSL";
 
   const lines = await query<any>(
-    `SELECT line_date, location, breakfast, lunch, dinner, line_total FROM advance_lines WHERE advance_request_id=$1 ORDER BY line_date`,
+    `SELECT line_date, location, breakfast, lunch, dinner, line_total, meals_count FROM advance_lines WHERE advance_request_id=$1 ORDER BY line_date`,
     [id]
   );
   const accommodation = await query<{ check_in: string; check_out: string }>(
@@ -249,8 +249,20 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   // scrambled order depending on which weekdays the trip's dates fell on.
   const dates = lines.map((l) => l.line_date).filter(Boolean);
   const dateFrom = dates[0];
-  const dateTo = dates[dates.length - 1];
-  const durationDays = dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1) : null;
+  // DAILY-rate rows (CMA/international per diem) can each represent several
+  // days on a single line_date now, so the trip's real length is the sum of
+  // each row's day count, not the span between the first and last row's
+  // dates - a single 5-day row would otherwise print as "1 day".
+  const isDailyRateTrip = adv.travel_rate_kind === "DAILY";
+  const totalDays = isDailyRateTrip
+    ? lines.reduce((sum: number, l: any) => sum + Math.max(1, Number(l.meals_count) || 1), 0)
+    : null;
+  const dateTo = isDailyRateTrip && dateFrom && totalDays
+    ? new Date(new Date(dateFrom).getTime() + (totalDays - 1) * 86400000).toISOString().slice(0, 10)
+    : dates[dates.length - 1];
+  const durationDays = isDailyRateTrip
+    ? totalDays
+    : (dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1) : null);
   const locations = Array.from(new Set(lines.map((l) => l.location).filter(Boolean))) as string[];
   const breakfastCount = lines.filter((l) => Number(l.breakfast) > 0).length;
   const lunchCount = lines.filter((l) => Number(l.lunch) > 0).length;

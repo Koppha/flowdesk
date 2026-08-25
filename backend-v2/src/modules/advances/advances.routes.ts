@@ -118,7 +118,7 @@ const LinesSchema = z.object({
         line_date: z.string(),
         location: z.string().optional(),
         travel_meta: z.record(z.unknown()).optional(),
-        meals_count: z.coerce.number().int().nonnegative().optional(),
+        meals_count: z.coerce.number().int().nonnegative().max(180, "Days can't exceed 180").optional(),
         meal_value: z.coerce.number().nonnegative().optional(),
         breakfast: z.coerce.number().nonnegative().default(0),
         lunch: z.coerce.number().nonnegative().default(0),
@@ -1124,7 +1124,17 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     if (!String(adv.payment_account || "").trim()) throw badRequest("payment_account is required");
     let needsAccommodation = false;
     if (await isTravelAdvanceType(adv.type)) {
-      const row = (await query<{ count: string }>(`SELECT count(*)::text AS count FROM advance_lines WHERE advance_request_id=$1`, [adv.id]))[0];
+      // DAILY-rate types (CMA/international per diem) let one row cover
+      // several days via meals_count, so "how many travel days" is the sum
+      // of each row's day count, not the row count - MEAL-rate types (local
+      // travel) still store exactly one row per day, so row count is still
+      // correct there.
+      const row = (await query<{ count: string }>(
+        adv.travel_rate_kind === "DAILY"
+          ? `SELECT COALESCE(SUM(GREATEST(meals_count, 1)), 0)::text AS count FROM advance_lines WHERE advance_request_id=$1`
+          : `SELECT count(*)::text AS count FROM advance_lines WHERE advance_request_id=$1`,
+        [adv.id]
+      ))[0];
       if (!row || Number(row.count) < 1) throw badRequest("At least one travel table entry is required");
       // More than one travel day implies an overnight stay requiring accommodation.
       needsAccommodation = Number(row.count) > 1;
