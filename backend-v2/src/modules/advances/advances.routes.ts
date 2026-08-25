@@ -255,8 +255,8 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId: strin
 
 export async function getAdvanceNotificationContext(advanceId: string) {
   return (
-    await query<{ full_name: string | null; email: string | null; department: string | null; requested_total: string; approved_total: string; type: string; status: string; paid_reference: string | null; currency: string | null }>(
-      `SELECT u.full_name, u.email, u.department, ar.requested_total, ar.approved_total, ar.type, ar.status, ar.paid_reference, tt.currency
+    await query<{ full_name: string | null; email: string | null; department: string | null; requested_total: string; approved_total: string; type: string; status: string; paid_reference: string | null; currency: string | null; extra_cost_amount: string; extra_cost_description: string | null }>(
+      `SELECT u.full_name, u.email, u.department, ar.requested_total, ar.approved_total, ar.type, ar.status, ar.paid_reference, tt.currency, ar.extra_cost_amount, ar.extra_cost_description
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
          LEFT JOIN travel_types tt ON tt.code = ar.type
@@ -973,7 +973,10 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
     if (adv.created_by_id !== req.user!.userId) throw forbidden("Only the creator can edit");
-    if (!["DRAFT", "SUBMITTED"].includes(adv.status)) throw badRequest("Cannot edit after manager review");
+    // Editable at any stage up until it's actually been approved - only the
+    // fields are updated in place here, the approval chain/status/current
+    // step are untouched, so an in-flight request keeps its progress.
+    if (["APPROVED", "PAID", "REJECTED", "CANCELLED"].includes(adv.status)) throw badRequest("Cannot edit after approval");
 
     const parsed = UpdateAdvanceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -1026,7 +1029,7 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
     const adv = await getAdvanceById(req.params.id);
     if (!adv) throw notFound();
     if (adv.created_by_id !== req.user!.userId) throw forbidden("Only the creator can edit lines");
-    if (!["DRAFT", "SUBMITTED"].includes(adv.status)) throw badRequest("Cannot edit lines after manager review");
+    if (["APPROVED", "PAID", "REJECTED", "CANCELLED"].includes(adv.status)) throw badRequest("Cannot edit lines after approval");
 
     const parsed = LinesSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -1300,6 +1303,8 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
         department: notificationContext.department,
         requestedTotal: Number(notificationContext.requested_total),
         currency: notificationContext.currency,
+        extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+        extraCostDescription: notificationContext.extra_cost_description,
         nextApprover: firstStepApprovers[0] ?? null,
         stepOrder: 0
       });
@@ -1314,6 +1319,8 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
           department: notificationContext.department,
           requestedTotal: Number(notificationContext.requested_total),
           currency: notificationContext.currency,
+          extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+          extraCostDescription: notificationContext.extra_cost_description,
           nextApprover: extra,
           stepOrder: 0
         });
@@ -1380,6 +1387,8 @@ advancesRouter.post("/:id/rollback", async (req: AuthedRequest, res, next) => {
         department: notificationContext.department,
         requestedTotal: Number(notificationContext.requested_total),
         currency: notificationContext.currency,
+        extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+        extraCostDescription: notificationContext.extra_cost_description,
         comments: parsed.data.comments
       });
     }
@@ -1444,6 +1453,8 @@ export async function performAdvanceReject(
       department: notificationContext.department,
       requestedTotal: Number(notificationContext.requested_total),
       currency: notificationContext.currency,
+      extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+      extraCostDescription: notificationContext.extra_cost_description,
       comments
     });
   }
@@ -1547,6 +1558,8 @@ export async function performAdvanceApprove(
       department: notificationContext.department,
       requestedTotal: Number(notificationContext.requested_total),
       currency: notificationContext.currency,
+      extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+      extraCostDescription: notificationContext.extra_cost_description,
       nextApprover,
       stepOrder: newStepOrder
     });
@@ -1562,6 +1575,8 @@ export async function performAdvanceApprove(
           stepOrder: newStepOrder,
           requestedTotal: Number(notificationContext.requested_total),
           currency: notificationContext.currency,
+          extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+          extraCostDescription: notificationContext.extra_cost_description,
           nextApprover: extra
         });
       }
@@ -1775,20 +1790,26 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
       throw badRequest("No pending approver to remind for this request");
     }
 
-    // Determine the current approver from the workflow chain or legacy role
-    let approverName: string | null = null;
-    let approverEmail: string | null = null;
-    let approverTitle: string | null = null;
+    // Determine the current approver(s) from the workflow chain (every
+    // parallel step in the pending group, not just the first) or legacy role
+    let stepOrder: number | undefined;
+    const approvers: { id: string | null; name: string | null; email: string; title: string | null }[] = [];
 
     if (adv.approval_chain?.length) {
       const chain = adv.approval_chain as ChainStep[];
       const stepIdx = adv.workflow_step_order ?? 0;
+      stepOrder = stepIdx;
       const group = getPendingGroup(chain, stepIdx);
-      const step = chain[group.indices[0]];
-      if (step) {
-        approverName  = step.approver_name ?? null;
-        approverEmail = step.approver_email ?? null;
-        approverTitle = (step as any).approver_title ?? step.position_name ?? null;
+      for (const idx of group.indices) {
+        const step = chain[idx];
+        if (step?.approver_email) {
+          approvers.push({
+            id: step.approver_id ?? null,
+            name: step.approver_name ?? null,
+            email: step.approver_email,
+            title: (step as any).approver_title ?? step.position_name ?? null
+          });
+        }
       }
     } else {
       // Legacy: look up by role
@@ -1798,19 +1819,22 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
       if (adv.status === "HR_OFFICER")        role = "FINANCE";
       if (adv.status === "APPROVED")          role = "FINANCE";
       if (role) {
-        const approverRows = await query<{ full_name: string | null; email: string }>(
-          `SELECT full_name, email FROM users WHERE role=$1 AND is_active=true AND lower(trim(department))=lower(trim($2)) LIMIT 1`,
+        const approverRows = await query<{ id: string; full_name: string | null; email: string }>(
+          `SELECT id, full_name, email FROM users WHERE role=$1 AND is_active=true AND lower(trim(department))=lower(trim($2)) LIMIT 1`,
           [role, adv.requester_department ?? ""]
         );
         if (approverRows[0]) {
-          approverName  = approverRows[0].full_name;
-          approverEmail = approverRows[0].email;
-          approverTitle = role.replace(/_/g, " ");
+          approvers.push({
+            id: approverRows[0].id,
+            name: approverRows[0].full_name,
+            email: approverRows[0].email,
+            title: role.replace(/_/g, " ")
+          });
         }
       }
     }
 
-    if (!approverEmail) throw badRequest("Could not determine the current approver's email");
+    if (!approvers.length) throw badRequest("Could not determine the current approver's email");
 
     // Fetch requester + sender details
     const [requesterRows, senderRows] = await Promise.all([
@@ -1826,6 +1850,25 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
     const requester = requesterRows[0];
     const sender    = senderRows[0];
 
+    for (const approver of approvers) {
+      void notifyAdvanceTask({
+        advanceId:      adv.id,
+        status:         adv.status,
+        advanceType:    adv.type,
+        requesterName:  requester?.full_name ?? null,
+        department:     adv.requester_department ?? null,
+        requestedTotal: Number(adv.requested_total),
+        currency:       adv.currency,
+        extraCostAmount: Number(adv.extra_cost_amount || 0),
+        extraCostDescription: adv.extra_cost_description,
+        nextApprover:   approver,
+        stepOrder,
+        isReminder:     true
+      });
+    }
+
+    // Confirm to the sender only — the approver email above already carries
+    // the real one-click action link.
     void notifyAdvanceReminder({
       advanceId:      adv.id,
       advanceType:    adv.type,
@@ -1834,14 +1877,14 @@ advancesRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, 
       requestedTotal: Number(adv.requested_total),
       currency:       adv.currency,
       status:         adv.status,
-      approverName,
-      approverEmail,
-      approverTitle,
+      approverName:   approvers.map((a) => a.name).filter(Boolean).join(", ") || null,
+      approverEmail:  null,
+      approverTitle:  null,
       senderName:     sender?.full_name ?? null,
       senderEmail:    sender?.email ?? null
     });
 
-    return res.json({ ok: true, approverName });
+    return res.json({ ok: true, approverName: approvers.map((a) => a.name).filter(Boolean).join(", ") || null });
   } catch (err) {
     return next(err);
   }

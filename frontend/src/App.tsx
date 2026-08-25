@@ -1254,7 +1254,8 @@ export default function App() {
     };
   }, [token, idleTimeoutMinutes, warningSeconds]);
   const canRequestForSelf = profileCompleted && ["PERMANENT", "INTERN", "TEMPORARY"].includes(employmentType);
-  const canCreateForOthers = profileCompleted && (employmentType === "PERMANENT" || isApproverRole(role));
+  // Temps and interns can never request on someone else's behalf, regardless of role.
+  const canCreateForOthers = profileCompleted && employmentType === "PERMANENT";
   const canOpenAdvanceForm = canRequestForSelf || canCreateForOthers;
   const eligibleBeneficiaries = requestDirectory.filter(
     (user) =>
@@ -2772,10 +2773,14 @@ export default function App() {
         // specific individual returned as approver_name/approver_title (the
         // department HOD) — show the group name instead, with no fixed actor.
         const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
-        // Prefer the workflow's own step label (position_name) over the
-        // approver's personal job title — the tracker should reflect what's
-        // configured in the Workflow Builder, not whoever happens to be assigned.
-        const label = step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
+        // Show the assigned approver's real job title instead of the generic
+        // workflow step name (e.g. "Manager"/"Head of Department") - a senior
+        // title like GM being labeled down to "Manager" misrepresents who
+        // actually holds approval authority here. Group/team steps and steps
+        // with no approver on record still fall back to the workflow label.
+        const label = !isTeamGroup && step.approver_title
+          ? step.approver_title
+          : step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
         const actorName = isTeamGroup ? "" : (approveEvent?.actor_name || step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -2915,10 +2920,11 @@ export default function App() {
         const isDone = terminalDone || stepApproved || currentStepIdx > idx;
         const isActive = !terminalFailed && !isDone && pendingStage.has(idx);
         const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
-        // Prefer the workflow's own step label (position_name) over the
-        // approver's personal job title — the tracker should reflect what's
-        // configured in the Workflow Builder, not whoever happens to be assigned.
-        const label = step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
+        // Show the assigned approver's real job title instead of the generic
+        // workflow step name - see buildTrackingStages for why.
+        const label = !isTeamGroup && step.approver_title
+          ? step.approver_title
+          : step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
         const actorName = isTeamGroup ? "" : (step.approver_name || "");
         stages.push({
           key: `step-${idx}`,
@@ -7061,8 +7067,16 @@ export default function App() {
                           }));
                           await api.updateAdvanceLines(editingAdvanceId, { lines: mappedRows });
                         }
-                        const submitResult: any = await api.submitAdvance(editingAdvanceId);
-                        alert(submitResult?.warning || "Advance request submitted successfully.");
+                        // A draft still needs the actual submit transition;
+                        // anything already in the approval pipeline (but not
+                        // yet approved) just gets its fields saved in place -
+                        // its current status/step/approver are untouched.
+                        if (editingAdvanceStatus === "DRAFT") {
+                          const submitResult: any = await api.submitAdvance(editingAdvanceId);
+                          alert(submitResult?.warning || "Advance request submitted successfully.");
+                        } else {
+                          alert("Changes saved.");
+                        }
                         setEditingAdvanceId(null);
                       } else {
                         // create new request, then send any additional details
@@ -7093,7 +7107,9 @@ export default function App() {
                     } finally {
                       setSubmittingAdvance(false);
                     }
-                  }}>{submittingAdvance ? "Submitting…" : (editingAdvanceId ? "Update & Submit" : "Submit")}</button>
+                  }}>{submittingAdvance
+                    ? (editingAdvanceId && editingAdvanceStatus !== "DRAFT" ? "Saving…" : "Submitting…")
+                    : (editingAdvanceId ? (editingAdvanceStatus === "DRAFT" ? "Update & Submit" : "Save Changes") : "Submit")}</button>
               </div>
                 </div>
                 <aside className="request-summary-card">

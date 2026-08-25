@@ -55,8 +55,8 @@ export function isPermanentEmployee(user: Pick<UserAccountState, "employment_typ
   return String(user.employment_type || "PERMANENT").trim().toUpperCase() === "PERMANENT";
 }
 
+// Temporary staff and interns can never request an advance on someone else's
+// behalf, regardless of role - only permanent employees can.
 export function canCreateAdvanceOnBehalf(user: Pick<UserAccountState, "employment_type" | "role">) {
-  const role = String(user.role || "").trim().toUpperCase();
-  if (isPermanentEmployee(user)) return true;
-  return ["HOD", "MANAGER", "FINANCE", "ADMIN", "CEO", "EXCO"].includes(role);
+  return isPermanentEmployee(user);
 }

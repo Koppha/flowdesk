@@ -256,7 +256,7 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
                     <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(a.created_at)}</td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
-                        {(a.status === "DRAFT" || a.status === "SUBMITTED") && (
+                        {!["APPROVED", "PAID", "REJECTED", "CANCELLED"].includes(a.status) && (
                           <button className="ep-icon-btn" title="Edit" onClick={() => onEdit(a)}>
                             <Edit3 size={15} aria-hidden />
                           </button>

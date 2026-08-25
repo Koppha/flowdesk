@@ -338,12 +338,22 @@ export async function notifyAdvanceTask(args: {
   approvedTotal?: number;
   currency?: string | null;
   comments?: string | null;
+  // Extra, non-travel-table cost the requester added on top of the computed
+  // travel total (e.g. a conference fee) - shown as its own line so an
+  // approver isn't left guessing why the total is higher than the trip lines add up to.
+  extraCostAmount?: number | null;
+  extraCostDescription?: string | null;
   // The specific approver for the next workflow step (workflow-driven advances).
   // When provided, this takes priority over the legacy role-based lookup.
   nextApprover?: { id?: string | null; name: string | null; email: string | null; title: string | null } | null;
   // The workflow step order nextApprover is being asked to act on — required
   // to mint a one-click email-approve/reject link bound to that exact step.
   stepOrder?: number;
+  // A follow-up nudge (POST /advances/:id/remind) rather than the original
+  // notification for this step — same action link, different subject/wording,
+  // and never re-notifies the requester (they already know, they just clicked
+  // remind).
+  isReminder?: boolean;
 }) {
   const requester = args.requesterName || "Requester";
   const department = args.department || null;
@@ -360,6 +370,9 @@ export async function notifyAdvanceTask(args: {
     ["Division",  department],
     ["Type",        args.advanceType.replace(/_/g, " ")],
     ["Amount",      fmt(args.requestedTotal, args.currency)],
+    ...(Number(args.extraCostAmount || 0) > 0
+      ? [["Extra Cost", `${fmt(Number(args.extraCostAmount), args.currency)}${args.extraCostDescription ? ` — ${args.extraCostDescription}` : ""}`] as [string, string]]
+      : []),
     ["Status",      statusLabel(args.status)],
     ...(args.comments ? [["Comments", args.comments] as [string, string]] : [])
   ]);
@@ -380,11 +393,13 @@ export async function notifyAdvanceTask(args: {
         }
       }
       const approverMsg = [
-        header(`ADVANCE REQUEST — ACTION REQUIRED`),
+        header(args.isReminder ? `ADVANCE REQUEST — REMINDER` : `ADVANCE REQUEST — ACTION REQUIRED`),
         ``,
         `Hello ${args.nextApprover.name || ""},`.trim(),
         ``,
-        `An advance request requires your ${roleLabel} approval.`,
+        args.isReminder
+          ? `This is a follow-up reminder — an advance request is still awaiting your ${roleLabel} approval.`
+          : `An advance request requires your ${roleLabel} approval.`,
         ``,
         details,
         ``,
@@ -396,12 +411,12 @@ export async function notifyAdvanceTask(args: {
 
       await sendMail({
         to: [args.nextApprover.email],
-        subject: `[Action Required] ${advanceTypeLabel(args.advanceType)} awaiting ${roleLabel} approval`,
+        subject: `${args.isReminder ? "[Reminder]" : "[Action Required]"} ${advanceTypeLabel(args.advanceType)} awaiting ${roleLabel} approval`,
         text: approverMsg
       });
 
       sendTeamsCard({
-        title: "Advance Request — Action Required",
+        title: args.isReminder ? "Advance Request — Reminder" : "Advance Request — Action Required",
         summary: `Advance request from ${requester} awaiting ${roleLabel} approval`,
         subtitle: `Requires ${roleLabel} action`,
         color: "f59e0b",
