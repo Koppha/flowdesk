@@ -153,7 +153,14 @@ export async function resolveWorkflowChain(params: {
         AND (w.valid_from  IS NULL OR w.valid_from  <= now())
         AND (w.valid_until IS NULL OR w.valid_until >= now())
         AND (w.department IS NULL OR trim(w.department) = '' OR lower(trim(w.department)) = lower(trim($2)))
-        AND (w.division IS NULL OR trim(w.division) = '' OR $6 = '' OR lower(trim(w.division)) = lower(trim($6)))
+        -- A workflow with no division set matches everyone (same as blank
+        -- department below), but a workflow scoped to a SPECIFIC division
+        -- must only match a requester actually in that division - a blank/
+        -- unresolved requester division ($6='') must NOT wildcard-match it,
+        -- or someone outside that division leaks into a division-only
+        -- workflow (e.g. a SEFS-scoped travel workflow matching an MNO
+        -- employee whenever their division came through blank).
+        AND (w.division IS NULL OR trim(w.division) = '' OR lower(trim(w.division)) = lower(trim($6)))
         AND (w.section IS NULL OR trim(w.section) = '' OR lower(trim(w.section)) = lower(trim($3)))
         AND (
           w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = ''

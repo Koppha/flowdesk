@@ -338,7 +338,9 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         WHERE request_type = $1
           AND status = 'ACTIVE'
           AND (department IS NULL OR trim(department) = '' OR lower(trim(department)) = lower(trim($2)))
-          AND (division IS NULL OR trim(division) = '' OR $6 = '' OR lower(trim(division)) = lower(trim($6)))
+          -- Mirrors resolveWorkflowChain's fix: a blank/unresolved requester
+          -- division must not wildcard-match a division-scoped workflow.
+          AND (division IS NULL OR trim(division) = '' OR lower(trim(division)) = lower(trim($6)))
           AND (section IS NULL OR trim(section) = '' OR lower(trim(section)) = lower(trim($3)))
           AND (
             advance_sub_type IS NULL OR trim(advance_sub_type) = ''
