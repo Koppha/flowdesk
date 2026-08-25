@@ -989,6 +989,73 @@ async function requireUserManagementAccess(req: AuthedRequest, res: any, next: a
   }
 }
 
+// Resolves an approver by email for the Advance Request "Custom Approval
+// Chain" picker (no workflow configured for the requester's department) -
+// lets a requester name someone who has never logged into FlowDesk yet as
+// their Counter Signer/Approver. If no matching account exists, creates a
+// lightweight stub mirroring exactly what a first-time AD login creates
+// (auth.routes.ts's own /login handler above) so the existing one-click
+// email-approval flow (email_action_tokens) works for them unchanged - that
+// flow only requires a real, active users.id, nothing else. An existing
+// account's real role always wins over the self-declared one; a brand-new
+// account is stamped with the declared role and the invite is written to
+// audit_log so there's a traceable record of who vouched for whom.
+authRouter.post("/resolve-or-invite-approver", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = z.object({
+      email: z.string().trim().email(),
+      declaredRole: z.enum(["MANAGER", "HOD", "EXCO"])
+    }).safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    const email = parsed.data.email.toLowerCase();
+
+    const existing = (await query<{ id: string; full_name: string | null; role: string; is_active: boolean }>(
+      `SELECT id, full_name, role, is_active FROM users WHERE lower(email)=$1 LIMIT 1`,
+      [email]
+    ))[0];
+
+    let userId: string;
+    let fullName: string | null;
+    let role: string;
+    let isNew = false;
+
+    if (existing) {
+      if (!existing.is_active) throw badRequest("This account is deactivated - reactivate it in User Management before inviting them");
+      userId = existing.id;
+      fullName = existing.full_name;
+      role = existing.role;
+    } else {
+      isNew = true;
+      role = parsed.data.declaredRole;
+      fullName = email.split("@")[0].split(/[._]/).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+      const syntheticHash = await hashPassword(randomUUID());
+      const created = (await query<{ id: string }>(
+        `INSERT INTO users (full_name, email, role, password_hash, is_active, employment_type, profile_completed)
+         VALUES ($1,$2,$3,$4,true,'PERMANENT',false)
+         RETURNING id`,
+        [fullName, email, role, syntheticHash]
+      ))[0];
+      userId = created.id;
+      logger.info("approver_invited_by_email_account_created", { email: maskEmail(email), user_id: userId, declared_role: role, invited_by: req.user!.userId });
+    }
+
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
+       VALUES ($1,'APPROVER_INVITED_BY_EMAIL','users',$2,$3,$4)`,
+      [
+        req.user!.userId,
+        userId,
+        JSON.stringify({ invitee_email: email }),
+        JSON.stringify({ declared_role: parsed.data.declaredRole, account_created: isNew, resolved_role: role })
+      ]
+    );
+
+    return res.json({ id: userId, full_name: fullName, role, isNew });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 authRouter.get("/users", requireAuth, requireUserManagementAccess, async (req: AuthedRequest, res, next) => {
   try {
     await ensurePermissionGroupTables();

@@ -144,6 +144,8 @@ export const api = {
   deleteDepartment: (department: string) => req(`/auth/departments/${encodeURIComponent(department)}`, { method: "DELETE" }),
   completeProfile: (data: { full_name: string; department: string; division_id?: string | null; section_id?: string | null; team_id?: string | null; employment_type: string; employee_no?: string }) => req("/auth/complete-profile", { method: "POST", body: JSON.stringify(data) }),
   adminUsers: (divisionId?: string | null) => req(`/auth/users${divisionId ? `?division_id=${encodeURIComponent(divisionId)}` : ""}`),
+  resolveOrInviteApprover: (email: string, declaredRole: "MANAGER" | "HOD" | "EXCO") =>
+    req("/auth/resolve-or-invite-approver", { method: "POST", body: JSON.stringify({ email, declaredRole }) }),
   createUser: (data: any) => req("/auth/users", { method: "POST", body: JSON.stringify(data) }),
   updateUser: (id: string, data: any) => req(`/auth/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteUser: (id: string) => req(`/auth/users/${id}`, { method: "DELETE" }),

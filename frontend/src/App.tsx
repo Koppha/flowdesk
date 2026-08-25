@@ -825,6 +825,13 @@ export default function App() {
   const [customChainUserId, setCustomChainUserId] = useState("");
   const [chainPositionSearches, setChainPositionSearches] = useState<Record<string, string>>({});
   const [chainPositionTypes, setChainPositionTypes] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  // "invite by email" affordance on the custom approval chain picker, for
+  // naming someone who's never logged into FlowDesk yet — keyed by position
+  // label (there are only ever two: Counter Signed By / Approved By).
+  const [inviteEmailByLabel, setInviteEmailByLabel] = useState<Record<string, string>>({});
+  const [inviteRoleByLabel, setInviteRoleByLabel] = useState<Record<string, "MANAGER" | "HOD" | "EXCO">>({});
+  const [invitingLabel, setInvitingLabel] = useState<string | null>(null);
+  const [inviteErrorByLabel, setInviteErrorByLabel] = useState<Record<string, string>>({});
   const { staff: staffDirectory } = useStaffDirectory();
 
   // advance request form fields
@@ -6723,6 +6730,42 @@ export default function App() {
                           ? "GM or Executive of your Division to approve the request"
                           : null;
 
+                      const applySelection = (uid: string, userName: string) => {
+                        setCustomApprovalChain(prev => {
+                          const without = prev.filter(s => s.label !== pt.name);
+                          const insertAt = chainPositionTypes.findIndex(p => p.id === pt.id);
+                          const before = without.filter(s => chainPositionTypes.findIndex(p => p.name === s.label) < insertAt);
+                          const after  = without.filter(s => chainPositionTypes.findIndex(p => p.name === s.label) >= insertAt);
+                          return [...before, { label: pt.name, user_id: uid, user_name: userName }, ...after];
+                        });
+                      };
+
+                      // Inviting a not-yet-registered approver by email only
+                      // makes sense in the "no workflow configured" fallback —
+                      // when a real workflow exists, the pool is already drawn
+                      // from known people. `!canPickOwnCountersigner` stands in
+                      // for that case since this section only renders when one
+                      // of the two is true.
+                      const showInviteByEmail = !canPickOwnCountersigner;
+                      const inviteEmail = inviteEmailByLabel[pt.name] || "";
+                      const inviteRole = inviteRoleByLabel[pt.name] || "MANAGER";
+
+                      async function inviteByEmail() {
+                        const email = inviteEmail.trim();
+                        if (!email) return;
+                        setInvitingLabel(pt.name);
+                        setInviteErrorByLabel(prev => ({ ...prev, [pt.name]: "" }));
+                        try {
+                          const resp = await api.resolveOrInviteApprover(email, inviteRole);
+                          applySelection(resp.id, resp.full_name || email);
+                          setInviteEmailByLabel(prev => ({ ...prev, [pt.name]: "" }));
+                        } catch (e: any) {
+                          setInviteErrorByLabel(prev => ({ ...prev, [pt.name]: e?.message || "Could not invite this person" }));
+                        } finally {
+                          setInvitingLabel(null);
+                        }
+                      }
+
                       return (
                         <div key={pt.id}>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: ptSubtitle ? 1 : 6 }}>
@@ -6742,14 +6785,7 @@ export default function App() {
                               }
                               const u = pool.find(p => p.id === uid);
                               if (!u) return;
-                              const userName = u.full_name || u.email;
-                              setCustomApprovalChain(prev => {
-                                const without = prev.filter(s => s.label !== pt.name);
-                                const insertAt = chainPositionTypes.findIndex(p => p.id === pt.id);
-                                const before = without.filter(s => chainPositionTypes.findIndex(p => p.name === s.label) < insertAt);
-                                const after  = without.filter(s => chainPositionTypes.findIndex(p => p.name === s.label) >= insertAt);
-                                return [...before, { label: pt.name, user_id: uid, user_name: userName }, ...after];
-                              });
+                              applySelection(uid, u.full_name || u.email);
                             }}
                             style={{ width: "100%", padding: "9px 12px", borderRadius: 7, border: `1px solid ${selected ? "#b6d4a8" : "#d1d5db"}`, fontSize: 14, background: selected ? "#f0fdf4" : "#f9fafb", color: "var(--text)", cursor: "pointer" }}
                           >
@@ -6760,6 +6796,42 @@ export default function App() {
                               </option>
                             ))}
                           </select>
+                          {showInviteByEmail && (
+                            <div style={{ marginTop: 8 }}>
+                              <div style={{ fontSize: 12, color: "#78716c", marginBottom: 4 }}>
+                                Not in the list? Invite them by email — they'll receive an email to approve, even if they've never logged into FlowDesk.
+                              </div>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input
+                                  type="email"
+                                  placeholder="their.email@etl.co.ls"
+                                  value={inviteEmail}
+                                  onChange={(e) => setInviteEmailByLabel(prev => ({ ...prev, [pt.name]: e.target.value }))}
+                                  style={{ flex: 1, padding: "7px 10px", borderRadius: 7, border: "1px solid #d1d5db", fontSize: 13 }}
+                                />
+                                <select
+                                  value={inviteRole}
+                                  onChange={(e) => setInviteRoleByLabel(prev => ({ ...prev, [pt.name]: e.target.value as "MANAGER" | "HOD" | "EXCO" }))}
+                                  style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid #d1d5db", fontSize: 13 }}
+                                >
+                                  <option value="MANAGER">Manager</option>
+                                  <option value="HOD">HOD</option>
+                                  <option value="EXCO">EXCO</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  className="button small-button"
+                                  disabled={!inviteEmail.trim() || invitingLabel === pt.name}
+                                  onClick={inviteByEmail}
+                                >
+                                  {invitingLabel === pt.name ? "Inviting…" : "Invite"}
+                                </button>
+                              </div>
+                              {inviteErrorByLabel[pt.name] && (
+                                <div style={{ fontSize: 12, color: "#c0392b", marginTop: 4 }}>{inviteErrorByLabel[pt.name]}</div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

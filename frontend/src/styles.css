@@ -3650,14 +3650,13 @@ html[data-theme="dark"] .advance-form .breakdown-table th {
 }
 
 .advance-form .footer-buttons {
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
-  margin: 22px -22px -22px;
+  /* Not sticky - the buttons must flow at the natural end of the form, or
+     users skip content above them (they're always visible without scrolling,
+     so nothing signals there's more to fill in below the fold). */
+  margin-top: 22px;
   padding: 14px 22px;
   border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--surface-raised);
 }
 
 .request-summary-card {
