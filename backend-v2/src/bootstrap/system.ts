@@ -1814,15 +1814,17 @@ async function upsertReportingLine(employeeId: string, managerId: string, reason
   );
 }
 
-// Every active EXCO-role user (the GMs) must report straight to the CEO -
-// never to another GM. /reporting-lines/auto-generate already gets this
-// right going forward (role === 'EXCO' is checked before any
-// department-leadership fallback), but stale or manually-entered
-// reporting_lines rows predating that logic can still have one GM pointed
-// at a peer GM (e.g. seen live: Puleng Masoabi and another GM both showing
-// Lebohang Ramaisa, a fellow GM, as their manager instead of the CEO).
-// Idempotently corrects every such row on every startup, in both UAT and
-// prod, rather than requiring a one-off manual fix per person found.
+// EXCO-role users (the GMs) default to reporting straight to the CEO when
+// they have no reporting line configured at all. This is a gap-filler only
+// - it must NEVER override an already-active reporting_lines row, even one
+// pointing at a peer GM: that's a real, confirmed org pattern (e.g. Ketja
+// Nhlapo and Puleng Masoabi both genuinely report to Lebohang Ramaisa, a
+// fellow GM, not the CEO - confirmed directly, not a data error). An
+// earlier version of this function force-reset every EXCO user's reporting
+// line to the CEO on every startup regardless of what was already set,
+// which silently clobbered that confirmed relationship back to CEO on the
+// next deploy and caused a real request to be wrongly approved by the CEO
+// instead of the correct GM. Only fills a genuine gap now.
 async function ensureExcoMembersReportToCeo() {
   const ceo = (await query<{ id: string }>(
     `SELECT id FROM users WHERE role::text = 'CEO' AND is_active = true ORDER BY full_name LIMIT 1`
@@ -1834,7 +1836,12 @@ async function ensureExcoMembersReportToCeo() {
   );
   for (const exco of excoUsers) {
     if (exco.id === ceo.id) continue;
-    await upsertReportingLine(exco.id, ceo.id, "EXCO members report to CEO, never a peer GM - auto-fixed");
+    const active = (await query<{ manager_id: string | null }>(
+      `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
+      [exco.id]
+    ))[0];
+    if (active) continue;
+    await upsertReportingLine(exco.id, ceo.id, "EXCO member had no reporting line configured - defaulted to CEO");
   }
 }
 
@@ -1888,12 +1895,23 @@ async function ensureSefsExcoReportsToCeo() {
     );
 
     for (const emp of employees) {
+      // Gap-filler only, same as ensureExcoMembersReportToCeo above - must
+      // never override an already-active reporting_lines row. This loop's
+      // simple department-tier default (HOD/MANAGER/dept leadership) can be
+      // wrong for someone with a more specific, manually-confirmed real
+      // relationship, and re-running on every startup would silently
+      // clobber that confirmed fix back to the generic default.
+      const active = (await query<{ manager_id: string | null }>(
+        `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
+        [emp.id]
+      ))[0];
+      if (active) continue;
       const reportsTo = emp.role === "HOD"
         ? mafereka.id
         : emp.role === "MANAGER"
         ? (dept.hod_user_id ?? mafereka.id)
         : (dept.manager_user_id ?? dept.hod_user_id ?? mafereka.id);
-      await upsertReportingLine(emp.id, reportsTo, "SEFS EXCO reports to CEO - auto-fixed for division-level org placement");
+      await upsertReportingLine(emp.id, reportsTo, "SEFS employee had no reporting line configured - defaulted by department leadership tier");
     }
   }
 }
