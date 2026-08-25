@@ -370,26 +370,6 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
       <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 14, alignItems: "start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-          <div className="ep-panel">
-            <div className="ep-panel-head"><div className="ep-panel-title">Request Information</div></div>
-            <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              <Field label="Requester"><div style={{ fontWeight: 600 }}>{task.requester_name || "—"}</div></Field>
-              <Field label="Department"><div>{task.requester_department || "—"}</div></Field>
-              <Field label="Position"><div>{task.position || "—"}</div></Field>
-              <Field label="Computer Type"><div>{task.computer_type || "—"}</div></Field>
-              <Field label="Employee No."><div>{task.requester_employee_no || "—"}</div></Field>
-              <Field label="Process"><div>{task.request_type || "—"}</div></Field>
-              <Field label="Phone"><div>{task.phone_no || "—"}</div></Field>
-              <Field label="Submitted On"><div>{fmtDate(task.submitted_at)}</div></Field>
-            </div>
-            {task.justification && (
-              <div style={{ padding: "0 20px 18px" }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>Justification</div>
-                <div style={{ fontSize: 13, background: "var(--surface-soft)", padding: 10, borderRadius: 6 }}>{task.justification}</div>
-              </div>
-            )}
-          </div>
-
           {task.status !== "COMPLETED" ? (
             <ProvisioningForm task={task} onChange={setTask} onReload={load} saving={saving} setSaving={setSaving} />
           ) : (
@@ -580,8 +560,10 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
         hostname={hostname} setHostname={setHostname}
         network={network} setNetwork={setNetwork}
         warranty={warranty} setWarranty={setWarranty}
+        checklist={checklist} onSaveChecklist={saveChecklist}
+        software={software} newSoftware={newSoftware} setNewSoftware={setNewSoftware} onSaveSoftware={saveSoftware}
         saving={saving}
-        onFinish={async () => {
+        onSaveAssignment={async () => {
           setSaving(true);
           try {
             await api.itProvisioningAssign(task.id, { assigned_to_id: assignedTo || null, device_source: deviceSource as any });
@@ -646,55 +628,6 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
         </div>
       )}
 
-      <div className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Provisioning Checklist</div></div>
-        <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-          {checklist.map((c, i) => (
-            <label key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-              <input type="checkbox" checked={c.checked} onChange={(e) => {
-                const next = checklist.map((item, idx) => idx === i ? { ...item, checked: e.target.checked } : item);
-                void saveChecklist(next);
-              }} />
-              {c.label}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Software Installed</div></div>
-        <div style={{ padding: "14px 20px" }}>
-          <table className="ep-table">
-            <thead><tr><th>Software</th><th style={{ width: 120 }}>Status</th></tr></thead>
-            <tbody>
-              {software.map((s, i) => (
-                <tr key={i}>
-                  <td style={{ fontSize: 13 }}>{s.name}</td>
-                  <td>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                      <input type="checkbox" checked={s.status === "INSTALLED"} onChange={(e) => {
-                        const next = software.map((item, idx) => idx === i ? { ...item, status: (e.target.checked ? "INSTALLED" : "PENDING") as "INSTALLED" | "PENDING" } : item);
-                        void saveSoftware(next);
-                      }} />
-                      {s.status === "INSTALLED" ? <span style={{ color: "#059669", fontWeight: 600 }}>Installed</span> : <span style={{ color: "var(--muted)" }}>Pending</span>}
-                    </label>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <input style={{ ...fieldStyle(), flex: 1 }} placeholder="Additional software" value={newSoftware} onChange={(e) => setNewSoftware(e.target.value)} />
-            <button className="ep-btn-outline" onClick={() => {
-              if (!newSoftware.trim()) return;
-              const next = [...software, { name: newSoftware.trim(), status: "PENDING" as const, is_standard: false }];
-              setNewSoftware("");
-              void saveSoftware(next);
-            }}>+ Add Software</button>
-          </div>
-        </div>
-      </div>
-
       {(task.status === "AWAITING_PROVISIONING" || task.status === "IN_PROGRESS") && (
         <div className="ep-panel">
           <div className="ep-panel-head"><div className="ep-panel-title">Provisioning Validation</div></div>
@@ -756,10 +689,14 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
 // ─── Assignment wizard (Assign Officer → Device Source → Confirm Device) ────
 
 const WIZARD_STEPS = [
-  { key: "officer", label: "Assign Officer" },
-  { key: "source", label: "Device Source" },
-  { key: "device", label: "Confirm Device" },
+  { key: "info", label: "Request Information", sub: "Review request", desc: "Confirm the request details before starting provisioning." },
+  { key: "officer", label: "Assign Officer", sub: "Assign & start", desc: "Assign this request to an IT officer to begin provisioning." },
+  { key: "source", label: "Device Source", sub: "Select device", desc: "Choose whether this device comes from new stock, existing stock, or a replacement." },
+  { key: "device", label: "Confirm Device", sub: "Enter device info", desc: "Capture the asset details for the device being provisioned." },
+  { key: "checklist", label: "Checklist", sub: "Complete checklist", desc: "Work through the provisioning checklist for this device." },
+  { key: "software", label: "Software", sub: "Confirm software", desc: "Confirm installed software and add anything else required." },
 ] as const;
+const STEP_INFO = 0, STEP_OFFICER = 1, STEP_SOURCE = 2, STEP_DEVICE = 3, STEP_CHECKLIST = 4, STEP_SOFTWARE = 5;
 
 function AssignmentWizard(props: {
   task: Task;
@@ -774,117 +711,209 @@ function AssignmentWizard(props: {
   hostname: string; setHostname: (v: string) => void;
   network: string; setNetwork: (v: string) => void;
   warranty: string; setWarranty: (v: string) => void;
+  checklist: ChecklistItem[]; onSaveChecklist: (next: ChecklistItem[]) => void;
+  software: SoftwareItem[]; newSoftware: string; setNewSoftware: (v: string) => void; onSaveSoftware: (next: SoftwareItem[]) => void;
   saving: boolean;
-  onFinish: () => void | Promise<void>;
+  onSaveAssignment: () => void | Promise<void>;
 }) {
   const { task, staff, assignedTo, setAssignedTo, deviceSource, setDeviceSource,
     assetNumber, setAssetNumber, serialNumber, setSerialNumber, manufacturer, setManufacturer,
     model, setModel, os, setOs, hostname, setHostname, network, setNetwork, warranty, setWarranty,
-    saving, onFinish } = props;
+    checklist, onSaveChecklist, software, newSoftware, setNewSoftware, onSaveSoftware,
+    saving, onSaveAssignment } = props;
 
   const alreadySet = Boolean(task.assigned_to_id && task.device?.asset_number);
   const [editing, setEditing] = useState(!alreadySet);
   const [step, setStep] = useState(0);
+  const [furthest, setFurthest] = useState(0);
 
   if (!editing) {
     return (
       <div className="ep-panel">
         <div className="ep-panel-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div className="ep-panel-title">Assignment &amp; Device</div>
-          <button className="ep-btn-outline" onClick={() => { setStep(0); setEditing(true); }}>Edit</button>
+          <div className="ep-panel-title">Provisioning Setup</div>
+          <button className="ep-btn-outline" onClick={() => { setStep(0); setFurthest(WIZARD_STEPS.length - 1); setEditing(true); }}>Edit</button>
         </div>
         <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Assigned To"><div style={{ fontWeight: 600 }}>{task.assigned_to_name || "—"}</div></Field>
           <Field label="Provisioning Status"><div style={{ padding: "7px 0" }}><StatusBadge status={task.status} /></div></Field>
           <Field label="Device Source"><div>{deviceSource.replace(/_/g, " ")}</div></Field>
           <Field label="Asset Number"><div>{assetNumber || "—"}</div></Field>
+          <Field label="Checklist"><div>{checklist.filter((c) => c.checked).length}/{checklist.length} complete</div></Field>
+          <Field label="Software"><div>{software.filter((s) => s.status === "INSTALLED").length}/{software.length} installed</div></Field>
         </div>
       </div>
     );
   }
 
   const canProceedFromOfficer = Boolean(assignedTo);
-  const canFinish = Boolean(assetNumber.trim());
+  const canLeaveDevice = Boolean(assetNumber.trim());
 
-  function next() {
-    if (step === 0 && !canProceedFromOfficer) { alert("Select an IT Officer to continue"); return; }
-    setStep((s) => Math.min(s + 1, WIZARD_STEPS.length - 1));
+  function goTo(i: number) {
+    if (i > furthest) return;
+    setStep(i);
+  }
+  async function next() {
+    if (step === STEP_OFFICER && !canProceedFromOfficer) { alert("Select an IT Officer to continue"); return; }
+    if (step === STEP_DEVICE) {
+      if (!canLeaveDevice) { alert("Asset number is required"); return; }
+      await onSaveAssignment();
+    }
+    const nextStep = Math.min(step + 1, WIZARD_STEPS.length - 1);
+    setStep(nextStep);
+    setFurthest((f) => Math.max(f, nextStep));
   }
   function back() {
     setStep((s) => Math.max(s - 1, 0));
   }
-  async function finish() {
-    if (!canFinish) { alert("Asset number is required"); return; }
-    await onFinish();
+  function finish() {
     setEditing(false);
   }
 
   return (
     <div className="ep-panel">
-      <div className="ep-panel-head"><div className="ep-panel-title">Provisioning Details</div></div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 20px 0" }}>
+      <div className="ep-panel-head"><div className="ep-panel-title">Provisioning Setup</div></div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "16px 20px 0", flexWrap: "wrap" }}>
         {WIZARD_STEPS.map((s, i) => (
           <React.Fragment key={s.key}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div
+              style={{ display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0, cursor: i <= furthest ? "pointer" : "default" }}
+              onClick={() => goTo(i)}
+            >
               {i < step
-                ? <CheckCircle2 size={18} color="#059669" />
+                ? <span style={{ width: 32, height: 32, borderRadius: 99, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#d1fae5" }}><CheckCircle2 size={18} color="#059669" /></span>
                 : <span style={{
-                    width: 18, height: 18, borderRadius: 99, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 11, fontWeight: 700, color: i === step ? "#fff" : "var(--muted)",
+                    width: 32, height: 32, borderRadius: 99, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 13, fontWeight: 700, color: i === step ? "#fff" : "var(--muted)",
                     background: i === step ? "#2563eb" : "transparent", border: i === step ? "none" : "1.5px solid var(--border)",
                   }}>{i + 1}</span>}
-              <span style={{ fontSize: 13, fontWeight: i === step ? 600 : 400, color: i === step ? "var(--text)" : "var(--muted)" }}>{s.label}</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: i === step ? "#2563eb" : "var(--text)", whiteSpace: "nowrap" }}>{s.label}</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>{s.sub}</div>
+              </div>
             </div>
-            {i < WIZARD_STEPS.length - 1 && <div style={{ flex: 1, height: 1, background: "var(--border)" }} />}
+            {i < WIZARD_STEPS.length - 1 && <div style={{ flex: 1, height: 1, background: "var(--border)", marginTop: 16, minWidth: 16 }} />}
           </React.Fragment>
         ))}
       </div>
 
-      <div style={{ padding: "18px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        {step === 0 && (
-          <>
-            <Field label="Assigned To">
-              <select style={fieldStyle()} value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
-                <option value="">Select IT Officer</option>
-                {staff.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
-              </select>
-            </Field>
-            <Field label="Provisioning Status"><div style={{ padding: "7px 0" }}><StatusBadge status={task.status} /></div></Field>
-          </>
-        )}
-
-        {step === 1 && (
-          <div style={{ gridColumn: "1 / -1" }}>
-            <Field label="Device Source">
-              <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
-                {[["NEW_STOCK", "New Stock"], ["EXISTING_STOCK", "Existing Stock"], ["REPLACEMENT_DEVICE", "Replacement Device"]].map(([v, l]) => (
-                  <label key={v} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: "pointer" }}>
-                    <input type="radio" checked={deviceSource === v} onChange={() => setDeviceSource(v)} /> {l}
-                  </label>
-                ))}
-              </div>
-            </Field>
-          </div>
-        )}
-
-        {step === 2 && (
-          <>
-            <Field label="Asset Number *"><input style={fieldStyle()} value={assetNumber} onChange={(e) => setAssetNumber(e.target.value)} placeholder="ETL-LAP-00482" /></Field>
-            <Field label="Serial Number"><input style={fieldStyle()} value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} /></Field>
-            <Field label="Manufacturer"><input style={fieldStyle()} value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} placeholder="Lenovo" /></Field>
-            <Field label="Model"><input style={fieldStyle()} value={model} onChange={(e) => setModel(e.target.value)} placeholder="ThinkPad T14 Gen 5" /></Field>
-            <Field label="Operating System"><input style={fieldStyle()} value={os} onChange={(e) => setOs(e.target.value)} placeholder="Windows 11 Enterprise" /></Field>
-            <Field label="Hostname"><input style={fieldStyle()} value={hostname} onChange={(e) => setHostname(e.target.value)} /></Field>
-            <Field label="IP / Network Details"><input style={fieldStyle()} value={network} onChange={(e) => setNetwork(e.target.value)} /></Field>
-            <Field label="Warranty Expiry"><input type="date" style={fieldStyle()} value={warranty} onChange={(e) => setWarranty(e.target.value)} /></Field>
-          </>
-        )}
+      <div style={{ padding: "18px 20px 0" }}>
+        <div style={{ fontSize: 14.5, fontWeight: 700 }}>Step {step + 1} of {WIZARD_STEPS.length}: {WIZARD_STEPS[step].label}</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{WIZARD_STEPS[step].desc}</div>
       </div>
+
+      {step === STEP_INFO && (
+        <div style={{ padding: "14px 20px 18px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="Requester"><div style={{ fontWeight: 600 }}>{task.requester_name || "—"}</div></Field>
+          <Field label="Department"><div>{task.requester_department || "—"}</div></Field>
+          <Field label="Position"><div>{task.position || "—"}</div></Field>
+          <Field label="Computer Type"><div>{task.computer_type || "—"}</div></Field>
+          <Field label="Employee No."><div>{task.requester_employee_no || "—"}</div></Field>
+          <Field label="Process"><div>{task.request_type || "—"}</div></Field>
+          <Field label="Phone"><div>{task.phone_no || "—"}</div></Field>
+          <Field label="Submitted On"><div>{fmtDate(task.submitted_at)}</div></Field>
+          {task.justification && (
+            <div style={{ gridColumn: "1 / -1" }}>
+              <Field label="Justification"><div style={{ background: "var(--surface-soft)", padding: 10, borderRadius: 6 }}>{task.justification}</div></Field>
+            </div>
+          )}
+        </div>
+      )}
+
+      {step === STEP_OFFICER && (
+        <div style={{ padding: "14px 20px 18px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="Assigned To">
+            <select style={fieldStyle()} value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+              <option value="">Select IT Officer</option>
+              {staff.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
+            </select>
+          </Field>
+          <Field label="Provisioning Status"><div style={{ padding: "7px 0" }}><StatusBadge status={task.status} /></div></Field>
+        </div>
+      )}
+
+      {step === STEP_SOURCE && (
+        <div style={{ padding: "14px 20px 18px" }}>
+          <Field label="Device Source">
+            <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
+              {[["NEW_STOCK", "New Stock"], ["EXISTING_STOCK", "Existing Stock"], ["REPLACEMENT_DEVICE", "Replacement Device"]].map(([v, l]) => (
+                <label key={v} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: "pointer" }}>
+                  <input type="radio" checked={deviceSource === v} onChange={() => setDeviceSource(v)} /> {l}
+                </label>
+              ))}
+            </div>
+          </Field>
+        </div>
+      )}
+
+      {step === STEP_DEVICE && (
+        <div style={{ padding: "14px 20px 18px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="Asset Number *"><input style={fieldStyle()} value={assetNumber} onChange={(e) => setAssetNumber(e.target.value)} placeholder="ETL-LAP-00482" /></Field>
+          <Field label="Serial Number"><input style={fieldStyle()} value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} /></Field>
+          <Field label="Manufacturer"><input style={fieldStyle()} value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} placeholder="Lenovo" /></Field>
+          <Field label="Model"><input style={fieldStyle()} value={model} onChange={(e) => setModel(e.target.value)} placeholder="ThinkPad T14 Gen 5" /></Field>
+          <Field label="Operating System"><input style={fieldStyle()} value={os} onChange={(e) => setOs(e.target.value)} placeholder="Windows 11 Enterprise" /></Field>
+          <Field label="Hostname"><input style={fieldStyle()} value={hostname} onChange={(e) => setHostname(e.target.value)} /></Field>
+          <Field label="IP / Network Details"><input style={fieldStyle()} value={network} onChange={(e) => setNetwork(e.target.value)} /></Field>
+          <Field label="Warranty Expiry"><input type="date" style={fieldStyle()} value={warranty} onChange={(e) => setWarranty(e.target.value)} /></Field>
+        </div>
+      )}
+
+      {step === STEP_CHECKLIST && (
+        <div style={{ padding: "14px 20px 18px" }}>
+          {checklist.length === 0 ? (
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>No checklist items for this request.</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              {checklist.map((c, i) => (
+                <label key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={c.checked} onChange={(e) => {
+                    onSaveChecklist(checklist.map((item, idx) => (idx === i ? { ...item, checked: e.target.checked } : item)));
+                  }} />
+                  {c.label}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {step === STEP_SOFTWARE && (
+        <div style={{ padding: "14px 20px 18px" }}>
+          <table className="ep-table">
+            <thead><tr><th>Software</th><th style={{ width: 120 }}>Status</th></tr></thead>
+            <tbody>
+              {software.map((s, i) => (
+                <tr key={i}>
+                  <td style={{ fontSize: 13 }}>{s.name}</td>
+                  <td>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                      <input type="checkbox" checked={s.status === "INSTALLED"} onChange={(e) => {
+                        onSaveSoftware(software.map((item, idx) => (idx === i ? { ...item, status: (e.target.checked ? "INSTALLED" : "PENDING") as "INSTALLED" | "PENDING" } : item)));
+                      }} />
+                      {s.status === "INSTALLED" ? <span style={{ color: "#059669", fontWeight: 600 }}>Installed</span> : <span style={{ color: "var(--muted)" }}>Pending</span>}
+                    </label>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <input style={{ ...fieldStyle(), flex: 1 }} placeholder="Additional software" value={newSoftware} onChange={(e) => setNewSoftware(e.target.value)} />
+            <button className="ep-btn-outline" onClick={() => {
+              if (!newSoftware.trim()) return;
+              const next = [...software, { name: newSoftware.trim(), status: "PENDING" as const, is_standard: false }];
+              setNewSoftware("");
+              onSaveSoftware(next);
+            }}>+ Add Software</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: "0 20px 18px", display: "flex", gap: 8 }}>
         {step > 0 && <button className="ep-btn-outline" onClick={back} disabled={saving}>Back</button>}
         {step < WIZARD_STEPS.length - 1 && <button className="ep-btn" onClick={next} disabled={saving}>Next</button>}
-        {step === WIZARD_STEPS.length - 1 && <button className="ep-btn" onClick={finish} disabled={saving || !canFinish}>Finish</button>}
+        {step === WIZARD_STEPS.length - 1 && <button className="ep-btn" onClick={finish} disabled={saving}>Finish</button>}
         {alreadySet && <button className="ep-btn-outline" onClick={() => setEditing(false)} disabled={saving}>Cancel</button>}
       </div>
     </div>
@@ -905,6 +934,25 @@ function ValidationRow({ ok, label }: { ok: boolean; label: string }) {
 function CompletedSummary({ task }: { task: Task }) {
   return (
     <>
+      <div className="ep-panel">
+        <div className="ep-panel-head"><div className="ep-panel-title">Request Information</div></div>
+        <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="Requester"><div style={{ fontWeight: 600 }}>{task.requester_name || "—"}</div></Field>
+          <Field label="Department"><div>{task.requester_department || "—"}</div></Field>
+          <Field label="Position"><div>{task.position || "—"}</div></Field>
+          <Field label="Computer Type"><div>{task.computer_type || "—"}</div></Field>
+          <Field label="Employee No."><div>{task.requester_employee_no || "—"}</div></Field>
+          <Field label="Process"><div>{task.request_type || "—"}</div></Field>
+          <Field label="Phone"><div>{task.phone_no || "—"}</div></Field>
+          <Field label="Submitted On"><div>{fmtDate(task.submitted_at)}</div></Field>
+        </div>
+        {task.justification && (
+          <div style={{ padding: "0 20px 18px" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>Justification</div>
+            <div style={{ fontSize: 13, background: "var(--surface-soft)", padding: 10, borderRadius: 6 }}>{task.justification}</div>
+          </div>
+        )}
+      </div>
       <div className="ep-panel">
         <div className="ep-panel-head"><div className="ep-panel-title">Device Information</div></div>
         <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
