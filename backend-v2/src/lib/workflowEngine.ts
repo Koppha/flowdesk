@@ -103,6 +103,22 @@ export async function resolveRequesterManager(
   );
 }
 
+// The EXCO member for a given department (plain, non-ANY_ONE-group EXCO
+// steps route here) — extracted so both the resolution-time step loop below
+// and any later re-resolution (e.g. reassigning a pending step when an
+// employee moves departments) use the exact same lookup.
+export async function resolveDeptExco(
+  department: string
+): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
+  if (!department.trim()) return null;
+  return (
+    (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+      `SELECT id, full_name, title, email FROM users WHERE role = 'EXCO' AND is_active = true AND lower(trim(department)) = lower(trim($1)) LIMIT 1`,
+      [department]
+    ))[0] ?? null
+  );
+}
+
 export async function resolveWorkflowChain(params: {
   requestType: string;
   department: string;
@@ -242,12 +258,7 @@ export async function resolveWorkflowChain(params: {
     const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
     return stepCode === "EXCO" && !step.assigned_user_ids?.length && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
   });
-  const deptExco = hasDeptExcoStep && department.trim()
-    ? (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
-        `SELECT id, full_name, title, email FROM users WHERE role = 'EXCO' AND is_active = true AND lower(trim(department)) = lower(trim($1)) LIMIT 1`,
-        [department]
-      ))[0] ?? null
-    : null;
+  const deptExco = hasDeptExcoStep ? await resolveDeptExco(department) : null;
 
   // A plain (non-ANY_ONE-group) MANAGER or HOD step with no fixed
   // assigned_user_id routes to the REQUESTER's own manager (reporting_lines,
@@ -331,12 +342,27 @@ export async function resolveWorkflowChain(params: {
       hodManager = secondLevelManager;
     }
 
+    // Same collision, but for a step whose approver is a FIXED, single named
+    // pick in the workflow (e.g. a specific HOD hardcoded on this step) —
+    // if that person is also who the earlier dynamic Manager step resolved
+    // to, showing them twice in a row isn't a real second review, so
+    // escalate to their own manager instead of using the fixed pick as-is.
+    // Team/section ANY_ONE group steps are never a single named person, so
+    // they're excluded from this check.
+    const isSingleFixedPick = hasFixedAssignees && step.assigned_user_ids!.length === 1
+      && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+    let fixedAssigneeEscalation: Awaited<ReturnType<typeof resolveRequesterManager>> | null = null;
+    if (isSingleFixedPick && dynamicManagerAlreadyResolved && requesterManager && step.assigned_user_ids![0] === requesterManager.id) {
+      fixedAssigneeEscalation = await resolveRequesterManager(requesterManager.id);
+    }
+
     // Multiple people can be assigned to one step — whoever acts first
     // satisfies it. The other resolution paths (HR leadership, dept EXCO/
     // Manager lookup, requester override) only ever resolve to a single
     // person, so they stay single-element arrays.
     const approverIds: string[] =
       override               ? (override.id ? [override.id] : []) :
+      fixedAssigneeEscalation ? (fixedAssigneeEscalation.id ? [fixedAssigneeEscalation.id] : []) :
       hasFixedAssignees      ? step.assigned_user_ids! :
       isHrCode               ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : []) :
       isDeptExcoCode          ? (deptExco?.id ? [deptExco.id] : []) :
@@ -348,6 +374,7 @@ export async function resolveWorkflowChain(params: {
 
     const approverName =
       override               ? override.full_name :
+      fixedAssigneeEscalation ? fixedAssigneeEscalation.full_name :
       hasFixedAssignees      ? approverIds.map((id) => assignedUserMap.get(id)?.full_name || assignedUserMap.get(id)?.email).filter(Boolean).join(", ") || null :
       isHrCode               ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
       isDeptExcoCode          ? (deptExco?.full_name ?? null) :
@@ -357,6 +384,7 @@ export async function resolveWorkflowChain(params: {
 
     const approverTitle =
       override               ? override.title :
+      fixedAssigneeEscalation ? fixedAssigneeEscalation.title :
       hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.title ?? null) :
       isHrCode               ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
       isDeptExcoCode          ? (deptExco?.title ?? null) :
@@ -366,6 +394,7 @@ export async function resolveWorkflowChain(params: {
 
     const approverEmail =
       override               ? override.email :
+      fixedAssigneeEscalation ? fixedAssigneeEscalation.email :
       hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.email ?? null) :
       isHrCode               ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
       isDeptExcoCode          ? (deptExco?.email ?? null) :
@@ -383,7 +412,7 @@ export async function resolveWorkflowChain(params: {
     // Per-person contact details, in the same order as approverIds — the
     // fixed-assignee path can have more than one; every other path resolves
     // to at most one person, reusing the single name/title/email already computed.
-    const approvers = hasFixedAssignees
+    const approvers = (hasFixedAssignees && !fixedAssigneeEscalation)
       ? approverIds.map((id) => ({
           id,
           name: assignedUserMap.get(id)?.full_name ?? null,

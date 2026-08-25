@@ -429,7 +429,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
     const hasUnassignedManagerStep = steps.some((step) => isDynamicManagerOrHod(step).isManager);
     const hasUnassignedHodStep = steps.some((step) => isDynamicManagerOrHod(step).isHod);
     const requesterManager = (hasUnassignedManagerStep || hasUnassignedHodStep) ? await resolveRequesterManager(req.user!.userId) : null;
-    const hodEscalatedManager = (hasUnassignedManagerStep && hasUnassignedHodStep && requesterManager)
+    const hodEscalatedManager = (hasUnassignedManagerStep && requesterManager)
       ? await resolveRequesterManager(requesterManager.id)
       : null;
 
@@ -442,11 +442,21 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
       const stepAssignedIds: string[] = (step.assigned_user_ids as string[] | null)?.length
         ? (step.assigned_user_ids as string[])
         : (step.assigned_user_id ? [step.assigned_user_id] : []);
+      const isGroupStep = step.approval_mode === "ANY_ONE" && !!step.approval_group_name;
+      // A fixed single-person step (e.g. a hardcoded HOD pick) that happens to
+      // be the same person the dynamic Manager step above already resolved to
+      // isn't a real second review - escalate to their own manager instead,
+      // mirroring the dynamic-HOD collision handling above.
+      const fixedCollision = !isDynamicManager && !isDynamicHod && !isGroupStep
+        && stepAssignedIds.length === 1 && hasUnassignedManagerStep && requesterManager
+        && stepAssignedIds[0] === requesterManager.id;
       const approverIds =
         isHrCode
           ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : [])
           : (isDynamicManager || isDynamicHod)
           ? (dynamicManager?.id ? [dynamicManager.id] : [])
+          : fixedCollision
+          ? (hodEscalatedManager?.id ? [hodEscalatedManager.id] : [])
           : stepAssignedIds;
       const approverId = approverIds[0] || null;
       const approverName =
@@ -454,6 +464,8 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
           ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null)
           : (isDynamicManager || isDynamicHod)
           ? (dynamicManager?.full_name ?? null)
+          : fixedCollision
+          ? (hodEscalatedManager?.full_name ?? null)
           : approverIds.map((id) => assignedUserMap.get(id)?.full_name || assignedUserMap.get(id)?.email).filter(Boolean).join(", ") || null;
 
       if (!approverId && step.is_required && !step.skip_if_unassigned && isHrCode) {

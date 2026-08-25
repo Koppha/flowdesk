@@ -4,6 +4,7 @@ import { logger } from "./lib/logger.js";
 import { bootstrapSystem } from "./bootstrap/system.js";
 import { sendPendingChangeRequestFollowUps } from "./modules/custom-requests/custom-requests.routes.js";
 import { startVendorContractReminderWorker } from "./modules/vendor-contracts/vendor-contracts.routes.js";
+import { reassignAllPendingApprovals } from "./lib/approvalReassignment.js";
 
 await bootstrapSystem();
 
@@ -17,6 +18,27 @@ async function runFollowUpScheduler() {
 }
 runFollowUpScheduler();
 setInterval(runFollowUpScheduler, 24 * 60 * 60 * 1000);
+
+// Run once at startup then every 24 h: re-checks every pending advance/claim's
+// currently dynamically-resolved approval step against who that position
+// actually resolves to today, and reassigns + notifies when it's changed -
+// catches a manager becoming available (activated, moved, reporting line
+// fixed) after a request was already submitted against the old resolution.
+async function runApprovalReassignmentSweep() {
+  try {
+    const { reassignments, warnings } = await reassignAllPendingApprovals();
+    logger.info("approval_reassignment_sweep_completed", {
+      reassigned_count: reassignments.length,
+      warning_count: warnings.length,
+      reassignments,
+      warnings
+    });
+  } catch (err) {
+    logger.warn("approval_reassignment_sweep_failed", { error: String(err) });
+  }
+}
+runApprovalReassignmentSweep();
+setInterval(runApprovalReassignmentSweep, 24 * 60 * 60 * 1000);
 
 startVendorContractReminderWorker();
 

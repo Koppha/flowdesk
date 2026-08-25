@@ -13,6 +13,7 @@ import { createDepartmentGroup, createDivision, createManagerType, createSection
 import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
 import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
 import { generateDelegationReference, getDelegationRequestTypes, setDelegationRequestTypes, writeDelegationAudit } from "../../lib/delegations.js";
+import { reassignPendingRequestsForMovedEmployee } from "../../lib/approvalReassignment.js";
 
 const LoginSchema = z
   .object({
@@ -1754,11 +1755,12 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     const parsed = UpdateUserSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid user payload", parsed.error.flatten());
 
-    const existingUser = await query<{ is_active: boolean }>(
-      `SELECT is_active FROM users WHERE id=$1`, [req.params.id]
+    const existingUser = await query<{ is_active: boolean; department: string | null; division_id: string | null; section_id: string | null }>(
+      `SELECT is_active, department, division_id, section_id FROM users WHERE id=$1`, [req.params.id]
     );
     if (!existingUser[0]) throw notFound();
     const wasReactivated = existingUser[0].is_active === false && parsed.data.is_active === true;
+    const before = existingUser[0];
 
     const fields: string[] = [];
     const values: any[] = [];
@@ -1805,6 +1807,8 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
       email: string;
       role: string;
       department: string | null;
+      division_id: string | null;
+      section_id: string | null;
     }>(sql, values);
     if (!rows[0]) throw notFound();
 
@@ -1818,7 +1822,28 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
       });
     }
 
-    return res.json({ ...rows[0], groups: await getUserGroups(req.params.id) });
+    // If this move changed where the employee sits in the org, any of their
+    // own pending requests whose current approval step was dynamically
+    // resolved from their old placement (Manager/HOD/EXCO) may now point at
+    // the wrong person — best-effort, must never fail the move itself.
+    let reassignments: Awaited<ReturnType<typeof reassignPendingRequestsForMovedEmployee>> | null = null;
+    const orgChanged = rows[0].department !== before.department
+      || rows[0].division_id !== before.division_id
+      || rows[0].section_id !== before.section_id;
+    if (orgChanged) {
+      try {
+        reassignments = await reassignPendingRequestsForMovedEmployee(rows[0].id);
+      } catch (err) {
+        logger.warn("approval_reassignment_on_move_failed", { user_id: rows[0].id, error: serializeError(err) });
+      }
+    }
+
+    return res.json({
+      ...rows[0],
+      groups: await getUserGroups(req.params.id),
+      reassignments: reassignments?.reassignments ?? [],
+      reassignmentWarnings: reassignments?.warnings ?? []
+    });
   } catch (err) {
     return next(err);
   }

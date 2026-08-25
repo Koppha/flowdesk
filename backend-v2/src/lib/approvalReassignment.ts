@@ -1,0 +1,351 @@
+import { query } from "./db.js";
+import {
+  ChainStep,
+  getPendingGroup,
+  resolveDeptExco,
+  resolveRequesterManager,
+  resolveWorkflowChain
+} from "./workflowEngine.js";
+import { normalizeWorkflowRouteCode } from "./workflowRouting.js";
+import { isTravelAdvanceType } from "./travel.js";
+import { notifyAdvanceTask, notifyClaimTask } from "./notifications.js";
+
+// Statuses where a chain-bearing request still has a live pending approver -
+// mirrors the transition maps in advances.types.ts / claims.service.ts.
+const ADVANCE_PENDING_STATUSES = ["SUBMITTED", "COUNTERSIGNED", "HR_OFFICER", "APPROVED"];
+const CLAIM_PENDING_STATUSES = ["SUBMITTED", "MANAGER_APPROVED", "EXCO_APPROVED", "HR_OFFICER", "FINANCE_VERIFIED", "PAYMENT_PROCESSING"];
+
+export interface ReassignmentResult {
+  module: "advance" | "claim";
+  requestId: string;
+  requestType: string;
+  positionType: "MANAGER" | "HOD" | "EXCO";
+  oldApproverId: string | null;
+  oldApproverName: string | null;
+  newApproverId: string;
+  newApproverName: string | null;
+}
+
+export interface ReassignmentWarning {
+  module: "advance" | "claim";
+  requestId: string;
+  reason: string;
+}
+
+type ResolvedApprover = { id: string; full_name: string | null; title: string | null; email: string | null };
+
+// Only MANAGER/HOD/EXCO steps that resolved dynamically (no fixed assignee,
+// not an ANY_ONE org-unit group) are eligible for reassignment — everything
+// else (fixed picks, Team:/Section:/Department: group steps) is left alone.
+async function classifyDynamicStep(
+  workflowId: string,
+  step: ChainStep
+): Promise<"MANAGER" | "HOD" | "EXCO" | null> {
+  const rows = await query<{
+    position_type_code: string | null;
+    position_name: string;
+    assigned_user_id: string | null;
+    assigned_user_ids: string[] | null;
+    approval_mode: string;
+    approval_group_name: string | null;
+  }>(
+    `SELECT position_type_code, position_name, assigned_user_id, assigned_user_ids, approval_mode, approval_group_name
+       FROM workflow_steps WHERE workflow_id=$1 AND step_order=$2 LIMIT 1`,
+    [workflowId, step.step_order]
+  );
+  const def = rows[0];
+  if (!def) return null;
+  const code = normalizeWorkflowRouteCode(def.position_type_code, def.position_name);
+  if (code !== "MANAGER" && code !== "HOD" && code !== "EXCO") return null;
+  const hasFixedAssignees = !!def.assigned_user_id || !!(def.assigned_user_ids && def.assigned_user_ids.length);
+  const isGroupStep = def.approval_mode === "ANY_ONE" && !!def.approval_group_name;
+  if (hasFixedAssignees || isGroupStep) return null;
+  return code;
+}
+
+// Re-resolves who should fill a dynamic step, exactly mirroring
+// resolveWorkflowChain's own step-building logic (workflowEngine.ts) so a
+// reassignment never disagrees with what a fresh submission would produce.
+async function resolveDynamicApprover(
+  positionCode: "MANAGER" | "HOD" | "EXCO",
+  movedUserId: string,
+  department: string | null,
+  chain: ChainStep[],
+  stepIdx: number
+): Promise<ResolvedApprover | null> {
+  if (positionCode === "EXCO") return resolveDeptExco(department || "");
+
+  const candidate = await resolveRequesterManager(movedUserId);
+  if (positionCode !== "HOD" || !candidate) return candidate;
+
+  // Collision avoidance: if an earlier step in this same stored chain is a
+  // MANAGER position already resolved to this same person, escalate one
+  // level further so the same approver doesn't land on two steps — mirrors
+  // resolveWorkflowChain's dynamicManagerAlreadyResolved/secondLevelManager.
+  const earlierManagerHit = chain
+    .slice(0, stepIdx)
+    .some((s) => normalizeWorkflowRouteCode(s.position_type_code, s.position_name) === "MANAGER" && s.approver_id === candidate.id);
+  if (!earlierManagerHit) return candidate;
+  return resolveRequesterManager(candidate.id);
+}
+
+function patchStep(step: ChainStep, resolved: ResolvedApprover) {
+  step.approver_id = resolved.id;
+  step.approver_ids = [resolved.id];
+  step.approver_name = resolved.full_name;
+  step.approver_title = resolved.title;
+  step.approver_email = resolved.email;
+  step.approvers = [{ id: resolved.id, name: resolved.full_name, email: resolved.email, title: resolved.title }];
+}
+
+async function writeAudit(action: string, entityType: string, requestId: string, actorId: string | null, before: unknown, after: unknown) {
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [actorId, action, entityType, requestId, JSON.stringify(before), JSON.stringify(after)]
+  );
+}
+
+// requesterId: reassign only this person's own pending requests (the
+// employee-move trigger). null: sweep every requester's pending requests
+// (the daily cron sweep) - each row is still resolved against its own
+// requester, never the caller's identity.
+async function reassignAdvances(
+  requesterId: string | null,
+  actorId: string | null,
+  auditAction: string,
+  reassignments: ReassignmentResult[],
+  warnings: ReassignmentWarning[]
+) {
+  const rows = await query<{
+    id: string;
+    requester_id: string;
+    type: string;
+    workflow_id: string;
+    workflow_step_order: number | null;
+    approval_chain: ChainStep[];
+    requester_department: string | null;
+    requester_section: string | null;
+    division: string | null;
+    role: string;
+  }>(
+    `SELECT ar.id, ar.requester_id, ar.type, ar.workflow_id, ar.workflow_step_order, ar.approval_chain,
+            u.department AS requester_department, s.name AS requester_section,
+            d.name AS division, u.role
+       FROM advance_requests ar
+       JOIN users u ON u.id = ar.requester_id
+       LEFT JOIN sections s ON s.id = u.section_id
+       LEFT JOIN divisions d ON d.id = u.division_id
+      WHERE ($1::uuid IS NULL OR ar.requester_id = $1)
+        AND ar.status = ANY($2)
+        AND ar.approval_chain IS NOT NULL
+        AND ar.workflow_id IS NOT NULL`,
+    [requesterId, ADVANCE_PENDING_STATUSES]
+  );
+
+  for (const row of rows) {
+    const chain = row.approval_chain;
+    const stepIdx = row.workflow_step_order ?? 0;
+    const group = getPendingGroup(chain, stepIdx);
+    let changed = false;
+    let lastPatched: ResolvedApprover | null = null;
+
+    for (const idx of group.indices) {
+      const step = chain[idx];
+      if (!step) continue;
+      const positionCode = await classifyDynamicStep(row.workflow_id, step);
+      if (!positionCode) continue;
+
+      const resolved = await resolveDynamicApprover(positionCode, row.requester_id, row.requester_department, chain, idx);
+      if (!resolved) {
+        warnings.push({ module: "advance", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
+        continue;
+      }
+      if (resolved.id === step.approver_id) continue;
+
+      const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: positionCode };
+      reassignments.push({
+        module: "advance", requestId: row.id, requestType: row.type, positionType: positionCode,
+        oldApproverId: step.approver_id, oldApproverName: step.approver_name,
+        newApproverId: resolved.id, newApproverName: resolved.full_name
+      });
+      patchStep(step, resolved);
+      changed = true;
+      lastPatched = resolved;
+      await writeAudit(auditAction, "advance_requests", row.id, actorId, before, { approver_id: resolved.id, approver_name: resolved.full_name });
+    }
+
+    if (!changed) continue;
+
+    // Safety net: if the org move changed which workflow applies (not just
+    // who fills a role), step-patching alone can't fix that — flag it.
+    const needsAccommodation = (await isTravelAdvanceType(row.type))
+      ? Number(
+          (await query<{ count: string }>(`SELECT count(*)::text AS count FROM advance_lines WHERE advance_request_id=$1`, [row.id]))[0]?.count ?? "0"
+        ) > 1
+      : false;
+    const probe = await resolveWorkflowChain({
+      requestType: "ADVANCE_REQUEST",
+      department: row.requester_department || "",
+      division: row.division || "",
+      section: row.requester_section || "",
+      advanceSubType: row.type,
+      needsAccommodation,
+      requesterRole: row.role,
+      requesterId: row.requester_id
+    });
+    if (!probe || probe.workflowId !== row.workflow_id) {
+      warnings.push({ module: "advance", requestId: row.id, reason: "This request's current placement now matches a different workflow entirely — review manually" });
+    }
+
+    await query(`UPDATE advance_requests SET approval_chain=$1, updated_at=now() WHERE id=$2`, [JSON.stringify(chain), row.id]);
+
+    if (lastPatched) {
+      void notifyAdvanceTask({
+        advanceId: row.id,
+        status: chainStepStatusForNotify(chain, stepIdx),
+        advanceType: row.type,
+        requesterName: null,
+        department: row.requester_department,
+        requestedTotal: 0,
+        nextApprover: { id: lastPatched.id, name: lastPatched.full_name, email: lastPatched.email, title: lastPatched.title },
+        stepOrder: stepIdx
+      });
+    }
+  }
+}
+
+// notifyAdvanceTask keys its email wording off `status`, not the chain
+// itself - reuse the request's own status label rather than re-deriving it,
+// since we only need "who to notify", not a status transition here.
+function chainStepStatusForNotify(chain: ChainStep[], stepIdx: number): string {
+  const step = chain[stepIdx];
+  if (!step) return "SUBMITTED";
+  if (step.position_type_code.startsWith("HR_")) return "HR_OFFICER";
+  if (step.position_type_code === "MANAGER") return "SUBMITTED";
+  if (["HOD", "EXCO", "CEO"].includes(step.position_type_code)) return "COUNTERSIGNED";
+  return "SUBMITTED";
+}
+
+async function reassignClaims(
+  requesterId: string | null,
+  actorId: string | null,
+  auditAction: string,
+  reassignments: ReassignmentResult[],
+  warnings: ReassignmentWarning[]
+) {
+  const rows = await query<{
+    id: string;
+    claimant_id: string;
+    workflow_id: string;
+    workflow_step_order: number | null;
+    approval_chain: ChainStep[];
+    claimant_department: string | null;
+    claimant_section: string | null;
+    linked_advance_type: string | null;
+  }>(
+    `SELECT c.id, c.claimant_id, c.workflow_id, c.workflow_step_order, c.approval_chain,
+            u.department AS claimant_department, s.name AS claimant_section,
+            ar.type AS linked_advance_type
+       FROM clearance_claims c
+       JOIN users u ON u.id = c.claimant_id
+       LEFT JOIN sections s ON s.id = u.section_id
+       LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
+      WHERE ($1::uuid IS NULL OR c.claimant_id = $1)
+        AND c.status = ANY($2)
+        AND c.approval_chain IS NOT NULL
+        AND c.workflow_id IS NOT NULL`,
+    [requesterId, CLAIM_PENDING_STATUSES]
+  );
+
+  for (const row of rows) {
+    const chain = row.approval_chain;
+    const stepIdx = row.workflow_step_order ?? 0;
+    const group = getPendingGroup(chain, stepIdx);
+    let changed = false;
+    let lastPatched: ResolvedApprover | null = null;
+
+    for (const idx of group.indices) {
+      const step = chain[idx];
+      if (!step) continue;
+      const positionCode = await classifyDynamicStep(row.workflow_id, step);
+      if (!positionCode) continue;
+
+      const resolved = await resolveDynamicApprover(positionCode, row.claimant_id, row.claimant_department, chain, idx);
+      if (!resolved) {
+        warnings.push({ module: "claim", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
+        continue;
+      }
+      if (resolved.id === step.approver_id) continue;
+
+      const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: positionCode };
+      reassignments.push({
+        module: "claim", requestId: row.id, requestType: "CLEARANCE_REQUEST", positionType: positionCode,
+        oldApproverId: step.approver_id, oldApproverName: step.approver_name,
+        newApproverId: resolved.id, newApproverName: resolved.full_name
+      });
+      patchStep(step, resolved);
+      changed = true;
+      lastPatched = resolved;
+      await writeAudit(auditAction, "clearance_claims", row.id, actorId, before, { approver_id: resolved.id, approver_name: resolved.full_name });
+    }
+
+    if (!changed) continue;
+
+    const probe = await resolveWorkflowChain({
+      requestType: "CLEARANCE_REQUEST",
+      department: row.claimant_department || "",
+      section: row.claimant_section || "",
+      advanceSubType: row.linked_advance_type || undefined,
+      requesterId: row.claimant_id
+    });
+    if (!probe || probe.workflowId !== row.workflow_id) {
+      warnings.push({ module: "claim", requestId: row.id, reason: "This request's current placement now matches a different workflow entirely — review manually" });
+    }
+
+    await query(`UPDATE clearance_claims SET approval_chain=$1, updated_at=now() WHERE id=$2`, [JSON.stringify(chain), row.id]);
+
+    if (lastPatched) {
+      void notifyClaimTask({
+        claimId: row.id,
+        status: chainStepStatusForNotify(chain, stepIdx),
+        claimantName: null,
+        department: row.claimant_department,
+        claimTotal: 0,
+        nextApprover: { id: lastPatched.id, name: lastPatched.full_name, email: lastPatched.email, title: lastPatched.title },
+        stepOrder: stepIdx
+      });
+    }
+  }
+}
+
+// Best-effort: called after PUT /users/:id commits a department/division/
+// section change. Never throws — a failure here must not fail the employee
+// move itself, only skip the (auditable, retryable) reassignment side effect.
+export async function reassignPendingRequestsForMovedEmployee(movedUserId: string): Promise<{
+  reassignments: ReassignmentResult[];
+  warnings: ReassignmentWarning[];
+}> {
+  const reassignments: ReassignmentResult[] = [];
+  const warnings: ReassignmentWarning[] = [];
+  await reassignAdvances(movedUserId, movedUserId, "APPROVAL_STEP_REASSIGNED_ON_MOVE", reassignments, warnings);
+  await reassignClaims(movedUserId, movedUserId, "APPROVAL_STEP_REASSIGNED_ON_MOVE", reassignments, warnings);
+  return { reassignments, warnings };
+}
+
+// Daily sweep (see index.ts) covering every requester, not just one just-
+// moved employee - catches the case this feature was actually built for:
+// a request went out to nobody-resolvable (or a stale approver) days ago,
+// and the right person (e.g. a manager whose account was inactive/unset)
+// has since become available. actor_id is left null on the audit trail to
+// mark these as system-triggered rather than admin-triggered.
+export async function reassignAllPendingApprovals(): Promise<{
+  reassignments: ReassignmentResult[];
+  warnings: ReassignmentWarning[];
+}> {
+  const reassignments: ReassignmentResult[] = [];
+  const warnings: ReassignmentWarning[] = [];
+  await reassignAdvances(null, null, "APPROVAL_STEP_REASSIGNED_BY_SWEEP", reassignments, warnings);
+  await reassignClaims(null, null, "APPROVAL_STEP_REASSIGNED_BY_SWEEP", reassignments, warnings);
+  return { reassignments, warnings };
+}
