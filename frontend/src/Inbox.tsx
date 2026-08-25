@@ -1050,7 +1050,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       requestedTotal: formatMoney(detail.requested_total, detail.travel_currency),
       approvedTotal: formatMoney(detail.approved_total, detail.travel_currency),
       paymentMethod: detail.payment_method || "—",
-      paymentAccount: detail.payment_account || ""
+      paymentAccount: detail.payment_account || "",
+      extraCost: Number(detail.extra_cost_amount || 0) > 0 ? formatMoney(detail.extra_cost_amount, detail.travel_currency) : null,
+      extraCostDescription: detail.extra_cost_description || null
     };
   }, [item.doc_type, detail, travelTypes]);
 
@@ -1846,6 +1848,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     <ReviewField icon={CreditCard} label="Requested Total" value={pdfFormSummary.requestedTotal} />
                     <ReviewField icon={CreditCard} label="Approved Total" value={pdfFormSummary.approvedTotal} />
                     <ReviewField icon={CreditCard} label="Payment" value={`${pdfFormSummary.paymentMethod} ${pdfFormSummary.paymentAccount}`} />
+                    {pdfFormSummary.extraCost && (
+                      <ReviewField
+                        icon={CreditCard}
+                        label="Extra Cost"
+                        value={pdfFormSummary.extraCostDescription ? `${pdfFormSummary.extraCost} — ${pdfFormSummary.extraCostDescription}` : pdfFormSummary.extraCost}
+                      />
+                    )}
                   </div>
                 </>
               ) : (
