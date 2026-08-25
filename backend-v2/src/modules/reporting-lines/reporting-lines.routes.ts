@@ -471,15 +471,24 @@ reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO
                 )
             ),
             -- Department-level tier only for employees with no section of
-            -- their own to be resolved through first.
+            -- their own to be resolved through first. Unlike section_fallback
+            -- above, getDepartmentLeadership does NOT derive this live from
+            -- role+department - it reads departments.manager_user_id/
+            -- hod_user_id/exco_user_id, a single explicitly-set column per
+            -- role. Matching that exactly (instead of "any manager in the
+            -- same department") avoids showing the same unassigned employees
+            -- under every manager who happens to share that department, and
+            -- avoids attributing them to the wrong one when the department's
+            -- real designated fallback is someone else entirely.
             department_fallback AS (
-              SELECT u.id FROM users u, viewer v
-              WHERE u.department = v.department AND u.id <> v.id AND u.section_id IS NULL
+              SELECT u.id FROM users u, viewer v, departments d
+              WHERE u.department = v.department AND u.department = d.name
+                AND u.id <> v.id AND u.section_id IS NULL
                 AND NOT EXISTS (SELECT 1 FROM reporting_lines rl WHERE rl.employee_id = u.id AND rl.is_active = true)
                 AND (
-                  (u.role::text = 'EMPLOYEE' AND v.role = 'MANAGER') OR
-                  (u.role::text = 'MANAGER' AND v.role = 'HOD') OR
-                  (u.role::text = 'HOD' AND v.role = 'EXCO')
+                  (u.role::text = 'EMPLOYEE' AND v.role = 'MANAGER' AND d.manager_user_id = v.id) OR
+                  (u.role::text = 'MANAGER' AND v.role = 'HOD' AND d.hod_user_id = v.id) OR
+                  (u.role::text = 'HOD' AND v.role = 'EXCO' AND d.exco_user_id = v.id)
                 )
             ),
             team_ids AS (
