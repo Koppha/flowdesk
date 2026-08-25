@@ -1304,17 +1304,25 @@ export default function App() {
       ]);
     }
 
+    // Guards against an older request (e.g. for a previously-selected advance
+    // type) resolving after a newer one and clobbering its result - without
+    // this, advanceApprovalChain and advanceWorkflowFound could each end up
+    // reflecting a *different* request, showing a resolved chain and the
+    // "no workflow" custom-picker fallback at the same time.
+    let cancelled = false;
+
     if (!dept) {
       setAdvanceApprovalChain([]);
       setAdvanceWorkflowFound(false);
       loadCustomChainData();
-      return;
+      return () => { cancelled = true; };
     }
     setAdvanceWorkflowFound(null);
     // Pass the selected advance sub-type (and requester role) so the backend can
     // prefer a sub-type-specific and/or role-restricted workflow.
     api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, role, profile?.division_name || undefined)
       .then((result: any) => {
+        if (cancelled) return;
         const chain: any[] = Array.isArray(result?.chain) ? result.chain : [];
         const filtered = chain.filter((s: any) => s.position_type_code !== "EMPLOYEE");
         setAdvanceApprovalChain(
@@ -1334,10 +1342,13 @@ export default function App() {
         if (!found) loadCustomChainData();
       })
       .catch(() => {
+        if (cancelled) return;
         setAdvanceApprovalChain([]);
         setAdvanceWorkflowFound(false);
         loadCustomChainData();
       });
+
+    return () => { cancelled = true; };
   }, [page, profile?.department, profile?.division_name, profile?.section_name, advanceType, role]);
 
   async function refresh() {
