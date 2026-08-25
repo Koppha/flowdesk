@@ -4,18 +4,24 @@ import { randomUUID } from "crypto";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departments.js";
+import { getDepartmentLeadership, getSectionLeadership, listDepartmentGroups } from "../../lib/departments.js";
 import { getDelegationsForManager } from "../../lib/delegations.js";
 
 const OPEN_ADVANCE_STATUSES = "('SUBMITTED','COUNTERSIGNED','HR_REVIEW','HR_OFFICER','APPROVED')";
 const OPEN_CLAIM_STATUSES = "('SUBMITTED','MANAGER_APPROVED','EXCO_APPROVED','FINANCE_VERIFIED','HR_OFFICER','PAYMENT_PROCESSING')";
 
-// Falls back to department leadership when no reporting_lines row exists yet,
-// mirroring the chain used by /reporting-lines/auto-generate: EXCO -> CEO,
-// HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else -> MANAGER/HOD/EXCO.
+// Falls back to leadership when no reporting_lines row exists yet, mirroring
+// resolveRequesterManager in workflowEngine.ts: EXCO -> CEO, otherwise the
+// closest available leadership first - the requester's SECTION (a strictly
+// closer org unit than their department, e.g. Technical's four sections
+// each have their own real HOD) - then their department as a broader last
+// resort. HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else -> MANAGER/HOD/EXCO
+// at each level. (/reporting-lines/auto-generate is a separate bulk admin
+// tool that doesn't go through this function and is department-only today -
+// not updated here, out of scope for this fix.)
 async function getFallbackManagerId(userId: string): Promise<string | null> {
-  const userRows = await query<{ role: string; department: string | null }>(
-    `SELECT role::text AS role, department FROM users WHERE id = $1`,
+  const userRows = await query<{ role: string; department: string | null; section_id: string | null }>(
+    `SELECT role::text AS role, department, section_id FROM users WHERE id = $1`,
     [userId]
   );
   const user = userRows[0];
@@ -28,12 +34,18 @@ async function getFallbackManagerId(userId: string): Promise<string | null> {
     return ceoRows[0]?.id ?? null;
   }
 
-  if (!user.department) return null;
-  const leadership = await getDepartmentLeadership(user.department);
+  const fallbackId = (leadership: { hod_user_id: string | null; manager_user_id: string | null; exco_user_id: string | null }) => {
+    if (user.role === "HOD") return leadership.exco_user_id ?? null;
+    if (user.role === "MANAGER") return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+    return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+  };
 
-  if (user.role === "HOD") return leadership.exco_user_id ?? null;
-  if (user.role === "MANAGER") return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
-  return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+  if (user.section_id) {
+    const sectionId = fallbackId(await getSectionLeadership(user.section_id));
+    if (sectionId) return sectionId;
+  }
+  if (!user.department) return null;
+  return fallbackId(await getDepartmentLeadership(user.department));
 }
 
 export const reportingLinesRouter = Router();

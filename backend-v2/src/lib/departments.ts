@@ -967,6 +967,55 @@ export async function getDepartmentLeadership(departmentInput: string) {
   };
 }
 
+// Section-level leadership, for the "closest fallback available" step in
+// resolveRequesterManager (workflowEngine.ts) - a section is a strictly
+// closer org unit than its parent department, so it should be tried first.
+// Derived live from who currently holds each role *tagged to this section*
+// (users.role + users.section_id) rather than sections.hod_user_id/
+// manager_user_id/exco_user_id - those dedicated fields exist but are almost
+// never populated in practice (same as the equivalent department fields
+// above), while a real person holding the role is reliably findable this
+// way - e.g. Technical's four sections each have a real HOD by role, even
+// though sections.hod_user_id is blank for all of them.
+export async function getSectionLeadership(sectionId: string) {
+  if (!sectionId) {
+    return {
+      section_id: null,
+      hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
+      manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
+      exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
+    };
+  }
+  const rows = await query<{
+    hod_user_id: string | null; hod_name: string | null; hod_title: string | null; hod_email: string | null;
+    manager_user_id: string | null; manager_name: string | null; manager_title: string | null; manager_email: string | null;
+    exco_user_id: string | null; exco_name: string | null; exco_title: string | null; exco_email: string | null;
+  }>(
+    `SELECT hod.id AS hod_user_id, hod.full_name AS hod_name, hod.title AS hod_title, hod.email AS hod_email,
+            mgr.id AS manager_user_id, mgr.full_name AS manager_name, mgr.title AS manager_title, mgr.email AS manager_email,
+            exco.id AS exco_user_id, exco.full_name AS exco_name, exco.title AS exco_title, exco.email AS exco_email
+       FROM (SELECT 1) placeholder
+       LEFT JOIN LATERAL (
+         SELECT id, full_name, title, email FROM users WHERE section_id=$1 AND role='HOD' AND is_active=true ORDER BY full_name LIMIT 1
+       ) hod ON true
+       LEFT JOIN LATERAL (
+         SELECT id, full_name, title, email FROM users WHERE section_id=$1 AND role='MANAGER' AND is_active=true ORDER BY full_name LIMIT 1
+       ) mgr ON true
+       LEFT JOIN LATERAL (
+         SELECT id, full_name, title, email FROM users WHERE section_id=$1 AND role='EXCO' AND is_active=true ORDER BY full_name LIMIT 1
+       ) exco ON true`,
+    [sectionId]
+  );
+  return rows[0]
+    ? { section_id: sectionId, ...rows[0] }
+    : {
+        section_id: sectionId,
+        hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
+        manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
+        exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
+      };
+}
+
 // ─── Manager Types ────────────────────────────────────────────────────────────
 
 export type ManagerType = {

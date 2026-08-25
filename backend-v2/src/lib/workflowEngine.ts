@@ -1,5 +1,5 @@
 import { query } from "./db.js";
-import { getDepartmentLeadership } from "./departments.js";
+import { getDepartmentLeadership, getSectionLeadership } from "./departments.js";
 import { isCompensationFinanceSection } from "./financeAuthority.js";
 import { getUserGroups } from "./permissionGroups.js";
 import { normalizeWorkflowRouteCode } from "./workflowRouting.js";
@@ -60,9 +60,12 @@ export function getPendingGroup(chain: ChainStep[], stepIdx: number): { indices:
 }
 
 // Mirrors getFallbackManagerId in reporting-lines.routes.ts: the requester's
-// active reporting_lines manager, falling back to their department's
-// leadership chain (HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else ->
-// MANAGER/HOD/EXCO) when no reporting_lines row exists yet.
+// active reporting_lines manager, falling back to the closest available
+// leadership when no reporting_lines row exists yet - their SECTION's
+// leadership first (a strictly closer org unit - e.g. Technical's four
+// sections each have their own real HOD), then their department's, as a
+// broader last resort. Same HOD -> EXCO / MANAGER -> HOD/EXCO / everyone
+// else -> MANAGER/HOD/EXCO chain at each level.
 export async function resolveRequesterManager(
   requesterId: string
 ): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
@@ -73,16 +76,21 @@ export async function resolveRequesterManager(
   let managerId = lineRows[0]?.manager_id ?? null;
 
   if (!managerId || managerId === requesterId) {
-    const requesterRows = await query<{ role: string; department: string | null }>(
-      `SELECT role::text AS role, department FROM users WHERE id = $1`,
+    const requesterRows = await query<{ role: string; department: string | null; section_id: string | null }>(
+      `SELECT role::text AS role, department, section_id FROM users WHERE id = $1`,
       [requesterId]
     );
     const requesterUser = requesterRows[0];
-    if (requesterUser?.department) {
-      const leadership = await getDepartmentLeadership(requesterUser.department);
-      if (requesterUser.role === "HOD") managerId = leadership.exco_user_id ?? null;
-      else if (requesterUser.role === "MANAGER") managerId = leadership.hod_user_id ?? leadership.exco_user_id ?? null;
-      else managerId = leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+    const fallbackId = (leadership: { hod_user_id: string | null; manager_user_id: string | null; exco_user_id: string | null }) => {
+      if (requesterUser!.role === "HOD") return leadership.exco_user_id ?? null;
+      if (requesterUser!.role === "MANAGER") return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+      return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
+    };
+    if (requesterUser?.section_id) {
+      managerId = fallbackId(await getSectionLeadership(requesterUser.section_id));
+    }
+    if ((!managerId || managerId === requesterId) && requesterUser?.department) {
+      managerId = fallbackId(await getDepartmentLeadership(requesterUser.department));
     }
   }
 
@@ -410,6 +418,88 @@ export async function resolveWorkflowChain(params: {
   }
 
   return { workflowId: (workflow as any).id, chain };
+}
+
+// Synthesizes a 4-step chain for a requester whose department/section has no
+// configured workflow at all - used only when resolveWorkflowChain returns
+// null and the requester has supplied exactly two named approvers via the
+// "Custom Approval Chain" fallback (see advances.routes.ts /:id/submit).
+// Ends in the same Treasury capture/mark-paid group steps every real
+// workflow uses (group-resolved via getUserGroups, same mechanism
+// canApproveStep already relies on for every ANY_ONE step - no hardcoded
+// user ids), so the request flows through the identical downstream
+// inbox/payment machinery as any normally-routed one.
+export async function buildAdHocChain(
+  overrideChain: { label: string; user_id: string; user_name?: string }[]
+): Promise<ChainStep[]> {
+  const counterSigner = overrideChain.find((o) => o.label === "Counter Signed By");
+  const approver = overrideChain.find((o) => o.label === "Approved By");
+  if (!counterSigner || !approver) return [];
+
+  const users = await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+    `SELECT id, full_name, title, email FROM users WHERE id = ANY($1) AND is_active = true`,
+    [[counterSigner.user_id, approver.user_id]]
+  );
+  const byId = new Map(users.map((u) => [u.id, u]));
+  const counterSignerUser = byId.get(counterSigner.user_id);
+  const approverUser = byId.get(approver.user_id);
+  if (!counterSignerUser || !approverUser) return [];
+
+  const namedStep = (
+    stepOrder: number,
+    positionTypeCode: string,
+    positionName: string,
+    actionType: string,
+    u: { id: string; full_name: string | null; title: string | null; email: string | null },
+    finalApproval: boolean
+  ): ChainStep => ({
+    step_order: stepOrder,
+    position_type_code: positionTypeCode,
+    position_name: positionName,
+    approver_id: u.id,
+    approver_ids: [u.id],
+    approver_name: u.full_name,
+    approver_title: u.title,
+    approver_email: u.email,
+    approvers: [{ id: u.id, name: u.full_name, email: u.email, title: u.title }],
+    required: true,
+    final_approval: finalApproval,
+    approval_mode: "SINGLE",
+    approval_group_name: null,
+    requires_accommodation: false,
+    parallel_with_previous: false,
+    action_type: actionType,
+    can_reject: true,
+    can_rollback: true
+  });
+
+  const treasuryStep = (stepOrder: number, actionType: string): ChainStep => ({
+    step_order: stepOrder,
+    position_type_code: "MANAGER",
+    position_name: "Team: Treasury & Financial Accounting",
+    approver_id: null,
+    approver_ids: [],
+    approver_name: null,
+    approver_title: null,
+    approver_email: null,
+    approvers: [],
+    required: true,
+    final_approval: false,
+    approval_mode: "ANY_ONE",
+    approval_group_name: "Team: Treasury & Financial Accounting",
+    requires_accommodation: false,
+    parallel_with_previous: false,
+    action_type: actionType,
+    can_reject: true,
+    can_rollback: true
+  });
+
+  return [
+    namedStep(0, "MANAGER", "Counter Signed By", "COUNTER_SIGN", counterSignerUser, false),
+    namedStep(1, "EXCO", "Approved By", "APPROVE", approverUser, true),
+    treasuryStep(2, "DEPT_CAPTURE"),
+    treasuryStep(3, "MARK_PAID")
+  ];
 }
 
 // Maps workflow position_type_code to advance_requests.status for the given step.
