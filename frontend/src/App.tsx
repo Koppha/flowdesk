@@ -1409,7 +1409,12 @@ export default function App() {
     setReportClaims(Array.isArray(allClaimsResp) ? allClaimsResp : []);
     const rawInboxItems: any[] = Array.isArray(i.items) ? i.items : [];
     const nonSplitInboxItems = rawInboxItems.filter((it) => !isCaptureItem(it) && !isPaymentItem(it));
-    const inboxItemCount = nonSplitInboxItems.length;
+    // The Inbox list itself shows every item you're relevant to (including
+    // ones already past your own step, kept for visibility/tracking), but
+    // the badge count must only reflect items actually waiting on YOUR
+    // action right now - otherwise it stays inflated with things already
+    // approved by you or not yet reached your step.
+    const inboxItemCount = nonSplitInboxItems.filter((it) => it.current_step_actionable_by_me === true).length;
     setInboxCount(inboxItemCount);
     setInboxItems(nonSplitInboxItems);
     setCaptureCount(rawInboxItems.filter(isCapturePendingItem).length);
@@ -1489,7 +1494,9 @@ export default function App() {
         const resp: { items?: any[] } = await api.inbox();
         const rawItems: any[] = Array.isArray(resp.items) ? resp.items : [];
         const nonSplitItems = rawItems.filter((it) => !isCaptureItem(it) && !isPaymentItem(it));
-        const fresh = nonSplitItems.length;
+        // Same fix as the initial load: only count items actually actionable
+        // by you right now, not everything you're peripherally relevant to.
+        const fresh = nonSplitItems.filter((it) => it.current_step_actionable_by_me === true).length;
         setCaptureCount(rawItems.filter(isCapturePendingItem).length);
         const prev = knownInboxCount.current;
         if (fresh > prev) {

@@ -448,7 +448,46 @@ reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO
   try {
     const managerId = req.user!.userId;
     const members = await query<any>(
-      `SELECT u.id, u.full_name, u.email, u.title, u.role::text AS role, u.department, u.is_active,
+      `WITH viewer AS (SELECT id, role::text AS role, department, section_id FROM users WHERE id = $1),
+            explicit_reports AS (
+              SELECT u.id FROM users u
+              JOIN reporting_lines rl ON rl.employee_id = u.id AND rl.is_active = true
+              WHERE rl.manager_id = $1
+            ),
+            -- Same role-tier fallback resolveRequesterManager uses at
+            -- submit time (EMPLOYEE -> section MANAGER, MANAGER -> section
+            -- HOD, HOD -> section EXCO) - anyone without a personal
+            -- reporting_lines row who'd resolve to this viewer as their
+            -- approver belongs on their team too, or "My Team" stays empty
+            -- for every manager who only has fallback-resolved reports.
+            section_fallback AS (
+              SELECT u.id FROM users u, viewer v
+              WHERE u.section_id = v.section_id AND u.id <> v.id
+                AND NOT EXISTS (SELECT 1 FROM reporting_lines rl WHERE rl.employee_id = u.id AND rl.is_active = true)
+                AND (
+                  (u.role::text = 'EMPLOYEE' AND v.role = 'MANAGER') OR
+                  (u.role::text = 'MANAGER' AND v.role = 'HOD') OR
+                  (u.role::text = 'HOD' AND v.role = 'EXCO')
+                )
+            ),
+            -- Department-level tier only for employees with no section of
+            -- their own to be resolved through first.
+            department_fallback AS (
+              SELECT u.id FROM users u, viewer v
+              WHERE u.department = v.department AND u.id <> v.id AND u.section_id IS NULL
+                AND NOT EXISTS (SELECT 1 FROM reporting_lines rl WHERE rl.employee_id = u.id AND rl.is_active = true)
+                AND (
+                  (u.role::text = 'EMPLOYEE' AND v.role = 'MANAGER') OR
+                  (u.role::text = 'MANAGER' AND v.role = 'HOD') OR
+                  (u.role::text = 'HOD' AND v.role = 'EXCO')
+                )
+            ),
+            team_ids AS (
+              SELECT id FROM explicit_reports
+              UNION SELECT id FROM section_fallback
+              UNION SELECT id FROM department_fallback
+            )
+       SELECT u.id, u.full_name, u.email, u.title, u.role::text AS role, u.department, u.is_active,
               (SELECT COUNT(*) FROM advance_requests ar WHERE ar.requester_id = u.id AND ar.status::text IN ${OPEN_ADVANCE_STATUSES}) AS pending_advances,
               (SELECT COUNT(*) FROM clearance_claims cc WHERE cc.claimant_id = u.id AND cc.status::text IN ${OPEN_CLAIM_STATUSES}) AS pending_claims,
               (SELECT COUNT(*) FROM advance_requests ar WHERE ar.requester_id = u.id) AS total_advances,
@@ -458,8 +497,7 @@ reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO
                 (SELECT MAX(cc.updated_at) FROM clearance_claims cc WHERE cc.claimant_id = u.id)
               ) AS last_activity
          FROM users u
-         JOIN reporting_lines rl ON rl.employee_id = u.id AND rl.is_active = true
-        WHERE rl.manager_id = $1
+         JOIN team_ids t ON t.id = u.id
         ORDER BY u.full_name NULLS LAST, u.email`,
       [managerId]
     );
