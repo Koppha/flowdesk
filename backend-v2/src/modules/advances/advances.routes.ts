@@ -1128,8 +1128,10 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       throw badRequest("Only draft advances can be submitted");
     }
 
-    const requester = (await query<{ role: string; section_id: string | null; department: string | null }>(
-      `SELECT role, section_id, department FROM users WHERE id=$1`,
+    const requester = (await query<{ role: string; section_id: string | null; department: string | null; division: string | null }>(
+      `SELECT u.role, u.section_id, u.department, d.name AS division
+         FROM users u LEFT JOIN divisions d ON d.id = u.division_id
+        WHERE u.id=$1`,
       [adv.requester_id]
     ))[0];
     if (!requester) throw badRequest("Requester not found");
@@ -1174,6 +1176,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     const workflowResult = await resolveWorkflowChain({
       requestType: "ADVANCE_REQUEST",
       department: adv.requester_department || "",
+      division: requester.division || "",
       section: adv.requester_section || "",
       advanceSubType: adv.type,
       needsAccommodation,

@@ -313,13 +313,18 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
   try {
     const requestType = String(req.query.requestType || "").trim();
     const department = String(req.query.department || "").trim();
+    const division = String(req.query.division || "").trim();
     const section = String(req.query.section || "").trim();
     const advanceSubType = String(req.query.advance_sub_type || "").trim();
     const requesterRole = String(req.query.requester_role || "").trim();
     const amount = Number(req.query.amount || 0);
     if (!requestType) throw badRequest("requestType query parameter is required");
 
-    // Priority (highest → lowest):
+    // Priority (highest → lowest) - mirrors resolveWorkflowChain in
+    // workflowEngine.ts exactly, including the division filter (stops a
+    // workflow scoped to a different division, e.g. a SEFS-wide catch-all,
+    // from being previewed for someone in another division just because
+    // their own department/section has no more specific workflow):
     //   A workflow restricted to the requester's role (requester_roles) always
     //   outranks an unrestricted one, regardless of dept/section/sub_type specificity.
     //   0 = section + dept + sub_type exact match
@@ -333,6 +338,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         WHERE request_type = $1
           AND status = 'ACTIVE'
           AND (department IS NULL OR trim(department) = '' OR lower(trim(department)) = lower(trim($2)))
+          AND (division IS NULL OR trim(division) = '' OR $6 = '' OR lower(trim(division)) = lower(trim($6)))
           AND (section IS NULL OR trim(section) = '' OR lower(trim(section)) = lower(trim($3)))
           AND (
             advance_sub_type IS NULL OR trim(advance_sub_type) = ''
@@ -343,6 +349,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
           AND (requester_roles IS NULL OR ($5 <> '' AND $5 = ANY(requester_roles)))
         ORDER BY
           CASE WHEN requester_roles IS NOT NULL THEN 0 ELSE 1 END,
+          CASE WHEN $6 <> '' AND lower(trim(COALESCE(division,''))) = lower(trim($6)) THEN 0 ELSE 1 END,
           CASE
             WHEN $4 <> '' AND lower(trim(COALESCE(advance_sub_type,''))) = lower(trim($4))
                  AND lower(trim(COALESCE(section,''))) = lower(trim($3))
@@ -366,7 +373,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
           END,
           updated_at DESC, created_at DESC
         LIMIT 1`,
-      [requestType, department, section, advanceSubType, requesterRole]
+      [requestType, department, section, advanceSubType, requesterRole, division]
     );
     const workflow = workflows[0];
     if (!workflow) return res.json({ workflow: null, chain: [], tasks: [], warnings: ["No active workflow found."] });

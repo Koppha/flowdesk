@@ -1305,7 +1305,7 @@ export default function App() {
     setAdvanceWorkflowFound(null);
     // Pass the selected advance sub-type (and requester role) so the backend can
     // prefer a sub-type-specific and/or role-restricted workflow.
-    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, role)
+    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, role, profile?.division_name || undefined)
       .then((result: any) => {
         const chain: any[] = Array.isArray(result?.chain) ? result.chain : [];
         const filtered = chain.filter((s: any) => s.position_type_code !== "EMPLOYEE");
@@ -1330,7 +1330,7 @@ export default function App() {
         setAdvanceWorkflowFound(false);
         loadCustomChainData();
       });
-  }, [page, profile?.department, profile?.section_name, advanceType, role]);
+  }, [page, profile?.department, profile?.division_name, profile?.section_name, advanceType, role]);
 
   async function refresh() {
     setError(null);

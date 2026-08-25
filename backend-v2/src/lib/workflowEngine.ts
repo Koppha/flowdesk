@@ -98,6 +98,7 @@ export async function resolveRequesterManager(
 export async function resolveWorkflowChain(params: {
   requestType: string;
   department: string;
+  division?: string;
   section?: string;
   advanceSubType?: string;
   needsAccommodation?: boolean;
@@ -105,12 +106,21 @@ export async function resolveWorkflowChain(params: {
   requesterRole?: string;
   requesterId?: string;
 }): Promise<{ workflowId: string; chain: ChainStep[] } | null> {
-  const { requestType, department, section = "", advanceSubType = "", needsAccommodation = false, overrideChain = [], requesterRole = "", requesterId = "" } = params;
+  const { requestType, department, division = "", section = "", advanceSubType = "", needsAccommodation = false, overrideChain = [], requesterRole = "", requesterId = "" } = params;
 
   // TEMPORARY workflows (with a valid date window) take priority over STICKY ones.
   // A workflow restricted to the requester's role (requester_roles) always outranks
   // an unrestricted one. Within each tier the specificity order is:
   // dept+section+subtype > dept+subtype > dept+section > dept > global.
+  //
+  // The division filter (w.division) exists to stop a blank-department
+  // workflow scoped to one division (e.g. a SEFS-wide travel catch-all) from
+  // being picked up by a requester in a different division just because
+  // their own department/section has no more specific workflow of its own -
+  // a real incident: MNO employees whose department had a coverage gap were
+  // silently routed through SEFS's workflows and approval chain instead of
+  // failing loudly or falling back within their own division. A workflow
+  // with no division set still matches everyone, same as blank department.
   const workflows = await query<{ id: string }>(
     `SELECT w.*
        FROM workflows w
@@ -119,6 +129,7 @@ export async function resolveWorkflowChain(params: {
         AND (w.valid_from  IS NULL OR w.valid_from  <= now())
         AND (w.valid_until IS NULL OR w.valid_until >= now())
         AND (w.department IS NULL OR trim(w.department) = '' OR lower(trim(w.department)) = lower(trim($2)))
+        AND (w.division IS NULL OR trim(w.division) = '' OR $6 = '' OR lower(trim(w.division)) = lower(trim($6)))
         AND (w.section IS NULL OR trim(w.section) = '' OR lower(trim(w.section)) = lower(trim($3)))
         AND (
           w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = ''
@@ -133,6 +144,9 @@ export async function resolveWorkflowChain(params: {
         -- A role-restricted workflow (which already passed the WHERE filter, so it
         -- matches the requester) outranks an unrestricted one.
         CASE WHEN w.requester_roles IS NOT NULL THEN 0 ELSE 1 END,
+        -- A division-scoped workflow outranks a division-blank (fully global) one,
+        -- same idea as department specificity below.
+        CASE WHEN $6 <> '' AND lower(trim(COALESCE(w.division,''))) = lower(trim($6)) THEN 0 ELSE 1 END,
         -- Then by specificity (most specific wins)
         CASE
           WHEN $4 <> '' AND lower(trim(COALESCE(w.advance_sub_type,''))) = lower(trim($4))
@@ -158,7 +172,7 @@ export async function resolveWorkflowChain(params: {
         END,
         w.updated_at DESC, w.created_at DESC
       LIMIT 1`,
-    [requestType, department, section, advanceSubType, requesterRole]
+    [requestType, department, section, advanceSubType, requesterRole, division]
   );
 
   const workflow = workflows[0];

@@ -198,9 +198,10 @@ export const api = {
   createWorkflow: (data: any) => req("/workflows", { method: "POST", body: JSON.stringify(data) }),
   updateWorkflow: (id: string, data: any) => req(`/workflows/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteWorkflow: (id: string) => req(`/workflows/${id}`, { method: "DELETE" }),
-  resolveWorkflow: (requestType: string, department?: string, amount?: number, section?: string, advanceSubType?: string, requesterRole?: string) => {
+  resolveWorkflow: (requestType: string, department?: string, amount?: number, section?: string, advanceSubType?: string, requesterRole?: string, division?: string) => {
     const params = [`requestType=${encodeURIComponent(requestType)}`];
     if (department) params.push(`department=${encodeURIComponent(department)}`);
+    if (division) params.push(`division=${encodeURIComponent(division)}`);
     if (section) params.push(`section=${encodeURIComponent(section)}`);
     if (amount != null) params.push(`amount=${encodeURIComponent(String(amount))}`);
     if (advanceSubType) params.push(`advance_sub_type=${encodeURIComponent(advanceSubType)}`);
