@@ -355,7 +355,14 @@ export const api = {
   markClaimSettled: (id: string, settled_reference?: string) =>
     req(`/claims/${id}/mark-settled`, { method: "POST", body: JSON.stringify({ settled_reference }) }),
   // Hotels (accommodation)
-  hotels: () => req("/accommodation/hotels"),
+  hotels: (params?: { search?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.search) qs.set("search", params.search);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null) qs.set("offset", String(params.offset));
+    const query = qs.toString();
+    return req(`/accommodation/hotels${query ? `?${query}` : ""}`);
+  },
   createHotel: (data: any) => req("/accommodation/hotels", { method: "POST", body: JSON.stringify(data) }),
   updateHotel: (id: string, data: any) => req(`/accommodation/hotels/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteHotel: (id: string) => req(`/accommodation/hotels/${id}`, { method: "DELETE" }),

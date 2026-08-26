@@ -235,6 +235,25 @@ function normalizeDateInputValue(value: any) {
   return `${year}-${month}-${day}`;
 }
 
+// Travel line locations come in two formats depending on the travel type's
+// location_mode: DISTRICT mode stores "Start → Destination" (e.g. local
+// travel), COUNTRY_CITY mode (CMA/international) stores "Country / Province
+// / City" or "Country / City" (province omitted outside South Africa) - the
+// accommodation destination-extraction below previously only understood the
+// "→" format, so CMA/international requests never got a destination to book
+// against at all. Falls back to the whole trimmed string if neither
+// separator is present.
+function parseDestinationFromLocation(location: any): string {
+  const trimmed = String(location || "").trim();
+  if (!trimmed) return "";
+  if (trimmed.includes("→")) return trimmed.split("→")[1]?.trim() || "";
+  if (trimmed.includes("/")) {
+    const parts = trimmed.split("/").map((p) => p.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "";
+  }
+  return trimmed;
+}
+
 function lineAmount(line: any) {
   return Number(line.line_total || 0) || Number(line.meals || 0) || Number(line.lunch || 0) + Number(line.dinner || 0);
 }
@@ -947,11 +966,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const isTravelAdvance =
     item.doc_type === "ADVANCE" &&
     (Boolean(detail?.is_travel_type) || isTravelTypeCode(detail?.type, travelTypes));
-  // Accommodation is only valid for local travel (Lesotho districts mode)
-  const usesDistrictAccommodation = !detail?.travel_location_mode || detail.travel_location_mode === "DISTRICT";
-  // Multi-day: more than 1 travel line means the traveller stays overnight
   const travelDayCount = (detail?.lines ?? []).length;
-  const isMultiDayTravel = travelDayCount > 1;
 
   // Extract destination districts (exclude last return-home leg)
   const destinationDistricts = useMemo(() => {
@@ -961,11 +976,8 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     const outboundLines = lines.length > 1 ? lines.slice(0, -1) : lines;
     const districts = new Set<string>();
     outboundLines.forEach((line: any) => {
-      const location = String(line.location || "").trim();
-      if (location.includes("→")) {
-        const destination = location.split("→")[1]?.trim();
-        if (destination) districts.add(destination);
-      }
+      const destination = parseDestinationFromLocation(line.location);
+      if (destination) districts.add(destination);
     });
     return Array.from(districts);
   }, [isTravelAdvance, detail?.lines]);
@@ -980,9 +992,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     const lines: any[] = detail.lines || [];
     const outboundLines = lines.length > 1 ? lines.slice(0, -1) : lines;
     outboundLines.forEach((line: any, idx: number) => {
-      const location = String(line.location || "").trim();
-      if (!location.includes("→")) return;
-      const destination = location.split("→")[1]?.trim();
+      const destination = parseDestinationFromLocation(line.location);
       if (!destination) return;
       const checkIn = normalizeDateInputValue(line.line_date || line.trip_date || line.date);
       const nextLine = lines[idx + 1];
@@ -1005,9 +1015,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     if (!isTravelAdvance || !detail?.lines) return choices;
     const lines: any[] = detail.lines || [];
     lines.forEach((line: any) => {
-      const location = String(line.location || "").trim();
-      if (!location.includes("→")) return;
-      const destination = location.split("→")[1]?.trim();
+      const destination = parseDestinationFromLocation(line.location);
       if (!destination) return;
       let meta = line.travel_meta;
       if (typeof meta === "string") {
@@ -1197,8 +1205,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canCreateAccommodation =
     item.doc_type === "ADVANCE" &&
     isTravelAdvance &&
-    usesDistrictAccommodation &&   // local travel only
-    isMultiDayTravel &&            // must be more than 1 day
+    // Whether accommodation is actually needed (local/district travel,
+    // more than one travel day) is already decided server-side by whether
+    // a DEPT_ACCOMODATION step exists on this request's workflow chain and
+    // is assigned to this user (isMyWorkflowStep && isAccommodationStep,
+    // mirroring the backend's own canApproveStep check) - duplicating that
+    // decision here with usesDistrictAccommodation/isMultiDayTravel could
+    // only ever hide the button for someone the backend already assigned.
     (isWorkflowDriven
       ? isMyWorkflowStep && isAccommodationStep
       : (role === "MANAGER" && ["HR_OFFICER", "APPROVED"].includes(item.status)));
@@ -1240,8 +1253,8 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
 
   useEffect(() => {
     if (!canCreateAccommodation) return;
-    api.hotels()
-      .then((rows: any[]) => setAccommodationHotels(rows || []))
+    api.hotels({ limit: 10000, offset: 0 })
+      .then((result: any) => setAccommodationHotels((Array.isArray(result) ? result : result?.items) || []))
       .catch((e: any) => setError(String(e.message)));
     // Build one accommodation entry per destination district, auto-filling
     // check-in / check-out from the travel line dates for that district.

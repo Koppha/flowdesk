@@ -453,6 +453,11 @@ export default function App() {
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const [hotels, setHotels] = useState<any[]>([]);
+  const [hotelsTotal, setHotelsTotal] = useState(0);
+  const [hotelSearch, setHotelSearch] = useState("");
+  const [hotelPage, setHotelPage] = useState(0);
+  const hotelSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const HOTELS_PAGE_SIZE = 25;
   const [standbyToday, setStandbyToday] = useState<any[]>([]);
   const [hotelsLoading, setHotelsLoading] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
@@ -1383,7 +1388,7 @@ export default function App() {
       optionalStartupData<{ items?: any[] }>(api.inbox(), { items: [] }, "Inbox"),
       optionalStartupData<{ meal_value?: number }>(api.mealValue(), { meal_value: 0 }, "Meal value"),
       optionalStartupData<TravelType[]>(api.travelTypes(), [], "Travel types"),
-      optionalStartupData<any[]>(api.hotels(), [], "Hotels"),
+      optionalStartupData<any>(api.hotels({ limit: 10000, offset: 0 }), [], "Hotels"),
       optionalStartupData<{ on_standby_today?: any[] }>(api.standbyDashboard(), { on_standby_today: [] }, "Standby"),
       optionalStartupData<{ features?: Record<string, string[]> }>(api.adminFeaturePermissions(), {}, "Feature permissions"),
       optionalStartupData<{ name: string; member_count: string; dynamic?: boolean }[]>(api.permissionGroups(), [], "Permission groups"),
@@ -1443,7 +1448,9 @@ export default function App() {
     setMealValue(configuredMealValue);
     setMealValueDraft(String(configuredMealValue));
     setTravelTypes(Array.isArray(travelResp) ? travelResp : []);
-    setHotels(Array.isArray(hotelsResp) ? hotelsResp : []);
+    const initialHotels = Array.isArray(hotelsResp) ? hotelsResp : hotelsResp?.items || [];
+    setHotels(initialHotels);
+    setHotelsTotal(Array.isArray(hotelsResp) ? initialHotels.length : Number(hotelsResp?.total || initialHotels.length));
     setStandbyToday(Array.isArray(standbyResp?.on_standby_today) ? standbyResp.on_standby_today : []);
     setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
     setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
@@ -1697,11 +1704,14 @@ export default function App() {
     }
   }
 
-  async function loadHotels() {
+  async function loadHotels(opts?: { search?: string; page?: number }) {
     setHotelsLoading(true);
+    const search = opts?.search ?? hotelSearch;
+    const page = opts?.page ?? hotelPage;
     try {
-      const rows: any[] = await api.hotels();
-      setHotels(rows || []);
+      const result: any = await api.hotels({ search, limit: HOTELS_PAGE_SIZE, offset: page * HOTELS_PAGE_SIZE });
+      setHotels(Array.isArray(result) ? result : result?.items || []);
+      setHotelsTotal(Array.isArray(result) ? result.length : Number(result?.total || 0));
     } catch (e: any) {
       alert("Error loading hotels: " + e.message);
     } finally {
@@ -1709,13 +1719,36 @@ export default function App() {
     }
   }
 
-  function exportHotelsCSV() {
+  async function exportHotelsCSV() {
     const header = ["Name", "District", "Country", "Province", "City", "Address", "Contact"];
     const rows: string[][] = [header];
-    for (const h of hotels) {
-      rows.push([h.name || "", h.district || "", h.country || "", h.province || "", h.city || "", h.address || "", h.contact || ""]);
+    try {
+      // Export the full list regardless of the current search/page in view.
+      const result: any = await api.hotels({ limit: 10000, offset: 0 });
+      const all: any[] = Array.isArray(result) ? result : result?.items || [];
+      for (const h of all) {
+        rows.push([h.name || "", h.district || "", h.country || "", h.province || "", h.city || "", h.address || "", h.contact || ""]);
+      }
+      downloadCsv(`hotels-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+    } catch (e: any) {
+      alert("Error exporting hotels: " + e.message);
     }
-    downloadCsv(`hotels-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  }
+
+  // Debounced so typing doesn't fire a request per keystroke - resets to
+  // page 0 since the previous page offset may not exist under the new filter.
+  function handleHotelSearchChange(value: string) {
+    setHotelSearch(value);
+    setHotelPage(0);
+    if (hotelSearchDebounceRef.current) clearTimeout(hotelSearchDebounceRef.current);
+    hotelSearchDebounceRef.current = setTimeout(() => {
+      void loadHotels({ search: value, page: 0 });
+    }, 300);
+  }
+
+  function handleHotelPageChange(page: number) {
+    setHotelPage(page);
+    void loadHotels({ page });
   }
 
   function handleImportHotelsFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1754,7 +1787,8 @@ export default function App() {
     let skipped = 0;
     const errors: string[] = [];
     try {
-      let existing: any[] = await api.hotels();
+      const existingResp: any = await api.hotels({ limit: 10000, offset: 0 });
+      let existing: any[] = Array.isArray(existingResp) ? existingResp : existingResp?.items || [];
       for (const row of importHotelRows) {
         const dupe = existing.some(
           (h) => h.name.trim().toLowerCase() === row.name.toLowerCase() && (h.district || "").trim().toLowerCase() === row.district.toLowerCase()
@@ -5434,16 +5468,29 @@ export default function App() {
                     <div className="ep-panel-sub">Manage approved hotels available for accommodation requests.</div>
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button className="ep-btn-outline" onClick={exportHotelsCSV} disabled={hotels.length === 0}><Download size={15} />Export CSV</button>
+                    <button className="ep-btn-outline" onClick={() => void exportHotelsCSV()} disabled={hotelsTotal === 0}><Download size={15} />Export CSV</button>
                     <button className="ep-btn-outline" onClick={() => setShowImportHotelsModal(true)}><Upload size={15} />Import CSV</button>
                     <button className="ep-btn" onClick={() => setShowAddHotelModal(true)}><Plus size={15} />Add Hotel</button>
                   </div>
+                </div>
+                <div style={{ padding: "0 16px 12px" }}>
+                  <input
+                    className="ep-form-input"
+                    style={{ maxWidth: 320 }}
+                    placeholder="Search hotels by name, district, city, country…"
+                    value={hotelSearch}
+                    onChange={(e) => handleHotelSearchChange(e.target.value)}
+                  />
                 </div>
                 <div className="ep-table-wrap">
                   {hotelsLoading ? (
                     <div className="ep-loading"><RefreshCw size={18} className="rl-spin" /><p>Loading…</p></div>
                   ) : hotels.length === 0 ? (
-                    <div className="ep-empty"><p>No hotels yet. Click <strong>Add Hotel</strong> to add one.</p></div>
+                    <div className="ep-empty">
+                      <p>{hotelSearch ? "No hotels match your search." : (
+                        <>No hotels yet. Click <strong>Add Hotel</strong> to add one.</>
+                      )}</p>
+                    </div>
                   ) : (
                     <table className="ep-table">
                       <thead>
@@ -5468,6 +5515,24 @@ export default function App() {
                     </table>
                   )}
                 </div>
+                {hotelsTotal > HOTELS_PAGE_SIZE && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px" }}>
+                    <span style={{ fontSize: "0.85rem", color: "var(--muted, #888)" }}>
+                      {hotelPage * HOTELS_PAGE_SIZE + 1}–{Math.min((hotelPage + 1) * HOTELS_PAGE_SIZE, hotelsTotal)} of {hotelsTotal}
+                    </span>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="ep-btn-outline" style={{ padding: "5px 12px" }} disabled={hotelPage === 0} onClick={() => handleHotelPageChange(hotelPage - 1)}>Previous</button>
+                      <button
+                        className="ep-btn-outline"
+                        style={{ padding: "5px 12px" }}
+                        disabled={(hotelPage + 1) * HOTELS_PAGE_SIZE >= hotelsTotal}
+                        onClick={() => handleHotelPageChange(hotelPage + 1)}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* ── Add Travel Type Modal ── */}

@@ -3,7 +3,7 @@ import path from "path";
 import multer from "multer";
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, requireAuth, requireFinance, requireRole } from "../../lib/auth.js";
+import { AuthedRequest, requireAuth, requireFeatureAccess, requireFinance, requireRole } from "../../lib/auth.js";
 import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
@@ -94,17 +94,41 @@ const upload = multer({
 export const accommodationRouter = Router();
 accommodationRouter.use(requireAuth);
 
-// Hotels CRUD - managers and administrators can onboard hotels.
-accommodationRouter.get("/hotels", async (_req: AuthedRequest, res, next) => {
+// Hotels CRUD - who can onboard hotels is admin-configurable via the
+// "travel_setup" feature (Roles & Permissions), same as the frontend's own
+// gate on the Travel Setup page - previously this was a hardcoded
+// MANAGER/ADMIN role check here while the frontend showed the Add/Edit/
+// Delete controls to anyone granted travel_setup access (role or
+// permission group), so someone granted access through a group (e.g. HR
+// Operations) could see the buttons but every write would 403.
+accommodationRouter.get("/hotels", async (req: AuthedRequest, res, next) => {
   try {
-    const rows = await query(`SELECT * FROM accommodation_hotels ORDER BY country NULLS LAST, province NULLS LAST, city NULLS LAST, district NULLS LAST, name`);
-    return res.json(rows);
+    const search = String(req.query.search || "").trim();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const params: unknown[] = [];
+    let where = "";
+    if (search) {
+      params.push(`%${search}%`);
+      where = `WHERE name ILIKE $${params.length} OR district ILIKE $${params.length} OR country ILIKE $${params.length} OR province ILIKE $${params.length} OR city ILIKE $${params.length}`;
+    }
+    const total = (
+      await query<{ count: string }>(`SELECT count(*)::text AS count FROM accommodation_hotels ${where}`, params)
+    )[0]?.count ?? "0";
+    params.push(limit, offset);
+    const rows = await query(
+      `SELECT * FROM accommodation_hotels ${where}
+        ORDER BY country NULLS LAST, province NULLS LAST, city NULLS LAST, district NULLS LAST, name
+        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+    return res.json({ items: rows, total: Number(total), limit, offset });
   } catch (err) {
     return next(err);
   }
 });
 
-accommodationRouter.post("/hotels", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.post("/hotels", requireFeatureAccess("travel_setup", ["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const body = HotelCreateSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
@@ -129,7 +153,7 @@ accommodationRouter.post("/hotels", requireRole(["MANAGER", "ADMIN"]), async (re
   }
 });
 
-accommodationRouter.put("/hotels/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.put("/hotels/:id", requireFeatureAccess("travel_setup", ["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const body = HotelUpdateSchema.safeParse(req.body);
     if (!body.success) throw badRequest("Invalid hotel payload", body.error.flatten());
@@ -149,7 +173,7 @@ accommodationRouter.put("/hotels/:id", requireRole(["MANAGER", "ADMIN"]), async 
   }
 });
 
-accommodationRouter.delete("/hotels/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
+accommodationRouter.delete("/hotels/:id", requireFeatureAccess("travel_setup", ["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query<{ id: string }>(
       `DELETE FROM accommodation_hotels WHERE id=$1 RETURNING id`,
