@@ -132,6 +132,34 @@ export async function advanceWorkflowStep(args: {
 
     const chain = locked.approval_chain as ChainStep[];
     const stepIdx = locked.workflow_step_order ?? 0;
+
+    // Accommodation is non-blocking: it never holds up the rest of the
+    // chain (see the stillPending exclusion below), so HR can still be
+    // finishing the booking after the chain has already moved on to later
+    // steps (even after payment). If the acting step is a DEPT_ACCOMODATION
+    // step that's no longer part of the current pending group, patch it in
+    // place instead of running it through the normal group-advancement
+    // logic below, which wouldn't find it there anymore.
+    const lateAccommodationIdx = chain.findIndex((s, i) => s.action_type === "DEPT_ACCOMODATION" && !s.approved && i < stepIdx);
+    if (lateAccommodationIdx !== -1) {
+      const lateStep = chain[lateAccommodationIdx];
+      const canAct = role === "ADMIN" || (await canApproveStep(lateStep, userId, role, delegatedManagerIds, userSectionId));
+      if (canAct) {
+        const actedAt = new Date().toISOString();
+        const newChain = chain.map((s, i) => (i === lateAccommodationIdx ? { ...s, approved: true, approved_at: actedAt } : s));
+        await client.query(`UPDATE advance_requests SET approval_chain=$2, updated_at=now() WHERE id=$1`, [adv.id, JSON.stringify(newChain)]);
+        return {
+          nextStatus: locked.status,
+          newStepOrder: stepIdx,
+          hasMore: true,
+          currentStep: newChain[lateAccommodationIdx],
+          stillPending: false,
+          nextApprover: null,
+          nextApprovers: []
+        };
+      }
+    }
+
     if (stepIdx >= chain.length) throw badRequest("All workflow steps have been completed");
 
     const group = getPendingGroup(chain, stepIdx);
@@ -156,7 +184,11 @@ export async function advanceWorkflowStep(args: {
       for (const idx of group.indices) newChain[idx] = { ...newChain[idx], approved: true, approved_at: actedAt };
     }
 
-    const stillPending = group.indices.some((idx) => !newChain[idx].approved);
+    // Accommodation never blocks the rest of the chain - Capture (or
+    // whatever else is in this stage) is the real gate. A still-unapproved
+    // DEPT_ACCOMODATION step is picked up later via the lateAccommodationIdx
+    // path above once HR actually books it, whenever that happens.
+    const stillPending = group.indices.some((idx) => chain[idx].action_type !== "DEPT_ACCOMODATION" && !newChain[idx].approved);
     let nextStatus: AdvanceStatus;
     let newStepOrder: number;
     let hasMore: boolean;
