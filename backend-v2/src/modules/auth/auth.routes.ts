@@ -13,7 +13,7 @@ import { createDepartmentGroup, createDivision, createManagerType, createSection
 import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
 import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
 import { generateDelegationReference, getDelegationRequestTypes, setDelegationRequestTypes, writeDelegationAudit } from "../../lib/delegations.js";
-import { reassignPendingRequestsForMovedEmployee } from "../../lib/approvalReassignment.js";
+import { reassignPendingRequestsForMovedEmployee, syncApproverTitleForPendingSteps } from "../../lib/approvalReassignment.js";
 
 const LoginSchema = z
   .object({
@@ -1755,8 +1755,8 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     const parsed = UpdateUserSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid user payload", parsed.error.flatten());
 
-    const existingUser = await query<{ is_active: boolean; department: string | null; division_id: string | null; section_id: string | null }>(
-      `SELECT is_active, department, division_id, section_id FROM users WHERE id=$1`, [req.params.id]
+    const existingUser = await query<{ is_active: boolean; department: string | null; division_id: string | null; section_id: string | null; title: string | null }>(
+      `SELECT is_active, department, division_id, section_id, title FROM users WHERE id=$1`, [req.params.id]
     );
     if (!existingUser[0]) throw notFound();
     const wasReactivated = existingUser[0].is_active === false && parsed.data.is_active === true;
@@ -1809,6 +1809,7 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
       department: string | null;
       division_id: string | null;
       section_id: string | null;
+      title: string | null;
     }>(sql, values);
     if (!rows[0]) throw notFound();
 
@@ -1835,6 +1836,17 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
         reassignments = await reassignPendingRequestsForMovedEmployee(rows[0].id);
       } catch (err) {
         logger.warn("approval_reassignment_on_move_failed", { user_id: rows[0].id, error: serializeError(err) });
+      }
+    }
+
+    // A title-only edit doesn't change who approves, but any request still
+    // waiting on this person's action should show their current title, not
+    // whatever it was when that step was originally resolved.
+    if (parsed.data.title !== undefined && rows[0].title !== before.title) {
+      try {
+        await syncApproverTitleForPendingSteps(rows[0].id, rows[0].title);
+      } catch (err) {
+        logger.warn("approver_title_sync_failed", { user_id: rows[0].id, error: serializeError(err) });
       }
     }
 

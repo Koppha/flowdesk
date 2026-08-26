@@ -349,3 +349,75 @@ export async function reassignAllPendingApprovals(): Promise<{
   await reassignClaims(null, null, "APPROVAL_STEP_REASSIGNED_BY_SWEEP", reassignments, warnings);
   return { reassignments, warnings };
 }
+
+// Best-effort: called after PUT /users/:id commits a title-only edit (no
+// department/division/section change, so reassignPendingRequestsForMovedEmployee
+// wouldn't run). A title edit never changes WHO approves, only what's shown
+// for them, so this only rewrites the display title on steps that haven't
+// been actioned yet — an already-approved step keeps the title the approver
+// actually held at the time they approved, same as any other audit trail.
+export async function syncApproverTitleForPendingSteps(userId: string, newTitle: string | null): Promise<{
+  advancesUpdated: number;
+  claimsUpdated: number;
+}> {
+  let advancesUpdated = 0;
+  let claimsUpdated = 0;
+
+  function patchChain(chain: ChainStep[]): { chain: ChainStep[]; changed: boolean } {
+    let changed = false;
+    const patched = chain.map((step) => {
+      if (step.approved) return step;
+      let stepChanged = false;
+      const next: ChainStep = { ...step };
+      if (next.approver_id === userId && next.approver_title !== newTitle) {
+        next.approver_title = newTitle;
+        stepChanged = true;
+      }
+      if (Array.isArray(next.approvers)) {
+        let approversChanged = false;
+        const approvers = next.approvers.map((a) => {
+          if (a.id === userId && a.title !== newTitle) {
+            approversChanged = true;
+            return { ...a, title: newTitle };
+          }
+          return a;
+        });
+        if (approversChanged) {
+          next.approvers = approvers;
+          stepChanged = true;
+        }
+      }
+      if (stepChanged) changed = true;
+      return stepChanged ? next : step;
+    });
+    return { chain: patched, changed };
+  }
+
+  const advanceRows = await query<{ id: string; approval_chain: ChainStep[] }>(
+    `SELECT id, approval_chain FROM advance_requests
+      WHERE status = ANY($1::text[]) AND approval_chain IS NOT NULL AND approval_chain::text LIKE $2`,
+    [ADVANCE_PENDING_STATUSES, `%${userId}%`]
+  );
+  for (const row of advanceRows) {
+    const { chain, changed } = patchChain(row.approval_chain);
+    if (changed) {
+      await query(`UPDATE advance_requests SET approval_chain=$2 WHERE id=$1`, [row.id, JSON.stringify(chain)]);
+      advancesUpdated++;
+    }
+  }
+
+  const claimRows = await query<{ id: string; approval_chain: ChainStep[] }>(
+    `SELECT id, approval_chain FROM clearance_claims
+      WHERE status = ANY($1::text[]) AND approval_chain IS NOT NULL AND approval_chain::text LIKE $2`,
+    [CLAIM_PENDING_STATUSES, `%${userId}%`]
+  );
+  for (const row of claimRows) {
+    const { chain, changed } = patchChain(row.approval_chain);
+    if (changed) {
+      await query(`UPDATE clearance_claims SET approval_chain=$2 WHERE id=$1`, [row.id, JSON.stringify(chain)]);
+      claimsUpdated++;
+    }
+  }
+
+  return { advancesUpdated, claimsUpdated };
+}

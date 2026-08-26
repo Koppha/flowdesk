@@ -1,5 +1,5 @@
 import { query } from "./db.js";
-import { getDepartmentLeadership, getSectionLeadership } from "./departments.js";
+import { getDepartmentLeadership, getSectionLeadership, getTeamLeadership } from "./departments.js";
 import { isCompensationFinanceSection } from "./financeAuthority.js";
 import { getUserGroups } from "./permissionGroups.js";
 import { normalizeWorkflowRouteCode } from "./workflowRouting.js";
@@ -61,11 +61,16 @@ export function getPendingGroup(chain: ChainStep[], stepIdx: number): { indices:
 
 // Mirrors getFallbackManagerId in reporting-lines.routes.ts: the requester's
 // active reporting_lines manager, falling back to the closest available
-// leadership when no reporting_lines row exists yet - their SECTION's
-// leadership first (a strictly closer org unit - e.g. Technical's four
-// sections each have their own real HOD), then their department's, as a
-// broader last resort. Same HOD -> EXCO / MANAGER -> HOD/EXCO / everyone
-// else -> MANAGER/HOD/EXCO chain at each level.
+// leadership when no reporting_lines row exists yet - their TEAM's
+// leadership first (users.team_id, the UI's "Section" field - the closest
+// possible org unit, e.g. Operations now has a distinct MANAGER per team:
+// Transmission, NOC, IP Core Network, Network Quality, so matching on team
+// finds the right one instead of picking arbitrarily among all of them),
+// then their SECTION's (users.section_id, the UI's "Department" field - a
+// broader unit, e.g. Technical's four sections each have their own real
+// HOD), then their department's, as a broader last resort. Same HOD -> EXCO
+// / MANAGER -> HOD/EXCO / everyone else -> MANAGER/HOD/EXCO chain at each
+// level.
 export async function resolveRequesterManager(
   requesterId: string
 ): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
@@ -76,8 +81,8 @@ export async function resolveRequesterManager(
   let managerId = lineRows[0]?.manager_id ?? null;
 
   if (!managerId || managerId === requesterId) {
-    const requesterRows = await query<{ role: string; department: string | null; section_id: string | null }>(
-      `SELECT role::text AS role, department, section_id FROM users WHERE id = $1`,
+    const requesterRows = await query<{ role: string; department: string | null; section_id: string | null; team_id: string | null }>(
+      `SELECT role::text AS role, department, section_id, team_id FROM users WHERE id = $1`,
       [requesterId]
     );
     const requesterUser = requesterRows[0];
@@ -86,7 +91,10 @@ export async function resolveRequesterManager(
       if (requesterUser!.role === "MANAGER") return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
       return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
     };
-    if (requesterUser?.section_id) {
+    if (requesterUser?.team_id) {
+      managerId = fallbackId(await getTeamLeadership(requesterUser.team_id));
+    }
+    if ((!managerId || managerId === requesterId) && requesterUser?.section_id) {
       managerId = fallbackId(await getSectionLeadership(requesterUser.section_id));
     }
     if ((!managerId || managerId === requesterId) && requesterUser?.department) {

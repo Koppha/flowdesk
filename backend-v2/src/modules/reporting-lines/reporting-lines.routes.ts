@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { getDepartmentLeadership, getSectionLeadership, listDepartmentGroups } from "../../lib/departments.js";
+import { getDepartmentLeadership, getSectionLeadership, getTeamLeadership, listDepartmentGroups } from "../../lib/departments.js";
 import { getDelegationsForManager } from "../../lib/delegations.js";
 
 const OPEN_ADVANCE_STATUSES = "('SUBMITTED','COUNTERSIGNED','HR_REVIEW','HR_OFFICER','APPROVED')";
@@ -12,16 +12,21 @@ const OPEN_CLAIM_STATUSES = "('SUBMITTED','MANAGER_APPROVED','EXCO_APPROVED','FI
 
 // Falls back to leadership when no reporting_lines row exists yet, mirroring
 // resolveRequesterManager in workflowEngine.ts: EXCO -> CEO, otherwise the
-// closest available leadership first - the requester's SECTION (a strictly
-// closer org unit than their department, e.g. Technical's four sections
-// each have their own real HOD) - then their department as a broader last
-// resort. HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else -> MANAGER/HOD/EXCO
-// at each level. (/reporting-lines/auto-generate is a separate bulk admin
-// tool that doesn't go through this function and is department-only today -
-// not updated here, out of scope for this fix.)
+// closest available leadership first - the requester's TEAM (users.team_id,
+// the UI's "Section" field - the closest possible unit; several departments
+// now have more than one active MANAGER/HOD, each actually running a
+// different team under it, so matching team_id first finds the right one
+// instead of an arbitrary department-wide pick) - then their SECTION
+// (users.section_id, the UI's "Department" field - a broader unit than
+// team, e.g. Technical's four sections each have their own real HOD) - then
+// their department as a broader last resort. HOD -> EXCO, MANAGER ->
+// HOD/EXCO, everyone else -> MANAGER/HOD/EXCO at each level.
+// (/reporting-lines/auto-generate is a separate bulk admin tool that
+// doesn't go through this function and is department-only today - not
+// updated here, out of scope for this fix.)
 async function getFallbackManagerId(userId: string): Promise<string | null> {
-  const userRows = await query<{ role: string; department: string | null; section_id: string | null }>(
-    `SELECT role::text AS role, department, section_id FROM users WHERE id = $1`,
+  const userRows = await query<{ role: string; department: string | null; section_id: string | null; team_id: string | null }>(
+    `SELECT role::text AS role, department, section_id, team_id FROM users WHERE id = $1`,
     [userId]
   );
   const user = userRows[0];
@@ -40,6 +45,10 @@ async function getFallbackManagerId(userId: string): Promise<string | null> {
     return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
   };
 
+  if (user.team_id) {
+    const teamId = fallbackId(await getTeamLeadership(user.team_id));
+    if (teamId) return teamId;
+  }
   if (user.section_id) {
     const sectionId = fallbackId(await getSectionLeadership(user.section_id));
     if (sectionId) return sectionId;
@@ -448,11 +457,29 @@ reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO
   try {
     const managerId = req.user!.userId;
     const members = await query<any>(
-      `WITH viewer AS (SELECT id, role::text AS role, department, section_id FROM users WHERE id = $1),
+      `WITH viewer AS (SELECT id, role::text AS role, department, section_id, team_id FROM users WHERE id = $1),
             explicit_reports AS (
               SELECT u.id FROM users u
               JOIN reporting_lines rl ON rl.employee_id = u.id AND rl.is_active = true
               WHERE rl.manager_id = $1
+            ),
+            -- Closest possible tier: the viewer's own team (users.team_id,
+            -- the UI's "Section" field). Several departments now have more
+            -- than one active MANAGER/HOD, each actually running a
+            -- different team under it (e.g. Operations: one manager per
+            -- team - Transmission, NOC, IP Core Network, Network Quality) -
+            -- matching team_id first attributes an unassigned employee to
+            -- the manager who actually runs their team, instead of every
+            -- manager who merely shares the same department.
+            team_fallback AS (
+              SELECT u.id FROM users u, viewer v
+              WHERE v.team_id IS NOT NULL AND u.team_id = v.team_id AND u.id <> v.id
+                AND NOT EXISTS (SELECT 1 FROM reporting_lines rl WHERE rl.employee_id = u.id AND rl.is_active = true)
+                AND (
+                  (u.role::text = 'EMPLOYEE' AND v.role = 'MANAGER') OR
+                  (u.role::text = 'MANAGER' AND v.role = 'HOD') OR
+                  (u.role::text = 'HOD' AND v.role = 'EXCO')
+                )
             ),
             -- Same role-tier fallback resolveRequesterManager uses at
             -- submit time (EMPLOYEE -> section MANAGER, MANAGER -> section
@@ -460,10 +487,23 @@ reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO
             -- reporting_lines row who'd resolve to this viewer as their
             -- approver belongs on their team too, or "My Team" stays empty
             -- for every manager who only has fallback-resolved reports.
+            -- Skipped for an employee whose own team already has a
+            -- dedicated leader of the right tier - team_fallback above
+            -- attributes them to that specific manager instead, the same
+            -- team-before-section cascade resolveRequesterManager uses.
             section_fallback AS (
               SELECT u.id FROM users u, viewer v
               WHERE u.section_id = v.section_id AND u.id <> v.id
                 AND NOT EXISTS (SELECT 1 FROM reporting_lines rl WHERE rl.employee_id = u.id AND rl.is_active = true)
+                AND NOT EXISTS (
+                  SELECT 1 FROM users tm
+                  WHERE tm.team_id = u.team_id AND tm.is_active = true
+                    AND (
+                      (u.role::text = 'EMPLOYEE' AND tm.role::text = 'MANAGER') OR
+                      (u.role::text = 'MANAGER' AND tm.role::text = 'HOD') OR
+                      (u.role::text = 'HOD' AND tm.role::text = 'EXCO')
+                    )
+                )
                 AND (
                   (u.role::text = 'EMPLOYEE' AND v.role = 'MANAGER') OR
                   (u.role::text = 'MANAGER' AND v.role = 'HOD') OR
@@ -493,6 +533,7 @@ reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO
             ),
             team_ids AS (
               SELECT id FROM explicit_reports
+              UNION SELECT id FROM team_fallback
               UNION SELECT id FROM section_fallback
               UNION SELECT id FROM department_fallback
             )

@@ -1016,6 +1016,56 @@ export async function getSectionLeadership(sectionId: string) {
       };
 }
 
+// Team-level leadership - a team (the UI's "Section" field, users.team_id) is
+// a strictly closer org unit than its parent department (users.section_id,
+// the UI's "Department" field - confusingly, see project memory on this
+// naming), so resolveRequesterManager tries this tier before
+// getSectionLeadership. Several departments now have more than one active
+// MANAGER (or HOD/EXCO), each actually running a different team under it
+// (e.g. Operations has one manager per team: Transmission, NOC, IP Core
+// Network, Network Quality) - getSectionLeadership's department-wide live
+// match can't tell them apart and picks arbitrarily (alphabetically first),
+// but matching on the requester's own team_id first finds the right one
+// whenever that team has its own dedicated leader.
+export async function getTeamLeadership(teamId: string | null | undefined) {
+  if (!teamId) {
+    return {
+      team_id: null,
+      hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
+      manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
+      exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
+    };
+  }
+  const rows = await query<{
+    hod_user_id: string | null; hod_name: string | null; hod_title: string | null; hod_email: string | null;
+    manager_user_id: string | null; manager_name: string | null; manager_title: string | null; manager_email: string | null;
+    exco_user_id: string | null; exco_name: string | null; exco_title: string | null; exco_email: string | null;
+  }>(
+    `SELECT hod.id AS hod_user_id, hod.full_name AS hod_name, hod.title AS hod_title, hod.email AS hod_email,
+            mgr.id AS manager_user_id, mgr.full_name AS manager_name, mgr.title AS manager_title, mgr.email AS manager_email,
+            exco.id AS exco_user_id, exco.full_name AS exco_name, exco.title AS exco_title, exco.email AS exco_email
+       FROM (SELECT 1) placeholder
+       LEFT JOIN LATERAL (
+         SELECT id, full_name, title, email FROM users WHERE team_id=$1 AND role='HOD' AND is_active=true ORDER BY full_name LIMIT 1
+       ) hod ON true
+       LEFT JOIN LATERAL (
+         SELECT id, full_name, title, email FROM users WHERE team_id=$1 AND role='MANAGER' AND is_active=true ORDER BY full_name LIMIT 1
+       ) mgr ON true
+       LEFT JOIN LATERAL (
+         SELECT id, full_name, title, email FROM users WHERE team_id=$1 AND role='EXCO' AND is_active=true ORDER BY full_name LIMIT 1
+       ) exco ON true`,
+    [teamId]
+  );
+  return rows[0]
+    ? { team_id: teamId, ...rows[0] }
+    : {
+        team_id: teamId,
+        hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
+        manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
+        exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
+      };
+}
+
 // ─── Manager Types ────────────────────────────────────────────────────────────
 
 export type ManagerType = {
