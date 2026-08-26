@@ -228,7 +228,18 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId: strin
     return { actor, requester: actor };
   }
 
-  if (!canCreateAdvanceOnBehalf(actor)) {
+  // A PA (personal assistant) explicitly assigned to this principal (see
+  // pa-assignments.routes.ts) can submit for them regardless of employment
+  // type or department - that assignment is its own authorization, unlike
+  // the intern/temp path below which relies on same-department proximity
+  // instead of an explicit relationship.
+  const paRows = await query<{ id: string }>(
+    `SELECT id FROM pa_assignments WHERE pa_user_id=$1 AND principal_user_id=$2 AND is_active=true LIMIT 1`,
+    [actor.id, beneficiaryId]
+  );
+  const isAssignedPa = paRows.length > 0;
+
+  if (!isAssignedPa && !canCreateAdvanceOnBehalf(actor)) {
     throw forbidden("You are not allowed to create advances on behalf of other employees");
   }
 
@@ -239,14 +250,16 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId: strin
   if (!isProfileComplete(requester)) {
     throw badRequest("The selected employee must complete their profile before an advance can be created");
   }
-  if (!["INTERN", "TEMPORARY"].includes(String(requester.employment_type || "").trim().toUpperCase())) {
-    throw badRequest("On-behalf advances are only available for interns and temporary employees");
-  }
 
-  const actorDepartment = String(actor.department || "").trim();
-  const requesterDepartment = String(requester.department || "").trim();
-  if (!actorDepartment || !requesterDepartment || actorDepartment !== requesterDepartment) {
-    throw forbidden("On-behalf advances must stay within the same division");
+  if (!isAssignedPa) {
+    if (!["INTERN", "TEMPORARY"].includes(String(requester.employment_type || "").trim().toUpperCase())) {
+      throw badRequest("On-behalf advances are only available for interns and temporary employees, or for an assigned PA");
+    }
+    const actorDepartment = String(actor.department || "").trim();
+    const requesterDepartment = String(requester.department || "").trim();
+    if (!actorDepartment || !requesterDepartment || actorDepartment !== requesterDepartment) {
+      throw forbidden("On-behalf advances must stay within the same division");
+    }
   }
 
   await assertSingleOutstandingTravelAdvance(requester, type, client);

@@ -23,6 +23,7 @@ export async function bootstrapSystem() {
   await ensureWorkflowSchema();
   await ensureTravelSchema();
   await ensureReportingLinesSchema();
+  await ensurePaAssignmentsSchema();
   await ensureRequestTypesSchema();
   await ensureEmploymentTypesSchema();
   await ensureEmailActionTokensSchema();
@@ -1204,6 +1205,29 @@ async function ensureReportingLinesSchema() {
   await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_employee ON reporting_lines(employee_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_manager  ON reporting_lines(manager_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_active   ON reporting_lines(is_active)`);
+}
+
+// Explicit PA (personal assistant) -> principal (boss) assignments. The
+// existing "on behalf of" advance-request flow only covers interns/temps
+// (see resolveAdvanceRequester in advances.routes.ts) - a PA submitting for
+// a permanent-employment boss doesn't fit that, so this is a separate,
+// admin-managed relationship an assistant can be granted for a specific
+// person, regardless of either person's department or employment type.
+async function ensurePaAssignmentsSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS pa_assignments (
+      id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      pa_user_id        uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      principal_user_id uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      is_active         boolean     NOT NULL DEFAULT true,
+      created_by_id     uuid        REFERENCES users(id),
+      created_at        timestamptz NOT NULL DEFAULT now(),
+      updated_at        timestamptz NOT NULL DEFAULT now(),
+      CHECK (pa_user_id <> principal_user_id)
+    )
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pa_assignments_pair ON pa_assignments(pa_user_id, principal_user_id) WHERE is_active`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_pa_assignments_pa ON pa_assignments(pa_user_id)`);
 }
 
 async function ensureWorkflowSchema() {

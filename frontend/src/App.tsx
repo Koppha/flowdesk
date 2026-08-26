@@ -453,6 +453,7 @@ export default function App() {
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const [hotels, setHotels] = useState<any[]>([]);
+  const [myPaPrincipals, setMyPaPrincipals] = useState<any[]>([]);
   const [hotelsTotal, setHotelsTotal] = useState(0);
   const [hotelSearch, setHotelSearch] = useState("");
   const [hotelPage, setHotelPage] = useState(0);
@@ -619,6 +620,10 @@ export default function App() {
   const [delegationDeptFilter, setDelegationDeptFilter] = useState("");
   const [delegationAudit, setDelegationAudit] = useState<any[]>([]);
   const [delegationAuditLoading, setDelegationAuditLoading] = useState(false);
+  const [paAssignmentsList, setPaAssignmentsList] = useState<any[]>([]);
+  const [paAssignmentsLoading, setPaAssignmentsLoading] = useState(false);
+  const [newPaUserId, setNewPaUserId] = useState("");
+  const [newPaPrincipalUserId, setNewPaPrincipalUserId] = useState("");
   const [customRequestTypeOptions, setCustomRequestTypeOptions] = useState<Array<{ code: string; name: string }>>([]);
   const [advances, setAdvances] = useState<any[]>([]);
   const [claims, setClaims] = useState<any[]>([]);
@@ -1261,15 +1266,23 @@ export default function App() {
     };
   }, [token, idleTimeoutMinutes, warningSeconds]);
   const canRequestForSelf = profileCompleted && ["PERMANENT", "INTERN", "TEMPORARY"].includes(employmentType);
-  // Temps and interns can never request on someone else's behalf, regardless of role.
-  const canCreateForOthers = profileCompleted && employmentType === "PERMANENT";
+  // Temps and interns can never request on someone else's behalf, regardless
+  // of role - except for a boss they're explicitly assigned as PA for
+  // (myPaPrincipals), which is its own authorization independent of role/
+  // employment type (see resolveAdvanceRequester on the backend).
+  const canCreateForOthers = (profileCompleted && employmentType === "PERMANENT") || myPaPrincipals.length > 0;
   const canOpenAdvanceForm = canRequestForSelf || canCreateForOthers;
-  const eligibleBeneficiaries = requestDirectory.filter(
-    (user) =>
-      user.id !== profile?.id &&
-      ["INTERN", "TEMPORARY"].includes(String(user.employment_type || "").toUpperCase()) &&
-      Boolean(user.profile_completed)
-  );
+  const eligibleBeneficiaries = useMemo(() => {
+    const fromDirectory = requestDirectory.filter(
+      (user) =>
+        user.id !== profile?.id &&
+        ["INTERN", "TEMPORARY"].includes(String(user.employment_type || "").toUpperCase()) &&
+        Boolean(user.profile_completed)
+    );
+    const seen = new Set(fromDirectory.map((u) => u.id));
+    const fromPaAssignments = myPaPrincipals.filter((u) => u.id !== profile?.id && !seen.has(u.id));
+    return [...fromDirectory, ...fromPaAssignments];
+  }, [requestDirectory, myPaPrincipals, profile?.id]);
   const eligibleSupportCreators = requestDirectory.filter(
     (user) =>
       user.id !== profile?.id &&
@@ -1651,10 +1664,20 @@ export default function App() {
   }, [page, clearanceLinkedAdvanceId]);
 
   useEffect(() => {
+    if (!token) { setMyPaPrincipals([]); return; }
+    api.myPaPrincipals()
+      .then((rows: any) => setMyPaPrincipals(Array.isArray(rows) ? rows : []))
+      .catch(() => setMyPaPrincipals([]));
+  }, [token]);
+
+  useEffect(() => {
     if (token && ["SETTINGS", "REPORTS", "USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS"].includes(page)) {
       if (role === "ADMIN" || role === "MANAGER") {
         void loadAdminUsers();
         void loadDelegations();
+      }
+      if (page === "MANAGER_DELEGATIONS" && role === "ADMIN") {
+        void loadPaAssignments();
       }
     }
     if (token && ["SETTINGS", "REPORTS", "TRAVEL_SETUP"].includes(page)) {
@@ -2254,6 +2277,52 @@ export default function App() {
       setDelegationAudit([]);
     } finally {
       setDelegationAuditLoading(false);
+    }
+  }
+
+  async function loadPaAssignments() {
+    setPaAssignmentsLoading(true);
+    try {
+      const rows = await api.paAssignments();
+      setPaAssignmentsList(Array.isArray(rows) ? rows : []);
+    } catch (e: any) {
+      alert("Error loading PA assignments: " + e.message);
+    } finally {
+      setPaAssignmentsLoading(false);
+    }
+  }
+
+  async function createPaAssignment() {
+    if (!newPaUserId || !newPaPrincipalUserId) {
+      alert("Select both the assistant and the boss they'll submit for.");
+      return;
+    }
+    if (newPaUserId === newPaPrincipalUserId) {
+      alert("A person can't be their own PA.");
+      return;
+    }
+    try {
+      await api.createPaAssignment(newPaUserId, newPaPrincipalUserId);
+      setNewPaUserId("");
+      setNewPaPrincipalUserId("");
+      await loadPaAssignments();
+    } catch (e: any) {
+      alert("Error creating PA assignment: " + e.message);
+    }
+  }
+
+  async function endPaAssignment(id: string) {
+    const confirmed = await confirmAction({
+      title: "Remove PA assignment?",
+      text: "The assistant will no longer be able to submit advance requests for this person.",
+      confirmButtonText: "Remove"
+    });
+    if (!confirmed) return;
+    try {
+      await api.deletePaAssignment(id);
+      setPaAssignmentsList((current) => current.filter((a) => a.id !== id));
+    } catch (e: any) {
+      alert("Error removing PA assignment: " + e.message);
     }
   }
 
@@ -4528,6 +4597,70 @@ export default function App() {
                       })}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {role === "ADMIN" && (
+                <div className="ep-panel" style={{ marginTop: 24 }}>
+                  <div className="ep-panel-head">
+                    <div>
+                      <div className="ep-panel-title">PA Assignments</div>
+                      <div className="ep-panel-sub">Let an assistant submit advance requests on behalf of a specific person, regardless of employment type or department.</div>
+                    </div>
+                    <button className="ep-btn-outline" onClick={() => void loadPaAssignments()} disabled={paAssignmentsLoading}>
+                      {paAssignmentsLoading ? "Loading…" : "Refresh"}
+                    </button>
+                  </div>
+                  <div className="ep-panel-body">
+                    <div className="ep-form-row" style={{ alignItems: "flex-end", marginBottom: 16 }}>
+                      <div className="ep-form-group">
+                        <label>Assistant (PA)</label>
+                        <UserSearchSelect
+                          value={newPaUserId}
+                          onChange={setNewPaUserId}
+                          users={adminUsers.filter((u) => u.is_active !== false)}
+                          placeholder="Search or browse users…"
+                        />
+                      </div>
+                      <div className="ep-form-group">
+                        <label>Submits for (boss)</label>
+                        <UserSearchSelect
+                          value={newPaPrincipalUserId}
+                          onChange={setNewPaPrincipalUserId}
+                          users={adminUsers.filter((u) => u.is_active !== false && u.id !== newPaUserId)}
+                          placeholder="Search or browse users…"
+                        />
+                      </div>
+                      <button className="ep-btn" onClick={() => void createPaAssignment()}>
+                        <Plus size={14} aria-hidden /> Add
+                      </button>
+                    </div>
+                    {paAssignmentsList.length === 0 ? (
+                      <div style={{ padding: "8px 0", color: "var(--muted)", fontSize: 13 }}>No PA assignments yet.</div>
+                    ) : (
+                      <div className="ep-table-wrap">
+                        <table className="ep-table">
+                          <thead>
+                            <tr><th>Assistant</th><th>Submits for</th><th>Since</th><th></th></tr>
+                          </thead>
+                          <tbody>
+                            {paAssignmentsList.map((a) => (
+                              <tr key={a.id}>
+                                <td style={{ fontWeight: 600 }}>{a.pa_user_name || a.pa_user_email || "—"}</td>
+                                <td>{a.principal_user_name || a.principal_user_email || "—"}</td>
+                                <td style={{ fontSize: "0.85rem", color: "var(--muted)" }}>{formatDateOnly(a.created_at)}</td>
+                                <td>
+                                  <button className="ep-btn-danger" style={{ padding: "5px 10px", fontSize: "0.8rem" }} onClick={() => void endPaAssignment(a.id)}>
+                                    Remove
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

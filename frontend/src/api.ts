@@ -369,6 +369,14 @@ export const api = {
   mealValue: () => req("/accommodation/meal-value"),
   updateMealValue: (meal_value: number) => req("/accommodation/meal-value", { method: "PUT", body: JSON.stringify({ meal_value }) }),
 
+  // PA (personal assistant) assignments - let an assistant submit advances
+  // on behalf of a specific boss regardless of employment type/department.
+  myPaPrincipals: () => req("/pa-assignments/my-principals"),
+  paAssignments: () => req("/pa-assignments"),
+  createPaAssignment: (pa_user_id: string, principal_user_id: string) =>
+    req("/pa-assignments", { method: "POST", body: JSON.stringify({ pa_user_id, principal_user_id }) }),
+  deletePaAssignment: (id: string) => req(`/pa-assignments/${id}`, { method: "DELETE" }),
+
   requestTypes: () => req("/request-types"),
   requestTypeDetail: (id: string) => req(`/request-types/${id}`),
   createRequestType: (data: any) => req("/request-types", { method: "POST", body: JSON.stringify(data) }),

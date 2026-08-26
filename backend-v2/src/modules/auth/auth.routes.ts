@@ -46,6 +46,20 @@ async function assertKnownRole(role: string) {
   if (!rows[0]?.exists) throw badRequest("Unknown role");
 }
 
+// employee_no has a raw DB unique constraint (users_employee_no_key) - every
+// write site needs to check for a collision itself and throw a clean error,
+// or a duplicate silently surfaces to the user as an unhandled 500 instead
+// of "this number is already in use" (confirmed happening in prod on
+// /complete-profile before this check was added there).
+async function assertEmployeeNoAvailable(employeeNo: string | null, excludeUserId?: string) {
+  if (!employeeNo) return;
+  const clash = await query<{ id: string }>(
+    excludeUserId ? `SELECT id FROM users WHERE employee_no=$1 AND id<>$2 LIMIT 1` : `SELECT id FROM users WHERE employee_no=$1 LIMIT 1`,
+    excludeUserId ? [employeeNo, excludeUserId] : [employeeNo]
+  );
+  if (clash.length) throw badRequest("This employee number is already registered to someone else");
+}
+
 function assertRoleAssignmentAllowed(req: AuthedRequest, target: { department: string | null; role?: string | null }, nextRole: string) {
   if (req.user!.role === "ADMIN") return;
   if (req.user!.role !== "MANAGER" && req.user!.role !== "EXCO") {
@@ -915,6 +929,7 @@ authRouter.post("/complete-profile", async (req: AuthedRequest, res, next) => {
     if (!parsed.success) throw badRequest("Invalid profile payload", parsed.error.flatten());
 
     const employeeNo = String(parsed.data.employee_no || "").trim() || null;
+    await assertEmployeeNoAvailable(employeeNo, req.user!.userId);
     const department = await resolveDepartmentGroup(parsed.data.department);
     await ensureUserOrgColumns();
 
@@ -1653,6 +1668,7 @@ authRouter.post("/position-vacancies/:id/fill", requireRole(["ADMIN", "MANAGER",
       const pwd = randomUUID();
       const hash = await hashPassword(pwd);
       const employeeNo = parsed.data.employee_no?.trim() || null;
+      await assertEmployeeNoAvailable(employeeNo);
       const title = parsed.data.title || vacancy.title || null;
       const employmentType = parsed.data.employment_type ?? "PERMANENT";
       const profileCompleted = Boolean(
@@ -1704,6 +1720,7 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
     const role = parsed.data.role ?? "EXCO";
     await assertKnownRole(role);
     const employeeNo = parsed.data.employee_no?.trim() || null;
+    await assertEmployeeNoAvailable(employeeNo);
     const sectionOrDepartment = parsed.data.section ?? parsed.data.department ?? "";
     const department = sectionOrDepartment
       ? await resolveDepartmentGroup(sectionOrDepartment)
@@ -1777,7 +1794,11 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     // employee_no is UNIQUE - an empty string (rather than null) collides
     // with every other blank-employee_no user on the second such save, so
     // normalize blank to null the same way user creation already does.
-    if (parsed.data.employee_no !== undefined) { fields.push(`employee_no=$${idx++}`); values.push(parsed.data.employee_no?.trim() || null); }
+    if (parsed.data.employee_no !== undefined) {
+      const employeeNo = parsed.data.employee_no?.trim() || null;
+      await assertEmployeeNoAvailable(employeeNo, req.params.id);
+      fields.push(`employee_no=$${idx++}`); values.push(employeeNo);
+    }
     if (parsed.data.title !== undefined) { fields.push(`title=$${idx++}`); values.push(parsed.data.title); }
     if (parsed.data.department !== undefined) {
       const organization = parsed.data.department.trim();

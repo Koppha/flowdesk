@@ -376,10 +376,12 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       const captureViewOnly = !isAdmin && ((await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req)));
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name, tt.currency
+                ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name, tt.currency,
+                dv.name AS division
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
            LEFT JOIN travel_types tt ON tt.code = ar.type
+           LEFT JOIN divisions dv ON dv.id = u.division_id
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
           ORDER BY ar.created_at DESC`
@@ -418,6 +420,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           purpose: a.purpose,
           requester_name: a.requester_name,
           currency: a.currency,
+          division: a.division ?? null,
           workflow_step_order: a.workflow_step_order,
           current_step_approver_id: currentStep?.approver_id ?? null,
           current_step_position_name: currentStep ? group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ") : null,

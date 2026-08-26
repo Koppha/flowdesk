@@ -19,6 +19,7 @@ type InboxItem =
       purpose: string | null;
       requester_name: string;
       currency?: string | null;
+      division?: string | null;
       advance_type?: string;
       workflow_step_order?: number | null;
       current_step_approver_id?: string | null;
@@ -528,11 +529,26 @@ export default function Inbox(props: {
   );
   useEffect(() => { if (!hasAnyDelegatedItems) setDelegationScope("ALL"); }, [hasAnyDelegatedItems]);
 
+  // Company/division filter (MNO / SEFS / HigherLife) - only meaningful in
+  // the Capture Inbox, where Treasury/Finance need to work one company's
+  // queue at a time rather than a single list mixing all three.
+  const [divisionFilter, setDivisionFilter] = useState<"ALL" | "MNO" | "SEFS" | "HigherLife">("ALL");
+  const divisionCounts = useMemo(() => {
+    const counts: Record<string, number> = { MNO: 0, SEFS: 0, HigherLife: 0 };
+    for (const it of items) {
+      const d = (it as any).division;
+      if (d && d in counts) counts[d]++;
+    }
+    return counts;
+  }, [items]);
+
   const scopedItems = useMemo(() => {
-    if (delegationScope === "MINE") return items.filter((it: any) => !it.is_delegated);
-    if (delegationScope === "DELEGATED") return items.filter((it: any) => it.is_delegated);
-    return items;
-  }, [items, delegationScope]);
+    let result = items;
+    if (delegationScope === "MINE") result = result.filter((it: any) => !it.is_delegated);
+    else if (delegationScope === "DELEGATED") result = result.filter((it: any) => it.is_delegated);
+    if (mode === "capture" && divisionFilter !== "ALL") result = result.filter((it: any) => it.division === divisionFilter);
+    return result;
+  }, [items, delegationScope, mode, divisionFilter]);
 
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
@@ -555,7 +571,7 @@ export default function Inbox(props: {
   const [queueSearch, setQueueSearch] = useState("");
   const [queuePage, setQueuePage] = useState(1);
   const [queuePageSize, setQueuePageSize] = useState(10);
-  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope]);
+  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope, divisionFilter]);
 
   // Capture mode's item list deliberately keeps already-captured items visible
   // (so they can still be found/downloaded), so "awaiting" counts need to
@@ -671,6 +687,26 @@ export default function Inbox(props: {
             </div>
           ) : (
             <>
+              {mode === "capture" && (
+                <div className="ep-tabs" style={{ marginBottom: 8 }}>
+                  {([
+                    { key: "ALL", label: "All Companies" },
+                    { key: "MNO", label: "MNO" },
+                    { key: "SEFS", label: "SEFS" },
+                    { key: "HigherLife", label: "HigherLife" }
+                  ] as const).map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      className={`ep-tab ${divisionFilter === tab.key ? "active" : ""}`}
+                      onClick={() => setDivisionFilter(tab.key)}
+                    >
+                      {tab.label}
+                      <span className="inbox-count-chip">{tab.key === "ALL" ? items.length : divisionCounts[tab.key]}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {hasAnyDelegatedItems && (
                 <>
                   <div className="inbox-delegate-banner">
