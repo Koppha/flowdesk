@@ -12,10 +12,17 @@ paAssignmentsRouter.use(requireAuth);
 // assignments themselves (create/end) is ADMIN-only, below.
 paAssignmentsRouter.get("/my-principals", async (req: AuthedRequest, res, next) => {
   try {
+    // Full org placement (role, section, division), not just department -
+    // the advance form needs all of it to resolve the boss's actual rate
+    // tier and approval chain, not the PA's own (see App.tsx's
+    // selectedRequestUser / travellerRole / the resolveWorkflow effect).
     const rows = await query(
-      `SELECT u.id, u.full_name, u.employee_no, u.employment_type, u.department, u.profile_completed
+      `SELECT u.id, u.full_name, u.email, u.employee_no, u.employment_type, u.department, u.profile_completed,
+              u.role, u.section_id, s.name AS section_name, u.division_id, dv.name AS division_name
          FROM pa_assignments pa
          JOIN users u ON u.id = pa.principal_user_id
+         LEFT JOIN sections s ON s.id = u.section_id
+         LEFT JOIN divisions dv ON dv.id = u.division_id
         WHERE pa.pa_user_id = $1 AND pa.is_active = true AND u.is_active = true
         ORDER BY u.full_name NULLS LAST`,
       [req.user!.userId]

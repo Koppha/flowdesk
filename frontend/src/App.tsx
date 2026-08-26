@@ -967,7 +967,11 @@ export default function App() {
   // actually for, not necessarily the person filling in the form on their
   // behalf) — EXCO/CEO have their own configured rates precisely so this
   // doesn't silently fall back to the general-staff rate for them.
-  const travellerRole = requestDirectory.find((user) => user.id === requestForUserId)?.role || profile?.role || "UNKNOWN";
+  const travellerRole =
+    requestDirectory.find((user) => user.id === requestForUserId)?.role ||
+    myPaPrincipals.find((user) => user.id === requestForUserId)?.role ||
+    (!requestForUserId || requestForUserId === profile?.id ? profile?.role : undefined) ||
+    "UNKNOWN";
   const selectedTravelRate = selectedTravelType
     ? Number(
         (travellerRole === "CEO" ? selectedTravelType.rate_ceo : travellerRole === "EXCO" ? selectedTravelType.rate_exco : selectedTravelType.rate_general_staff) || 0
@@ -1291,6 +1295,7 @@ export default function App() {
   );
   const selectedRequestUser =
     requestDirectory.find((user) => user.id === requestForUserId) ||
+    myPaPrincipals.find((user) => user.id === requestForUserId) ||
     (requestForUserId === (profile?.id || me?.userId)
       ? {
           id: profile?.id || me?.userId || "",
@@ -1314,8 +1319,18 @@ export default function App() {
   // resolve approval chain from the workflow that matches the user's section + advance type
   useEffect(() => {
     if (page !== "MY_ADVANCES" && page !== "ADVANCE") return;
-    const dept = profile?.department || "";
-    const section = profile?.section_name || "";
+    // A PA submitting for an assigned boss must resolve the approval route
+    // (and the rate tier, via travellerRole above) from the BOSS's own org
+    // placement, not the PA's - otherwise this always showed the PA's own
+    // chain/rate regardless of who "Request For" actually pointed at. Self
+    // and the existing intern/temp on-behalf flow are unaffected (myPaPrincipals
+    // won't contain requestForUserId for those, so this falls through to the
+    // same profile-based behavior as before).
+    const paPrincipal = myPaPrincipals.find((u) => u.id === requestForUserId);
+    const dept = paPrincipal ? (paPrincipal.department || "") : (profile?.department || "");
+    const section = paPrincipal ? (paPrincipal.section_name || "") : (profile?.section_name || "");
+    const division = paPrincipal ? (paPrincipal.division_name || "") : (profile?.division_name || "");
+    const chainRole = paPrincipal ? (paPrincipal.role || role) : role;
 
     function loadCustomChainData() {
       setChainPositionTypes([
@@ -1340,7 +1355,7 @@ export default function App() {
     setAdvanceWorkflowFound(null);
     // Pass the selected advance sub-type (and requester role) so the backend can
     // prefer a sub-type-specific and/or role-restricted workflow.
-    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, role, profile?.division_name || undefined)
+    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, chainRole, division || undefined)
       .then((result: any) => {
         if (cancelled) return;
         const chain: any[] = Array.isArray(result?.chain) ? result.chain : [];
@@ -1369,7 +1384,7 @@ export default function App() {
       });
 
     return () => { cancelled = true; };
-  }, [page, profile?.department, profile?.division_name, profile?.section_name, advanceType, role]);
+  }, [page, profile?.department, profile?.division_name, profile?.section_name, advanceType, role, requestForUserId, myPaPrincipals]);
 
   async function refresh() {
     setError(null);
