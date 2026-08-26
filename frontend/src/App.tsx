@@ -4532,8 +4532,16 @@ export default function App() {
                                 users={adminUsers.filter((user) => {
                                   if (user.is_active === false || user.id === delegationManagerId) return false;
                                   const manager = adminUsers.find((u) => u.id === delegationManagerId);
-                                  if (!manager || manager.role === "CEO") return true;
-                                  const sameDept = Boolean(manager.department) && manager.department === user.department;
+                                  if (!manager) return true;
+                                  // CEO is org-wide, no scoping at all. Someone with no department
+                                  // of their own but a division (e.g. a GM overseeing a whole
+                                  // division rather than one department) is scoped to that
+                                  // division instead of one department/section.
+                                  if (manager.role === "CEO") return true;
+                                  if (!manager.department) {
+                                    return Boolean(manager.division_id) && manager.division_id === user.division_id;
+                                  }
+                                  const sameDept = manager.department === user.department;
                                   const sameSection = Boolean(manager.section_id) && manager.section_id === user.section_id;
                                   return sameDept || sameSection;
                                 })}
@@ -4550,9 +4558,16 @@ export default function App() {
                               users={adminUsers.filter((user) => {
                                 const selfId = profile?.id || me?.userId;
                                 if (user.is_active === false || user.id === selfId) return false;
-                                if (role === "CEO") return true;
                                 const selfInfo = adminUsers.find((u) => u.id === selfId);
-                                const sameDept = Boolean(selfInfo?.department) && selfInfo?.department === user.department;
+                                // CEO is org-wide, no scoping at all. Someone with no department
+                                // of their own but a division (e.g. a GM overseeing a whole
+                                // division rather than one department) is scoped to that
+                                // division instead of one department/section.
+                                if (role === "CEO") return true;
+                                if (!selfInfo?.department) {
+                                  return Boolean(selfInfo?.division_id) && selfInfo?.division_id === user.division_id;
+                                }
+                                const sameDept = selfInfo?.department === user.department;
                                 const sameSection = Boolean(selfInfo?.section_id) && selfInfo?.section_id === user.section_id;
                                 return sameDept || sameSection;
                               })}

@@ -1296,8 +1296,8 @@ authRouter.post("/delegations", async (req: AuthedRequest, res, next) => {
     const isStandbyClaim = Boolean(parsed.data.request_types?.includes("STANDBY_CLAIM"));
     const isOvertimeApproval = Boolean(parsed.data.request_types?.some((t) => t === "OVERTIME_REQUEST" || t === "OVERTIME_CLAIM"));
 
-    const users = await query<{ id: string; role: string; department: string | null; section_id: string | null; team_id: string | null; full_name: string | null; email: string }>(
-      `SELECT id, role, department, section_id, team_id, full_name, email FROM users WHERE id IN ($1, $2)`,
+    const users = await query<{ id: string; role: string; department: string | null; section_id: string | null; team_id: string | null; division_id: string | null; full_name: string | null; email: string }>(
+      `SELECT id, role, department, section_id, team_id, division_id, full_name, email FROM users WHERE id IN ($1, $2)`,
       [managerId, parsed.data.delegate_id]
     );
     const manager = users.find((user) => user.id === managerId);
@@ -1355,18 +1355,25 @@ authRouter.post("/delegations", async (req: AuthedRequest, res, next) => {
       if (!managerRoleEligible && !(await isDelegationEligible(manager.id))) {
         throw badRequest("User must be a Manager, Exco member, CEO, or assigned to a workflow step that allows delegation");
       }
-      // CEO is an org-wide role with no single department, so any active delegate
-      // is acceptable; everyone else's delegate must share the manager's
+      // CEO is an org-wide role with no single department, so any active
+      // delegate is acceptable. Someone with no department of their own but
+      // a division (e.g. a GM overseeing a whole division rather than one
+      // department) is scoped to that division instead of one department/
+      // section. Everyone else's delegate must share the manager's
       // department or section.
-      if (manager.role !== "CEO") {
+      if (manager.role === "CEO") {
+        managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
+      } else if (!managerDept) {
+        if (!manager.division_id || manager.division_id !== delegate.division_id) {
+          throw badRequest("Delegate must be in the same division as the manager");
+        }
+      } else {
         const delegateDept = String(delegate.department || "").trim();
-        const sameDept = Boolean(managerDept) && managerDept === delegateDept;
+        const sameDept = managerDept === delegateDept;
         const sameSection = Boolean(manager.section_id) && manager.section_id === delegate.section_id;
         if (!sameDept && !sameSection) {
           throw badRequest("Delegate must be in the same department or section as the manager");
         }
-      } else {
-        managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
       }
     }
 
