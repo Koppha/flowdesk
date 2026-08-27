@@ -343,6 +343,14 @@ export async function resolveWorkflowChain(params: {
     // deptExco above).
     const isHrCode = code.startsWith("HR_");
     const isDeptExcoCode = code === "EXCO" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
+
+    // An EXCO-role requester (e.g. a GM) submitting their own request would
+    // otherwise resolve this step back to themselves - they're their own
+    // department's EXCO member - which isn't a real second review. Skip the
+    // step entirely rather than have someone approve their own request; the
+    // CEO/Manager step above already covers their sign-off.
+    if (isDeptExcoCode && requesterId && deptExco?.id === requesterId) { previousStepPushed = false; continue; }
+
     const isDeptManagerCode = code === "MANAGER" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const isDeptHodCode = code === "HOD" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const hasFixedAssignees = !!step.assigned_user_ids?.length;
