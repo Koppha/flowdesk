@@ -1104,11 +1104,8 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     const dates = lines.map((l) => l.line_date).filter(Boolean).sort();
     const dateFrom = dates[0];
     const dateTo = dates[dates.length - 1];
-    // Departure-to-return span (e.g. 27th to 30th = 3 days), not an
-    // inclusive count of both endpoints - mirrors resolveAdvancePdfData's
-    // fix in backend-v2/src/lib/pdf/pdfFieldCatalog.ts.
     const durationDays = dateFrom && dateTo
-      ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000))
+      ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1)
       : null;
     const locations = Array.from(new Set(lines.map((l) => l.location).filter(Boolean))) as string[];
     const onBehalfOf = detail.created_by_id && detail.requester_id && detail.created_by_id !== detail.requester_id
