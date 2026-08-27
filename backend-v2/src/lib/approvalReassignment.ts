@@ -71,22 +71,31 @@ async function resolveDynamicApprover(
   movedUserId: string,
   department: string | null,
   chain: ChainStep[],
-  stepIdx: number
+  stepIdx: number,
+  workflowId: string
 ): Promise<ResolvedApprover | null> {
   if (positionCode === "EXCO") return resolveDeptExco(department || "");
 
   const candidate = await resolveRequesterManager(movedUserId);
   if (positionCode !== "HOD" || !candidate) return candidate;
 
-  // Collision avoidance: if an earlier step in this same stored chain is a
-  // MANAGER position already resolved to this same person, escalate one
-  // level further so the same approver doesn't land on two steps — mirrors
+  // Collision avoidance: if an earlier step in this same stored chain is
+  // ITSELF a dynamic MANAGER position, escalate one level further so the
+  // same "direct manager" slot doesn't fill both steps — mirrors
   // resolveWorkflowChain's dynamicManagerAlreadyResolved/secondLevelManager.
-  const earlierManagerHit = chain
-    .slice(0, stepIdx)
-    .some((s) => normalizeWorkflowRouteCode(s.position_type_code, s.position_name) === "MANAGER" && s.approver_id === candidate.id);
-  if (!earlierManagerHit) return candidate;
-  return resolveRequesterManager(candidate.id);
+  // This has to be a structural check (was that earlier step a dynamic
+  // MANAGER step at all), not an identity comparison against its stored
+  // approver_id — that id is frozen from whenever it last resolved, and a
+  // move can change what resolveRequesterManager(movedUserId) returns
+  // without touching the earlier step's stale approver_id at all, which
+  // silently defeated this check (see Thuto Matlakala's HOD step landing on
+  // his own direct manager, Lithakong Mothibe, instead of escalating to the
+  // real Operations HOD, Paka Mahao).
+  for (let i = 0; i < stepIdx; i++) {
+    const earlierCode = await classifyDynamicStep(workflowId, chain[i]);
+    if (earlierCode === "MANAGER") return resolveRequesterManager(candidate.id);
+  }
+  return candidate;
 }
 
 function patchStep(step: ChainStep, resolved: ResolvedApprover) {
@@ -156,7 +165,7 @@ async function reassignAdvances(
       const positionCode = await classifyDynamicStep(row.workflow_id, step);
       if (!positionCode) continue;
 
-      const resolved = await resolveDynamicApprover(positionCode, row.requester_id, row.requester_department, chain, idx);
+      const resolved = await resolveDynamicApprover(positionCode, row.requester_id, row.requester_department, chain, idx, row.workflow_id);
       if (!resolved) {
         warnings.push({ module: "advance", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
         continue;
@@ -271,7 +280,7 @@ async function reassignClaims(
       const positionCode = await classifyDynamicStep(row.workflow_id, step);
       if (!positionCode) continue;
 
-      const resolved = await resolveDynamicApprover(positionCode, row.claimant_id, row.claimant_department, chain, idx);
+      const resolved = await resolveDynamicApprover(positionCode, row.claimant_id, row.claimant_department, chain, idx, row.workflow_id);
       if (!resolved) {
         warnings.push({ module: "claim", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
         continue;
