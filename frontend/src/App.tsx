@@ -41,7 +41,7 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
+import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
@@ -2731,16 +2731,21 @@ export default function App() {
     setPage("ADVANCE");
   }
 
-  function advanceStageLabel(status: string, _type?: string) {
+  function advanceStageLabel(advance: any) {
+    const status = advance?.status;
+    if (status === "DRAFT") return "Draft (not submitted)";
+    if (status === "PAID") return "Completed";
+    if (status === "CANCELLED") return "Cancelled";
+    if (status === "REJECTED") return "Rejected";
+    // status often still reads a stale pre-approval bucket (e.g. "SUBMITTED")
+    // once a workflow-driven advance has moved past approval into
+    // Accommodation/Capture/Payment - see isAdvancePastApproval.
+    if (isAdvancePastApproval(advance)) return "Approved — Awaiting Payment";
     switch (status) {
-      case "DRAFT":             return "Draft (not submitted)";
       case "SUBMITTED":         return "Pending Approval";
       case "COUNTERSIGNED":     return "Pending HOD / EXCO Approval";
       case "HR_OFFICER":        return "Pending Finance Payment";
       case "APPROVED":          return "Approved — Awaiting Payment";
-      case "PAID":              return "Completed";
-      case "CANCELLED":         return "Cancelled";
-      case "REJECTED":          return "Rejected";
       default:                  return humanizeToken(status);
     }
   }
@@ -3467,14 +3472,14 @@ export default function App() {
       .filter((a) => {
         const requester = (a.requester_name || profile?.full_name || me?.fullName || "").toLowerCase();
         const type = travelTypeLabel(a.type, travelTypes).toLowerCase();
-        const status = (currentApprovalStepLabel(a) || advanceStageLabel(a.status, a.type)).toLowerCase();
+        const status = (currentApprovalStepLabel(a) || advanceStageLabel(a)).toLowerCase();
         return requester.includes(term) || type.includes(term) || status.includes(term) || String(a.type || "").toLowerCase().includes(term);
       })
       .map((a) => ({
         kind: "advance" as const,
         id: a.id,
         title: `${a.requester_name || profile?.full_name || me?.fullName || "—"} · ${travelTypeLabel(a.type, travelTypes)}`,
-        subtitle: currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a.status, a.type),
+        subtitle: currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a),
       }));
     const claimResults = claims
       .filter((c) => {
@@ -3503,7 +3508,7 @@ export default function App() {
       if (a.paid_at) entries.push({ id: `${a.id}-paid`, title, subtitle: `${type} · Paid`, status: "PAID", date: a.paid_at });
       else if (a.approved_at) entries.push({ id: `${a.id}-appr`, title, subtitle: `${type} · Approved`, status: "APPROVED", date: a.approved_at });
       else if (a.status === "REJECTED" && (a.updated_at || a.approved_at)) entries.push({ id: `${a.id}-rej`, title, subtitle: `${type} · Rejected`, status: "REJECTED", date: a.updated_at || a.approved_at });
-      else if (a.submitted_at || a.created_at) entries.push({ id: `${a.id}-sub`, title, subtitle: `${type} · ${currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a.status, a.type)}`, status: a.status, date: a.submitted_at || a.created_at });
+      else if (a.submitted_at || a.created_at) entries.push({ id: `${a.id}-sub`, title, subtitle: `${type} · ${currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a)}`, status: isAdvancePastApproval(a) ? "APPROVED" : a.status, date: a.submitted_at || a.created_at });
     }
     for (const c of claims) {
       const title = `Clearance for ${c.requester_name || name}`;
@@ -3641,8 +3646,8 @@ export default function App() {
                   <strong>
                     {Array.isArray(advance.approval_chain) && advance.approval_chain.length > 0
                       && !["DRAFT", "PAID", "APPROVED", "REJECTED", "CANCELLED"].includes(currentStatus) && activeStage?.label
-                      ? `Pending ${activeStage.label} Approval`
-                      : advanceStageLabel(currentStatus, advance.type)}
+                      ? (isAdvancePastApproval(advance) ? `With ${activeStage.label}` : `Pending ${activeStage.label} Approval`)
+                      : advanceStageLabel(advance)}
                   </strong>
                   <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>
                     {["PAID", "APPROVED", "REJECTED", "CANCELLED"].includes(currentStatus) ? humanizeToken(currentStatus) : "In Progress"}
@@ -3760,7 +3765,7 @@ export default function App() {
                     <h3><User size={17} aria-hidden /> Current Owner</h3>
                     <div className="tracking-owner">
                       <strong>{activeStage?.label || "Requester"}</strong>
-                      <span>{advanceStageLabel(currentStatus, advance.type)}</span>
+                      <span>{advanceStageLabel(advance)}</span>
                       {["SUBMITTED","COUNTERSIGNED","HR_OFFICER","APPROVED"].includes(currentStatus) && (
                         <button
                           type="button"
@@ -6210,7 +6215,7 @@ export default function App() {
                         return (
                           <div key={status} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 20px" }}>
                             <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>
-                              {advanceStageLabel(status)}
+                              {advanceStageLabel({ status })}
                             </span>
                             <div style={{ flex: 1, height: 6, background: "var(--surface-soft)", borderRadius: 99, overflow: "hidden" }}>
                               <div style={{ height: "100%", width: `${(count/total)*100}%`, background: color, borderRadius: 99 }} />
@@ -6289,7 +6294,7 @@ export default function App() {
                               <td>{travelTypeLabel(adv.type, travelTypes)}</td>
                               <td>
                                 <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: sbg, color: sclr }}>
-                                  {currentApprovalStepLabel(adv) ? `Pending ${currentApprovalStepLabel(adv)} Approval` : advanceStageLabel(adv.status, adv.type)}
+                                  {currentApprovalStepLabel(adv) ? `Pending ${currentApprovalStepLabel(adv)} Approval` : advanceStageLabel(adv)}
                                 </span>
                               </td>
                               <td style={{ fontWeight: 600 }}>{fmtMoney(adv.requested_total)}</td>

@@ -346,6 +346,14 @@ function itemStatusLabel(item: InboxItem) {
     if ((item as any).current_step_action_type === "COUNTER_SIGN" || item.current_step_position_name === "Manager") {
       return "Pending Countersign";
     }
+    // Once the chain has moved past actual approval-type steps and into
+    // post-approval processing (Accommodation/Capture/Payment), it's already
+    // approved - showing "Pending Approval" here is stale/wrong, it just
+    // hasn't been captured, booked, or paid yet.
+    if (isCaptureActionType((item as any).current_step_action_type) || (item as any).current_step_action_type === "DEPT_ACCOMODATION") {
+      return "Approved";
+    }
+    if ((item as any).current_step_action_type === "MARK_PAID") return "Approved — Awaiting Payment";
     return "Pending Approval";
   }
   if (item.doc_type === "CUSTOM_REQUEST" && item.status === "IN_PROGRESS") {

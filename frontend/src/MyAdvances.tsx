@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { formatMoney, travelTypeLabel, isTravelTypeCode, TravelType, currentApprovalStepLabel } from "./constants";
+import { formatMoney, travelTypeLabel, isTravelTypeCode, TravelType, currentApprovalStepLabel, isAdvancePastApproval } from "./constants";
 import { FileText, Clock3, CheckCircle2, XCircle, Edit3, RefreshCw, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 
 function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
@@ -68,16 +68,21 @@ function requestNumber(advance: any) {
   return `ADV-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
 }
 
-function advanceStageLabel(status: string) {
+function advanceStageLabel(advance: any) {
+  const status = advance?.status;
+  if (status === "DRAFT") return "Draft (not submitted)";
+  if (status === "PAID") return "Completed";
+  if (status === "CANCELLED") return "Cancelled";
+  if (status === "REJECTED") return "Rejected";
+  // status often still reads a stale pre-approval bucket (e.g. "SUBMITTED")
+  // once a workflow-driven advance has moved past approval into
+  // Accommodation/Capture/Payment - see isAdvancePastApproval.
+  if (isAdvancePastApproval(advance)) return "Approved — Awaiting Payment";
   switch (status) {
-    case "DRAFT": return "Draft (not submitted)";
     case "SUBMITTED": return "Pending Approval";
     case "COUNTERSIGNED": return "Pending HOD / EXCO Approval";
     case "HR_OFFICER": return "Pending Finance Payment";
     case "APPROVED": return "Approved — Awaiting Payment";
-    case "PAID": return "Completed";
-    case "CANCELLED": return "Cancelled";
-    case "REJECTED": return "Rejected";
     default: return statusLabel(status);
   }
 }
@@ -245,11 +250,11 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
                     <td style={{ fontWeight: 600 }}>{travelTypeLabel(a.type, travelTypes)}</td>
                     <td><strong>{requestNumber(a)}</strong></td>
                     <td>
-                      <span className={`status-pill ${statusTone(a.status)}`}>{currentApprovalStepLabel(a) || statusLabel(a.status)}</span>
+                      <span className={`status-pill ${statusTone(a.status)}`}>{currentApprovalStepLabel(a) || (isAdvancePastApproval(a) ? "Approved" : statusLabel(a.status))}</span>
                       {a.is_overdue && <span className="status-pill status-pill-danger" style={{ marginLeft: 6 }}>Overdue</span>}
                     </td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>
-                      {currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a.status)}
+                      {currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a)}
                     </td>
                     <td>{formatMoney(a.requested_total, travelTypeCurrency(a.type, travelTypes))}</td>
                     <td>{formatMoney(a.approved_total, travelTypeCurrency(a.type, travelTypes))}</td>

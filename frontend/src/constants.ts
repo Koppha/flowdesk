@@ -139,15 +139,40 @@ export function stepDoneStatusLabel(actionType: string | null | undefined): stri
   }
 }
 
+// Steps that happen *after* approval is already decided - capturing travel
+// form data, booking accommodation, recording payment - not another
+// judgment call, so "pending approval"-flavored wording is wrong for them.
+const POST_APPROVAL_ACTION_TYPES = new Set(["DEPT_ACCOMODATION", "DEPT_CAPTURE", "CAPTURE", "BOOK_ACC", "MARK_PAID"]);
+
+// True once a workflow-driven advance has passed every real approval-type
+// step (COUNTER_SIGN/APPROVE/HR_*/EXCO/...) and is only waiting on
+// post-approval processing (Accommodation/Capture/Payment) - advance_requests.status
+// often still reads a stale pre-approval bucket (e.g. "SUBMITTED") at this
+// point for workflow-driven requests, since it isn't updated on every chain
+// step transition, only at a few fixed milestones.
+export function isAdvancePastApproval(advance: any): boolean {
+  const chain = Array.isArray(advance?.approval_chain) ? advance.approval_chain : [];
+  if (!chain.length) return false;
+  const lastApprovalIdx = chain.reduce(
+    (last: number, step: any, idx: number) => (!POST_APPROVAL_ACTION_TYPES.has(step.action_type) ? idx : last),
+    -1
+  );
+  if (lastApprovalIdx === -1) return false;
+  const stepOrder = typeof advance?.workflow_step_order === "number" ? advance.workflow_step_order : 0;
+  return stepOrder > lastApprovalIdx;
+}
+
 export function currentApprovalStepLabel(advance: any): string | null {
   const chain = Array.isArray(advance?.approval_chain) ? advance.approval_chain : [];
   if (!chain.length) return null;
   if (TERMINAL_ADVANCE_STATUSES.includes(String(advance?.status || "").toUpperCase())) return null;
+  if (isAdvancePastApproval(advance)) return null;
 
   let idx = typeof advance?.workflow_step_order === "number" ? advance.workflow_step_order : 0;
   while (idx > 0 && chain[idx]?.parallel_with_previous) idx--;
   const step = chain[idx];
   if (!step) return null;
+  if (POST_APPROVAL_ACTION_TYPES.has(step.action_type)) return null;
 
   const positionName: string | undefined = step.position_name;
   return (positionName && displayOrgGroupName(positionName)) || step.approver_title || null;
