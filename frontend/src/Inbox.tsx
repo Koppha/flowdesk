@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
-import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { roleLabel } from "./roles";
 import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
@@ -1145,7 +1145,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
         key: `step-${idx}`,
         label,
         state: isDone ? "done" : isActive ? "active" : "waiting",
-        status: isDone ? "Approved" : isActive ? "In Progress" : "Waiting",
+        status: isDone ? stepDoneStatusLabel(step.action_type) : isActive ? "In Progress" : "Waiting",
         actor: isTeamGroup ? "" : (step.approver_name || "")
       };
     });

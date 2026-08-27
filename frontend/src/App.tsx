@@ -41,7 +41,7 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isTravelTypeCode, travelTypeLabel } from "./constants";
+import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
@@ -2940,7 +2940,7 @@ export default function App() {
           state: isSkipped ? "done" : terminalFailed && isActive ? "danger" : isActive ? "active" : isDone ? "done" : "waiting",
           date: approveEvent?.created_at || "",
           actor: actorName,
-          status: isSkipped ? "Skipped (no approver assigned)" : isActive ? "In Progress" : isDone ? "Approved" : "Waiting",
+          status: isSkipped ? "Skipped (no approver assigned)" : isActive ? "In Progress" : isDone ? stepDoneStatusLabel(step.action_type) : "Waiting",
           tooltip: isSkipped ? "This step was automatically skipped because no approver was assigned and the step is configured to skip if unassigned." : undefined
         });
       });
@@ -3083,7 +3083,7 @@ export default function App() {
           label,
           state: terminalFailed && isActive ? "danger" : isActive ? "active" : isDone ? "done" : "waiting",
           actor: actorName,
-          status: isActive ? "In Progress" : isDone ? "Approved" : "Waiting"
+          status: isActive ? "In Progress" : isDone ? stepDoneStatusLabel(step.action_type) : "Waiting"
         });
       });
     }

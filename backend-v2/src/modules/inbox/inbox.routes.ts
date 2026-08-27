@@ -409,7 +409,14 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId);
           if (!eligible) continue;
         }
-        const currentStep = group.steps.find((s) => !s.approved) ?? null;
+        // Use captureStep itself for the displayed "current step" fields,
+        // not just "whichever group member happens to be unapproved first"
+        // (group.steps in array/step_order order) - some workflows (e.g.
+        // SEFS's) have Accommodation at a lower step_order than Capture, so
+        // that generic pick returned DEPT_ACCOMODATION here, which then
+        // failed the frontend's isCaptureItem/isCaptureActionType check and
+        // silently hid an otherwise-actionable capture item from the whole
+        // Capture Inbox (including its company tab counts).
         items.push({
           doc_type: "ADVANCE",
           id: a.id,
@@ -422,11 +429,11 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           currency: a.currency,
           division: a.division ?? null,
           workflow_step_order: a.workflow_step_order,
-          current_step_approver_id: currentStep?.approver_id ?? null,
-          current_step_position_name: currentStep ? group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ") : null,
-          current_step_action_type: currentStep?.action_type ?? null,
-          current_step_can_reject: currentStep?.can_reject,
-          current_step_can_rollback: currentStep?.can_rollback,
+          current_step_approver_id: captureStep.approver_id ?? null,
+          current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ") || captureStep.position_name,
+          current_step_action_type: captureStep.action_type,
+          current_step_can_reject: captureStep.can_reject,
+          current_step_can_rollback: captureStep.can_rollback,
           current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)),
           capture_done: !!captureStep.approved,
           is_delegated: !!delegatedFrom(captureStep),

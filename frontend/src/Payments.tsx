@@ -16,6 +16,7 @@ interface PaymentItem {
   purpose: string | null;
   requester_name: string | null;
   department: string | null;
+  division: string | null;
   created_at: string;
   paid_at: string | null;
   paid_reference: string | null;
@@ -58,6 +59,9 @@ export default function Payments(props: { onBack?: () => void }) {
 
   const [items, setItems] = useState<PaymentItem[]>([]);
   const [tab, setTab] = useState<"pending" | "paid">("pending");
+  // Company/division filter (MNO / SEFS / HigherLife) - lets Finance work
+  // one company's payment queue at a time, same as the Capture Inbox tabs.
+  const [divisionFilter, setDivisionFilter] = useState<"ALL" | "MNO" | "SEFS" | "HigherLife">("ALL");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<PaymentItem | null>(null);
@@ -91,15 +95,28 @@ export default function Payments(props: { onBack?: () => void }) {
     return Array.from(totals.entries());
   }
 
+  const divisionCounts = useMemo(() => {
+    const counts: Record<string, number> = { MNO: 0, SEFS: 0, HigherLife: 0 };
+    for (const i of items) {
+      if (i.division && i.division in counts) counts[i.division]++;
+    }
+    return counts;
+  }, [items]);
+
+  const companyFiltered = useMemo(
+    () => (divisionFilter === "ALL" ? items : items.filter((i) => i.division === divisionFilter)),
+    [items, divisionFilter]
+  );
+
   const stats = useMemo(() => ({
-    pending: items.filter((i) => i.payment_status === "PENDING").length,
-    pendingValueByCurrency: valueByCurrency(items.filter((i) => i.payment_status === "PENDING")),
-    paid: items.filter((i) => i.payment_status === "PAID").length,
-    paidValueByCurrency: valueByCurrency(items.filter((i) => i.payment_status === "PAID"))
-  }), [items]);
+    pending: companyFiltered.filter((i) => i.payment_status === "PENDING").length,
+    pendingValueByCurrency: valueByCurrency(companyFiltered.filter((i) => i.payment_status === "PENDING")),
+    paid: companyFiltered.filter((i) => i.payment_status === "PAID").length,
+    paidValueByCurrency: valueByCurrency(companyFiltered.filter((i) => i.payment_status === "PAID"))
+  }), [companyFiltered]);
 
   const filtered = useMemo(() => {
-    const byTab = items.filter((i) => i.payment_status === tab.toUpperCase());
+    const byTab = companyFiltered.filter((i) => i.payment_status === tab.toUpperCase());
     if (!search.trim()) return byTab;
     const q = search.toLowerCase();
     return byTab.filter((i) =>
@@ -108,7 +125,7 @@ export default function Payments(props: { onBack?: () => void }) {
       (i.department || "").toLowerCase().includes(q) ||
       (i.paid_reference || "").toLowerCase().includes(q)
     );
-  }, [items, tab, search]);
+  }, [companyFiltered, tab, search]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -164,6 +181,25 @@ export default function Payments(props: { onBack?: () => void }) {
               : stats.paidValueByCurrency.map(([currency, value]) => <small key={currency} style={{ display: "block" }}>{formatMoney(value, currency)}</small>)}
           </div>
         </div>
+      </div>
+
+      <div className="ep-tabs" style={{ marginBottom: 8 }}>
+        {([
+          { key: "ALL", label: "All Companies" },
+          { key: "MNO", label: "MNO" },
+          { key: "SEFS", label: "SEFS" },
+          { key: "HigherLife", label: "HigherLife" }
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={`ep-tab ${divisionFilter === t.key ? "active" : ""}`}
+            onClick={() => { setDivisionFilter(t.key); setPage(1); }}
+          >
+            {t.label}
+            <span className="inbox-count-chip">{t.key === "ALL" ? items.length : divisionCounts[t.key]}</span>
+          </button>
+        ))}
       </div>
 
       <div className="ep-tabs">

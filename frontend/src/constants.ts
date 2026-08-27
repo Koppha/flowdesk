@@ -120,6 +120,20 @@ export function displayOrgGroupName(name: string): string {
   return name;
 }
 
+// A completed step's status word depends on what kind of action it actually
+// was - "Approved" is right for a COUNTER_SIGN/APPROVE decision, but wrong
+// for DEPT_CAPTURE (data entry, not a judgment call), DEPT_ACCOMODATION
+// (a booking), or MARK_PAID (a payment) - each gets its own accurate word.
+export function stepDoneStatusLabel(actionType: string | null | undefined): string {
+  switch (actionType) {
+    case "DEPT_CAPTURE": return "Captured";
+    case "DEPT_ACCOMODATION": return "Booked";
+    case "MARK_PAID": return "Paid";
+    case "COUNTER_SIGN": return "Countersigned";
+    default: return "Approved";
+  }
+}
+
 export function currentApprovalStepLabel(advance: any): string | null {
   const chain = Array.isArray(advance?.approval_chain) ? advance.approval_chain : [];
   if (!chain.length) return null;

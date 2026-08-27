@@ -735,10 +735,12 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
       `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
               ar.workflow_step_order, ar.approval_chain, ar.paid_at, ar.paid_reference,
               ar.created_at, ar.sequence_no, COALESCE(tt.currency, 'LSL') AS currency,
-              u.full_name AS requester_name, u.employee_no AS requester_employee_no, u.department
+              u.full_name AS requester_name, u.employee_no AS requester_employee_no, u.department,
+              dv.name AS division
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
          LEFT JOIN travel_types tt ON tt.code = ar.type
+         LEFT JOIN divisions dv ON dv.id = u.division_id
         WHERE ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
         ORDER BY ar.created_at DESC`
     );
@@ -780,6 +782,7 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
         purpose: a.purpose,
         requester_name: a.requester_name,
         department: a.department,
+        division: a.division ?? null,
         created_at: a.created_at,
         paid_at: a.paid_at,
         paid_reference: a.paid_reference,
