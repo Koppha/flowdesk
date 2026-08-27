@@ -1555,14 +1555,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               className="button small-button button-subtle"
               disabled={busy}
               onClick={async () => {
-                // At the user's own Capture step, "Save as PDF" doubles as the
-                // step's action button — it captures (advances the workflow to
-                // the next stage) and then opens the freshly generated PDF,
-                // same as the "Capture" action button further down the page.
-                if (isCaptureStep && canApproveAdvance) {
-                  handleApproveAdvance();
-                  return;
-                }
+                // Read-only: just opens the current PDF. Capturing (advancing
+                // the workflow) only happens via the dedicated "Capture"
+                // action button further down the page - this button must
+                // never have a side effect on the approval chain.
                 try {
                   await openBlobInNewTab(() => api.advancePdf(item.id));
                 } catch (e: any) {
