@@ -274,10 +274,11 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       const userGroups = await getUserGroups(userId);
       const markPaidRows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                u.full_name AS requester_name, tt.currency
+                ar.approval_chain, u.full_name AS requester_name, tt.currency, dv.name AS division
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
            LEFT JOIN travel_types tt ON tt.code = ar.type
+           LEFT JOIN divisions dv ON dv.id = u.division_id
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status = 'APPROVED'
             AND ar.workflow_step_order IS NOT NULL
@@ -304,6 +305,16 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       );
       for (const a of markPaidRows) {
         if (items.some((i: any) => i.id === a.id)) continue;
+        // A workflow whose Capture step this same user also holds (e.g.
+        // SEFS's Finance Operations group does both DEPT_CAPTURE and
+        // MARK_PAID) reaches MARK_PAID only after Capture is done - without
+        // marking capture_done here, this item has none of the fields the
+        // frontend's isCaptureItem check looks for, so it silently vanished
+        // from the Capture Inbox entirely (claimed by this loader first,
+        // ahead of loadCaptureHistoryItems below, whose dedup then skipped
+        // it) instead of showing up in the Captured tab.
+        const chain = a.approval_chain as ChainStep[];
+        const hasCaptureStep = chain.some((s) => isCaptureActionType(s.action_type));
         items.push({
           doc_type: "ADVANCE",
           id: a.id,
@@ -314,7 +325,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           purpose: a.purpose,
           requester_name: a.requester_name,
           currency: a.currency,
-          is_final_step_approver: true
+          division: a.division ?? null,
+          is_final_step_approver: true,
+          ...(hasCaptureStep ? { current_step_action_type: "DEPT_CAPTURE", capture_done: true } : {})
         });
       }
 
@@ -322,10 +335,11 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       // The named person who gave final approval can also mark as paid.
       const singleRows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
-                u.full_name AS requester_name, tt.currency
+                ar.approval_chain, u.full_name AS requester_name, tt.currency, dv.name AS division
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
            LEFT JOIN travel_types tt ON tt.code = ar.type
+           LEFT JOIN divisions dv ON dv.id = u.division_id
           WHERE ar.approval_chain IS NOT NULL
             AND ar.status = 'APPROVED'
             AND NOT EXISTS (
@@ -342,6 +356,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       );
       for (const a of singleRows) {
         if (items.some((i: any) => i.id === a.id)) continue;
+        const chain = a.approval_chain as ChainStep[];
+        const hasCaptureStep = chain.some((s) => isCaptureActionType(s.action_type));
         items.push({
           doc_type: "ADVANCE",
           id: a.id,
@@ -350,6 +366,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           requested_total: Number(a.requested_total),
           approved_total: Number(a.approved_total),
           purpose: a.purpose,
+          division: a.division ?? null,
+          ...(hasCaptureStep ? { current_step_action_type: "DEPT_CAPTURE", capture_done: true } : {}),
           requester_name: a.requester_name,
           currency: a.currency,
           is_final_step_approver: true
