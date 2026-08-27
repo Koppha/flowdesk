@@ -8,7 +8,7 @@ import { query, withTransaction } from "../../lib/db.js";
 import { advanceWorkflowStep, createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } from "./advances.service.js";
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
 import type { AdvanceStatus } from "./advances.types.js";
-import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
+import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvancePaymentDeclined, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
@@ -1496,6 +1496,37 @@ export async function performAdvanceReject(
       extraCostDescription: notificationContext.extra_cost_description,
       comments
     });
+
+    // A decline at the Payment step means the requester isn't the only one
+    // who needs to know - whoever captured this request's details, and
+    // whoever booked its accommodation, both did work that may need
+    // redoing, so they're notified too instead of only finding out
+    // indirectly (or not at all).
+    if (currentStep?.action_type === "MARK_PAID") {
+      const recipients: Array<{ name: string | null; email: string | null; role: "Capture" | "Accommodation" }> = [];
+      const captureStep = chain.find((s) => (s.action_type === "CAPTURE" || s.action_type === "DEPT_CAPTURE") && s.approved);
+      if (captureStep?.approver_email) recipients.push({ name: captureStep.approver_name, email: captureStep.approver_email, role: "Capture" });
+      const accommodationBookers = await query<{ full_name: string | null; email: string | null }>(
+        `SELECT DISTINCT u.full_name, u.email
+           FROM accommodation_requests acc
+           JOIN users u ON u.id = acc.created_by_id
+          WHERE acc.advance_request_id = $1`,
+        [adv.id]
+      );
+      for (const b of accommodationBookers) recipients.push({ name: b.full_name, email: b.email, role: "Accommodation" });
+      if (recipients.length) {
+        await notifyAdvancePaymentDeclined({
+          advanceId: adv.id,
+          advanceType: notificationContext.type,
+          requesterName: notificationContext.full_name,
+          department: notificationContext.department,
+          requestedTotal: Number(notificationContext.requested_total),
+          currency: notificationContext.currency,
+          comments,
+          recipients
+        });
+      }
+    }
   }
   return { status };
 }

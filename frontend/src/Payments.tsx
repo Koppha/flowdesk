@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { formatMoney, isFinanceDeptClient } from "./constants";
-import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight, XCircle } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
@@ -65,6 +65,8 @@ export default function Payments(props: { onBack?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<PaymentItem | null>(null);
+  const [declining, setDeclining] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -138,6 +140,26 @@ export default function Payments(props: { onBack?: () => void }) {
       await api.markAdvancePaid(item.id);
       await refresh();
       setSelected(null);
+    } catch (e: any) {
+      setError(String(e.message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDecline(item: PaymentItem) {
+    if (!declineReason.trim()) {
+      setError("Enter a reason for declining this payment.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.rejectAdvance(item.id, declineReason.trim());
+      await refresh();
+      setSelected(null);
+      setDeclineReason("");
+      setDeclining(false);
     } catch (e: any) {
       setError(String(e.message));
     } finally {
@@ -239,7 +261,7 @@ export default function Payments(props: { onBack?: () => void }) {
               </thead>
               <tbody>
                 {paged.map((item) => (
-                  <tr key={item.id} style={{ cursor: "pointer" }} onClick={() => setSelected(item)}>
+                  <tr key={item.id} style={{ cursor: "pointer" }} onClick={() => { setSelected(item); setDeclining(false); setDeclineReason(""); }}>
                     <td>{item.paid_reference || "—"}</td>
                     <td>{requestNumber(item)}</td>
                     <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.requester_name || "—"}</td>
@@ -276,7 +298,7 @@ export default function Payments(props: { onBack?: () => void }) {
       {selected && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 1200, display: "flex", justifyContent: "flex-end", background: "rgba(15, 23, 42, 0.5)" }}
-          onClick={() => setSelected(null)}
+          onClick={() => { setSelected(null); setDeclining(false); setDeclineReason(""); }}
         >
           <div
             style={{ width: "min(480px, 100vw)", height: "100%", overflow: "auto", background: "var(--surface, #fff)", color: "var(--text)", boxShadow: "-12px 0 40px rgba(15,23,42,0.25)", display: "flex", flexDirection: "column" }}
@@ -288,7 +310,7 @@ export default function Payments(props: { onBack?: () => void }) {
                 <h2 style={{ margin: "4px 0" }}>{selected.paid_reference || "Pending Payment"}</h2>
                 <StatusBadge status={selected.payment_status} />
               </div>
-              <button className="button small-button button-subtle" onClick={() => setSelected(null)}>Close</button>
+              <button className="button small-button button-subtle" onClick={() => { setSelected(null); setDeclining(false); setDeclineReason(""); }}>Close</button>
             </div>
 
             <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -314,11 +336,39 @@ export default function Payments(props: { onBack?: () => void }) {
               </div>
             </div>
 
-            <div style={{ padding: "0 20px 20px", marginTop: "auto" }}>
+            {selected.payment_status === "PENDING" && !isAdmin && canMarkPaid && declining && (
+              <div style={{ padding: "0 20px 14px" }}>
+                <textarea
+                  className="ep-form-select"
+                  style={{ width: "100%", minHeight: 70, resize: "vertical" }}
+                  placeholder="Reason for declining this payment…"
+                  value={declineReason}
+                  onChange={(e) => setDeclineReason(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div style={{ padding: "0 20px 20px", marginTop: "auto", display: "flex", gap: 8 }}>
               {selected.payment_status === "PENDING" && !isAdmin && canMarkPaid && (
-                <button className="button button-primary" disabled={busy} onClick={() => handleMarkPaid(selected)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  <Wallet size={16} /> Mark as Paid
-                </button>
+                declining ? (
+                  <>
+                    <button className="button button-danger" disabled={busy} onClick={() => handleDecline(selected)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                      <XCircle size={16} /> Confirm Decline
+                    </button>
+                    <button className="button button-subtle" disabled={busy} onClick={() => { setDeclining(false); setDeclineReason(""); }} style={{ flex: 1 }}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="button button-primary" disabled={busy} onClick={() => handleMarkPaid(selected)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                      <Wallet size={16} /> Mark as Paid
+                    </button>
+                    <button className="button button-danger" disabled={busy} onClick={() => setDeclining(true)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                      <XCircle size={16} /> Decline
+                    </button>
+                  </>
+                )
               )}
             </div>
           </div>

@@ -551,6 +551,59 @@ export async function notifyAdvanceTask(args: {
   }
 }
 
+// ─── notifyAdvancePaymentDeclined ─────────────────────────────────────────────
+// The Payment Officer declining at the Mark Paid step doesn't just affect the
+// requester - whoever already captured the request's details, and whoever
+// booked its accommodation, both did work that may now need redoing (or at
+// least need to know the payment didn't go through), so they're notified
+// alongside the requester rather than only the requester finding out.
+
+export async function notifyAdvancePaymentDeclined(args: {
+  advanceId: string;
+  advanceType: string;
+  requesterName: string | null;
+  department: string | null;
+  requestedTotal: number;
+  currency?: string | null;
+  comments: string;
+  recipients: Array<{ name: string | null; email: string | null; role: "Capture" | "Accommodation" }>;
+}) {
+  const requester = args.requesterName || "Requester";
+  const details = detailBlock([
+    ["Requester",  requester],
+    ["Division", args.department],
+    ["Type",       args.advanceType.replace(/_/g, " ")],
+    ["Amount",     fmt(args.requestedTotal, args.currency)],
+    ["Comments",   args.comments]
+  ]);
+
+  for (const r of args.recipients) {
+    if (!r.email) continue;
+    try {
+      const msg = [
+        header(`ADVANCE REQUEST — PAYMENT DECLINED`),
+        ``,
+        `Hello ${r.name || ""}`.trim() + `,`,
+        ``,
+        `The Payment Officer has declined this advance request at the payment step. You previously actioned its ${r.role === "Capture" ? "Capture" : "Accommodation"} step, so you're being notified in case it needs to be redone.`,
+        ``,
+        details,
+        ``,
+        footer()
+      ].join("\n");
+      await sendMail({
+        to: [r.email],
+        subject: `[Payment Declined] ${advanceTypeLabel(args.advanceType)} for ${requester}`,
+        text: msg
+      });
+    } catch (error) {
+      logger.warn("advance_payment_declined_notification_failed", {
+        advance_id: args.advanceId, recipient: r.email, error: serializeError(error)
+      });
+    }
+  }
+}
+
 // ─── notifyAdvancePaid ────────────────────────────────────────────────────────
 
 export async function notifyAdvancePaid(args: {
