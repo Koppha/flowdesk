@@ -5,6 +5,7 @@ import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canAccessRefundable } from "../../lib/refundablePermissions.js";
+import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 
 // Refundable is the opposite of Deductions (deductions.routes.ts): a closed
 // clearance claim's balance_amount can go either way - positive means the
@@ -94,10 +95,12 @@ refundableRouter.use(async (req: AuthedRequest, res, next) => {
   }
 });
 
-refundableRouter.get("/", async (_req: AuthedRequest, res, next) => {
+refundableRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
+    const allowedDivisions = await getViewerDivisionScope(req.user!.userId, req.user!.role === "ADMIN");
     const rows = await query<RefundableRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
-    return res.json({ items: rows });
+    const items = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
+    return res.json({ items });
   } catch (err) {
     return next(err);
   }

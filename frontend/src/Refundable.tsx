@@ -95,8 +95,11 @@ export default function Refundable() {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const [tab, setTab] = useState<"pending" | "refunded" | "all">("pending");
+  // Company filter (MNO / SEFS / HigherLife) - same fixed set and pattern as
+  // Payments and the Capture Inbox, replacing the old free-text division
+  // dropdown so this page's filtering is consistent across admin screens.
+  const [companyFilter, setCompanyFilter] = useState<"ALL" | "MNO" | "SEFS" | "HigherLife">("ALL");
   const [search, setSearch] = useState("");
-  const [filterDivision, setFilterDivision] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
@@ -149,7 +152,13 @@ export default function Refundable() {
     };
   }, [items]);
 
-  const uniqueDivisions = useMemo(() => Array.from(new Set(items.map((i) => i.division_name).filter(Boolean))).sort() as string[], [items]);
+  const companyCounts = useMemo(() => {
+    const counts: Record<string, number> = { MNO: 0, SEFS: 0, HigherLife: 0 };
+    for (const i of items) {
+      if (i.division_name && i.division_name in counts) counts[i.division_name]++;
+    }
+    return counts;
+  }, [items]);
 
   const tabFiltered = useMemo(() => {
     if (tab === "all") return items;
@@ -159,7 +168,7 @@ export default function Refundable() {
 
   const filtered = useMemo(() => {
     return tabFiltered.filter((i) => {
-      if (filterDivision && i.division_name !== filterDivision) return false;
+      if (companyFilter !== "ALL" && i.division_name !== companyFilter) return false;
       if (dateFrom && (!i.closed_at || i.closed_at < dateFrom)) return false;
       if (dateTo && (!i.closed_at || i.closed_at > dateTo)) return false;
       if (search) {
@@ -173,7 +182,7 @@ export default function Refundable() {
       }
       return true;
     });
-  }, [tabFiltered, filterDivision, dateFrom, dateTo, search]);
+  }, [tabFiltered, companyFilter, dateFrom, dateTo, search]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
@@ -294,6 +303,25 @@ export default function Refundable() {
         </div>
       </div>
 
+      <div className="ep-tabs" style={{ marginBottom: 8 }}>
+        {([
+          { key: "ALL", label: "All Companies" },
+          { key: "MNO", label: "MNO" },
+          { key: "SEFS", label: "SEFS" },
+          { key: "HigherLife", label: "HigherLife" }
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={`ep-tab ${companyFilter === t.key ? "active" : ""}`}
+            onClick={() => { setCompanyFilter(t.key); setPage(1); }}
+          >
+            {t.label}
+            <span className="inbox-count-chip">{t.key === "ALL" ? items.length : companyCounts[t.key]}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="ep-tabs">
         {([
           { key: "pending", label: "Pending", count: items.filter((i) => rowStatus(i) === "PENDING").length },
@@ -313,14 +341,10 @@ export default function Refundable() {
             <Search size={14} />
             <input placeholder="Search name, emp no, division, destination…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
           </div>
-          <select className="ep-form-select" value={filterDivision} onChange={(e) => { setFilterDivision(e.target.value); setPage(1); }} style={{ minWidth: 160 }}>
-            <option value="">All Divisions</option>
-            {uniqueDivisions.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
           <input type="date" className="ep-form-select" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} title="Closed from" />
           <input type="date" className="ep-form-select" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} title="Closed to" />
-          {(search || filterDivision || dateFrom || dateTo) && (
-            <button className="ep-btn-outline" onClick={() => { setSearch(""); setFilterDivision(""); setDateFrom(""); setDateTo(""); setPage(1); }}>
+          {(search || companyFilter !== "ALL" || dateFrom || dateTo) && (
+            <button className="ep-btn-outline" onClick={() => { setSearch(""); setCompanyFilter("ALL"); setDateFrom(""); setDateTo(""); setPage(1); }}>
               Clear
             </button>
           )}

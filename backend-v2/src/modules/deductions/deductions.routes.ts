@@ -5,6 +5,7 @@ import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { canAccessDeductions } from "../../lib/deductionsPermissions.js";
+import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 
 export const deductionsRouter = Router();
 deductionsRouter.use(requireAuth);
@@ -89,10 +90,12 @@ deductionsRouter.use(async (req: AuthedRequest, res, next) => {
   }
 });
 
-deductionsRouter.get("/", async (_req: AuthedRequest, res, next) => {
+deductionsRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
+    const allowedDivisions = await getViewerDivisionScope(req.user!.userId, req.user!.role === "ADMIN");
     const rows = await query<DeductionRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
-    return res.json({ items: rows });
+    const items = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
+    return res.json({ items });
   } catch (err) {
     return next(err);
   }

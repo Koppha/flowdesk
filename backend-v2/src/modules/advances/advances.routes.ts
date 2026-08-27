@@ -14,6 +14,7 @@ import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, getTravelRateForC
 import { getDepartmentLeadership } from "../../lib/departments.js";
 import { buildAdHocChain, canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
+import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
@@ -726,6 +727,9 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
     const allowed = (await hasFeatureAccess(req.user!.userId, role, "payments", ["ADMIN", "Department: Finance"]))
       || (await isCompensationFinanceUser(req));
     if (!allowed) throw forbidden();
+    // Non-admin viewers only work their own company's queue - see
+    // getViewerDivisionScope for the MNO/HigherLife pairing.
+    const allowedDivisions = await getViewerDivisionScope(req.user!.userId, role === "ADMIN");
 
     const statusParam = String(req.query.status || "all") as "pending" | "paid" | "all";
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
@@ -747,6 +751,7 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
 
     const classified: any[] = [];
     for (const a of rows) {
+      if (allowedDivisions && !allowedDivisions.includes(a.division)) continue;
       let paymentStatus: "PENDING" | "PAID" | null = null;
       if (a.status === "PAID") {
         paymentStatus = "PAID";

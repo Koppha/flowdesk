@@ -5,6 +5,7 @@ import { query } from "../../lib/db.js";
 import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib/delegations.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
+import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 
 // "CAPTURE" was this system's original built-in capture action code;
 // "DEPT_CAPTURE" is the custom one actually registered and used by every
@@ -374,15 +375,13 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       // current_step_actionable_by_me below still runs the real canApproveStep
       // check, so this never grants the ability to actually capture anything.
       const captureViewOnly = !isAdmin && ((await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req)));
-      // Non-admin capture staff only work one company's queue - SEFS's
+      // Non-admin capture staff only work their own company's queue - SEFS's
       // Finance Operations team shouldn't see MNO's Treasury queue mixed in
-      // (and vice versa). ADMIN keeps the company-wide view.
-      const viewerDivision = isAdmin
-        ? null
-        : (await query<{ division: string | null }>(
-            `SELECT dv.name AS division FROM users u LEFT JOIN divisions dv ON dv.id = u.division_id WHERE u.id=$1`,
-            [req.user!.userId]
-          ))[0]?.division ?? null;
+      // (and vice versa), but MNO's Treasury also handles HigherLife's
+      // capture work (it has no finance staff of its own), so an MNO viewer's
+      // scope is {MNO, HigherLife} rather than MNO alone. ADMIN keeps the
+      // company-wide view.
+      const allowedDivisions = await getViewerDivisionScope(req.user!.userId, isAdmin);
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
                 ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name, tt.currency,
@@ -397,7 +396,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       );
       for (const a of rows) {
         if (items.some((i: any) => i.id === a.id)) continue;
-        if (viewerDivision && a.division !== viewerDivision) continue;
+        if (allowedDivisions && !allowedDivisions.includes(a.division)) continue;
         const chain = a.approval_chain as ChainStep[];
         const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
         if (!captureStep) continue;
