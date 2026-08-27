@@ -112,8 +112,18 @@ async function fetchBlob(path: string) {
 // resolves, so strict popup blockers (Firefox in particular) silently
 // swallow the window.open() and no tab ever appears, even though the PDF
 // downloaded fine.
-export async function openBlobInNewTab(fetcher: () => Promise<Blob>) {
-  const tab = window.open("", "_blank");
+// Opens a blank tab immediately (synchronously, within the click handler's
+// call stack) - browsers only allow window.open without treating it as a
+// blocked popup when it happens directly in response to a user gesture, not
+// after an intervening await. Callers that need to run other async work
+// (e.g. capturing a step) before the PDF is ready must call this FIRST, then
+// navigateTabToBlob once the blob is available - see handleApproveAdvance in
+// Inbox.tsx for why this two-step form exists.
+export function openBlankTab(): Window | null {
+  return window.open("", "_blank");
+}
+
+export async function navigateTabToBlob(tab: Window | null, fetcher: () => Promise<Blob>) {
   try {
     const blob = await fetcher();
     const url = URL.createObjectURL(blob);
@@ -124,6 +134,11 @@ export async function openBlobInNewTab(fetcher: () => Promise<Blob>) {
     if (tab) tab.close();
     throw err;
   }
+}
+
+export async function openBlobInNewTab(fetcher: () => Promise<Blob>) {
+  const tab = openBlankTab();
+  await navigateTabToBlob(tab, fetcher);
 }
 
 export const api = {

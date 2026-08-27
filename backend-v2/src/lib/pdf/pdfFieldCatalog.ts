@@ -262,7 +262,10 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
     : dates[dates.length - 1];
   const durationDays = isDailyRateTrip
     ? totalDays
-    : (dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1) : null);
+    // Departure-to-return span (e.g. 27th to 30th = 3 days), not an
+    // inclusive count of both endpoints - the +1 this used to have
+    // overcounted every trip by one day.
+    : (dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000)) : null);
   const locations = Array.from(new Set(lines.map((l) => l.location).filter(Boolean))) as string[];
   const breakfastCount = lines.filter((l) => Number(l.breakfast) > 0).length;
   const lunchCount = lines.filter((l) => Number(l.lunch) > 0).length;

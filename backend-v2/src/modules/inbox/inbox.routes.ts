@@ -374,6 +374,15 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       // current_step_actionable_by_me below still runs the real canApproveStep
       // check, so this never grants the ability to actually capture anything.
       const captureViewOnly = !isAdmin && ((await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req)));
+      // Non-admin capture staff only work one company's queue - SEFS's
+      // Finance Operations team shouldn't see MNO's Treasury queue mixed in
+      // (and vice versa). ADMIN keeps the company-wide view.
+      const viewerDivision = isAdmin
+        ? null
+        : (await query<{ division: string | null }>(
+            `SELECT dv.name AS division FROM users u LEFT JOIN divisions dv ON dv.id = u.division_id WHERE u.id=$1`,
+            [req.user!.userId]
+          ))[0]?.division ?? null;
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
                 ar.workflow_step_order, ar.approval_chain, u.full_name AS requester_name, tt.currency,
@@ -388,6 +397,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       );
       for (const a of rows) {
         if (items.some((i: any) => i.id === a.id)) continue;
+        if (viewerDivision && a.division !== viewerDivision) continue;
         const chain = a.approval_chain as ChainStep[];
         const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
         if (!captureStep) continue;

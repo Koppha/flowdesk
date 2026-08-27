@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
-import { api, getUserFromToken, openBlobInNewTab } from "./api";
+import { api, getUserFromToken, navigateTabToBlob, openBlankTab, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
@@ -542,13 +542,28 @@ export default function Inbox(props: {
     return counts;
   }, [items]);
 
+  // Pending/Captured split, same pattern as Payments' Pending/Paid tabs -
+  // capture mode's item list keeps captured items visible (see comment below
+  // on pendingItems), so without this split the queue mixes done and not-done
+  // work together with no way to separate them.
+  const [captureStatusFilter, setCaptureStatusFilter] = useState<"PENDING" | "CAPTURED">("PENDING");
+  const captureStatusCounts = useMemo(() => {
+    if (mode !== "capture") return { pending: 0, captured: 0 };
+    const base = divisionFilter === "ALL" ? items : items.filter((it: any) => it.division === divisionFilter);
+    return {
+      pending: base.filter((it: any) => it.capture_done !== true).length,
+      captured: base.filter((it: any) => it.capture_done === true).length
+    };
+  }, [items, mode, divisionFilter]);
+
   const scopedItems = useMemo(() => {
     let result = items;
     if (delegationScope === "MINE") result = result.filter((it: any) => !it.is_delegated);
     else if (delegationScope === "DELEGATED") result = result.filter((it: any) => it.is_delegated);
     if (mode === "capture" && divisionFilter !== "ALL") result = result.filter((it: any) => it.division === divisionFilter);
+    if (mode === "capture") result = result.filter((it: any) => (captureStatusFilter === "CAPTURED") === (it.capture_done === true));
     return result;
-  }, [items, delegationScope, mode, divisionFilter]);
+  }, [items, delegationScope, mode, divisionFilter, captureStatusFilter]);
 
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
@@ -571,7 +586,7 @@ export default function Inbox(props: {
   const [queueSearch, setQueueSearch] = useState("");
   const [queuePage, setQueuePage] = useState(1);
   const [queuePageSize, setQueuePageSize] = useState(10);
-  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope, divisionFilter]);
+  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope, divisionFilter, captureStatusFilter]);
 
   // Capture mode's item list deliberately keeps already-captured items visible
   // (so they can still be found/downloaded), so "awaiting" counts need to
@@ -703,6 +718,24 @@ export default function Inbox(props: {
                     >
                       {tab.label}
                       <span className="inbox-count-chip">{tab.key === "ALL" ? items.length : divisionCounts[tab.key]}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {mode === "capture" && (
+                <div className="ep-tabs" style={{ marginBottom: 8 }}>
+                  {([
+                    { key: "PENDING", label: "Pending" },
+                    { key: "CAPTURED", label: "Captured" }
+                  ] as const).map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      className={`ep-tab ${captureStatusFilter === tab.key ? "active" : ""}`}
+                      onClick={() => setCaptureStatusFilter(tab.key)}
+                    >
+                      {tab.label}
+                      <span className="inbox-count-chip">{tab.key === "PENDING" ? captureStatusCounts.pending : captureStatusCounts.captured}</span>
                     </button>
                   ))}
                 </div>
@@ -1071,8 +1104,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     const dates = lines.map((l) => l.line_date).filter(Boolean).sort();
     const dateFrom = dates[0];
     const dateTo = dates[dates.length - 1];
+    // Departure-to-return span (e.g. 27th to 30th = 3 days), not an
+    // inclusive count of both endpoints - mirrors resolveAdvancePdfData's
+    // fix in backend-v2/src/lib/pdf/pdfFieldCatalog.ts.
     const durationDays = dateFrom && dateTo
-      ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1)
+      ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000))
       : null;
     const locations = Array.from(new Set(lines.map((l) => l.location).filter(Boolean))) as string[];
     const onBehalfOf = detail.created_by_id && detail.requester_id && detail.created_by_id !== detail.requester_id
@@ -1338,12 +1374,16 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // before the PDF/confirmation could ever be seen, so a "successful" mark-paid
   // looked like nothing happened at all.
   async function handleMarkAdvancePaid() {
+    // Same reasoning as the capture flow below - open the tab synchronously,
+    // before the mark-paid API call, so popup blockers don't silently
+    // swallow it once the click is no longer "fresh" after that await.
+    const tab = openBlankTab();
     setBusy(true);
     setError(null);
     try {
       await api.markAdvancePaid(item.id);
       try {
-        await openBlobInNewTab(() => api.advancePdf(item.id));
+        await navigateTabToBlob(tab, () => api.advancePdf(item.id));
       } catch (e: any) {
         setError(e?.message || "Advance marked as paid, but failed to generate the PDF.");
         return;
@@ -1351,6 +1391,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       await Swal.fire({ icon: "success", title: "Marked as Paid", text: "Status updated and the PDF opened in a new tab.", timer: 1800, showConfirmButton: false });
       await props.onDone();
     } catch (e: any) {
+      tab?.close();
       setError(String(e.message));
     } finally {
       setBusy(false);
@@ -1402,13 +1443,19 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     // which left Capture with no visible feedback: the PDF tab could still
     // open a moment later, but any error or confirmation had nowhere to show.
     if (isCaptureStep) {
+      // Open the tab synchronously, right here in the click handler, before
+      // the capture API call - opening it only after that await completes
+      // (the old code) meant the browser no longer saw this as a direct
+      // response to the click, so popup blockers could silently swallow it
+      // and Capture staff would see no PDF at all with no error shown.
+      const tab = openBlankTab();
       void (async () => {
         setBusy(true);
         setError(null);
         try {
           await api.approveAdvance(item.id, approvedTotal, comments);
           try {
-            await openBlobInNewTab(() => api.advancePdf(item.id));
+            await navigateTabToBlob(tab, () => api.advancePdf(item.id));
           } catch (e: any) {
             setError(e?.message || "Captured, but failed to generate the travel form.");
             return;
@@ -1416,6 +1463,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           await Swal.fire({ icon: "success", title: "Captured", text: "Status updated and the travel form opened in a new tab.", timer: 1800, showConfirmButton: false });
           await props.onDone();
         } catch (e: any) {
+          tab?.close();
           setError(String(e.message));
         } finally {
           setBusy(false);
