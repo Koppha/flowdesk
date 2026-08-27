@@ -88,8 +88,13 @@ export function isTravelTypeCode(code: string | null | undefined, travelTypes: T
   return travelTypes.some((type) => type.code === code && type.active !== false);
 }
 
+// "Finance" is MNO's free-text department name for this role; SEFS's own
+// finance team uses "Finance Operations" instead - both need to pass this
+// check (Payments/Deductions/Refundable's mark-paid/deducted/refunded
+// buttons), or SEFS staff can view these queues but never act on them.
+const FINANCE_DEPT_NAMES = ["finance", "finance operations"];
 export function isFinanceDeptClient(department: string | null | undefined): boolean {
-  return String(department || "").trim().toLowerCase() === "finance";
+  return FINANCE_DEPT_NAMES.includes(String(department || "").trim().toLowerCase());
 }
 
 const TERMINAL_ADVANCE_STATUSES = ["DRAFT", "PAID", "APPROVED", "REJECTED", "CANCELLED"];
