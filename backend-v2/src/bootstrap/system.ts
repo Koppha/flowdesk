@@ -1522,7 +1522,7 @@ const DEFAULT_TEMPLATE_DEFS: Record<(typeof PDF_REQUEST_TYPES)[number], { name: 
     name: "Default Travel Advance Request",
     headerTitle: "Travel Advance Request",
     sections: [
-      fieldGridSection("Requester & Traveller Details",
+      fieldGridSection("Requester & Employee Details",
         ["request_id", "created_at", "created_by_name", "request_type_label", "requester_name", "requester_employee_no", "traveller_type", "status"],
         { columns: 4 }),
       fieldGridSection("Trip Details",
@@ -1544,11 +1544,11 @@ const DEFAULT_TEMPLATE_DEFS: Record<(typeof PDF_REQUEST_TYPES)[number], { name: 
       ),
       approvalSummarySection(),
       disclaimerSection("Clearing Requirement & Disclaimer", [
-        "The traveller must submit all original receipts and a completed Travel Expense Claim Form to Finance within **seven (7) working days** of return.",
+        "The employee must submit all original receipts and a completed Travel Expense Claim Form to Finance within **seven (7) working days** of return.",
         "Any unspent advance must be returned within the same 7-day period via the original disbursement channel.",
-        "Failure to clear within the stipulated period will result in the amount being **deducted from the traveller's next salary** per ETL Financial Policy FP-007.",
+        "Failure to clear within the stipulated period will result in the amount being **deducted from the employee's next salary** per ETL Financial Policy FP-007.",
         "All claims are subject to Finance verification and audit. ETL reserves the right to reject claims lacking documentation or exceeding policy limits.",
-        "By submitting this request, the requester and traveller confirm the information is accurate and that they have read the **ETL Travel & Subsistence Policy**."
+        "By submitting this request, the requester and employee confirm the information is accurate and that they have read the **ETL Travel & Subsistence Policy**."
       ])
     ]
   },

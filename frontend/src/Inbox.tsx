@@ -1923,9 +1923,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 <>
                   <div className="review-card-title review-card-subtitle">Requester</div>
                   <div className="review-field-grid">
-                    <ReviewField icon={User} label="Traveller Name" value={pdfFormSummary.travellerName} />
+                    <ReviewField icon={User} label="Employee Name" value={pdfFormSummary.travellerName} />
                     <ReviewField icon={Hash} label="Employee No." value={pdfFormSummary.employeeNo} />
-                    <ReviewField icon={User} label="Traveller Type" value={pdfFormSummary.travellerType} />
+                    <ReviewField icon={User} label="Employment Type" value={pdfFormSummary.travellerType} />
                     <ReviewField icon={Building2} label="Division" value={pdfFormSummary.division} />
                     {pdfFormSummary.onBehalfOf && <ReviewField icon={User} label="On Behalf Of" value={pdfFormSummary.onBehalfOf} />}
                   </div>

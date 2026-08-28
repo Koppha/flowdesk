@@ -41,7 +41,7 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "created_at", label: "Created", group: "Requester" },
     { key: "created_by_name", label: "Created By", group: "Requester" },
     { key: "request_type_label", label: "Request Type", group: "Requester" },
-    { key: "requester_name", label: "Traveller Name", group: "Requester" },
+    { key: "requester_name", label: "Employee Name", group: "Requester" },
     { key: "requester_employee_no", label: "Employee No.", group: "Requester" },
     { key: "traveller_type", label: "Employment Type", group: "Requester" },
     { key: "department", label: "Division", group: "Requester" },

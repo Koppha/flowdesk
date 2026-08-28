@@ -464,7 +464,13 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_action_type: captureStep.action_type,
           current_step_can_reject: captureStep.can_reject,
           current_step_can_rollback: captureStep.can_rollback,
-          current_step_actionable_by_me: !captureStep.approved && (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)),
+          // ADMIN can act on any pending step regardless of who it's
+          // assigned to (the actual capture/approve endpoints already allow
+          // this) - without this, an admin viewing a step restricted to one
+          // specific individual (e.g. SEFS's Capture step) never counted as
+          // "actionable by me", so their Capture Inbox badge stayed stuck at
+          // 0 even with dozens of items genuinely waiting to be captured.
+          current_step_actionable_by_me: !captureStep.approved && (isAdmin || (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId))),
           capture_done: !!captureStep.approved,
           is_delegated: !!delegatedFrom(captureStep),
           delegated_from_manager_name: (() => {
