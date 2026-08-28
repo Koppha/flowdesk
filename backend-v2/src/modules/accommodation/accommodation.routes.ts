@@ -3,7 +3,7 @@ import path from "path";
 import multer from "multer";
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, requireAuth, requireFeatureAccess, requireFinance, requireRole } from "../../lib/auth.js";
+import { AuthedRequest, requireAuth, requireFeatureAccess, requireRole } from "../../lib/auth.js";
 import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
@@ -12,6 +12,7 @@ import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.j
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { advanceWorkflowStep, getAdvanceById } from "../advances/advances.service.js";
 import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
+import { isCaptureActionType } from "../inbox/inbox.routes.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { notifyAdvanceTask } from "../../lib/notifications.js";
 import { getAdvanceNotificationContext, writeAdvanceAudit } from "../advances/advances.routes.js";
@@ -257,11 +258,35 @@ async function getAccommodationById(id: string) {
   return { ...row, quotations };
 }
 
+// Accommodation is captured/paid centrally by MNO's own Finance/Treasury
+// team for every company (unlike Advance capture, which each company's own
+// finance team handles for itself) - so acting on a booking is gated purely
+// on the actor's OWN is_compensation_finance flag, company-agnostic, never
+// on which company the booking itself belongs to.
+async function canActOnAccommodation(actor: { role: string; sectionId?: string | null }): Promise<boolean> {
+  return actor.role === "ADMIN" || isCompensationFinanceSection(actor.sectionId);
+}
+
+// A non-Treasury viewer (e.g. SEFS's own finance-adjacent staff) can see -
+// but never act on - a booking for their own company: specifically, whoever
+// would be eligible to act on the *linked advance's own* Capture step (that
+// advance's chain is already resolved per the requester's own division at
+// submission time, so this is naturally scoped to that one company, no
+// separate division filter needed).
+async function isEligibleOnLinkedAdvanceCaptureStep(row: any, actor: { userId: string; role: string; sectionId?: string | null }): Promise<boolean> {
+  const advance = await getAdvanceById(row.advance_request_id);
+  const chain = (advance?.approval_chain ?? []) as ChainStep[];
+  const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
+  if (!captureStep) return false;
+  const delegatedManagerIds = await getDelegatedManagerIds(actor.userId, "ADVANCE_REQUEST");
+  return canApproveStep(captureStep, actor.userId, actor.role, delegatedManagerIds, actor.sectionId);
+}
+
 async function canViewAccommodation(args: { role: string; sectionId?: string | null; userId: string; row: any }) {
-  if (args.role === "ADMIN" || (await isCompensationFinanceSection(args.sectionId))) return true;
+  if (await canActOnAccommodation(args)) return true;
   if (args.row.created_by_id === args.userId) return true;
   if (args.row.requester_id === args.userId) return true;
-  return false;
+  return isEligibleOnLinkedAdvanceCaptureStep(args.row, args);
 }
 
 accommodationRouter.get("/", async (req: AuthedRequest, res, next) => {
@@ -533,10 +558,11 @@ accommodationRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
 // The reference is generated the same way an advance's own mark-paid does
 // (payment_ref_seq -> formatPaymentReference) rather than typed in by
 // Finance, so there's no free-text "budget code" to get wrong or leave blank.
-accommodationRouter.post("/:id/mark-paid", requireFinance, async (req: AuthedRequest, res, next) => {
+accommodationRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
   try {
     const row = await getAccommodationById(req.params.id);
     if (!row) throw notFound();
+    if (!(await canActOnAccommodation({ role: req.user!.role, sectionId: req.user!.sectionId }))) throw forbidden();
     if (row.status !== "SUBMITTED") throw badRequest("Only submitted accommodation requests can be paid");
 
     const seqRows = await query<{ seq: string }>(`SELECT nextval('payment_ref_seq') AS seq`);
@@ -566,13 +592,14 @@ accommodationRouter.post("/:id/mark-paid", requireFinance, async (req: AuthedReq
   }
 });
 
-accommodationRouter.post("/:id/reject", requireFinance, async (req: AuthedRequest, res, next) => {
+accommodationRouter.post("/:id/reject", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = RejectSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Comments are required for reject", parsed.error.flatten());
 
     const row = await getAccommodationById(req.params.id);
     if (!row) throw notFound();
+    if (!(await canActOnAccommodation({ role: req.user!.role, sectionId: req.user!.sectionId }))) throw forbidden();
     if (row.status !== "SUBMITTED") throw badRequest("Only submitted accommodation requests can be rejected");
 
     await query(

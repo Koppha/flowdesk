@@ -12,7 +12,7 @@ import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 // real workflow's Treasury/Finance capture step today (added later via the
 // Action Types panel - see workflow_action_types). Mirrors the frontend's
 // isCaptureActionType in Inbox.tsx - keep both in sync.
-function isCaptureActionType(code: string | null | undefined) {
+export function isCaptureActionType(code: string | null | undefined) {
   return code === "CAPTURE" || code === "DEPT_CAPTURE";
 }
 
@@ -481,35 +481,47 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     };
 
-    // Accommodation bookings follow the same Capture-then-paid flow as any
-    // other capture item, so they're loaded unconditionally here (like
-    // loadCaptureHistoryItems) rather than gated behind the legacy per-role
-    // rule list, which only ever covered role==='FINANCE' and left every
-    // Treasury/Finance EMPLOYEE and the HR Operations staff who actually
-    // booked it unable to see it at all. Visible to: ADMIN, whoever holds
-    // the "capture" feature grant (view, same as loadCaptureHistoryItems),
-    // actual Finance dept (can act via the /accommodation-requests routes'
-    // own requireFinance gate), and the HR user who created it or the
-    // traveller it's for (read-only, so they can track it through to paid).
+    // Accommodation is captured/paid centrally by MNO's own Finance/Treasury
+    // team for every company (unlike Advance capture, which each company's
+    // own finance team handles for itself) - so who can ACT is a single
+    // global, company-agnostic is_compensation_finance check, same as
+    // accommodation.routes.ts's mark-paid/reject gate and Deductions/
+    // Refundable's own act gates. A company's own finance-adjacent staff
+    // (e.g. SEFS) can still VIEW - never act on - their own company's
+    // booking: specifically whoever would be eligible on the *linked
+    // advance's own* Capture step (that advance's chain is already resolved
+    // per the requester's own division at submission time, so this is
+    // naturally scoped to that one company already, no separate division
+    // filter needed). The HR user who created it or the traveller it's for
+    // can always view their own, regardless of company.
     const loadAccommodationItems = async () => {
       const isAdmin = rule === "ALL";
-      const captureViewOnly = !isAdmin && ((await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req)));
       const canAct = isAdmin || (await isCompensationFinanceSection(req.user!.sectionId));
+      const captureViewOnly = !canAct && (await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"]));
       const rows = await query<any>(
         `SELECT acc.id, acc.status, acc.amount, acc.location, acc.provider,
                 acc.created_by_id, acc.requester_id,
                 requester.full_name AS requester_name,
-                creator.full_name AS created_by_name
+                creator.full_name AS created_by_name,
+                ar.approval_chain,
+                dv.name AS division
            FROM accommodation_requests acc
            JOIN users requester ON requester.id = acc.requester_id
            JOIN users creator ON creator.id = acc.created_by_id
+           JOIN advance_requests ar ON ar.id = acc.advance_request_id
+           LEFT JOIN divisions dv ON dv.id = requester.division_id
           WHERE acc.status <> 'DRAFT'
           ORDER BY acc.created_at DESC`
       );
       for (const a of rows) {
         if (items.some((i: any) => i.id === a.id)) continue;
         const isOwner = a.created_by_id === req.user!.userId || a.requester_id === req.user!.userId;
-        if (!isAdmin && !canAct && !captureViewOnly && !isOwner) continue;
+        if (!canAct && !captureViewOnly && !isOwner) {
+          const chain = (a.approval_chain ?? []) as ChainStep[];
+          const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
+          const chainEligible = captureStep ? await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId) : false;
+          if (!chainEligible) continue;
+        }
         items.push({
           doc_type: "ACCOMMODATION",
           id: a.id,
@@ -519,7 +531,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           provider: a.provider,
           requester_name: a.requester_name,
           created_by_name: a.created_by_name,
-          current_step_actionable_by_me: canAct && a.status === "SUBMITTED"
+          division: a.division ?? null,
+          current_step_actionable_by_me: canAct && a.status === "SUBMITTED",
+          capture_done: a.status === "PAID"
         });
       }
     };
