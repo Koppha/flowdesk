@@ -59,6 +59,18 @@ export function getPendingGroup(chain: ChainStep[], stepIdx: number): { indices:
   return { indices, steps: indices.map((i) => chain[i]) };
 }
 
+// A requires_accommodation step is parallel_with_previous and non-blocking
+// (see advanceWorkflowStep's lateAccommodationIdx handling in
+// advances.service.ts) - the chain's workflow_step_order pointer can move
+// past it once Capture/payment complete, even though it's still unbooked.
+// Callers that need to know "does this advance still need an accommodation
+// booking" must scan the whole chain, not just getPendingGroup's window
+// around the current pointer.
+export function findPendingAccommodationStep(chain: ChainStep[]): { index: number; step: ChainStep } | null {
+  const index = chain.findIndex((s) => s.requires_accommodation && !s.approved);
+  return index === -1 ? null : { index, step: chain[index] };
+}
+
 // Mirrors getFallbackManagerId in reporting-lines.routes.ts: the requester's
 // active reporting_lines manager, falling back to the closest available
 // leadership when no reporting_lines row exists yet - their TEAM's

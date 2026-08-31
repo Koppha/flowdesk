@@ -3,7 +3,7 @@ import { AuthedRequest, Role, hasFeatureAccess, requireAuth } from "../../lib/au
 import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { query } from "../../lib/db.js";
 import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib/delegations.js";
-import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, getPendingGroup, findPendingAccommodationStep, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 
@@ -206,6 +206,20 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           if (step.approved) continue;
           if (await canApproveStep(step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { matched = step; break; }
         }
+        // Accommodation is parallel/non-blocking, so the chain's pending
+        // group can move on (e.g. once Capture/payment complete) while the
+        // accommodation step itself is still unbooked - fall back to a
+        // whole-chain scan so HR Operations (or whoever is assigned) still
+        // sees it as actionable instead of it silently disappearing once the
+        // advance is APPROVED/PAID.
+        let lateAccommodation: ChainStep | undefined;
+        if (!matched) {
+          const accStep = findPendingAccommodationStep(chain);
+          if (accStep && await canApproveStep(accStep.step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) {
+            matched = accStep.step;
+            lateAccommodation = accStep.step;
+          }
+        }
         if (matched) {
           const delegatedFromId = delegatedFrom(matched);
           items.push({
@@ -221,7 +235,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             division: a.division ?? null,
             workflow_step_order: a.workflow_step_order,
             current_step_approver_id: matched.approver_id,
-            current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
+            current_step_position_name: lateAccommodation ? matched.position_name : group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
             current_step_requires_accommodation: matched.requires_accommodation,
             current_step_action_type: matched.action_type,
             current_step_can_reject: matched.can_reject,
@@ -439,6 +453,18 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId);
           if (!eligible) continue;
         }
+        // Accommodation is parallel/non-blocking - it can still be sitting
+        // unbooked (no accommodation_requests row created yet) long after
+        // Capture/payment finished and this loader's own displayed step has
+        // moved on to captureStep. Scan the whole chain so the item still
+        // carries an accurate requires_accommodation flag and stays
+        // actionable for whoever can book it, instead of silently losing
+        // that signal the moment Capture completes (which is what let 56
+        // advances since 2026-08-20 go all the way to PAID with no one ever
+        // seeing that they still needed an accommodation booking).
+        const accStep = findPendingAccommodationStep(chain);
+        const captureActionable = !captureStep.approved && (isAdmin || (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)));
+        const accommodationActionable = !!accStep && (isAdmin || (await canApproveStep(accStep.step, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)));
         // Use captureStep itself for the displayed "current step" fields,
         // not just "whichever group member happens to be unapproved first"
         // (group.steps in array/step_order order) - some workflows (e.g.
@@ -464,13 +490,18 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_action_type: captureStep.action_type,
           current_step_can_reject: captureStep.can_reject,
           current_step_can_rollback: captureStep.can_rollback,
+          current_step_requires_accommodation: !!accStep,
           // ADMIN can act on any pending step regardless of who it's
           // assigned to (the actual capture/approve endpoints already allow
           // this) - without this, an admin viewing a step restricted to one
           // specific individual (e.g. SEFS's Capture step) never counted as
           // "actionable by me", so their Capture Inbox badge stayed stuck at
           // 0 even with dozens of items genuinely waiting to be captured.
-          current_step_actionable_by_me: !captureStep.approved && (isAdmin || (await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId))),
+          // Also true once capture is fully done if a booking is still
+          // needed (accommodationActionable) - otherwise this item stops
+          // being actionable the moment Capture/payment finishes, even
+          // though the (separate, parallel) accommodation step is still open.
+          current_step_actionable_by_me: captureActionable || accommodationActionable,
           capture_done: !!captureStep.approved,
           is_delegated: !!delegatedFrom(captureStep),
           delegated_from_manager_name: (() => {
@@ -635,7 +666,12 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         if (items.some((i: any) => i.id === a.id)) continue;
         const chain = a.approval_chain as ChainStep[];
         const group = getPendingGroup(chain, a.workflow_step_order ?? 0);
-        if (!group.steps.length || group.steps.every((s) => s.approved)) continue;
+        // Same rationale as loadCaptureHistoryItems: a still-open
+        // requires_accommodation step can lag behind group.steps[0] once
+        // parallel Capture has moved the pending group on, so it must be
+        // found by a whole-chain scan, not read off the group's own steps.
+        const accStep = findPendingAccommodationStep(chain);
+        if ((!group.steps.length || group.steps.every((s) => s.approved)) && !accStep) continue;
         items.push({
           doc_type: "ADVANCE",
           id: a.id,
@@ -649,7 +685,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           workflow_step_order: a.workflow_step_order,
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
           current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
-          current_step_requires_accommodation: group.steps[0]?.requires_accommodation ?? false,
+          current_step_requires_accommodation: !!accStep,
           current_step_action_type: group.steps[0]?.action_type ?? null,
           current_step_can_reject: group.steps[0]?.can_reject ?? true,
           current_step_can_rollback: group.steps[0]?.can_rollback ?? true,

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStaffDirectory, refreshStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
-import Inbox, { isCaptureItem, isCapturePendingItem, isPaymentItem } from "./Inbox";
+import Inbox, { isCaptureItem, isCapturePendingItem, isPaymentItem, needsAccommodationBooking } from "./Inbox";
 import Payments from "./Payments";
 import Deductions from "./Deductions";
 import Refundable from "./Refundable";
@@ -1444,7 +1444,7 @@ export default function App() {
     setReportAdvances(Array.isArray(allAdvancesResp) ? allAdvancesResp : []);
     setReportClaims(Array.isArray(allClaimsResp) ? allClaimsResp : []);
     const rawInboxItems: any[] = Array.isArray(i.items) ? i.items : [];
-    const nonSplitInboxItems = rawInboxItems.filter((it) => !isCaptureItem(it) && !isPaymentItem(it));
+    const nonSplitInboxItems = rawInboxItems.filter((it) => (!isCaptureItem(it) || needsAccommodationBooking(it)) && !isPaymentItem(it));
     // The Inbox list itself shows every item you're relevant to (including
     // ones already past your own step, kept for visibility/tracking), but
     // the badge count must only reflect items actually waiting on YOUR
@@ -1531,7 +1531,7 @@ export default function App() {
       try {
         const resp: { items?: any[] } = await api.inbox();
         const rawItems: any[] = Array.isArray(resp.items) ? resp.items : [];
-        const nonSplitItems = rawItems.filter((it) => !isCaptureItem(it) && !isPaymentItem(it));
+        const nonSplitItems = rawItems.filter((it) => (!isCaptureItem(it) || needsAccommodationBooking(it)) && !isPaymentItem(it));
         // Same fix as the initial load: only count items actually actionable
         // by you right now, not everything you're peripherally relevant to.
         const fresh = nonSplitItems.filter((it) => it.current_step_actionable_by_me === true).length;

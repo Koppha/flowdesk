@@ -11,7 +11,7 @@ import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS }
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
 import { advanceWorkflowStep, getAdvanceById } from "../advances/advances.service.js";
-import { canApproveStep, getPendingGroup, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, findPendingAccommodationStep, type ChainStep } from "../../lib/workflowEngine.js";
 import { isCaptureActionType } from "../inbox/inbox.routes.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { notifyAdvanceTask } from "../../lib/notifications.js";
@@ -334,20 +334,20 @@ accommodationRouter.post("/", async (req: AuthedRequest, res, next) => {
     if (!advance) throw badRequest("Linked advance not found");
     if (!(await isTravelAdvanceType(advance.type))) throw badRequest("Accommodation requests can only be linked to travel advances");
 
-    // Only the person whose turn it currently is on the advance's approval chain
-    // (i.e. the assigned HR/accommodation step) may attach an accommodation booking.
+    // Only the person assigned to the advance's accommodation step may attach
+    // a booking. Found by scanning the whole chain for the still-unapproved
+    // requires_accommodation step (not just the current pending group) since
+    // it's parallel/non-blocking and the chain's position can move past it
+    // once Capture/payment complete - see findPendingAccommodationStep.
     const role = req.user!.role;
     if (role !== "ADMIN") {
       if (!advance.approval_chain?.length) throw badRequest("This advance does not have an active approval workflow.");
       const chain = advance.approval_chain as ChainStep[];
-      const group = getPendingGroup(chain, advance.workflow_step_order ?? 0);
-      if (!group.indices.length) throw badRequest("All workflow steps have been completed");
+      const accommodationStep = findPendingAccommodationStep(chain);
+      if (!accommodationStep) throw badRequest("This advance's accommodation step has already been completed or is not part of its workflow.");
       const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "ADVANCE_REQUEST");
-      let currentStep: ChainStep | undefined;
-      for (const idx of group.indices) {
-        if (await canApproveStep(chain[idx], req.user!.userId, role, delegatedManagerIds, req.user!.sectionId)) { currentStep = chain[idx]; break; }
-      }
-      if (!currentStep) throw forbidden(`You are not the assigned approver for step: ${chain[group.indices[0]].position_name}`);
+      const eligible = await canApproveStep(accommodationStep.step, req.user!.userId, role, delegatedManagerIds, req.user!.sectionId);
+      if (!eligible) throw forbidden(`You are not the assigned approver for step: ${accommodationStep.step.position_name}`);
     }
 
     const rows = await query<{ id: string }>(

@@ -470,6 +470,18 @@ export function isCapturePendingItem(item: any) {
   return isCaptureItem(item) && item.current_step_actionable_by_me === true;
 }
 
+// An advance still needing an accommodation booking is otherwise classified
+// as a capture item (it usually carries a parallel Capture step too) and
+// would only ever surface in the Capture Inbox - but Admin needs to see it
+// in the general Approval Inbox as well, since it's easy to miss it sitting
+// only in Capture once payment has already gone out (accommodation runs in
+// parallel with Treasury capture, so it can still be outstanding long after
+// the advance is PAID). Used to let such items appear in both inboxes at
+// once, rather than exclusively routing to one.
+export function needsAccommodationBooking(item: any) {
+  return item.doc_type === "ADVANCE" && item.current_step_requires_accommodation === true;
+}
+
 // Items awaiting or already through payment — surfaced in the dedicated
 // Payments page instead of the general Approval Inbox. Checked three ways
 // because advances reach this state via three different inbox code paths
@@ -510,7 +522,11 @@ export default function Inbox(props: {
     setError(null);
     const [inboxResp, myActionsResp] = await Promise.all([api.inbox(), api.myInboxActions(30)]);
     const all: InboxItem[] = inboxResp.items || [];
-    setItems(mode === "capture" ? all.filter(isCaptureItem) : all.filter((it) => !isCaptureItem(it) && !isPaymentItem(it)));
+    setItems(
+      mode === "capture"
+        ? all.filter(isCaptureItem)
+        : all.filter((it) => (!isCaptureItem(it) || needsAccommodationBooking(it)) && !isPaymentItem(it))
+    );
     setMyActions(myActionsResp.items || []);
   }
 
