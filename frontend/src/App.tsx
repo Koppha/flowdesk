@@ -250,6 +250,14 @@ function dashboardInitials(value: string | null | undefined) {
   return (parts[0]?.[0] || "U") + (parts[1]?.[0] || "");
 }
 
+function isInCurrentMonth(value: unknown, now: Date): boolean {
+  if (!value) return false;
+  const date = new Date(String(value));
+  return !Number.isNaN(date.getTime())
+    && date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth();
+}
+
 const STARTUP_REQUEST_TIMEOUT_MS = 10000;
 
 function withStartupTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -3646,18 +3654,25 @@ export default function App() {
   // helper summaries
   const pendingAdvCount = advances.filter((a) => ["SUBMITTED", "COUNTERSIGNED", "HR_OFFICER", "APPROVED"].includes(a.status)).length;
   const pendingClaimCount = claims.filter((c) => !["SETTLED", "CLOSED", "REJECTED"].includes(c.status)).length;
-  // Grouped by currency rather than blended into one number — an LSL and a
-  // USD advance/claim summed together and labelled with one currency symbol
-  // would be meaningless.
+  // Only money actually paid to the employee during the current month is
+  // spend. Approved, rejected, cancelled and still-pending requests must not
+  // inflate this figure. A clearance contributes only an actual reimbursement
+  // to the employee (never its full expense total or an employee payback).
+  // Group by currency rather than blending unlike currencies into one number.
   const monthlySpendByCurrency = (() => {
     const totals = new Map<string, number>();
-    for (const c of claims) {
-      const currency = c.currency || "LSL";
-      totals.set(currency, (totals.get(currency) || 0) + Number(c.claim_total || 0));
-    }
+    const now = new Date();
     for (const a of advances) {
+      if (a.status !== "PAID" || !isInCurrentMonth(a.paid_at, now)) continue;
       const currency = travelTypeCurrency(a.type, travelTypes);
       totals.set(currency, (totals.get(currency) || 0) + Number(a.approved_total || 0));
+    }
+    for (const c of claims) {
+      const isPaidRefund = c.status === "COMPLETED" && c.financial_outcome === "REFUND_DUE";
+      const isPaidLegacyReimbursement = c.status === "CLOSED" && c.finance_decision === "REIMBURSE_EMPLOYEE";
+      if ((!isPaidRefund && !isPaidLegacyReimbursement) || !isInCurrentMonth(c.settled_at, now)) continue;
+      const currency = c.currency || "LSL";
+      totals.set(currency, (totals.get(currency) || 0) + Number(c.settlement_amount || 0));
     }
     return Array.from(totals.entries());
   })();
