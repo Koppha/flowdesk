@@ -6,6 +6,16 @@ import Payments from "./Payments";
 import Deductions from "./Deductions";
 import Refundable from "./Refundable";
 import Accommodation from "./Accommodation";
+import PaybackReview from "./PaybackReview";
+import TreasuryProcessing from "./TreasuryProcessing";
+import ReportClearanceSummary from "./ReportClearanceSummary";
+import ReportRefundsDue from "./ReportRefundsDue";
+import ReportEmployeePaybacks from "./ReportEmployeePaybacks";
+import ReportFullyClearedTrips from "./ReportFullyClearedTrips";
+import ReportOutstandingClearances from "./ReportOutstandingClearances";
+import ReportClearanceAgeing from "./ReportClearanceAgeing";
+import ReportAuditReconciliation from "./ReportAuditReconciliation";
+import ReportDeptDivisionClearance from "./ReportDeptDivisionClearance";
 import VendorContracts from "./VendorContracts";
 import ServiceContracts from "./ServiceContracts";
 import ITProvisioning from "./ITProvisioning";
@@ -93,6 +103,7 @@ import {
   User,
   UserRoundCheck,
   Users,
+  Landmark,
   Wallet,
   Wifi,
   X,
@@ -413,7 +424,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -428,6 +439,33 @@ function clearanceMonthYearRange(): number[] {
 
 function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
   return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
+}
+
+type PaybackProofFormState = { amount_paid: string; payment_date: string; reference: string; comment: string; file: File | null };
+
+function PaybackProofForm(props: {
+  form: PaybackProofFormState;
+  setForm: React.Dispatch<React.SetStateAction<PaybackProofFormState>>;
+  onSubmit: () => void;
+  submitting: boolean;
+  submitLabel: string;
+}) {
+  const { form, setForm, onSubmit, submitting, submitLabel } = props;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <input className="ep-form-input" type="number" step="0.01" placeholder="Amount paid" value={form.amount_paid} onChange={(e) => setForm((f) => ({ ...f, amount_paid: e.target.value }))} />
+      <input className="ep-form-input" type="date" placeholder="Payment date" value={form.payment_date} onChange={(e) => setForm((f) => ({ ...f, payment_date: e.target.value }))} />
+      <input className="ep-form-input" placeholder="Transaction / receipt reference (optional)" value={form.reference} onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))} />
+      <textarea className="ep-form-input" placeholder="Comment (optional)" value={form.comment} onChange={(e) => setForm((f) => ({ ...f, comment: e.target.value }))} />
+      <label className="clearance-upload-button" style={{ alignSelf: "flex-start" }}>
+        <Upload size={15} aria-hidden /> {form.file ? form.file.name : "Attach Proof (receipt / deposit slip / bank confirmation)"}
+        <input type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => setForm((f) => ({ ...f, file: e.currentTarget.files?.[0] || null }))} />
+      </label>
+      <button className="button small-button" type="button" disabled={submitting} onClick={onSubmit} style={{ alignSelf: "flex-start" }}>
+        {submitting ? "Submitting…" : submitLabel}
+      </button>
+    </div>
+  );
 }
 
 export default function App() {
@@ -485,6 +523,8 @@ export default function App() {
   const [deductionsCount, setDeductionsCount] = useState(0);
   const [hasRefundableAccess, setHasRefundableAccess] = useState(false);
   const [refundableCount, setRefundableCount] = useState(0);
+  const [hasTreasuryAccess, setHasTreasuryAccess] = useState(false);
+  const [treasuryCount, setTreasuryCount] = useState(0);
   const [hasItProvisioningAccess, setHasItProvisioningAccess] = useState(false);
   const [itProvisioningCount, setItProvisioningCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
@@ -697,6 +737,8 @@ export default function App() {
   const [clearanceTrackLoading, setClearanceTrackLoading] = useState(false);
   const [clearanceTrackId, setClearanceTrackId] = useState<string | null>(null);
   const [clearanceTrackDetail, setClearanceTrackDetail] = useState<any | null>(null);
+  const [paybackProofForm, setPaybackProofForm] = useState<{ amount_paid: string; payment_date: string; reference: string; comment: string; file: File | null }>({ amount_paid: "", payment_date: "", reference: "", comment: "", file: null });
+  const [paybackProofSubmitting, setPaybackProofSubmitting] = useState(false);
   const [aiAnomalies, setAiAnomalies] = useState<any | null>(null);
   const [nlPrompt, setNlPrompt] = useState("show rejected salary advances this month by department");
   const [nlReport, setNlReport] = useState<any | null>(null);
@@ -1405,7 +1447,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, itProvisioningAccessResp, moduleFlagsResp, vendorContractsAccessResp, serviceContractsAccessResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, treasuryAccessResp, itProvisioningAccessResp, moduleFlagsResp, vendorContractsAccessResp, serviceContractsAccessResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1428,6 +1470,7 @@ export default function App() {
       optionalStartupData<{ allowed?: boolean }>(api.paymentsAccess(), { allowed: false }, "Payments access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.refundableAccess(), { allowed: false }, "Refundable access"),
+      optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.treasuryAccess(), { allowed: false }, "Treasury access"),
       optionalStartupData<{ allowed?: boolean; awaitingProvisioning?: number; inProgress?: number }>(api.itProvisioningAccess(), { allowed: false }, "IT Provisioning access"),
       optionalStartupData<{
         overtime_enabled?: boolean; standby_enabled?: boolean;
@@ -1492,6 +1535,8 @@ export default function App() {
     setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
     setHasRefundableAccess(Boolean(refundableAccessResp?.allowed));
     setRefundableCount(refundableAccessResp?.pendingCount || 0);
+    setHasTreasuryAccess(Boolean(treasuryAccessResp?.allowed));
+    setTreasuryCount(treasuryAccessResp?.pendingCount || 0);
     setHasItProvisioningAccess(Boolean(itProvisioningAccessResp?.allowed));
     setItProvisioningCount((itProvisioningAccessResp?.awaitingProvisioning || 0) + (itProvisioningAccessResp?.inProgress || 0));
     setHasVendorContractsAccess(Boolean(vendorContractsAccessResp?.allowed));
@@ -2676,6 +2721,31 @@ export default function App() {
     }
   }
 
+  async function submitPaybackProofForTracking() {
+    const claimId = clearanceTrackId;
+    if (!claimId) return;
+    if (!paybackProofForm.file) { alert("A proof attachment is required."); return; }
+    if (!paybackProofForm.amount_paid || !paybackProofForm.payment_date) { alert("Amount paid and payment date are required."); return; }
+    setPaybackProofSubmitting(true);
+    try {
+      const form = new FormData();
+      form.append("file", paybackProofForm.file);
+      form.append("amount_paid", paybackProofForm.amount_paid);
+      form.append("payment_date", paybackProofForm.payment_date);
+      if (paybackProofForm.reference) form.append("reference", paybackProofForm.reference);
+      if (paybackProofForm.comment) form.append("comment", paybackProofForm.comment);
+      await api.submitPaybackProof(claimId, form);
+      setPaybackProofForm({ amount_paid: "", payment_date: "", reference: "", comment: "", file: null });
+      const detail = await api.claimDetail(claimId);
+      setClearanceTrackDetail(detail);
+      alert("Payback proof submitted. HR Operations will review it.");
+    } catch (e: any) {
+      alert("Error submitting payback proof: " + e.message);
+    } finally {
+      setPaybackProofSubmitting(false);
+    }
+  }
+
   async function editClearance(claimId: string) {
     try {
       const detail: any = await api.claimDetail(claimId);
@@ -2802,6 +2872,22 @@ export default function App() {
     return humanizeToken(value);
   }
 
+  // Employee-facing labels for the trip-completion clearance outcome
+  // statuses - deliberately distinct from raw enum values, per spec.
+  const CLEARANCE_OUTCOME_LABELS: Record<string, string> = {
+    FULLY_CLEARED: "Fully Cleared",
+    COMPLETED: "Fully Cleared",
+    REFUND_DUE: "Refund Due to You",
+    PAYBACK_DUE: "Payback Required",
+    PAYBACK_PROOF_SUBMITTED: "Payback Proof Under Review",
+    PAYBACK_PROOF_REJECTED: "Payback Proof Rejected",
+    FINANCE_TREASURY_REVIEW: "Fully Cleared — With Finance Treasury"
+  };
+  function clearanceOutcomeStatusLabel(value: any) {
+    const status = String(value || "").toUpperCase();
+    return CLEARANCE_OUTCOME_LABELS[status] || humanizeClaimStatus(status);
+  }
+
   function formatTrackingDate(value: any, includeTime = true) {
     if (!value) return "—";
     const d = new Date(value);
@@ -2833,7 +2919,7 @@ export default function App() {
   function statusToneClass(value: any) {
     const status = String(value || "").toUpperCase();
     if (["REJECTED", "CANCELLED"].includes(status) || status.includes("REJECT")) return "tracking-tone-danger";
-    if (["PAID", "APPROVED", "HR_OFFICER"].includes(status)) return "tracking-tone-success";
+    if (["PAID", "APPROVED", "HR_OFFICER", "COMPLETED", "FINANCE_TREASURY_REVIEW"].includes(status)) return "tracking-tone-success";
     if (["DRAFT"].includes(status)) return "tracking-tone-neutral";
     return "tracking-tone-progress";
   }
@@ -3852,7 +3938,7 @@ export default function App() {
                   <div>
                     <span>Reference</span>
                     <strong>{claimNumber(claim)}</strong>
-                    <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>{humanizeClaimStatus(currentStatus)}</em>
+                    <em className={`tracking-status-pill ${statusToneClass(currentStatus)}`}>{clearanceOutcomeStatusLabel(currentStatus)}</em>
                   </div>
                 </div>
                 <div>
@@ -3897,11 +3983,71 @@ export default function App() {
                     <dl className="tracking-detail-list">
                       <div><dt>Reference</dt><dd>{claimNumber(claim)}</dd></div>
                       <div><dt>Month</dt><dd>{claim.month || "—"}</dd></div>
-                      <div><dt>Total Claimed</dt><dd>{fmtMoney(claim.claim_total, claim.currency)}</dd></div>
-                      <div><dt>Advance</dt><dd>{fmtMoney(claim.advance_amount, claim.currency)}</dd></div>
-                      <div><dt>Balance</dt><dd>{fmtMoney(claim.balance_amount, claim.currency)}</dd></div>
+                      <div><dt>Approved Advance</dt><dd>{fmtMoney(claim.advance_amount, claim.currency)}</dd></div>
+                      <div><dt>Verified Expenses</dt><dd>{fmtMoney(claim.claim_total, claim.currency)}</dd></div>
+                      {claim.financial_outcome === "REFUND_DUE" && (
+                        <div><dt>Refund Due</dt><dd>{fmtMoney(Math.abs(Number(claim.balance_amount || 0)), claim.currency)}</dd></div>
+                      )}
+                      {claim.financial_outcome === "PAYBACK_DUE" && (
+                        <div><dt>Payback Due</dt><dd>{fmtMoney(Math.abs(Number(claim.balance_amount || 0)), claim.currency)}</dd></div>
+                      )}
+                      <div>
+                        <dt>Outstanding Amount</dt>
+                        <dd>{claim.employee_clearance_status === "FULLY_CLEARED" || currentStatus === "COMPLETED" || currentStatus === "FINANCE_TREASURY_REVIEW" ? fmtMoney(0, claim.currency) : fmtMoney(Math.abs(Number(claim.balance_amount || 0)), claim.currency)}</dd>
+                      </div>
+                      {claim.financial_outcome && <div><dt>Clearance Outcome</dt><dd>{clearanceOutcomeStatusLabel(claim.financial_outcome === "BALANCED" ? "FULLY_CLEARED" : claim.financial_outcome)}</dd></div>}
+                      <div><dt>Current Status</dt><dd>{clearanceOutcomeStatusLabel(currentStatus)}</dd></div>
                     </dl>
                   </section>
+
+                  {currentStatus === "PAYBACK_DUE" && (
+                    <section className="tracking-card">
+                      <h3>Submit Payback Proof</h3>
+                      <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
+                        You must return {fmtMoney(Math.abs(Number(claim.balance_amount || 0)), claim.currency)} to the company. Upload proof of payment (receipt, deposit slip, or bank transfer confirmation) below.
+                      </p>
+                      <PaybackProofForm form={paybackProofForm} setForm={setPaybackProofForm} onSubmit={submitPaybackProofForTracking} submitting={paybackProofSubmitting} submitLabel="Submit Payback Proof" />
+                    </section>
+                  )}
+
+                  {currentStatus === "PAYBACK_PROOF_REJECTED" && (
+                    <section className="tracking-card">
+                      <h3>Payback Proof Rejected</h3>
+                      <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
+                        HR Operations did not accept your previous proof
+                        {claim.payback_proofs?.[0]?.rejection_reason ? <>: <strong>{claim.payback_proofs[0].rejection_reason}</strong></> : "."}
+                        {" "}Please review and resubmit — required payback amount: {fmtMoney(Math.abs(Number(claim.balance_amount || 0)), claim.currency)}.
+                      </p>
+                      <PaybackProofForm form={paybackProofForm} setForm={setPaybackProofForm} onSubmit={submitPaybackProofForTracking} submitting={paybackProofSubmitting} submitLabel="Resubmit Payback Proof" />
+                    </section>
+                  )}
+
+                  {currentStatus === "PAYBACK_PROOF_SUBMITTED" && (
+                    <section className="tracking-card">
+                      <h3>Payback Proof Submitted</h3>
+                      <p style={{ fontSize: 13, color: "var(--muted)" }}>
+                        Submitted {formatTrackingDate(claim.payback_proofs?.[0]?.submitted_at)}. Awaiting HR Operations verification.
+                      </p>
+                    </section>
+                  )}
+
+                  {(currentStatus === "COMPLETED" || currentStatus === "FINANCE_TREASURY_REVIEW") && (
+                    <section className="tracking-card">
+                      <h3>Trip Completed and Fully Cleared</h3>
+                      <p style={{ fontSize: 13, color: "var(--muted)" }}>All trip expenses have been accounted for, and no outstanding payment remains.</p>
+                    </section>
+                  )}
+
+                  {claim.payback_proofs?.length > 0 && (
+                    <section className="tracking-card">
+                      <h3>Payback Proof History</h3>
+                      <dl className="tracking-detail-list">
+                        {claim.payback_proofs.map((p: any) => (
+                          <div key={p.id}><dt>v{p.version} — {formatTrackingDate(p.submitted_at)}</dt><dd>{p.status} {p.rejection_reason ? `— ${p.rejection_reason}` : ""}</dd></div>
+                        ))}
+                      </dl>
+                    </section>
+                  )}
                 </div>
 
                 <aside className="tracking-side-stack">
@@ -4326,7 +4472,7 @@ export default function App() {
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
                 )}
-                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
+                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
               </div>
             </div>
           )}
@@ -4334,6 +4480,10 @@ export default function App() {
               assignment), not a Finance function - kept as its own top-level item
               rather than nested under Finance. */}
           <a href="#" className={navItemClass(page === "ACCOMMODATION")} onClick={(e) => { e.preventDefault(); setPage("ACCOMMODATION"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Accommodation</a>
+          <a href="#" className={navItemClass(page === "PAYBACK_REVIEW")} onClick={(e) => { e.preventDefault(); setPage("PAYBACK_REVIEW"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>HR Operations Review</a>
+          {hasTreasuryAccess && (
+            <a href="#" className={navItemClass(page === "TREASURY_PROCESSING")} onClick={(e) => { e.preventDefault(); setPage("TREASURY_PROCESSING"); }}><span className="sidebar-nav-icon"><Landmark size={18} aria-hidden /></span>Trip Clearance Processing <b>{treasuryCount}</b></a>
+          )}
           {hasItProvisioningAccess && (
             <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>
           )}
@@ -4353,8 +4503,8 @@ export default function App() {
               </div>
             </div>
           )}
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               {canAccessFeature("report_advances") && (
                 <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
@@ -4451,6 +4601,26 @@ export default function App() {
             <Refundable />
           ) : page === "ACCOMMODATION" ? (
             <Accommodation profile={profile} onBack={() => setPage("HOME")} />
+          ) : page === "PAYBACK_REVIEW" ? (
+            <PaybackReview onBack={() => setPage("HOME")} />
+          ) : page === "TREASURY_PROCESSING" ? (
+            <TreasuryProcessing onBack={() => setPage("HOME")} />
+          ) : page === "REPORT_CLEARANCE_SUMMARY" ? (
+            <ReportClearanceSummary onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_REFUNDS_DUE" ? (
+            <ReportRefundsDue onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_EMPLOYEE_PAYBACKS" ? (
+            <ReportEmployeePaybacks onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_FULLY_CLEARED" ? (
+            <ReportFullyClearedTrips onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_OUTSTANDING" ? (
+            <ReportOutstandingClearances onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_AGEING" ? (
+            <ReportClearanceAgeing onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_TREASURY_AUDIT" ? (
+            <ReportAuditReconciliation onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_DEPT_DIVISION" ? (
+            <ReportDeptDivisionClearance onBack={() => setPage("REPORTS")} />
           ) : page === "IT_PROVISIONING" ? (
             <ITProvisioning />
           ) : page === "OVERTIME" ? (
@@ -6151,6 +6321,16 @@ export default function App() {
                   ] : []),
                   ...(role === "ADMIN" ? [
                     { icon: <PlayCircle size={26} />, color: "#4f46e5", bg: "#e0e7ff", title: "Tooltip Engagement", desc: "How far users get through each in-app guided tour before completing or skipping it.", action: () => setPage("REPORT_TOUR_ENGAGEMENT"), live: true },
+                  ] : []),
+                  ...(hasTreasuryAccess ? [
+                    { icon: <Landmark size={26} />, color: "#0891b2", bg: "#cffafe", title: "Trip Clearance Summary", desc: "Trips, advances, verified expenses and outcomes across the business.", action: () => setPage("REPORT_CLEARANCE_SUMMARY"), live: true },
+                    { icon: <Landmark size={26} />, color: "#2563eb", bg: "#dbeafe", title: "Refunds Due", desc: "Refunds owed to employees, from awaiting payment through to processed.", action: () => setPage("REPORT_REFUNDS_DUE"), live: true },
+                    { icon: <Landmark size={26} />, color: "#7c3aed", bg: "#ede9fe", title: "Employee Paybacks", desc: "Payback proofs, HR verification, and Treasury reconciliation.", action: () => setPage("REPORT_EMPLOYEE_PAYBACKS"), live: true },
+                    { icon: <Landmark size={26} />, color: "#059669", bg: "#d1fae5", title: "Fully Cleared Trips", desc: "Completed clearances, retaining their original financial outcome.", action: () => setPage("REPORT_FULLY_CLEARED"), live: true },
+                    { icon: <Landmark size={26} />, color: "#d97706", bg: "#fef3c7", title: "Outstanding Clearances", desc: "Every trip not yet completed, grouped by responsible team.", action: () => setPage("REPORT_OUTSTANDING"), live: true },
+                    { icon: <Clock3 size={26} />, color: "#db2777", bg: "#fce7f3", title: "Clearance Ageing", desc: "How long incomplete clearances have sat in each stage.", action: () => setPage("REPORT_AGEING"), live: true },
+                    { icon: <ShieldCheck size={26} />, color: "#dc2626", bg: "#fee2e2", title: "Treasury Audit & Reconciliation", desc: "Flags settlement discrepancies, missing references, and overdue items.", action: () => setPage("REPORT_TREASURY_AUDIT"), live: true },
+                    { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Department & Division", desc: "Clearance activity summarized by division and department.", action: () => setPage("REPORT_DEPT_DIVISION"), live: true },
                   ] : []),
                 ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}

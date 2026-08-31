@@ -936,7 +936,16 @@ export async function notifyClaimTask(args: {
         EXCO_APPROVED:          `Your clearance claim has been approved by EXCO and is now with HR for processing.`,
         HR_OFFICER:             `Your clearance claim is with Finance for verification.`,
         FINANCE_VERIFIED:       `Your clearance claim has been verified by Finance and is awaiting final settlement.`,
-        CLOSED:                 `Your clearance claim has been fully approved and closed.`
+        CLOSED:                 `Your clearance claim has been fully approved and closed.`,
+        // Trip-completion clearance outcomes (see claims.service.ts's
+        // advanceClaimWorkflowStep) - the claim just finished its approval
+        // chain and its financial outcome was determined.
+        REFUND_DUE:              `Your trip expenses were more than your advance. A refund is due to you - it will be processed by Finance Treasury.`,
+        PAYBACK_DUE:             `Your trip advance was more than your verified expenses. Please submit proof that you have paid back the outstanding amount.`,
+        FINANCE_TREASURY_REVIEW: `Your trip is fully cleared and has been sent to Finance Treasury for final processing.`,
+        PAYBACK_PROOF_SUBMITTED: `Your repayment proof has been submitted and is awaiting HR Operations verification.`,
+        PAYBACK_PROOF_REJECTED:  `Your repayment proof was not accepted by HR Operations. Please review the reason and resubmit your proof.`,
+        COMPLETED:               `Your trip clearance is complete - all processing has finished.`
       };
 
       const statusMsg = claimantMessages[args.status];
@@ -977,6 +986,113 @@ export async function notifyClaimTask(args: {
         claim_id: args.claimId, status: args.status, error: serializeError(error)
       });
     }
+  }
+}
+
+// Notifies every Finance Treasury recipient (getCompensationFinanceRecipients
+// - same authority as Capture/Deductions/Refundable) that a clearance needs
+// their attention: arrived from HR Operations, or was returned to HR and is
+// back with them again.
+export async function notifyTreasuryQueueItem(args: {
+  claimId: string;
+  claimantName: string | null;
+  department: string | null;
+  financialOutcome: string;
+  amount: number;
+  currency?: string | null;
+}) {
+  try {
+    const recipients = await getCompensationFinanceRecipients();
+    if (!recipients.length) return;
+    const claimant = args.claimantName || "Claimant";
+    const body = [
+      header(`TRIP CLEARANCE — READY FOR TREASURY PROCESSING`),
+      ``,
+      `Hello,`,
+      ``,
+      `A trip clearance is ready for Finance Treasury processing.`,
+      ``,
+      detailBlock([
+        ["Claimant", claimant],
+        ["Division", args.department],
+        ["Outcome", args.financialOutcome],
+        ["Amount", fmt(args.amount, args.currency)]
+      ]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({
+      to: recipients.map((r) => r.email),
+      subject: `[Action Required] Trip clearance ready for Treasury processing`,
+      text: body
+    });
+
+    sendTeamsCard({
+      title: "Trip Clearance — Treasury Processing",
+      summary: `Trip clearance ready for Treasury processing: ${claimant}`,
+      subtitle: args.financialOutcome,
+      color: "0891b2",
+      facts: [
+        { name: "Claimant", value: claimant },
+        { name: "Division", value: args.department || "—" },
+        { name: "Outcome", value: args.financialOutcome },
+        { name: "Amount", value: fmt(args.amount, args.currency) }
+      ]
+    }).catch((e) => logger.warn("teams_treasury_queue_failed", { error: serializeError(e) }));
+  } catch (error) {
+    logger.warn("treasury_queue_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+// Payback-proof rejection needs the specific reason in the email body, which
+// notifyClaimTask's generic claimantMessages map can't carry - kept as its
+// own small function rather than widening that map's shape for one case.
+export async function notifyPaybackProofRejected(args: {
+  claimId: string;
+  claimantName: string | null;
+  claimantEmail?: string | null;
+  department: string | null;
+  reason: string;
+}) {
+  if (!args.claimantEmail) return;
+  const claimant = args.claimantName || "Claimant";
+  try {
+    const body = [
+      header(`CLEARANCE CLAIM — PAYBACK PROOF REJECTED`),
+      ``,
+      `Hello ${claimant},`,
+      ``,
+      `Your repayment proof was not accepted by HR Operations. Please review the reason and resubmit your proof.`,
+      ``,
+      detailBlock([
+        ["Claimant", claimant],
+        ["Division", args.department],
+        ["Reason", args.reason]
+      ]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({
+      to: [args.claimantEmail],
+      subject: `[Action Required] Payback proof rejected — resubmission needed`,
+      text: body
+    });
+
+    sendTeamsCard({
+      title: "Clearance Claim — Payback Proof Rejected",
+      summary: `Payback proof rejected for ${claimant}`,
+      subtitle: args.reason,
+      color: "dc2626",
+      facts: [
+        { name: "Claimant", value: claimant },
+        { name: "Division", value: args.department || "—" },
+        { name: "Reason", value: args.reason }
+      ]
+    }).catch((e) => logger.warn("teams_payback_proof_rejected_failed", { error: serializeError(e) }));
+  } catch (error) {
+    logger.warn("payback_proof_rejected_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
   }
 }
 

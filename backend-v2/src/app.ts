@@ -23,6 +23,8 @@ import { emailActionsRouter } from "./modules/email-actions/email-actions.routes
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
 import { refundableRouter } from "./modules/refundable/refundable.routes.js";
+import { treasuryRouter } from "./modules/treasury/treasury.routes.js";
+import { treasuryReportsRouter } from "./modules/treasury/treasury-reports.routes.js";
 import { itProvisioningRouter } from "./modules/it-provisioning/it-provisioning.routes.js";
 import { standbyRouter } from "./modules/standby/standby.routes.js";
 import { dataCleanupRouter } from "./modules/admin/data-cleanup.routes.js";
@@ -93,6 +95,8 @@ export function createApp() {
   app.use("/pdf-templates", pdfTemplatesRouter);
   app.use("/deductions", deductionsRouter);
   app.use("/refundable", refundableRouter);
+  app.use("/treasury", treasuryRouter);
+  app.use("/treasury-reports", treasuryReportsRouter);
   app.use("/it-provisioning", itProvisioningRouter);
   app.use("/admin/data-cleanup", dataCleanupRouter);
   app.use("/admin/approval-maintenance", approvalMaintenanceRouter);

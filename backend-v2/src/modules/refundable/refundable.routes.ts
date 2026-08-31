@@ -14,6 +14,17 @@ import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 // advanced, so the company owes them a refund. Deductions only ever tracked
 // and actioned the positive side; this module mirrors that same
 // list/act/audit flow for the negative side.
+//
+// Legacy-only: this module is untouched by the trip-completion clearance
+// outcome feature (see claims.service.ts's computeFinancialOutcome). A
+// claim only ever reaches status='CLOSED' via the old pre-outcome code path
+// (nothing sets it any more once financial_outcome is being computed), so
+// this list naturally only ever contains claims that predate that change.
+// A new-style REFUND_DUE claim is instead processed by Finance Treasury's
+// own POST /treasury/:id/process-refund (treasury.routes.ts), which
+// captures richer detail (method/reference/voucher/attachment) than this
+// module's simple boolean toggle and is the authoritative refund-processing
+// action for the new workflow.
 export const refundableRouter = Router();
 refundableRouter.use(requireAuth);
 

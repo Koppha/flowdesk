@@ -2150,7 +2150,7 @@ const FEATURE_KEYS = [
   "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer",
   "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions",
   "payments", "capture", "clearance_status_report",
-  "overtime_request", "overtime_claim"
+  "overtime_request", "overtime_claim", "treasury_processing"
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
@@ -2186,7 +2186,12 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
     "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
   ],
   overtime_request:      ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
-  overtime_claim:        ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"]
+  overtime_claim:        ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
+  // Finance Treasury processing queue/reports - same team as Capture Inbox
+  // (isCompensationFinanceSection/Treasury & Financial Accounting), since
+  // Treasury authority is deliberately the same authority throughout this
+  // system, not a separate permission concept.
+  treasury_processing:   ["ADMIN", "Section: Treasury & Financial Accounting"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {

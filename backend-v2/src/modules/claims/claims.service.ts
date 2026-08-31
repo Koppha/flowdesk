@@ -12,7 +12,44 @@ export type ClaimStatus =
   | "PAYMENT_PROCESSING"
   | "SETTLED"
   | "CLOSED"
-  | "REJECTED";
+  | "REJECTED"
+  // Trip-completion clearance outcomes (new, additive - see
+  // ensureClearanceOutcomeSchema in bootstrap/system.ts). Reached only via
+  // the chain-completion branch in advanceClaimWorkflowStep below; the
+  // legacy SETTLED/PAYMENT_PROCESSING/CLOSED values above are left in place
+  // for history and are never produced for a claim that reaches this branch.
+  | "REFUND_DUE"
+  | "PAYBACK_DUE"
+  | "PAYBACK_PROOF_SUBMITTED"
+  | "PAYBACK_PROOF_REJECTED"
+  | "FINANCE_TREASURY_REVIEW"
+  | "COMPLETED";
+
+// Permanent once set at chain completion - never changes again, so reports
+// retain the original settlement direction even after the claim is later
+// FULLY_CLEARED/COMPLETED.
+export type FinancialOutcome = "BALANCED" | "REFUND_DUE" | "PAYBACK_DUE";
+
+// The employee-facing "am I done" signal - distinct from `status` (workflow
+// stage) and `financial_outcome` (which direction the money moved, if any).
+export type EmployeeClearanceStatus = "NOT_CLEARED" | "CLEARANCE_PENDING" | "FULLY_CLEARED";
+
+// clearanceBalance = verifiedExpenseAmount - approvedAdvanceAmount, but this
+// codebase's existing balance_amount column (claim_total vs advance_amount,
+// already frozen from submission onward - see PUT /:id and PUT /:id/trips,
+// both DRAFT-only) is computed the other way around: advanceAmount -
+// claimTotal, so a POSITIVE balance_amount already means "employee spent
+// less than the advance" (payback owed) and a NEGATIVE one means "employee
+// spent more" (refund owed) - the exact convention deductions.routes.ts /
+// refundable.routes.ts already rely on. Reuse it as-is rather than
+// introducing an inverted duplicate field. Values are already rounded to
+// cents via Number(x.toFixed(2)) at write time (the pattern used throughout
+// claims.routes.ts), so a plain numeric comparison is safe here - no epsilon
+// needed.
+export function computeFinancialOutcome(balanceAmount: number): FinancialOutcome {
+  if (balanceAmount === 0) return "BALANCED";
+  return balanceAmount > 0 ? "PAYBACK_DUE" : "REFUND_DUE";
+}
 
 export type ClaimAction =
   | "MANAGER_APPROVE"
@@ -40,6 +77,17 @@ export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
     HR_OFFICER: { FINANCE_VERIFY: "FINANCE_VERIFIED" },
     FINANCE_VERIFIED: { SETTLE: "SETTLED" },
     PAYMENT_PROCESSING: { MARK_SETTLED: "CLOSED" },
+    // New trip-completion outcome statuses are never reached via this legacy
+    // fallback map — they're only ever produced/advanced by
+    // advanceClaimWorkflowStep's chain-completion branch and the dedicated
+    // payback-proof/treasury routes, which write status directly rather than
+    // going through nextClaimStatus.
+    REFUND_DUE: {},
+    PAYBACK_DUE: {},
+    PAYBACK_PROOF_SUBMITTED: {},
+    PAYBACK_PROOF_REJECTED: {},
+    FINANCE_TREASURY_REVIEW: {},
+    COMPLETED: {},
     SETTLED: {},
     CLOSED: {},
     REJECTED: {}
@@ -114,6 +162,7 @@ export async function advanceClaimWorkflowStep(args: {
   stillPending: boolean;
   nextApprover: { id: string | null; name: string | null; email: string | null; title: string | null } | null;
   nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }>;
+  financialOutcome: FinancialOutcome | null;
 }> {
   const { claim, userId, role, delegatedManagerIds, userSectionId } = args;
   if (!claim.approval_chain?.length) throw badRequest("This clearance does not have an active approval workflow.");
@@ -126,8 +175,8 @@ export async function advanceClaimWorkflowStep(args: {
   // performClaimReject), so without this check the same or another eligible
   // approver could still call approve and walk a rejected claim to CLOSED.
   return withTransaction(async (client) => {
-    const lockedRows = await client.query<{ status: ClaimStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null }>(
-      `SELECT status, workflow_step_order, approval_chain FROM clearance_claims WHERE id=$1 FOR UPDATE`,
+    const lockedRows = await client.query<{ status: ClaimStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null; balance_amount: string }>(
+      `SELECT status, workflow_step_order, approval_chain, balance_amount FROM clearance_claims WHERE id=$1 FOR UPDATE`,
       [claim.id]
     );
     const locked = lockedRows.rows[0];
@@ -163,6 +212,12 @@ export async function advanceClaimWorkflowStep(args: {
     let newStepOrder: number;
     let hasMore: boolean;
     let nextApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }> = [];
+    // Set only when the chain just finished (the branch below fires) - the
+    // trip-completion clearance outcome, computed once from the already-
+    // frozen balance_amount and never recomputed again.
+    let financialOutcome: FinancialOutcome | null = null;
+    let employeeClearanceStatus: EmployeeClearanceStatus | null = null;
+    let treasurySettlementStatus: "NOT_REQUIRED" | "PENDING" | null = null;
 
     if (stillPending) {
       nextStatus = locked.status;
@@ -171,9 +226,9 @@ export async function advanceClaimWorkflowStep(args: {
     } else {
       const nextIdx = group.indices[group.indices.length - 1] + 1;
       hasMore = nextIdx < newChain.length;
-      nextStatus = chainStepToClaimStatus(newChain, nextIdx);
       newStepOrder = hasMore ? nextIdx : newChain.length;
       if (hasMore) {
+        nextStatus = chainStepToClaimStatus(newChain, nextIdx);
         // Each step in the pending stage can now have more than one assigned
         // person — expand to one notification target per person so everyone
         // who can act on it is told, not just the first.
@@ -184,22 +239,45 @@ export async function advanceClaimWorkflowStep(args: {
             ? [{ id: s.approver_id, name: s.approver_name, email: s.approver_email, title: s.approver_title || s.position_name }]
             : []
         );
+      } else {
+        // The chain just finished — this is the new trip-completion outcome
+        // branch. Never CLOSED directly any more: compute the financial
+        // outcome and route onward instead (see computeFinancialOutcome's
+        // doc comment for the balance_amount sign convention).
+        financialOutcome = computeFinancialOutcome(Number(locked.balance_amount));
+        if (financialOutcome === "BALANCED") {
+          employeeClearanceStatus = "FULLY_CLEARED";
+          treasurySettlementStatus = "NOT_REQUIRED";
+          nextStatus = "FINANCE_TREASURY_REVIEW";
+        } else if (financialOutcome === "REFUND_DUE") {
+          employeeClearanceStatus = "CLEARANCE_PENDING";
+          treasurySettlementStatus = "PENDING";
+          nextStatus = "REFUND_DUE";
+        } else {
+          employeeClearanceStatus = "CLEARANCE_PENDING";
+          treasurySettlementStatus = "PENDING";
+          nextStatus = "PAYBACK_DUE";
+        }
       }
     }
 
-    // $2 (status) is bound to the claim_status enum column, so it can't also be
-    // compared against a text literal in the same statement (Postgres requires
-    // one type per parameter) — pass the "did this just close" check as its own
-    // boolean parameter instead of reusing $2 in a second, conflicting context.
+    // closed_at is stamped for every terminal-ish outcome status below, same
+    // as it always was for the old unconditional CLOSED — kept as a single
+    // "when did this claim stop being purely a pending approval" marker.
+    const stampClosedAt = nextStatus === "CLOSED" || financialOutcome !== null;
     await client.query(
       `UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4,
-         closed_at=CASE WHEN $5 THEN now() ELSE closed_at END, updated_at=now()
+         closed_at=CASE WHEN $5 THEN now() ELSE closed_at END,
+         financial_outcome=COALESCE($6, financial_outcome),
+         employee_clearance_status=COALESCE($7, employee_clearance_status),
+         treasury_settlement_status=COALESCE($8, treasury_settlement_status),
+         updated_at=now()
        WHERE id=$1`,
-      [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain), nextStatus === "CLOSED"]
+      [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain), stampClosedAt, financialOutcome, employeeClearanceStatus, treasurySettlementStatus]
     );
 
     const nextApprover = nextApprovers[0] ?? null;
 
-    return { nextStatus, newStepOrder, hasMore, currentStep, stillPending, nextApprover, nextApprovers };
+    return { nextStatus, newStepOrder, hasMore, currentStep, stillPending, nextApprover, nextApprovers, financialOutcome };
   });
 }

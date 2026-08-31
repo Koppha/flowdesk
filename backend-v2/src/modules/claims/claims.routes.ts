@@ -8,11 +8,11 @@ import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query, withTransaction } from "../../lib/db.js";
 import { assertUserCanRequest } from "../../lib/userProfile.js";
-import { notifyClaimTask } from "../../lib/notifications.js";
+import { notifyClaimTask, notifyPaybackProofRejected, notifyTreasuryQueueItem } from "../../lib/notifications.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { isTravelAdvanceType } from "../../lib/travel.js";
-import { canApproveStep, getPendingGroup, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, getPendingGroup, isRoundRobinCandidate, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
@@ -27,6 +27,32 @@ import {
   getClaimById,
   advanceClaimWorkflowStep
 } from "./claims.service.js";
+
+const TREASURY_INTERNAL_FIELDS = [
+  "treasury_posting_reference",
+  "treasury_reconciliation_date",
+  "treasury_comment",
+  "treasury_return_reason",
+  "settled_reference"
+] as const;
+
+// Every status-changing action on a claim writes here — the module had no
+// audit trail at all before the trip-completion outcome feature (unlike
+// advances/accommodation, which already had writeAdvanceAudit/
+// writeAccommodationAudit). Same two-line INSERT pattern as those.
+export async function writeClaimAudit(args: {
+  actorId: string;
+  claimId: string;
+  action: string;
+  before?: unknown;
+  after?: unknown;
+}) {
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
+     VALUES ($1,$2,'clearance_claims',$3,$4,$5)`,
+    [args.actorId, args.action, args.claimId, args.before ? JSON.stringify(args.before) : null, args.after ? JSON.stringify(args.after) : null]
+  );
+}
 
 export { nextClaimStatus };
 
@@ -181,12 +207,26 @@ export async function canViewClaim(args: { role: string; sectionId?: string | nu
     }
   }
 
-  // FINANCE_VERIFIED/PAYMENT_PROCESSING/CLOSED claims have left the active
-  // workflow chain and now sit with Finance/HR/EXCO/Managers awaiting (or
-  // having completed) settlement — those are the same roles allowedInboxForRole
-  // lists this status for, so let them view it.
-  if (["FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED"].includes(args.status || "") && ((await isCompensationFinanceSection(args.sectionId)) || ["MANAGER", "EXCO"].includes(args.role))) {
+  // FINANCE_VERIFIED/PAYMENT_PROCESSING/CLOSED (legacy) and the new trip-
+  // completion outcome statuses have all left the active workflow chain and
+  // now sit with Finance/HR/EXCO/Managers awaiting (or having completed)
+  // settlement — those are the same roles allowedInboxForRole lists this
+  // status for, so let them view it.
+  const POST_CHAIN_STATUSES = [
+    "FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED",
+    "REFUND_DUE", "PAYBACK_DUE", "PAYBACK_PROOF_SUBMITTED", "PAYBACK_PROOF_REJECTED",
+    "FINANCE_TREASURY_REVIEW", "COMPLETED"
+  ];
+  if (POST_CHAIN_STATUSES.includes(args.status || "") && ((await isCompensationFinanceSection(args.sectionId)) || ["MANAGER", "EXCO"].includes(args.role))) {
     return true;
+  }
+  // HR Operations retains view access to a claim they closed (and so may
+  // still need to review a payback proof on) even once it's past the chain -
+  // reuse the same "am I eligible on the DEPT_CLOSE step" check the payback-
+  // proof routes use, rather than a separate permission axis.
+  if (POST_CHAIN_STATUSES.includes(args.status || "") && args.approvalChain?.length) {
+    const lastStep = args.approvalChain[args.approvalChain.length - 1];
+    if (await isRoundRobinCandidate(lastStep, args.userId, args.role)) return true;
   }
 
   // NOTE: this used to also grant view access to anyone in the claimant's
@@ -222,6 +262,49 @@ claimsRouter.get("/", async (req: AuthedRequest, res, next) => {
         ORDER BY cc.created_at DESC`
     );
     return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// HR Operations' review queue - every claim currently waiting on an HR
+// Operations action: a payback proof to verify/reject (submitted or
+// rejected-and-awaiting-resubmission), or a refund that just needs
+// forwarding to Finance Treasury (no proof involved - see
+// POST /:id/send-to-treasury). Scoped to whoever this user is the
+// round-robin-assigned reviewer for (or ADMIN, who sees all of them).
+// Distinct from the generic GET / above, which is feature-gated on
+// report_advances and not scoped to "am I the assigned reviewer."
+claimsRouter.get("/payback-review-queue", async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query<any>(
+      `SELECT c.id, c.claimant_id, u.full_name AS employee_name, u.employee_no, u.department,
+              c.duty_station AS destination, c.balance_amount, c.status, c.approval_chain,
+              COALESCE(c.currency, 'LSL') AS currency,
+              (SELECT count(*) FROM clearance_payback_proofs p WHERE p.clearance_claim_id = c.id) AS submission_count,
+              p.id AS proof_id, p.amount_paid, p.payment_date, p.reference, p.comment AS proof_comment,
+              p.file_path, p.submitted_at, p.status AS proof_status, p.rejection_reason
+         FROM clearance_claims c
+         JOIN users u ON u.id = c.claimant_id
+         LEFT JOIN LATERAL (
+           SELECT * FROM clearance_payback_proofs
+            WHERE clearance_claim_id = c.id
+            ORDER BY version DESC LIMIT 1
+         ) p ON true
+        WHERE c.status IN ('PAYBACK_PROOF_SUBMITTED', 'PAYBACK_PROOF_REJECTED', 'REFUND_DUE')
+        ORDER BY p.submitted_at DESC NULLS LAST`
+    );
+    const items = [];
+    for (const r of rows) {
+      if (req.user!.role !== "ADMIN") {
+        const chain = r.approval_chain as ChainStep[] | null;
+        const lastStep = chain?.[chain.length - 1];
+        if (!lastStep || !(await isRoundRobinCandidate(lastStep, req.user!.userId, req.user!.role))) continue;
+      }
+      const { approval_chain, ...rest } = r;
+      items.push(rest);
+    }
+    return res.json({ items });
   } catch (err) {
     return next(err);
   }
@@ -337,7 +420,29 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     });
     const isOwner = claim.claimant_id === req.user!.userId;
     const can_view_pdf = await canAccessPdf({ requestType: "CLEARANCE_CLAIM", userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" });
-    return res.json({ ...claim, trips, receipts, can_view_pdf });
+    const payback_proofs = await query<any>(
+      `SELECT * FROM clearance_payback_proofs WHERE clearance_claim_id=$1 ORDER BY version DESC`,
+      [req.params.id]
+    );
+
+    // Internal Treasury posting/reconciliation/reference fields are hidden
+    // from the claimant (per spec: employees see their own status but not
+    // internal journal/bank/reconciliation detail) and from anyone else with
+    // no real stake in the claim. Finance/Admin always sees it; HR Operations
+    // may view Treasury *progress* for a clearance they closed (spec section
+    // 7) even though they can't act on it - same eligibility check as
+    // requirePaybackReviewer/canViewClaim's HR-ops branch above.
+    const lastChainStep = (claim.approval_chain as ChainStep[] | null)?.[(claim.approval_chain?.length ?? 1) - 1];
+    const canSeeTreasuryDetail =
+      req.user!.role === "ADMIN" ||
+      (await isCompensationFinanceSection(req.user!.sectionId)) ||
+      (lastChainStep ? await isRoundRobinCandidate(lastChainStep, req.user!.userId, req.user!.role) : false);
+    const shaped: any = { ...claim };
+    if (!canSeeTreasuryDetail) {
+      for (const field of TREASURY_INTERNAL_FIELDS) delete shaped[field];
+    }
+
+    return res.json({ ...shaped, trips, receipts, payback_proofs, can_view_pdf });
   } catch (err) {
     return next(err);
   }
@@ -370,6 +475,36 @@ claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res
     res.setHeader("Content-Type", contentTypes[ext] || "application/octet-stream");
     res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
     fs.createReadStream(receipt.file_path).pipe(res);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+claimsRouter.get("/:id/payback-proof/:proofId/file", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
+    if (!claim) throw notFound();
+    const managerChainIds = await getManagerChainIds(claim.claimant_id);
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
+      throw forbidden();
+    }
+    const proof = (await query<any>(`SELECT * FROM clearance_payback_proofs WHERE id=$1 AND clearance_claim_id=$2`, [req.params.proofId, req.params.id]))[0];
+    if (!proof) throw notFound();
+    if (!fs.existsSync(proof.file_path)) throw notFound();
+
+    const ext = path.extname(proof.file_path).toLowerCase();
+    const contentTypes: Record<string, string> = {
+      ".pdf": "application/pdf",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg"
+    };
+    const fileName = path.basename(proof.file_path).replace(/^\d+-/, "");
+    const disposition = req.query.download === "1" ? "attachment" : "inline";
+    res.setHeader("Content-Type", contentTypes[ext] || "application/octet-stream");
+    res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
+    fs.createReadStream(proof.file_path).pipe(res);
   } catch (err) {
     return next(err);
   }
@@ -821,6 +956,31 @@ export async function performClaimApprove(
       });
     }
   }
+
+  if (result.financialOutcome) {
+    await writeClaimAudit({
+      actorId: userId,
+      claimId: claim.id,
+      action: "CLEARANCE_OUTCOME_DETERMINED",
+      before: { status: claim.status },
+      after: { status: result.nextStatus, financial_outcome: result.financialOutcome, balance_amount: claim.balance_amount }
+    });
+    // A BALANCED outcome skips straight past HR Operations (nothing to
+    // verify) and goes directly to Treasury - notify them now. REFUND_DUE/
+    // PAYBACK_DUE only reach Treasury later (refundable.routes.ts's
+    // /:id/refunded, or payback-proof verification below), where they're
+    // notified at that point instead.
+    if (result.financialOutcome === "BALANCED" && notificationContext) {
+      await notifyTreasuryQueueItem({
+        claimId: claim.id,
+        claimantName: notificationContext.full_name,
+        department: notificationContext.department,
+        financialOutcome: "BALANCED",
+        amount: Number(notificationContext.claim_total),
+        currency: notificationContext.currency
+      });
+    }
+  }
   return { status: result.nextStatus };
 }
 
@@ -952,6 +1112,273 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
       });
     }
     return res.json({ ok: true, status: "DRAFT" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ─── Payback-proof submission / HR Operations verification ─────────────────
+// The employee's active proof-of-repayment cycle for a PAYBACK_DUE clearance.
+// Entirely separate from the approval_chain/workflow_step_order machinery
+// above (which already finished by the time a claim reaches PAYBACK_DUE) -
+// operates purely on clearance_claims.status plus the versioned
+// clearance_payback_proofs table, so a rejection/resubmission never touches
+// or re-walks the approval chain.
+
+const PaybackProofSchema = z.object({
+  amount_paid: z.coerce.number().positive("Amount paid is required"),
+  payment_date: z.string().trim().min(1, "Payment date is required"),
+  reference: z.string().trim().optional(),
+  comment: z.string().trim().optional()
+});
+
+// Who may review this claim's payback proof: whoever the claim's own
+// DEPT_CLOSE step round-robin-assigned (see workflowEngine.ts's
+// pickRoundRobinAssignee) — the same person who closed the clearance owns
+// its payback verification. Falls back to any live candidate on that step
+// (isRoundRobinCandidate) for view-only callers.
+async function requirePaybackReviewer(claim: NonNullable<Awaited<ReturnType<typeof getClaimById>>>, req: AuthedRequest) {
+  if (req.user!.role === "ADMIN") return;
+  if (!claim.approval_chain?.length) throw forbidden("This clearance has no configured approval workflow.");
+  const lastStep = (claim.approval_chain as ChainStep[])[claim.approval_chain.length - 1];
+  const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+  const eligible = await canApproveStep(lastStep, req.user!.userId, req.user!.role, delegatedManagerIds, req.user!.sectionId);
+  if (!eligible) throw forbidden("You are not the assigned HR Operations reviewer for this clearance.");
+}
+
+// A REFUND_DUE clearance has no proof to verify - the same HR Operations
+// reviewer that would have verified a payback instead just acknowledges it
+// and forwards it to Finance Treasury (spec: "After HR Operations completes
+// its review, the clearance is sent to Finance Treasury", and the canonical
+// transition list's "HR_OPERATIONS_REVIEW → REFUND_DUE → FINANCE_TREASURY_REVIEW").
+claimsRouter.post("/:id/send-to-treasury", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+    await requirePaybackReviewer(claim, req);
+    if (claim.status !== "REFUND_DUE") throw badRequest("Only a clearance awaiting a refund decision can be sent to Treasury this way");
+
+    await query(
+      `UPDATE clearance_claims SET status='FINANCE_TREASURY_REVIEW', sent_to_treasury_at=now(), sent_to_treasury_by_id=$2, updated_at=now() WHERE id=$1`,
+      [claim.id, req.user!.userId]
+    );
+    await writeClaimAudit({
+      actorId: req.user!.userId, claimId: claim.id, action: "SENT_TO_TREASURY",
+      before: { status: "REFUND_DUE" }, after: { status: "FINANCE_TREASURY_REVIEW" }
+    });
+
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyTreasuryQueueItem({
+        claimId: claim.id, claimantName: notificationContext.full_name, department: notificationContext.department,
+        financialOutcome: "REFUND_DUE", amount: Number(claim.balance_amount), currency: notificationContext.currency
+      });
+    }
+    return res.json({ ok: true, status: "FINANCE_TREASURY_REVIEW" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+claimsRouter.post("/:id/payback-proof", upload.single("file"), async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+    if (claim.claimant_id !== req.user!.userId) throw forbidden("Only the claimant can submit payback proof");
+    if (!["PAYBACK_DUE", "PAYBACK_PROOF_REJECTED"].includes(claim.status)) {
+      throw badRequest("Payback proof can only be submitted while a payback is due or a prior proof was rejected");
+    }
+    if (!req.file) throw badRequest("A proof attachment is required");
+
+    const parsed = PaybackProofSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payback proof payload", parsed.error.flatten());
+
+    const requiredAmount = Number(claim.balance_amount);
+    if (Number(parsed.data.amount_paid.toFixed(2)) !== Number(requiredAmount.toFixed(2))) {
+      throw badRequest(`Amount paid must match the required payback amount (${requiredAmount.toFixed(2)})`);
+    }
+
+    const beforeStatus = claim.status;
+    const versionRow = (await query<{ next_version: string }>(
+      `SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM clearance_payback_proofs WHERE clearance_claim_id=$1`,
+      [claim.id]
+    ))[0];
+    const proofRows = await query<{ id: string }>(
+      `INSERT INTO clearance_payback_proofs
+        (clearance_claim_id, version, amount_paid, payment_date, reference, comment, file_path, submitted_by_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id`,
+      [
+        claim.id,
+        Number(versionRow.next_version),
+        parsed.data.amount_paid,
+        parsed.data.payment_date,
+        parsed.data.reference ?? null,
+        parsed.data.comment ?? null,
+        req.file.path,
+        req.user!.userId
+      ]
+    );
+    await query(`UPDATE clearance_claims SET status='PAYBACK_PROOF_SUBMITTED', updated_at=now() WHERE id=$1`, [claim.id]);
+
+    await writeClaimAudit({
+      actorId: req.user!.userId,
+      claimId: claim.id,
+      action: "PAYBACK_PROOF_SUBMITTED",
+      before: { status: beforeStatus },
+      after: { status: "PAYBACK_PROOF_SUBMITTED", proof_id: proofRows[0].id, amount_paid: parsed.data.amount_paid, version: Number(versionRow.next_version) }
+    });
+
+    // Notify the specific round-robin-assigned HR Operations reviewer (see
+    // requirePaybackReviewer) - the last chain step's `approvers` snapshot
+    // already carries their contact details.
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    const lastStep = (claim.approval_chain as ChainStep[] | null)?.[(claim.approval_chain?.length ?? 1) - 1];
+    const reviewer = lastStep?.approvers?.find((a) => a.id === lastStep.assigned_user_id) ?? null;
+    if (notificationContext) {
+      await notifyClaimTask({
+        claimId: claim.id,
+        status: "PAYBACK_PROOF_SUBMITTED",
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
+        claimType: notificationContext.claim_type,
+        nextApprover: reviewer ? { id: reviewer.id, name: reviewer.name, email: reviewer.email, title: reviewer.title || "HR Operations" } : null,
+        stepOrder: claim.approval_chain ? claim.approval_chain.length - 1 : undefined
+      });
+    }
+
+    return res.status(201).json({ ok: true, status: "PAYBACK_PROOF_SUBMITTED", proof_id: proofRows[0].id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+claimsRouter.post("/:id/payback-proof/:proofId/verify", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+    await requirePaybackReviewer(claim, req);
+    if (claim.status !== "PAYBACK_PROOF_SUBMITTED") throw badRequest("This clearance is not awaiting payback-proof verification");
+
+    const proof = (await query<{ id: string; status: string; version: number }>(
+      `SELECT id, status, version FROM clearance_payback_proofs
+        WHERE clearance_claim_id=$1
+        ORDER BY version DESC LIMIT 1`,
+      [claim.id]
+    ))[0];
+    if (!proof || proof.id !== req.params.proofId) {
+      throw badRequest("Only the current (latest) payback proof can be verified");
+    }
+    if (proof.status !== "SUBMITTED") throw badRequest("This proof has already been reviewed");
+
+    const now = new Date();
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE clearance_payback_proofs SET status='VERIFIED', reviewed_by_id=$2, reviewed_at=$3 WHERE id=$1`,
+        [proof.id, req.user!.userId, now]
+      );
+      await client.query(
+        `UPDATE clearance_claims SET
+           status='FINANCE_TREASURY_REVIEW',
+           employee_clearance_status='FULLY_CLEARED',
+           payback_verified_by_id=$2, payback_verified_at=$3,
+           updated_at=now()
+         WHERE id=$1`,
+        [claim.id, req.user!.userId, now]
+      );
+    });
+
+    await writeClaimAudit({
+      actorId: req.user!.userId,
+      claimId: claim.id,
+      action: "PAYBACK_PROOF_VERIFIED",
+      before: { status: "PAYBACK_PROOF_SUBMITTED" },
+      after: { status: "FINANCE_TREASURY_REVIEW", proof_id: proof.id }
+    });
+
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyClaimTask({
+        claimId: claim.id,
+        status: "FINANCE_TREASURY_REVIEW",
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
+        claimType: notificationContext.claim_type
+      });
+      await notifyTreasuryQueueItem({
+        claimId: claim.id,
+        claimantName: notificationContext.full_name,
+        department: notificationContext.department,
+        financialOutcome: "PAYBACK_DUE",
+        amount: Number(claim.balance_amount),
+        currency: notificationContext.currency
+      });
+    }
+
+    return res.json({ ok: true, status: "FINANCE_TREASURY_REVIEW" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const PaybackRejectSchema = z.object({ reason: z.string().trim().min(1, "A rejection reason is required") });
+
+claimsRouter.post("/:id/payback-proof/:proofId/reject", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = PaybackRejectSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("A rejection reason is required", parsed.error.flatten());
+
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+    await requirePaybackReviewer(claim, req);
+    if (claim.status !== "PAYBACK_PROOF_SUBMITTED") throw badRequest("This clearance is not awaiting payback-proof verification");
+
+    const proof = (await query<{ id: string; status: string }>(
+      `SELECT id, status FROM clearance_payback_proofs
+        WHERE clearance_claim_id=$1
+        ORDER BY version DESC LIMIT 1`,
+      [claim.id]
+    ))[0];
+    if (!proof || proof.id !== req.params.proofId) {
+      throw badRequest("Only the current (latest) payback proof can be rejected");
+    }
+    if (proof.status !== "SUBMITTED") throw badRequest("This proof has already been reviewed");
+
+    const now = new Date();
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE clearance_payback_proofs SET status='REJECTED', reviewed_by_id=$2, reviewed_at=$3, rejection_reason=$4 WHERE id=$1`,
+        [proof.id, req.user!.userId, now, parsed.data.reason]
+      );
+      await client.query(`UPDATE clearance_claims SET status='PAYBACK_PROOF_REJECTED', updated_at=now() WHERE id=$1`, [claim.id]);
+    });
+
+    await writeClaimAudit({
+      actorId: req.user!.userId,
+      claimId: claim.id,
+      action: "PAYBACK_PROOF_REJECTED",
+      before: { status: "PAYBACK_PROOF_SUBMITTED" },
+      after: { status: "PAYBACK_PROOF_REJECTED", proof_id: proof.id, rejection_reason: parsed.data.reason }
+    });
+
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyPaybackProofRejected({
+        claimId: claim.id,
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        reason: parsed.data.reason
+      });
+    }
+
+    return res.json({ ok: true, status: "PAYBACK_PROOF_REJECTED" });
   } catch (err) {
     return next(err);
   }

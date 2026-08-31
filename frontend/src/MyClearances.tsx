@@ -9,7 +9,10 @@ interface Props {
   onTrack: (claimId: string) => void;
 }
 
-const PENDING_STATUSES = ["SUBMITTED", "MANAGER_APPROVED", "EXCO_APPROVED", "HR_OFFICER", "FINANCE_VERIFIED"];
+const PENDING_STATUSES = [
+  "SUBMITTED", "MANAGER_APPROVED", "EXCO_APPROVED", "HR_OFFICER", "FINANCE_VERIFIED",
+  "REFUND_DUE", "PAYBACK_DUE", "PAYBACK_PROOF_SUBMITTED", "PAYBACK_PROOF_REJECTED", "FINANCE_TREASURY_REVIEW"
+];
 
 const TABS: { key: string; label: string }[] = [
   { key: "ALL", label: "All" },
@@ -21,20 +24,35 @@ const TABS: { key: string; label: string }[] = [
 function tabStatuses(tab: string) {
   switch (tab) {
     case "PENDING": return PENDING_STATUSES;
-    case "SETTLED": return ["SETTLED", "CLOSED"];
-    case "ISSUES": return ["REJECTED"];
+    case "SETTLED": return ["SETTLED", "CLOSED", "COMPLETED"];
+    case "ISSUES": return ["REJECTED", "PAYBACK_PROOF_REJECTED"];
     default: return null;
   }
 }
 
+// Employee-facing labels for the trip-completion clearance outcome statuses
+// - deliberately distinct from raw enum values, per spec.
+const OUTCOME_STATUS_LABELS: Record<string, string> = {
+  COMPLETED: "Fully Cleared",
+  FINANCE_TREASURY_REVIEW: "Fully Cleared — With Finance Treasury",
+  REFUND_DUE: "Refund Due to You",
+  PAYBACK_DUE: "Payback Required",
+  PAYBACK_PROOF_SUBMITTED: "Payback Proof Under Review",
+  PAYBACK_PROOF_REJECTED: "Payback Proof Rejected"
+};
+
 function statusLabel(value: string | null | undefined) {
   if (!value) return "Unknown";
+  const upper = String(value).toUpperCase();
+  if (OUTCOME_STATUS_LABELS[upper]) return OUTCOME_STATUS_LABELS[upper];
   return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function statusTone(value: string | null | undefined) {
   const status = String(value || "").toUpperCase();
   if (status.includes("REJECT")) return "status-pill-danger";
+  if (status === "COMPLETED" || status === "FINANCE_TREASURY_REVIEW") return "status-pill-success";
+  if (status === "REFUND_DUE" || status === "PAYBACK_DUE" || status === "PAYBACK_PROOF_SUBMITTED") return "status-pill-warning";
   if (status.includes("SETTLED") || status.includes("APPROVED") || status.includes("CLOSED")) return "status-pill-success";
   if (status.includes("SUBMITTED") || status.includes("REVIEW") || status.includes("OFFICER") || status.includes("VERIFIED")) return "status-pill-warning";
   if (status.includes("DRAFT")) return "status-pill-neutral";
@@ -67,6 +85,12 @@ function clearanceStageLabel(claim: any) {
     case "EXCO_APPROVED": return "Pending Approval";
     case "HR_OFFICER": return "Waiting Finance Verification";
     case "FINANCE_VERIFIED": return "Waiting Finance Settlement";
+    case "REFUND_DUE": return "Refund Due to You";
+    case "PAYBACK_DUE": return "Payback Required";
+    case "PAYBACK_PROOF_SUBMITTED": return "Awaiting HR Operations Verification";
+    case "PAYBACK_PROOF_REJECTED": return "Payback Proof Rejected — Resubmit";
+    case "FINANCE_TREASURY_REVIEW": return "With Finance Treasury";
+    case "COMPLETED": return "Fully Cleared";
     default: return statusLabel(claim?.status);
   }
 }

@@ -141,6 +141,18 @@ export async function openBlobInNewTab(fetcher: () => Promise<Blob>) {
   await navigateTabToBlob(tab, fetcher);
 }
 
+// Triggers an actual file download (CSV exports) rather than opening a new
+// tab - used by the Treasury reports' export button.
+export async function downloadBlob(fetcher: () => Promise<Blob>, filename: string) {
+  const blob = await fetcher();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
 export const api = {
   login: (email: string, password: string) => req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => req("/auth/me"),
@@ -275,6 +287,26 @@ export const api = {
   deleteClaimReceipt: (id: string, receiptId: string) => req(`/claims/${id}/receipts/${receiptId}`, { method: "DELETE" }),
   claimReceiptFileBlob: (id: string, receiptId: string) => fetchBlob(`/claims/${id}/receipts/${receiptId}/file`),
   submitClaim: (id: string) => req(`/claims/${id}/submit`, { method: "POST", body: JSON.stringify({}) }),
+  submitPaybackProof: (id: string, form: FormData) => req(`/claims/${id}/payback-proof`, { method: "POST", body: form }),
+  verifyPaybackProof: (id: string, proofId: string) => req(`/claims/${id}/payback-proof/${proofId}/verify`, { method: "POST", body: JSON.stringify({}) }),
+  rejectPaybackProof: (id: string, proofId: string, reason: string) =>
+    req(`/claims/${id}/payback-proof/${proofId}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
+  paybackProofFileBlob: (id: string, proofId: string) => fetchBlob(`/claims/${id}/payback-proof/${proofId}/file`),
+  paybackReviewQueue: () => req("/claims/payback-review-queue"),
+  sendClearanceToTreasury: (id: string) => req(`/claims/${id}/send-to-treasury`, { method: "POST", body: JSON.stringify({}) }),
+
+  treasuryAccess: () => req("/treasury/access"),
+  treasuryQueue: (params: Record<string, string> = {}) => req(`/treasury?${new URLSearchParams(params).toString()}`),
+  treasuryCompleteBalanced: (id: string, data: { posting_reference?: string; comment?: string } = {}) =>
+    req(`/treasury/${id}/complete-balanced`, { method: "POST", body: JSON.stringify(data) }),
+  treasuryProcessRefund: (id: string, data: any) => req(`/treasury/${id}/process-refund`, { method: "POST", body: JSON.stringify(data) }),
+  treasuryReconcilePayback: (id: string, data: any) => req(`/treasury/${id}/reconcile-payback`, { method: "POST", body: JSON.stringify(data) }),
+  treasuryReturnToHr: (id: string, reason: string) => req(`/treasury/${id}/return-to-hr`, { method: "POST", body: JSON.stringify({ reason }) }),
+
+  treasuryReport: (report: string, params: Record<string, string> = {}) =>
+    req(`/treasury-reports/${report}?${new URLSearchParams(params).toString()}`),
+  treasuryReportCsv: (report: string, params: Record<string, string> = {}) =>
+    fetchBlob(`/treasury-reports/${report}?${new URLSearchParams({ ...params, format: "csv" }).toString()}`),
 
   inbox: () => req("/inbox"),
   myInboxActions: (limit = 50) => req(`/inbox/my-actions?limit=${limit}`),

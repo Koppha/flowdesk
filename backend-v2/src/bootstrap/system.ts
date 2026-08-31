@@ -34,6 +34,7 @@ export async function bootstrapSystem() {
   await ensureSessionSettingsSchema();
   await ensureTourProgressSchema();
   await ensureDeductionsSchema();
+  await ensureClearanceOutcomeSchema();
   await ensureAdminAccount();
   await ensureOrgStructureSections();
   await ensureExcoMembersReportToCeo();
@@ -1762,6 +1763,65 @@ async function ensureDeductionsSchema() {
   // don't share one audit trail.
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS refunded_at timestamptz`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS refunded_by_id uuid REFERENCES users(id)`);
+}
+
+// Trip-completion clearance outcomes (BALANCED/REFUND_DUE/PAYBACK_DUE) + the
+// payback-proof verification cycle + Finance Treasury processing. Adds new
+// claim_status values onto the modern workflow-engine-driven progression
+// (never restores the removed legacy COUNTERSIGNED/HR_MANAGER_REVIEW chain -
+// see git history commit 251f5c3). Existing SETTLED/PAYMENT_PROCESSING/CLOSED
+// values and the settle/mark-settled routes are left untouched for history -
+// new claims simply never fall into that path once financial_outcome is set.
+async function ensureClearanceOutcomeSchema() {
+  await ensureEnumColumnValue("clearance_claims", "status", "REFUND_DUE");
+  await ensureEnumColumnValue("clearance_claims", "status", "PAYBACK_DUE");
+  await ensureEnumColumnValue("clearance_claims", "status", "PAYBACK_PROOF_SUBMITTED");
+  await ensureEnumColumnValue("clearance_claims", "status", "PAYBACK_PROOF_REJECTED");
+  await ensureEnumColumnValue("clearance_claims", "status", "FINANCE_TREASURY_REVIEW");
+  await ensureEnumColumnValue("clearance_claims", "status", "COMPLETED");
+
+  // Set once when the approval chain finishes (advanceClaimWorkflowStep) and
+  // never changed again - permanent record for reporting even once the claim
+  // is later FULLY_CLEARED/COMPLETED.
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS financial_outcome text`);
+  // Employee-facing "am I done" signal - distinct from `status` (workflow
+  // stage) and `financial_outcome` (which direction the money moved).
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS employee_clearance_status text NOT NULL DEFAULT 'NOT_CLEARED'`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_settlement_status text`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS payback_verified_by_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS payback_verified_at timestamptz`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS sent_to_treasury_at timestamptz`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS sent_to_treasury_by_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_officer_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_posting_reference text`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_reconciliation_date date`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_comment text`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_completed_at timestamptz`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_return_reason text`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS treasury_returned_at timestamptz`);
+
+  // Versioned payback-proof submissions - never overwritten/deleted, each
+  // (re)submission is a new row (see claims.routes.ts POST /:id/payback-proof).
+  await query(`
+    CREATE TABLE IF NOT EXISTS clearance_payback_proofs (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      clearance_claim_id uuid NOT NULL REFERENCES clearance_claims(id),
+      version int NOT NULL,
+      amount_paid numeric(12,2) NOT NULL,
+      payment_date date NOT NULL,
+      reference text,
+      comment text,
+      file_path text NOT NULL,
+      status text NOT NULL DEFAULT 'SUBMITTED',
+      submitted_by_id uuid NOT NULL REFERENCES users(id),
+      submitted_at timestamptz NOT NULL DEFAULT now(),
+      reviewed_by_id uuid REFERENCES users(id),
+      reviewed_at timestamptz,
+      rejection_reason text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_cpp_claim ON clearance_payback_proofs(clearance_claim_id)`);
 }
 
 // Ensure core organizational structure sections exist (e.g., Treasury section
