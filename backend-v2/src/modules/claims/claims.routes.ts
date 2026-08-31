@@ -393,9 +393,11 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
   try {
     const claim = (
       await query<any>(
-        `SELECT c.*, ar.payment_method AS advance_payment_method, ar.payment_account AS advance_payment_account
+        `SELECT c.*, ar.payment_method AS advance_payment_method, ar.payment_account AS advance_payment_account,
+                ar.type AS travel_type_code, tt.rate_kind AS travel_rate_kind
            FROM clearance_claims c
            LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
           WHERE c.id=$1`,
         [req.params.id]
       )

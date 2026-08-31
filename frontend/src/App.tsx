@@ -3137,7 +3137,13 @@ export default function App() {
   function buildClearanceTrackingStages(claim: any) {
     const currentStatus = String(claim?.status || "DRAFT").toUpperCase();
     const terminalFailed = currentStatus === "REJECTED";
-    const terminalDone = currentStatus === "SETTLED" || currentStatus === "CLOSED";
+    const terminalDone = currentStatus === "SETTLED" || currentStatus === "CLOSED" || currentStatus === "COMPLETED";
+    // A trip-completion outcome claim (see claims.service.ts's
+    // computeFinancialOutcome) has already finished its own approval chain
+    // by the time it reaches any of these - show the final stage as
+    // in-progress with HR/Treasury rather than a plain "Waiting" that reads
+    // as nothing having happened yet.
+    const outcomeInProgress = ["REFUND_DUE", "PAYBACK_DUE", "PAYBACK_PROOF_SUBMITTED", "PAYBACK_PROOF_REJECTED", "FINANCE_TREASURY_REVIEW"].includes(currentStatus);
     const chain: any[] = Array.isArray(claim?.approval_chain) ? claim.approval_chain : [];
 
     const stages: any[] = [
@@ -3192,10 +3198,10 @@ export default function App() {
 
     stages.push({
       key: "settled",
-      label: currentStatus === "SETTLED" ? "Settled" : "Closed",
-      state: terminalDone ? "done" : "waiting",
+      label: currentStatus === "SETTLED" ? "Settled" : currentStatus === "COMPLETED" ? "Completed" : outcomeInProgress ? "Finance Treasury" : "Closed",
+      state: terminalDone ? "done" : outcomeInProgress ? "active" : "waiting",
       actor: "",
-      status: terminalDone ? "Completed" : "Waiting"
+      status: terminalDone ? "Completed" : outcomeInProgress ? clearanceOutcomeStatusLabel(currentStatus) : "Waiting"
     });
 
     if (terminalFailed) {

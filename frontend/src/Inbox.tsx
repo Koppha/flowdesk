@@ -300,6 +300,28 @@ function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) 
 
 const TERMINAL_STATUSES = new Set(["DRAFT", "SETTLED", "CLOSED", "PAID", "REJECTED", "CANCELLED"]);
 
+// Trip-completion clearance outcome statuses (see claims.service.ts's
+// computeFinancialOutcome) - the claim's own approval chain is already
+// fully complete by the time a claim reaches any of these, so the
+// "derive a Pending X label from current_step_position_name" branch in
+// itemStatusLabel below must never apply to them (that branch is only
+// valid while the chain is still actively being approved) - without this
+// exclusion, a chain-participant's read-only tracking entry for an
+// already-fully-approved claim read as "Pending Approval" again, even
+// though every approver had already signed off and it was only waiting on
+// Finance Treasury.
+const CLEARANCE_OUTCOME_STATUSES = new Set([
+  "REFUND_DUE", "PAYBACK_DUE", "PAYBACK_PROOF_SUBMITTED", "PAYBACK_PROOF_REJECTED", "FINANCE_TREASURY_REVIEW", "COMPLETED"
+]);
+const CLEARANCE_OUTCOME_LABELS: Record<string, string> = {
+  COMPLETED: "Fully Cleared",
+  FINANCE_TREASURY_REVIEW: "Approved — With Finance Treasury",
+  REFUND_DUE: "Approved — Refund Due",
+  PAYBACK_DUE: "Approved — Payback Required",
+  PAYBACK_PROOF_SUBMITTED: "Payback Proof Under Review",
+  PAYBACK_PROOF_REJECTED: "Payback Proof Rejected"
+};
+
 function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
   switch (value) {
     case "ADVANCE":          return Plane;
@@ -331,15 +353,20 @@ function itemStageProgress(item: InboxItem) {
   if (item.doc_type === "CUSTOM_REQUEST") return (item.current_step_position_name && displayOrgGroupName(item.current_step_position_name)) || statusLabel(status);
   if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return item.my_title || "Pending";
   if (status === "SUBMITTED") return "Pending";
+  if (CLEARANCE_OUTCOME_STATUSES.has(status)) return CLEARANCE_OUTCOME_LABELS[status] || statusLabel(status);
   if (TERMINAL_STATUSES.has(status)) return statusLabel(status);
   return "In Progress";
 }
 
 function itemStatusLabel(item: InboxItem) {
+  const status = String(item.status || "").toUpperCase();
+  if ((item.doc_type === "CLAIM" || item.doc_type === "ADVANCE") && CLEARANCE_OUTCOME_STATUSES.has(status)) {
+    return CLEARANCE_OUTCOME_LABELS[status] || statusLabel(status);
+  }
   if (
     (item.doc_type === "CLAIM" || item.doc_type === "ADVANCE") &&
     item.current_step_position_name &&
-    !TERMINAL_STATUSES.has(String(item.status || "").toUpperCase())
+    !TERMINAL_STATUSES.has(status)
   ) {
     // The first ("Manager"/Supervisor) step in the chain is a countersign
     // step; every later step is a regular approval step.
@@ -1226,16 +1253,24 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     // Finance/Payment stages tacked on; a workflow that actually needs a
     // Finance step includes one as a regular chain step instead).
     if (item.doc_type === "CLAIM") {
-      const claimStatus = detail?.status;
-      const terminalDone = claimStatus === "SETTLED" || claimStatus === "CLOSED";
+      const claimStatus = String(detail?.status || "").toUpperCase();
+      // A trip-completion outcome claim (see claims.service.ts's
+      // computeFinancialOutcome) has already finished its own approval
+      // chain by the time it reaches any of these statuses - the final
+      // stage must reflect that (in progress with HR/Treasury, not a plain
+      // "Waiting" that reads as nothing having happened yet) rather than
+      // falling back to the pre-outcome SETTLED/CLOSED-only terminal check.
+      const outcomeInProgress = ["REFUND_DUE", "PAYBACK_DUE", "PAYBACK_PROOF_SUBMITTED", "PAYBACK_PROOF_REJECTED", "FINANCE_TREASURY_REVIEW"].includes(claimStatus);
+      const terminalDone = claimStatus === "SETTLED" || claimStatus === "CLOSED" || claimStatus === "COMPLETED";
+      const finalLabel = claimStatus === "SETTLED" ? "Settled" : claimStatus === "COMPLETED" ? "Completed" : outcomeInProgress ? "Finance Treasury" : "Closed";
       return [
         initiatorStage,
         ...chainStages,
         {
           key: "step-closed",
-          label: claimStatus === "SETTLED" ? "Settled" : "Closed",
-          state: terminalDone ? "done" : "waiting",
-          status: terminalDone ? "Completed" : "Waiting",
+          label: finalLabel,
+          state: terminalDone ? "done" : outcomeInProgress ? "active" : "waiting",
+          status: terminalDone ? "Completed" : outcomeInProgress ? (CLEARANCE_OUTCOME_LABELS[claimStatus] || "In Progress") : "Waiting",
           actor: ""
         }
       ];
@@ -1684,7 +1719,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                         <tr>
                           <th>Date</th>
                           <th>Location</th>
-                          <th>Meals</th>
+                          <th>{detail.travel_rate_kind === "DAILY" ? "Daily Allowance" : "Meals"}</th>
                           <th>Transport</th>
                           <th>Other</th>
                           <th>Total</th>
