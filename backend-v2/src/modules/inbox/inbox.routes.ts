@@ -3,7 +3,7 @@ import { AuthedRequest, Role, hasFeatureAccess, requireAuth } from "../../lib/au
 import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { query } from "../../lib/db.js";
 import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib/delegations.js";
-import { canApproveStep, getPendingGroup, findPendingAccommodationStep, type ChainStep } from "../../lib/workflowEngine.js";
+import { canApproveStep, getPendingGroup, findPendingAccommodationStep, isRoundRobinCandidate, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 
@@ -252,9 +252,20 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // surface it as a read-only tracking item so they can follow its
         // progress.
         let isChainParticipant = false;
+        // The specific step that made this a participant, when it's a
+        // round-robin candidate on a "late" step outside the current pending
+        // group (e.g. accommodation after Capture/payment moved on) - display
+        // must come from that step, not group.steps[0], or a round-robin
+        // viewer would see the wrong (or no) "needs accommodation" signal.
+        let participantStep: ChainStep | undefined;
         const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
         for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
-          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { isChainParticipant = true; break; }
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { isChainParticipant = true; participantStep = chain[i]; break; }
+          // A round-robin-restricted step (e.g. HR Operations accommodation
+          // booking/clearance closing) rejects everyone but the one assigned
+          // person above - the rest of the candidate pool still gets this
+          // read-only tracking view instead of losing visibility entirely.
+          if (await isRoundRobinCandidate(chain[i], req.user!.userId, effectiveRole)) { isChainParticipant = true; participantStep = chain[i]; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -269,11 +280,13 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           currency: a.currency,
           division: a.division ?? null,
           workflow_step_order: a.workflow_step_order,
-          current_step_approver_id: group.steps[0]?.approver_id ?? null,
-          current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
-          current_step_requires_accommodation: group.steps[0]?.requires_accommodation ?? false,
-          current_step_can_reject: group.steps[0]?.can_reject ?? true,
-          current_step_can_rollback: group.steps[0]?.can_rollback ?? true,
+          current_step_approver_id: participantStep?.approver_id ?? group.steps[0]?.approver_id ?? null,
+          current_step_position_name: group.indices.includes(chain.indexOf(participantStep!))
+            ? group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ")
+            : participantStep?.position_name ?? "",
+          current_step_requires_accommodation: participantStep?.requires_accommodation ?? false,
+          current_step_can_reject: participantStep?.can_reject ?? true,
+          current_step_can_rollback: participantStep?.can_rollback ?? true,
           current_step_actionable_by_me: false
         });
       }
@@ -616,9 +629,15 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // surface it as a read-only tracking item so they can follow its
         // progress.
         let isChainParticipant = false;
+        let participantStep: ChainStep | undefined;
         const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
         for (let i = 0; i <= maxReachedIdx && i < chain.length; i++) {
-          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { isChainParticipant = true; break; }
+          if (await canApproveStep(chain[i], req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { isChainParticipant = true; participantStep = chain[i]; break; }
+          // A round-robin-restricted step (e.g. HR Operations accommodation
+          // booking/clearance closing) rejects everyone but the one assigned
+          // person above - the rest of the candidate pool still gets this
+          // read-only tracking view instead of losing visibility entirely.
+          if (await isRoundRobinCandidate(chain[i], req.user!.userId, effectiveRole)) { isChainParticipant = true; participantStep = chain[i]; break; }
         }
         if (!isChainParticipant) continue;
         items.push({
@@ -631,8 +650,10 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           currency: c.currency,
           claimant_name: c.claimant_name,
           workflow_step_order: c.workflow_step_order,
-          current_step_approver_id: group.steps[0]?.approver_id ?? null,
-          current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
+          current_step_approver_id: participantStep?.approver_id ?? group.steps[0]?.approver_id ?? null,
+          current_step_position_name: group.indices.includes(chain.indexOf(participantStep!))
+            ? group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ")
+            : participantStep?.position_name ?? "",
           current_step_actionable_by_me: false
         });
       }

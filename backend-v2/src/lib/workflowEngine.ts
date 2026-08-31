@@ -1,4 +1,4 @@
-import { query } from "./db.js";
+import { query, withTransaction } from "./db.js";
 import { getDepartmentLeadership, getSectionLeadership, getTeamLeadership } from "./departments.js";
 import { isCompensationFinanceSection } from "./financeAuthority.js";
 import { getUserGroups } from "./permissionGroups.js";
@@ -37,6 +37,14 @@ export interface ChainStep {
   // present on steps approved after this field was introduced; older steps
   // have `approved: true` with no timestamp (see SLA reporting's "no_data" state).
   approved_at?: string;
+  // Narrows a wider candidate pool (approval_group_name's live members, or a
+  // multi-id approver_ids roster) down to the one person who may actually
+  // ACT on this step, picked round-robin at chain-build time (see
+  // pickRoundRobinAssignee). Every other candidate can still VIEW the step
+  // (see isRoundRobinCandidate) but canApproveStep rejects them. Absent on
+  // every step that isn't round-robin-restricted, including all chains
+  // built before this field existed — fully backward compatible.
+  assigned_user_id?: string | null;
 }
 
 // Shared by the advances and claims SLA-report endpoints.
@@ -458,6 +466,19 @@ export async function resolveWorkflowChain(params: {
       ? [{ id: approverId, name: approverName ?? null, email: approverEmail ?? null, title: approverTitle ?? null }]
       : [];
 
+    // HR Operations handles accommodation booking and clearance closing as
+    // an operational queue, not a group sign-off - every member should still
+    // see these in their inbox, but only one person should actually own each
+    // one, spread round-robin rather than left as "any of three people, race
+    // to act" (which is how every other ANY_ONE group step still works).
+    let assignedUserId: string | null = null;
+    if (isGroupStep && step.approval_group_name === "Section: Human Resources Operations" && step.requires_accommodation) {
+      const candidates = await resolveGroupMemberIds(step.approval_group_name);
+      assignedUserId = await pickRoundRobinAssignee("accommodation_hr_ops", candidates);
+    } else if (step.action_type === "DEPT_CLOSE" && hasFixedAssignees && approverIds.length > 1) {
+      assignedUserId = await pickRoundRobinAssignee("clearance_close_hr_ops", approverIds);
+    }
+
     chain.push({
       step_order: step.step_order,
       position_type_code: code,
@@ -476,7 +497,8 @@ export async function resolveWorkflowChain(params: {
       parallel_with_previous: (step.parallel_with_previous ?? false) && previousStepPushed,
       action_type: step.action_type || "APPROVE",
       can_reject: step.can_reject ?? true,
-      can_rollback: step.can_rollback ?? true
+      can_rollback: step.can_rollback ?? true,
+      assigned_user_id: assignedUserId
     });
     previousStepPushed = true;
   }
@@ -598,6 +620,17 @@ export async function canApproveStep(
   delegatedManagerIds?: string[] | null,
   userSectionId?: string | null
 ): Promise<boolean> {
+  // A round-robin-restricted step (see pickRoundRobinAssignee) narrows a
+  // wider candidate pool down to one specific person - every other
+  // candidate can still VIEW the step (see isRoundRobinCandidate) but only
+  // the assigned one may act. Checked first so it overrides both the group
+  // and fixed-roster branches below rather than needing to duplicate this
+  // guard in each of them.
+  if (step.assigned_user_id) {
+    if (userId === step.assigned_user_id) return true;
+    if (delegatedManagerIds?.includes(step.assigned_user_id)) return true;
+    return false;
+  }
   // ANY_ONE steps (e.g. "Team: X", "Section: X", or "Department: X") can be
   // actioned by any member of the named permission group, regardless of who
   // the step's approver_id is. These org-unit groups are scoped to officers —
@@ -634,4 +667,90 @@ export async function canApproveStep(
   // department.
   if (step.position_type_code === "FINANCE") return isCompensationFinanceSection(userSectionId);
   return false;
+}
+
+// For a round-robin-restricted step (assigned_user_id set), everyone else in
+// the wider candidate pool should still see it in their inbox read-only,
+// rather than it vanishing for them the moment they're not the one picked.
+// canApproveStep alone can't answer that (it deliberately rejects everyone
+// but the assigned person now) - this checks the underlying pool instead:
+// live group membership for a "Section:/Team:/Department: X" step, or the
+// fixed approver_ids roster otherwise.
+export async function isRoundRobinCandidate(step: ChainStep, userId: string, userRole: string): Promise<boolean> {
+  if (!step.assigned_user_id) return false;
+  if (step.approval_mode === "ANY_ONE" && step.approval_group_name) {
+    const ORG_UNIT_PREFIXES = ["Team: ", "Section: ", "Department: "];
+    const isOrgUnitGroup = ORG_UNIT_PREFIXES.some((p) => step.approval_group_name!.startsWith(p));
+    if (isOrgUnitGroup && (userRole === "HOD" || userRole === "MANAGER")) return false;
+    const groups = await getUserGroups(userId);
+    return groups.includes(step.approval_group_name);
+  }
+  return (step.approver_ids || []).includes(userId);
+}
+
+// Live member ids of a "Section: X" or "Team: X" group, for picking a
+// round-robin assignee at chain-build time. Mirrors getUserGroups's own
+// section/team join and canApproveStep's HOD/MANAGER exclusion for org-unit
+// groups, so the candidate pool always matches who could actually act on
+// the step.
+async function resolveGroupMemberIds(groupName: string): Promise<string[]> {
+  const sectionMatch = groupName.startsWith("Section: ") ? groupName.slice("Section: ".length) : null;
+  const teamMatch = groupName.startsWith("Team: ") ? groupName.slice("Team: ".length) : null;
+  if (!sectionMatch && !teamMatch) return [];
+  const rows = await query<{ id: string }>(
+    sectionMatch
+      ? `SELECT DISTINCT u.id FROM users u
+           LEFT JOIN teams t ON t.id = u.team_id
+           LEFT JOIN sections s ON s.id = COALESCE(u.section_id, t.section_id)
+          WHERE s.name = $1 AND u.is_active = true AND u.role NOT IN ('MANAGER','HOD')
+          ORDER BY u.id`
+      : `SELECT DISTINCT u.id FROM users u JOIN teams t ON t.id = u.team_id
+          WHERE t.name = $1 AND u.is_active = true AND u.role NOT IN ('MANAGER','HOD')
+          ORDER BY u.id`,
+    [sectionMatch ?? teamMatch]
+  );
+  return rows.map((r) => r.id);
+}
+
+let roundRobinTableEnsured = false;
+async function ensureRoundRobinTable() {
+  if (roundRobinTableEnsured) return;
+  await query(
+    `CREATE TABLE IF NOT EXISTS round_robin_state (
+       rotation_key text PRIMARY KEY,
+       last_assigned_user_id uuid,
+       updated_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    []
+  );
+  roundRobinTableEnsured = true;
+}
+
+// Picks the next candidate after whichever one this rotation_key last
+// assigned, wrapping around - so repeat work (e.g. every advance needing an
+// HR Operations accommodation booking) spreads evenly across the pool
+// instead of always landing on whoever's first alphabetically or however
+// the group happens to be ordered. Locks the state row for the duration of
+// the pick so two chains resolving concurrently don't both land on the same
+// person.
+export async function pickRoundRobinAssignee(rotationKey: string, candidateIds: string[]): Promise<string | null> {
+  if (!candidateIds.length) return null;
+  if (candidateIds.length === 1) return candidateIds[0];
+  await ensureRoundRobinTable();
+  return withTransaction(async (client) => {
+    const { rows } = await client.query<{ last_assigned_user_id: string | null }>(
+      `SELECT last_assigned_user_id FROM round_robin_state WHERE rotation_key=$1 FOR UPDATE`,
+      [rotationKey]
+    );
+    const lastId = rows[0]?.last_assigned_user_id ?? null;
+    const lastIdx = lastId ? candidateIds.indexOf(lastId) : -1;
+    const nextId = candidateIds[(lastIdx + 1) % candidateIds.length];
+    await client.query(
+      `INSERT INTO round_robin_state (rotation_key, last_assigned_user_id, updated_at)
+       VALUES ($1,$2,now())
+       ON CONFLICT (rotation_key) DO UPDATE SET last_assigned_user_id=$2, updated_at=now()`,
+      [rotationKey, nextId]
+    );
+    return nextId;
+  });
 }
