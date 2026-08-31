@@ -1526,7 +1526,7 @@ const DEFAULT_TEMPLATE_DEFS: Record<(typeof PDF_REQUEST_TYPES)[number], { name: 
         ["request_id", "created_at", "created_by_name", "request_type_label", "requester_name", "requester_employee_no", "traveller_type", "status"],
         { columns: 4 }),
       fieldGridSection("Trip Details",
-        ["type_label", "destination", "departure_date", "return_date", "travel_duration", "accommodation_summary", "meals_summary"],
+        ["type_label", "destination", "departure_date", "return_date", "travel_duration", "accommodation_summary", "meals_summary", "extra_cost_amount", "extra_cost_description"],
         { columns: 2 }),
       fieldGridSection("", ["purpose"], { columns: 1 }),
       fieldGridSection("Payment Details", ["requested_total", "payment_status"], { columns: 2 }),

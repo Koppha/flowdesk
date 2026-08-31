@@ -333,6 +333,7 @@ export const api = {
     req("/auth/tour-progress", { method: "POST", body: JSON.stringify(data) }),
   tourProgressReport: () => req("/auth/tour-progress/report"),
   confirmAdvanceNotCleared: (id: string) => req(`/advances/${id}/confirm-not-cleared`, { method: "POST" }),
+  accommodationRequests: (mine?: boolean) => req(`/accommodation-requests${mine ? "?mine=true" : ""}`),
   createAccommodationRequest: (data: any) => req("/accommodation-requests", { method: "POST", body: JSON.stringify(data) }),
   uploadAccommodationQuotation: (id: string, form: FormData) => req(`/accommodation-requests/${id}/upload-quotation`, { method: "POST", body: form }),
   sendAccommodationToFinance: (id: string) => req(`/accommodation-requests/${id}/send-to-finance`, { method: "POST", body: JSON.stringify({}) }),
