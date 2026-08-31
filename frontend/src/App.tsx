@@ -4326,11 +4326,14 @@ export default function App() {
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
                 )}
-                <a href="#" className={navItemClass(page === "ACCOMMODATION")} onClick={(e) => { e.preventDefault(); setPage("ACCOMMODATION"); }}><FileText size={14} aria-hidden />Accommodation</a>
                 <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
               </div>
             </div>
           )}
+          {/* Accommodation is HR Operations' operational queue (booking + round-robin
+              assignment), not a Finance function - kept as its own top-level item
+              rather than nested under Finance. */}
+          <a href="#" className={navItemClass(page === "ACCOMMODATION")} onClick={(e) => { e.preventDefault(); setPage("ACCOMMODATION"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Accommodation</a>
           {hasItProvisioningAccess && (
             <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>
           )}

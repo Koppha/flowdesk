@@ -470,16 +470,23 @@ export function isCapturePendingItem(item: any) {
   return isCaptureItem(item) && item.current_step_actionable_by_me === true;
 }
 
-// An advance still needing an accommodation booking is otherwise classified
-// as a capture item (it usually carries a parallel Capture step too) and
-// would only ever surface in the Capture Inbox - but Admin needs to see it
-// in the general Approval Inbox as well, since it's easy to miss it sitting
-// only in Capture once payment has already gone out (accommodation runs in
-// parallel with Treasury capture, so it can still be outstanding long after
-// the advance is PAID). Used to let such items appear in both inboxes at
-// once, rather than exclusively routing to one.
+// Accommodation-related items Admin needs to see in the general Approval
+// Inbox as well as Capture, not exclusively routed to Capture:
+//  - An advance still needing an accommodation booking (it usually carries a
+//    parallel Capture step too, which is what makes isCaptureItem claim it) -
+//    easy to miss sitting only in Capture once payment has already gone out,
+//    since accommodation runs parallel to Treasury capture and can still be
+//    outstanding long after the advance is PAID.
+//  - An accommodation booking HR has already created and sent to finance
+//    (SUBMITTED) but not yet paid - previously only ever visible in Capture
+//    (isCaptureItem always claims doc_type ACCOMMODATION), so Admin had no
+//    way to see requested accommodation from the general inbox at all. Once
+//    PAID it's done, so it drops back to Capture-only (nothing left to act
+//    on from the Approval Inbox).
 export function needsAccommodationBooking(item: any) {
-  return item.doc_type === "ADVANCE" && item.current_step_requires_accommodation === true;
+  if (item.doc_type === "ADVANCE") return item.current_step_requires_accommodation === true;
+  if (item.doc_type === "ACCOMMODATION") return item.status === "SUBMITTED";
+  return false;
 }
 
 // Items awaiting or already through payment — surfaced in the dedicated
