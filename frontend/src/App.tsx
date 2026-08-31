@@ -2924,7 +2924,14 @@ export default function App() {
           (e: any) => e.action === "ADVANCE_APPROVE" && Number(e?.after_json?.workflow_step ?? -1) === idx + 1
         ) ?? null;
         const stepApproved = Boolean(step.approved);
-        const isDone   = terminalDone || stepApproved || currentStepIdx > idx;
+        // A requires_accommodation step is parallel/non-blocking (see
+        // workflowEngine.ts's findPendingAccommodationStep) - the workflow's
+        // step-order pointer can move past it once Capture/payment complete
+        // while it's still genuinely unbooked, so "pointer index passed
+        // this step" is not a reliable done-signal for it the way it is for
+        // every other step. Without this guard, an unbooked accommodation
+        // step showed as done/"Booked" once payment went through.
+        const isDone   = terminalDone || stepApproved || (currentStepIdx > idx && !step.requires_accommodation);
         const isActive = !terminalFailed && !isDone && pendingStage.has(idx);
         const isSkipped = step.skipIfUnassigned && !step.approver_name && !stepApproved;
         // "Team: X" steps are approvable by any member of that group, not the
@@ -3075,7 +3082,10 @@ export default function App() {
       }
       chain.forEach((step: any, idx: number) => {
         const stepApproved = Boolean(step.approved);
-        const isDone = terminalDone || stepApproved || currentStepIdx > idx;
+        // See buildTrackingStages's identical guard - a requires_accommodation
+        // step can be parallel/non-blocking, so the pointer moving past it is
+        // not a reliable done-signal on its own.
+        const isDone = terminalDone || stepApproved || (currentStepIdx > idx && !step.requires_accommodation);
         const isActive = !terminalFailed && !isDone && pendingStage.has(idx);
         const isTeamGroup = typeof step.position_name === "string" && step.position_name.startsWith("Team: ");
         // Show the assigned approver's real job title instead of the generic

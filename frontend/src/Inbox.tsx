@@ -1196,7 +1196,14 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       const label = !isTeamGroup && step.approver_title
         ? step.approver_title
         : step.position_name ? displayOrgGroupName(step.position_name) : step.approver_title;
-      const isDone = Boolean(step.approved) || stepOrder > idx;
+      // A requires_accommodation step is parallel/non-blocking - the
+      // workflow's step-order pointer can move past it once Capture/payment
+      // complete while it's still genuinely unbooked (see workflowEngine.ts's
+      // findPendingAccommodationStep), so "pointer index passed this step"
+      // alone isn't a reliable done-signal for it the way it is for every
+      // other step - without this guard it showed as done/"Booked" once
+      // payment went through even with no accommodation ever created.
+      const isDone = Boolean(step.approved) || (stepOrder > idx && !step.requires_accommodation);
       const isActive = !isDone && pendingStage.has(idx);
       return {
         key: `step-${idx}`,
