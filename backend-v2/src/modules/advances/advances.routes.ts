@@ -799,51 +799,8 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
       });
     }
 
-    // Accommodation bookings have their own SUBMITTED -> PAID lifecycle and
-    // payment endpoint, so include them as first-class payment documents.
-    // Admin and central Treasury can see every company; other explicitly
-    // granted Payments viewers retain Accommodation's owner-only visibility.
-    const accommodationRows = await query<any>(
-      `SELECT acc.id, acc.status, acc.amount, acc.location, acc.provider,
-              acc.created_at, acc.paid_at, acc.paid_reference,
-              acc.created_by_id, acc.requester_id,
-              requester.full_name AS requester_name, requester.department,
-              dv.name AS division, COALESCE(tt.currency, 'LSL') AS currency
-         FROM accommodation_requests acc
-         JOIN users requester ON requester.id = acc.requester_id
-         JOIN advance_requests ar ON ar.id = acc.advance_request_id
-         LEFT JOIN travel_types tt ON tt.code = ar.type
-         LEFT JOIN divisions dv ON dv.id = requester.division_id
-        WHERE acc.status IN ('SUBMITTED','PAID')
-        ORDER BY acc.created_at DESC`
-    );
-
-    for (const a of accommodationRows) {
-      const canSeeAllAccommodation = role === "ADMIN" || isCentralFinance;
-      const isOwner = a.created_by_id === req.user!.userId || a.requester_id === req.user!.userId;
-      if (!canSeeAllAccommodation && !isOwner) continue;
-
-      classified.push({
-        doc_type: "ACCOMMODATION",
-        id: a.id,
-        status: a.status,
-        payment_status: a.status === "PAID" ? "PAID" : "PENDING",
-        type: "ACCOMMODATION",
-        currency: a.currency,
-        requested_total: Number(a.amount),
-        approved_total: Number(a.amount),
-        purpose: [a.location, a.provider].filter(Boolean).join(" - ") || "Accommodation booking",
-        requester_name: a.requester_name,
-        department: a.department,
-        division: a.division ?? null,
-        created_at: a.created_at,
-        paid_at: a.paid_at,
-        paid_reference: a.paid_reference,
-        approved_by_name: null,
-        pdf_filename: `accommodation-${a.id}.pdf`
-      });
-    }
-
+    // ADVANCE endpoint returns only advance documents.
+    // Accommodation bookings are accessed via their own separate endpoint (/accommodation/payments).
     classified.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     const filtered = statusParam === "all" ? classified : classified.filter((r) => r.payment_status === statusParam.toUpperCase());
@@ -1439,11 +1396,20 @@ advancesRouter.post("/:id/rollback", async (req: AuthedRequest, res, next) => {
     const chain = adv.approval_chain as ChainStep[];
     const stepIdx = adv.workflow_step_order ?? 0;
     const group = getPendingGroup(chain, stepIdx);
-    if (!group.indices.length) throw badRequest("No active workflow step to roll back");
-    const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
-    let currentStep: ChainStep | undefined = chain[group.indices[0]];
-    if (role !== "ADMIN") {
+    let currentStep: ChainStep | undefined = group.indices.length ? chain[group.indices[0]] : undefined;
+    if (!group.indices.length) {
+      // The chain has already fully completed (e.g. the advance is PAID) -
+      // there's no "current step" left to gate against. Capture/Payments
+      // staff still need a way to send a paid-in-error advance all the way
+      // back to draft, so Finance/Treasury authority (or ADMIN) can do this
+      // from here even post-payment - a deliberate, reason-required action,
+      // not something the requester or an ordinary approver can trigger.
+      if (role !== "ADMIN" && !(await isCompensationFinanceUser(req))) {
+        throw forbidden("Only Finance/Treasury or ADMIN can roll back a completed advance.");
+      }
+    } else if (role !== "ADMIN") {
       currentStep = undefined;
+      const delegatedManagerIds = await getDelegatedManagerIds(userId, "ADVANCE_REQUEST");
       for (const idx of group.indices) {
         if (await canApproveStep(chain[idx], userId, role, delegatedManagerIds, req.user!.sectionId)) { currentStep = chain[idx]; break; }
       }
@@ -1461,7 +1427,7 @@ advancesRouter.post("/:id/rollback", async (req: AuthedRequest, res, next) => {
       actorId: userId,
       advanceId: adv.id,
       action: "ADVANCE_ROLLBACK",
-      before: { status: adv.status, workflow_step: stepIdx, step_name: currentStep.position_name },
+      before: { status: adv.status, workflow_step: stepIdx, step_name: currentStep?.position_name ?? "(chain already complete)" },
       after: { status: "DRAFT", comments: parsed.data.comments }
     });
 
@@ -1558,6 +1524,58 @@ advancesRouter.post("/:id/undo-capture", requireAuth, async (req: AuthedRequest,
     }
 
     return res.json({ ok: true, status: adv.status, workflow_step_order: newStepOrder });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Voids the advance outright - distinct from Roll Back to Draft (which
+// re-opens it for editing/resubmission): Cancel is a terminal marker, the
+// approval_chain/workflow position are left completely untouched as
+// historical record (unlike rollback, which wipes them). Available from
+// Capture and Payments even after the advance is PAID, since a paid-in-
+// error advance still needs a way to be voided - Finance/Treasury
+// authority (or ADMIN) only, reason required either way. Cancelling a
+// PAID advance does not itself reverse the payment or touch any ledger -
+// that recovery is handled the same way "Confirm Not Cleared" already
+// hands off outside this system, not by this action.
+advancesRouter.post("/:id/cancel", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = ActionCommentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("A reason is required to cancel this advance", parsed.error.flatten());
+
+    const adv = await getAdvanceById(req.params.id);
+    if (!adv) throw notFound();
+    if (["CANCELLED", "REJECTED"].includes(adv.status)) throw badRequest(`This advance is already ${adv.status.toLowerCase()}.`);
+
+    const role = req.user!.role;
+    if (role !== "ADMIN" && !(await isCompensationFinanceUser(req))) {
+      throw forbidden("Only Finance/Treasury or ADMIN can cancel an advance.");
+    }
+
+    await query(`UPDATE advance_requests SET status='CANCELLED', updated_at=now() WHERE id=$1`, [adv.id]);
+    await writeAdvanceAudit({
+      actorId: req.user!.userId,
+      advanceId: adv.id,
+      action: "ADVANCE_CANCELLED",
+      before: { status: adv.status },
+      after: { status: "CANCELLED", comments: parsed.data.comments }
+    });
+
+    const notificationContext = await getAdvanceNotificationContext(adv.id);
+    if (notificationContext) {
+      await notifyAdvanceCancelled({
+        advanceId: adv.id,
+        requesterName: notificationContext.full_name,
+        requesterEmail: notificationContext.email,
+        department: notificationContext.department,
+        advanceType: notificationContext.type,
+        requestedTotal: Number(notificationContext.requested_total),
+        currency: notificationContext.currency
+      });
+    }
+
+    return res.json({ ok: true, status: "CANCELLED" });
   } catch (err) {
     return next(err);
   }

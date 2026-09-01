@@ -945,7 +945,8 @@ export async function notifyClaimTask(args: {
         FINANCE_TREASURY_REVIEW: `Your trip is fully cleared and has been sent to Finance Treasury for final processing.`,
         PAYBACK_PROOF_SUBMITTED: `Your repayment proof has been submitted and is awaiting HR Operations verification.`,
         PAYBACK_PROOF_REJECTED:  `Your repayment proof was not accepted by HR Operations. Please review the reason and resubmit your proof.`,
-        COMPLETED:               `Your trip clearance is complete - all processing has finished.`
+        COMPLETED:               `Your trip clearance is complete - all processing has finished.`,
+        CANCELLED:               `Your clearance claim has been cancelled.`
       };
 
       const statusMsg = claimantMessages[args.status];

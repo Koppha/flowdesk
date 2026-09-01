@@ -1779,6 +1779,9 @@ async function ensureClearanceOutcomeSchema() {
   await ensureEnumColumnValue("clearance_claims", "status", "PAYBACK_PROOF_REJECTED");
   await ensureEnumColumnValue("clearance_claims", "status", "FINANCE_TREASURY_REVIEW");
   await ensureEnumColumnValue("clearance_claims", "status", "COMPLETED");
+  // Voiding a claim outright (distinct from Roll Back to Draft) - see
+  // claims.routes.ts's POST /:id/cancel.
+  await ensureEnumColumnValue("clearance_claims", "status", "CANCELLED");
 
   // Set once when the approval chain finishes (advanceClaimWorkflowStep) and
   // never changed again - permanent record for reporting even once the claim

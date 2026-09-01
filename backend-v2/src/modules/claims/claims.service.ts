@@ -23,7 +23,11 @@ export type ClaimStatus =
   | "PAYBACK_PROOF_SUBMITTED"
   | "PAYBACK_PROOF_REJECTED"
   | "FINANCE_TREASURY_REVIEW"
-  | "COMPLETED";
+  | "COMPLETED"
+  // Voided outright - distinct from REJECTED (a step's decision during
+  // active approval) and from DRAFT (rollback, still re-submittable as-is).
+  // See claims.routes.ts's POST /:id/cancel.
+  | "CANCELLED";
 
 // Permanent once set at chain completion - never changes again, so reports
 // retain the original settlement direction even after the claim is later
@@ -88,6 +92,7 @@ export function nextClaimStatus(current: ClaimStatus, action: ClaimAction) {
     PAYBACK_PROOF_REJECTED: {},
     FINANCE_TREASURY_REVIEW: {},
     COMPLETED: {},
+    CANCELLED: {},
     SETTLED: {},
     CLOSED: {},
     REJECTED: {}

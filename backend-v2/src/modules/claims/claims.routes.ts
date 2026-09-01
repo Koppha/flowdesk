@@ -36,6 +36,18 @@ const TREASURY_INTERNAL_FIELDS = [
   "settled_reference"
 ] as const;
 
+// Every status a claim can sit at once its own approval_chain has already
+// fully completed - legacy (FINANCE_VERIFIED/PAYMENT_PROCESSING/SETTLED/
+// CLOSED) and the new trip-completion outcome statuses alike. Shared by
+// canViewClaim, the rollback route's Finance-correction bypass, and the
+// cancel route below - anywhere that needs "is there no active workflow
+// step left to gate against."
+const POST_CHAIN_STATUSES = [
+  "FINANCE_VERIFIED", "PAYMENT_PROCESSING", "SETTLED", "CLOSED",
+  "REFUND_DUE", "PAYBACK_DUE", "PAYBACK_PROOF_SUBMITTED", "PAYBACK_PROOF_REJECTED",
+  "FINANCE_TREASURY_REVIEW", "COMPLETED"
+];
+
 // Every status-changing action on a claim writes here — the module had no
 // audit trail at all before the trip-completion outcome feature (unlike
 // advances/accommodation, which already had writeAdvanceAudit/
@@ -212,11 +224,6 @@ export async function canViewClaim(args: { role: string; sectionId?: string | nu
   // now sit with Finance/HR/EXCO/Managers awaiting (or having completed)
   // settlement — those are the same roles allowedInboxForRole lists this
   // status for, so let them view it.
-  const POST_CHAIN_STATUSES = [
-    "FINANCE_VERIFIED", "PAYMENT_PROCESSING", "CLOSED",
-    "REFUND_DUE", "PAYBACK_DUE", "PAYBACK_PROOF_SUBMITTED", "PAYBACK_PROOF_REJECTED",
-    "FINANCE_TREASURY_REVIEW", "COMPLETED"
-  ];
   if (POST_CHAIN_STATUSES.includes(args.status || "") && ((await isCompensationFinanceSection(args.sectionId)) || ["MANAGER", "EXCO"].includes(args.role))) {
     return true;
   }
@@ -277,6 +284,13 @@ claimsRouter.get("/", async (req: AuthedRequest, res, next) => {
 // report_advances and not scoped to "am I the assigned reviewer."
 claimsRouter.get("/payback-review-queue", async (req: AuthedRequest, res, next) => {
   try {
+    const allowed = await hasFeatureAccess(
+      req.user!.userId,
+      req.user!.role,
+      "hr_operations_review",
+      ["ADMIN", "Section: Human Resources Operations"]
+    );
+    if (!allowed) throw forbidden("Not authorized to view HR Operations Review");
     const rows = await query<any>(
       `SELECT c.id, c.claimant_id, u.full_name AS employee_name, u.employee_no, u.department,
               c.duty_station AS destination, c.balance_amount, c.status, c.approval_chain,
@@ -1067,11 +1081,14 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
     const role = req.user!.role;
     const userId = req.user!.userId;
 
-    // Finance "Request Correction": the claim has already left the dynamic
-    // workflow chain (status FINANCE_VERIFIED) by the time Finance acts on
-    // it, so there's no pending chain step to gate against — Finance/Admin
-    // can send it straight back to DRAFT, same as canViewClaim's Finance access.
-    const isFinanceCorrection = claim.status === "FINANCE_VERIFIED" && (role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId)));
+    // Finance "Request Correction": once the claim has left the dynamic
+    // workflow chain (any POST_CHAIN_STATUSES value - including PAID-
+    // equivalent ones like SETTLED/CLOSED/COMPLETED) there's no pending
+    // chain step left to gate against — Finance/Admin can still send it
+    // straight back to DRAFT from here, same as canViewClaim's Finance
+    // access. Deliberately not limited to pre-settlement statuses: a
+    // claim settled/completed in error still needs a way back to draft.
+    const isFinanceCorrection = POST_CHAIN_STATUSES.includes(claim.status) && (role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId)));
 
     if (!isFinanceCorrection) {
       if (!claim.approval_chain?.length) {
@@ -1114,6 +1131,58 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
       });
     }
     return res.json({ ok: true, status: "DRAFT" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Voids the clearance outright - distinct from Roll Back to Draft (which
+// re-opens it for editing/resubmission): Cancel is a terminal marker, the
+// approval_chain/workflow position are left untouched as historical
+// record. Available even once the claim has already settled/completed
+// (a settled-in-error claim still needs a way to be voided) -
+// Finance/Treasury authority (or ADMIN) only, reason required. Cancelling
+// an already-settled claim does not itself reverse any payment - that
+// recovery is handled outside this system, same as Roll Back's
+// post-settlement path above.
+claimsRouter.post("/:id/cancel", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = ActionCommentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("A reason is required to cancel this clearance", parsed.error.flatten());
+
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+    if (["CANCELLED", "REJECTED"].includes(claim.status)) throw badRequest(`This clearance is already ${String(claim.status).toLowerCase()}.`);
+
+    const role = req.user!.role;
+    if (role !== "ADMIN" && !(await isCompensationFinanceSection(req.user!.sectionId))) {
+      throw forbidden("Only Finance/Treasury or ADMIN can cancel a clearance.");
+    }
+
+    await query(`UPDATE clearance_claims SET status='CANCELLED', updated_at=now() WHERE id=$1`, [claim.id]);
+    await writeClaimAudit({
+      actorId: req.user!.userId,
+      claimId: claim.id,
+      action: "CLEARANCE_CANCELLED",
+      before: { status: claim.status },
+      after: { status: "CANCELLED", comments: parsed.data.comments }
+    });
+
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    if (notificationContext) {
+      await notifyClaimTask({
+        claimId: claim.id,
+        status: "CANCELLED",
+        claimantName: notificationContext.full_name,
+        claimantEmail: notificationContext.email,
+        department: notificationContext.department,
+        claimTotal: Number(notificationContext.claim_total),
+        currency: notificationContext.currency,
+        claimType: notificationContext.claim_type
+      });
+    }
+
+    return res.json({ ok: true, status: "CANCELLED" });
   } catch (err) {
     return next(err);
   }
