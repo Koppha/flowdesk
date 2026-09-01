@@ -378,6 +378,7 @@ export const api = {
   claimDetail: (id: string) => req(`/claims/${id}`),
 
   rollbackAdvance: (id: string, comments?: string) => req(`/advances/${id}/rollback`, { method: "POST", body: JSON.stringify({ comments }) }),
+  undoAdvanceCapture: (id: string, comments: string) => req(`/advances/${id}/undo-capture`, { method: "POST", body: JSON.stringify({ comments }) }),
   advancePdf: (id: string) => fetchBlob(`/advances/${id}/pdf`),
   rejectAdvance: (id: string, comments: string) => req(`/advances/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   approveAdvance: (id: string, approved_total: number, comments?: string) =>

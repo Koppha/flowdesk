@@ -13,6 +13,7 @@ import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
 import { buildAdHocChain, canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
+import { isCaptureActionType } from "../inbox/inbox.routes.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
@@ -1481,6 +1482,82 @@ advancesRouter.post("/:id/rollback", async (req: AuthedRequest, res, next) => {
       });
     }
     return res.json({ ok: true, status: "DRAFT" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Undoes an already-completed Capture step without discarding everything
+// that happened before it (Manager/HOD/EXCO/CEO approvals) the way the
+// full /:id/rollback-to-DRAFT above would - a correction to what was
+// captured shouldn't force the advance back through the entire approval
+// chain again. Only the person who captured it (or ADMIN) can undo it, and
+// only before payment has actually gone out - once status is PAID, real
+// money has moved and a correction needs a different, more deliberate
+// process than a self-service undo button.
+advancesRouter.post("/:id/undo-capture", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = ActionCommentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("A reason is required to undo capture", parsed.error.flatten());
+
+    const adv = await getAdvanceById(req.params.id);
+    if (!adv) throw notFound();
+    if (!adv.approval_chain?.length) throw badRequest("This advance does not have an active approval workflow.");
+    if (adv.status === "PAID") throw badRequest("This advance has already been paid - capture can no longer be undone here.");
+
+    const chain = adv.approval_chain as ChainStep[];
+    const captureIdx = chain.findIndex((s) => isCaptureActionType(s.action_type) && s.approved);
+    if (captureIdx === -1) throw badRequest("There is no completed capture step to undo.");
+    const captureStep = chain[captureIdx];
+
+    const role = req.user!.role;
+    if (role !== "ADMIN") {
+      const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "ADVANCE_REQUEST");
+      const eligible = await canApproveStep(captureStep, req.user!.userId, role, delegatedManagerIds, req.user!.sectionId);
+      if (!eligible) throw forbidden("You are not eligible to undo this capture.");
+    }
+
+    const newChain = chain.map((s, i) => (i === captureIdx ? { ...s, approved: false, approved_at: undefined } : s));
+    // Pull the pointer back to the capture step so it becomes the pending
+    // step again, same "reopen without discarding what came after it was
+    // reached" approach used for late accommodation bookings - any other
+    // step that had already independently completed (e.g. a parallel
+    // accommodation booking) is left exactly as it was.
+    const newStepOrder = Math.min(adv.workflow_step_order ?? 0, captureIdx);
+    await query(
+      `UPDATE advance_requests SET workflow_step_order=$2, approval_chain=$3, updated_at=now() WHERE id=$1`,
+      [adv.id, newStepOrder, JSON.stringify(newChain)]
+    );
+    await writeAdvanceAudit({
+      actorId: req.user!.userId,
+      advanceId: adv.id,
+      action: "ADVANCE_CAPTURE_UNDONE",
+      before: { workflow_step_order: adv.workflow_step_order, captured_by: captureStep.approver_name },
+      after: { workflow_step_order: newStepOrder, comments: parsed.data.comments }
+    });
+
+    const notificationContext = await getAdvanceNotificationContext(adv.id);
+    if (notificationContext) {
+      await notifyAdvanceTask({
+        advanceId: adv.id,
+        status: adv.status,
+        advanceType: notificationContext.type,
+        requesterName: notificationContext.full_name,
+        requesterEmail: notificationContext.email,
+        department: notificationContext.department,
+        requestedTotal: Number(notificationContext.requested_total),
+        currency: notificationContext.currency,
+        extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+        extraCostDescription: notificationContext.extra_cost_description,
+        nextApprover: captureStep.approver_id
+          ? { id: captureStep.approver_id, name: captureStep.approver_name, email: captureStep.approver_email, title: captureStep.approver_title || captureStep.position_name }
+          : null,
+        stepOrder: newStepOrder,
+        comments: parsed.data.comments
+      });
+    }
+
+    return res.json({ ok: true, status: adv.status, workflow_step_order: newStepOrder });
   } catch (err) {
     return next(err);
   }

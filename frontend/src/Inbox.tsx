@@ -1346,6 +1346,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
           (role === "MANAGER" && item.status === "HR_OFFICER") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
           (role === "EXCO" && item.status === "COUNTERSIGNED")));
+  // A correction to an already-captured advance shouldn't force it all the
+  // way back through Manager/HOD/EXCO/CEO approval again (what Roll Back to
+  // Draft would do) - undo-capture only reopens the capture step itself.
+  // Once paid, real money has moved, so it's no longer offered here.
+  const canUndoCapture = item.doc_type === "ADVANCE" && Boolean((item as any).capture_done) && item.status !== "PAID";
   const canMarkPaid =
     item.doc_type === "ADVANCE" &&
     (isWorkflowDriven
@@ -1493,6 +1498,15 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     }
     setRollbackError(null);
     void act(() => api.rollbackAdvance(item.id, comments.trim()));
+  }
+
+  function handleUndoCapture() {
+    if (!comments.trim()) {
+      setRollbackError("Enter a reason before undoing this capture.");
+      return;
+    }
+    setRollbackError(null);
+    void act(() => api.undoAdvanceCapture(item.id, comments.trim()));
   }
 
   function handleRollbackClaim() {
@@ -2244,7 +2258,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               <div className="review-form-grid review-form-grid-2">
                 <label>
                   <span>
-                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Comments (required for Roll Back / Reject)" : "Comments (optional)"}
+                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canUndoCapture ? "Comments (required for Roll Back / Reject / Undo Capture)" : "Comments (optional)"}
                   </span>
                   <textarea
                     className="review-control review-textarea"
@@ -2254,7 +2268,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       if (rollbackError) setRollbackError(null);
                       if (error === "Enter comments before rejecting this advance.") setError(null);
                     }}
-                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation ? "Enter reason for rollback/reject" : ""}
+                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canUndoCapture ? "Enter reason for rollback/reject/undo" : ""}
                   />
                   {rollbackError && (
                     <div className="review-warning">
@@ -2329,7 +2343,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation)) && (
+                {canUndoCapture && (
+                  <button className="button small-button button-subtle" disabled={busy} onClick={handleUndoCapture}>
+                    Undo Capture
+                  </button>
+                )}
+
+                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canUndoCapture)) && (
                   <div className="review-empty-note">{noActionMessage}</div>
                 )}
               </div>
