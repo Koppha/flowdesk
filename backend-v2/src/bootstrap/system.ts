@@ -9,6 +9,7 @@ import { env } from "../config/env.js";
 import { ensureDepartmentGroups, ensureManagerTypesTable, ensureUserOrgColumns } from "../lib/departments.js";
 import { ensureTravelSchema } from "../lib/travel.js";
 import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
+import { ensureBrsSchema } from "../modules/brs/brs.schema.js";
 import { DEFAULT_ECONET_LOGO_DATA_URI } from "../lib/pdf/assets/econetLogo.js";
 
 const DEFAULT_ADMIN_EMAIL = env.ADMIN_SEED_EMAIL || "admin@example.com";
@@ -25,6 +26,8 @@ export async function bootstrapSystem() {
   await ensureReportingLinesSchema();
   await ensurePaAssignmentsSchema();
   await ensureRequestTypesSchema();
+  await ensureBrsSchema();
+  await seedBrsApprovalRequestType();
   await ensureEmploymentTypesSchema();
   await ensureEmailActionTokensSchema();
   await ensurePositionVacanciesSchema();
@@ -709,6 +712,13 @@ async function ensureRequestTypesSchema() {
   // When set, submitters can't add/remove/reorder steps — the server resolves AUTO_MANAGER steps from
   // reporting_lines and validates ROLE_PICKER steps against the chosen approver's role.
   await query(`ALTER TABLE custom_request_types ADD COLUMN IF NOT EXISTS fixed_approval_chain jsonb`);
+  // Marks a type whose submissions are only ever created programmatically by
+  // another module (e.g. BRS_APPROVAL, spun up by brs.routes.ts when a BRS
+  // document routes for approval) - never something a person should pick
+  // from the "New Request" picker themselves. Still a completely ordinary
+  // custom_request_types row otherwise (same chain/notification/PDF/email
+  // machinery), just excluded from that one manual-submission list.
+  await query(`ALTER TABLE custom_request_types ADD COLUMN IF NOT EXISTS is_internal boolean NOT NULL DEFAULT false`);
 
   await seedChangeRequestType();
   await seedAttendanceRegisterType();
@@ -998,6 +1008,43 @@ async function seedChangeRequestType() {
       [typeId]
     );
   }
+
+  // Lets a Change Request raised from a baselined BRS reference which one —
+  // rendered as a read-only link back to the BRS by the frontend rather than
+  // a raw id (see CustomRequestsHub.tsx). Self-heals on every boot.
+  const hasBrsLink = await query<{ id: string }>(
+    `SELECT id FROM request_type_fields WHERE request_type_id = $1 AND field_key = 'related_brs_document_id'`,
+    [typeId]
+  );
+  if (!hasBrsLink[0]) {
+    await query(
+      `INSERT INTO request_type_fields (request_type_id, field_key, field_label, field_type, is_required, sort_order, wizard_step)
+       VALUES ($1, 'related_brs_document_id', 'Related BRS', 'text', false, 0, 1)`,
+      [typeId]
+    );
+  }
+}
+
+// BRS's Approval Routing stage never invents its own approval-chain engine —
+// it inserts directly into custom_request_submissions under this type, so
+// the entire existing free-form chain/approve/reject/notify/email-one-click
+// machinery in custom-requests.routes.ts is inherited with zero duplicated
+// code. Never submitted through the normal multipart POST /custom-requests
+// endpoint (BRS's own route builds the submission row itself — see
+// brs.routes.ts POST /:id/route-approval) — no fields are needed here beyond
+// what already lives on custom_request_submissions.data as a reference back
+// to the real document.
+async function seedBrsApprovalRequestType() {
+  const existing = await query<{ id: string }>(`SELECT id FROM custom_request_types WHERE code = 'BRS_APPROVAL'`);
+  if (!existing[0]) {
+    await query(
+      `INSERT INTO custom_request_types (name, code, description, icon, color, category, status, is_internal)
+       VALUES ('BRS Approval', 'BRS_APPROVAL', 'Approval routing for a Business Requirement Specification', 'FileCheck', '#7c3aed', 'BRS', 'ACTIVE', true)`
+    );
+    return;
+  }
+  // Self-heals an already-seeded row from before is_internal existed.
+  await query(`UPDATE custom_request_types SET is_internal = true WHERE id = $1 AND is_internal = false`, [existing[0].id]);
 }
 
 // Seeds the "Attendance Register" custom request type (monthly attendance

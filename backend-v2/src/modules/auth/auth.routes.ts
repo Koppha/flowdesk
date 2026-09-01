@@ -2148,8 +2148,9 @@ const FEATURE_KEYS = [
   "team_roster", "ceo_management", "employees",
   "exco_members", "managers", "leadership_assignments", "workflow_builder",
   "request_types", "reporting_lines", "advance_pdf", "report_reconciliation", "pdf_designer",
-  "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions",
+  "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions", "refundable",
   "payments", "capture", "clearance_status_report",
+  "accommodation", "hr_operations_review",
   "overtime_request", "overtime_claim", "treasury_processing"
 ] as const;
 
@@ -2181,6 +2182,8 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   // whoever is in the Treasury & Financial Accounting team's ANY_ONE group.
   payments:              ["ADMIN", "Department: Finance"],
   capture:               ["ADMIN", "Section: Treasury & Financial Accounting"],
+  accommodation:         ["ADMIN", "Section: Human Resources Operations", "Section: Treasury & Financial Accounting"],
+  hr_operations_review:  ["ADMIN", "Section: Human Resources Operations"],
   clearance_status_report: [
     "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
     "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"

@@ -108,7 +108,12 @@ refundableRouter.use(async (req: AuthedRequest, res, next) => {
 
 refundableRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
-    const allowedDivisions = await getViewerDivisionScope(req.user!.userId, req.user!.role === "ADMIN");
+    // Refunds are recorded centrally by MNO's own Finance/Treasury team for
+    // every company (unlike Advance capture, which each company's own
+    // finance team handles for itself) - see the matching comment in
+    // deductions.routes.ts.
+    const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
+    const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
     const rows = await query<RefundableRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
     const items = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
     return res.json({ items });

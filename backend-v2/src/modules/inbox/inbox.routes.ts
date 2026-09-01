@@ -561,7 +561,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       for (const a of rows) {
         if (items.some((i: any) => i.id === a.id)) continue;
         const isOwner = a.created_by_id === req.user!.userId || a.requester_id === req.user!.userId;
-        
+
         // DRAFT bookings are real accommodation documents. Include them for
         // Admin and owner/creator only (keep private from other unrelated viewers
         // until submitted to Finance).
@@ -576,7 +576,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             if (!chainEligible) continue;
           }
         }
-        
+
         items.push({
           doc_type: "ACCOMMODATION",
           id: a.id,

@@ -14,6 +14,7 @@ import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { createProvisioningTaskForSubmission } from "../it-provisioning/it-provisioning.service.js";
+import { baselineBrsDocument, returnBrsDocumentToDraft } from "../brs/brs.service.js";
 
 export const customRequestsRouter = Router();
 customRequestsRouter.use(requireAuth);
@@ -130,12 +131,16 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     const parsed = CreateSchema.safeParse({ request_type_id: req.body.request_type_id, data: bodyData, approval_chain: bodyChain });
     if (!parsed.success) throw badRequest("Invalid submission payload", parsed.error.flatten());
 
-    const requestType = (await query<{ id: string; name: string; status: string; fixed_approval_chain: FixedApprovalStep[] | null }>(
-      `SELECT id, name, status, fixed_approval_chain FROM custom_request_types WHERE id = $1 AND is_active = true`,
+    const requestType = (await query<{ id: string; name: string; status: string; fixed_approval_chain: FixedApprovalStep[] | null; is_internal: boolean }>(
+      `SELECT id, name, status, fixed_approval_chain, is_internal FROM custom_request_types WHERE id = $1 AND is_active = true`,
       [parsed.data.request_type_id]
     ))[0];
     if (!requestType) throw notFound("Request type not found");
     if (requestType.status !== "ACTIVE") throw badRequest("This request type is not currently active");
+    // Internal types (e.g. BRS_APPROVAL) only ever get a submission created
+    // programmatically by their owning module - never through this generic
+    // submit endpoint, even by an admin poking the API directly.
+    if (requestType.is_internal) throw badRequest("This request type cannot be submitted directly");
 
     await assertCanSubmit(req.user!.userId, req.user!.role, req.user!.department ?? null, req.user!.employmentType ?? null, requestType.id);
 
@@ -901,6 +906,17 @@ export async function performCustomRequestAction(
   // unaffected (no matching submission_id will ever ask for a task).
   if (newStatus === "APPROVED" && submission.request_type_code === "COMPUTER_REQUEST") {
     await createProvisioningTaskForSubmission(submission.id, submission.data?.computer_type);
+  }
+
+  // BRS's Approval Routing stage rides entirely on this generic engine (see
+  // brs.routes.ts POST /:id/route-approval) — the only BRS-specific code
+  // needed here is baselining on approval, or bouncing back to Draft for
+  // rework on rejection (never a dead end).
+  if (newStatus === "APPROVED" && submission.request_type_code === "BRS_APPROVAL") {
+    await baselineBrsDocument(submission.data?.brs_document_id, submission.id, actor.userId);
+  }
+  if (newStatus === "REJECTED" && submission.request_type_code === "BRS_APPROVAL") {
+    await returnBrsDocumentToDraft(submission.data?.brs_document_id, comment ?? null, actor.fullName ?? null);
   }
 
   // Email/Teams sends are slow relative to a request-response cycle and

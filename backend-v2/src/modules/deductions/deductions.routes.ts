@@ -92,7 +92,15 @@ deductionsRouter.use(async (req: AuthedRequest, res, next) => {
 
 deductionsRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
-    const allowedDivisions = await getViewerDivisionScope(req.user!.userId, req.user!.role === "ADMIN");
+    // Deductions are recorded centrally by MNO's own Finance/Treasury team
+    // for every company (unlike Advance capture, which each company's own
+    // finance team handles for itself) - so a Finance-authority viewer's
+    // scope is company-wide, not limited to their own division. Anyone else
+    // with view-only module access (e.g. a company's own finance-adjacent
+    // staff granted visibility but not the is_compensation_finance flag)
+    // still only sees their own company's rows.
+    const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
+    const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
     const rows = await query<DeductionRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
     const items = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
     return res.json({ items });

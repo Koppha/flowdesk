@@ -1677,6 +1677,69 @@ export async function notifyCustomRequestCancelled(args: {
   }
 }
 
+// ─── BRS notifications ─────────────────────────────────────────────────────────
+
+export async function notifyBrsSectionAssigned(args: {
+  documentId: string;
+  brsTitle: string;
+  requesterName: string | null;
+  sectionTitle: string;
+  assigneeEmails: string[];
+}) {
+  try {
+    if (!args.assigneeEmails.length) return;
+
+    const body = [
+      header("BRS — SECTION ASSIGNED TO YOU"),
+      ``,
+      `Hello,`,
+      ``,
+      `${args.requesterName || "A colleague"} assigned you the "${args.sectionTitle}" section of the BRS "${args.brsTitle}" — please fill it in and confirm when it's ready.`,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({
+      to: args.assigneeEmails,
+      subject: `[Action Required] BRS — ${args.sectionTitle} (${args.brsTitle})`,
+      text: body
+    });
+  } catch (error) {
+    logger.warn("brs_section_assigned_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
+export async function notifyBrsReturnedToDraft(args: {
+  documentId: string;
+  brsTitle: string;
+  requesterEmail: string | null;
+  requesterName: string | null;
+  returnedBy: string | null;
+  comment: string | null;
+}) {
+  try {
+    if (!args.requesterEmail) return;
+
+    const lines = [
+      header("BRS — RETURNED FOR REWORK"),
+      ``,
+      `Hello ${args.requesterName || ""},`,
+      ``,
+      `Your BRS "${args.brsTitle}" was not approved and has been returned to Draft by ${args.returnedBy || "an approver"}. Nothing has been cleared — update what's needed and route it for approval again when ready.`
+    ];
+    if (args.comment) lines.push(``, `Comment: ${args.comment}`);
+    lines.push(``, footer());
+
+    await sendMail({
+      to: [args.requesterEmail],
+      subject: `[Returned] BRS — ${args.brsTitle}`,
+      text: lines.join("\n")
+    });
+  } catch (error) {
+    logger.warn("brs_returned_to_draft_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
 // ─── Delegation notifications ─────────────────────────────────────────────────
 
 export async function notifyDelegationAssigned(args: {

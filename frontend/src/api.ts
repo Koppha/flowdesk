@@ -516,6 +516,40 @@ export const api = {
   updateCustomRequestData: (id: string, data: Record<string, any>) =>
     req(`/custom-requests/${id}/data`, { method: "PATCH", body: JSON.stringify({ data }) }),
 
+  // ── BRS (Business Requirement Specification) ──────────────────────────────
+  brsModuleFlag: () => req("/brs-types/module-flag"),
+  brsDefaultType: () => req("/brs-types/default"),
+  brsTypes: () => req("/brs-types"),
+  brsTypeDetail: (id: string) => req(`/brs-types/${id}`),
+  brsTypeCreate: (data: any) => req("/brs-types", { method: "POST", body: JSON.stringify(data) }),
+  brsTypeUpdate: (id: string, data: any) => req(`/brs-types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  brsTypeDelete: (id: string) => req(`/brs-types/${id}`, { method: "DELETE" }),
+  brsTypeSetSections: (id: string, sections: any[]) => req(`/brs-types/${id}/sections`, { method: "PUT", body: JSON.stringify(sections) }),
+  brsTypePermissions: (id: string) => req(`/brs-types/${id}/permissions`),
+  brsTypeAddPermission: (id: string, data: any) => req(`/brs-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
+  brsTypeRemovePermission: (id: string, permId: string) => req(`/brs-types/${id}/permissions/${permId}`, { method: "DELETE" }),
+
+  brsCreate: (data: { brs_type_id: string; title: string; intake_data?: Record<string, any> }) =>
+    req("/brs", { method: "POST", body: JSON.stringify(data) }),
+  myBrs: () => req("/brs/mine"),
+  assignedToMeBrs: () => req("/brs/assigned-to-me"),
+  brsDetail: (id: string) => req(`/brs/${id}`),
+  updateBrsSection: (id: string, sectionId: string, content_html: string) =>
+    req(`/brs/${id}/sections/${sectionId}`, { method: "PATCH", body: JSON.stringify({ content_html }) }),
+  submitBrsSection: (id: string, sectionId: string) => req(`/brs/${id}/sections/${sectionId}/submit`, { method: "POST" }),
+  addBrsSectionAssignee: (id: string, sectionId: string, data: { user_id?: string; section_ref_id?: string }) =>
+    req(`/brs/${id}/sections/${sectionId}/assignees`, { method: "POST", body: JSON.stringify(data) }),
+  confirmBrsSectionAssignee: (id: string, sectionId: string) =>
+    req(`/brs/${id}/sections/${sectionId}/assignees/confirm`, { method: "POST" }),
+  advanceBrsPhase: (id: string) => req(`/brs/${id}/advance-phase`, { method: "POST" }),
+  updateBrsIntake: (id: string, intake_data: Record<string, any>) =>
+    req(`/brs/${id}/intake`, { method: "PATCH", body: JSON.stringify({ intake_data }) }),
+  brsGateCheck: (id: string) => req(`/brs/${id}/gate-check`),
+  routeBrsApproval: (id: string, approval_chain: any[]) =>
+    req(`/brs/${id}/route-approval`, { method: "POST", body: JSON.stringify({ approval_chain }) }),
+  brsVersions: (id: string) => req(`/brs/${id}/versions`),
+  brsPdfBlob: (id: string) => fetchBlob(`/brs/${id}/pdf`),
+
   emailActionDetail: (token: string) => req(`/email-actions/${encodeURIComponent(token)}`),
   emailActionConfirm: (token: string, data: { action: "APPROVE" | "REJECT"; comment?: string }) =>
     req(`/email-actions/${encodeURIComponent(token)}/confirm`, { method: "POST", body: JSON.stringify(data) }),

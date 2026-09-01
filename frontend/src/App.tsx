@@ -31,6 +31,8 @@ import PdfDesigner from "./PdfDesigner";
 import DataCleanup from "./DataCleanup";
 import RequestTypes from "./RequestTypes";
 import CustomRequestsHub from "./CustomRequestsHub";
+import BrsStudio from "./BrsStudio";
+import BrsAdmin from "./BrsAdmin";
 import EmailActionConfirm from "./EmailActionConfirm";
 import GuidedTour, { type TourStep } from "./GuidedTour";
 import CeoManagement from "./CeoManagement";
@@ -432,7 +434,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -521,6 +523,7 @@ export default function App() {
   const [importHotelResult, setImportHotelResult] = useState<{ created: number; skipped: number; errors: string[] } | null>(null);
   const hotelFileInputRef = useRef<HTMLInputElement>(null);
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
+  const [hasActiveBrsTypes, setHasActiveBrsTypes] = useState(false);
   const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(true);
   const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(true);
   const [salaryAdvanceEnabled, setSalaryAdvanceEnabled] = useState(true);
@@ -1214,6 +1217,8 @@ export default function App() {
     it_provisioning:        ["ADMIN"],
     payments:               ["ADMIN", "Department: Finance"],
     capture:                ["ADMIN", "Section: Treasury & Financial Accounting"],
+    accommodation:          ["ADMIN", "Section: Human Resources Operations", "Section: Treasury & Financial Accounting"],
+    hr_operations_review:   ["ADMIN", "Section: Human Resources Operations"],
     clearance_status_report: [
       "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
       "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
@@ -1533,6 +1538,10 @@ export default function App() {
     setHotelsTotal(Array.isArray(hotelsResp) ? initialHotels.length : Number(hotelsResp?.total || initialHotels.length));
     setStandbyToday(Array.isArray(standbyResp?.on_standby_today) ? standbyResp.on_standby_today : []);
     setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
+    // Fetched separately from the big Promise.all above (not woven into its
+    // fragile positional destructuring) — BRS is optional, so any failure
+    // here should just leave the nav item hidden, never break startup.
+    api.brsModuleFlag().then((f: any) => setHasActiveBrsTypes(Boolean(f?.brs_enabled))).catch(() => setHasActiveBrsTypes(false));
     setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
     setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
     setSalaryAdvanceEnabled(moduleFlagsResp?.salary_advance_enabled !== false);
@@ -4472,6 +4481,7 @@ export default function App() {
             <a href="#" className={navItemClass(page === "STANDBY")} onClick={(e) => { e.preventDefault(); setPage("STANDBY"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Standby</a>
           )}
           {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Processes</a>}
+          {hasActiveBrsTypes && <a href="#" className={navItemClass(page === "BRS")} onClick={(e) => { e.preventDefault(); setPage("BRS"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>BRS Studio</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasRefundableAccess) && (
             <div className={`sidebar-group ${(financeMenuOpen || ["CAPTURE","PAYMENTS","DEDUCTIONS","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
@@ -4507,11 +4517,12 @@ export default function App() {
               </div>
             </div>
           )}
-          {/* Accommodation is HR Operations' operational queue (booking + round-robin
-              assignment), not a Finance function - kept as its own top-level item
-              rather than nested under Finance. */}
-          <a href="#" className={navItemClass(page === "ACCOMMODATION")} onClick={(e) => { e.preventDefault(); setPage("ACCOMMODATION"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Accommodation</a>
-          <a href="#" className={navItemClass(page === "PAYBACK_REVIEW")} onClick={(e) => { e.preventDefault(); setPage("PAYBACK_REVIEW"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>HR Operations Review</a>
+          {canAccessFeature("accommodation") && (
+            <a href="#" className={navItemClass(page === "ACCOMMODATION")} onClick={(e) => { e.preventDefault(); setPage("ACCOMMODATION"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Accommodation</a>
+          )}
+          {canAccessFeature("hr_operations_review") && (
+            <a href="#" className={navItemClass(page === "PAYBACK_REVIEW")} onClick={(e) => { e.preventDefault(); setPage("PAYBACK_REVIEW"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>HR Operations Review</a>
+          )}
           {hasTreasuryAccess && (
             <a href="#" className={navItemClass(page === "TREASURY_PROCESSING")} onClick={(e) => { e.preventDefault(); setPage("TREASURY_PROCESSING"); }}><span className="sidebar-nav-icon"><Landmark size={18} aria-hidden /></span>Trip Clearance Processing <b>{treasuryCount}</b></a>
           )}
@@ -4577,6 +4588,9 @@ export default function App() {
           {canAccessFeature("request_types") && (
             <a href="#" className={navItemClass(page === "REQUEST_TYPES")} onClick={(e) => { e.preventDefault(); setPage("REQUEST_TYPES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Process</a>
           )}
+          {role === "ADMIN" && (
+            <a href="#" className={navItemClass(page === "BRS_ADMIN")} onClick={(e) => { e.preventDefault(); setPage("BRS_ADMIN"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>BRS Templates</a>
+          )}
           {(canAccessFeature("org_structure") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines") || canAccessFeature("pdf_designer")) && (
             <div className={`sidebar-group ${orgNavOpen ? "open" : ""}`}>
               <a href="#" className={navItemClass(ORG_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setOrgNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong>{orgNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
@@ -4630,9 +4644,9 @@ export default function App() {
             <Deductions />
           ) : page === "REFUNDABLE" ? (
             <Refundable />
-          ) : page === "ACCOMMODATION" ? (
+          ) : page === "ACCOMMODATION" && canAccessFeature("accommodation") ? (
             <Accommodation profile={profile} onBack={() => setPage("HOME")} />
-          ) : page === "PAYBACK_REVIEW" ? (
+          ) : page === "PAYBACK_REVIEW" && canAccessFeature("hr_operations_review") ? (
             <PaybackReview onBack={() => setPage("HOME")} />
           ) : page === "TREASURY_PROCESSING" ? (
             <TreasuryProcessing onBack={() => setPage("HOME")} />
@@ -4672,6 +4686,10 @@ export default function App() {
             />
           ) : page === "CHANGE_REQUEST" ? (
             <CustomRequestsHub profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
+          ) : page === "BRS" ? (
+            <BrsStudio profile={profile} onBack={() => setPage("HOME")} />
+          ) : page === "BRS_ADMIN" ? (
+            <BrsAdmin onBack={() => setPage("HOME")} />
           ) : page === "CEO_MANAGEMENT" ? (
             <CeoManagement />
           ) : page === "EMPLOYEES" ? (
@@ -5163,6 +5181,8 @@ export default function App() {
                       { key: "it_provisioning",        label: "IT Provisioning",          group: "IT" },
                       { key: "payments",               label: "Payments",                 group: "Finance Operations" },
                       { key: "capture",                label: "Capture Inbox",            group: "Finance Operations" },
+                      { key: "accommodation",          label: "Accommodation",            group: "HR Operations" },
+                      { key: "hr_operations_review",   label: "HR Operations Review",     group: "HR Operations" },
                       { key: "overtime_request",       label: "Overtime Request",         group: "Overtime" },
                       { key: "overtime_claim",         label: "Overtime Claim",            group: "Overtime" },
                       { key: "vendor_contracts",         label: "Vendor Contracts (View)",   group: "Contracts" },
@@ -5199,6 +5219,8 @@ export default function App() {
     it_provisioning:        ["ADMIN"],
                       payments:               ["ADMIN","Department: Finance"],
                       capture:                ["ADMIN","Section: Treasury & Financial Accounting"],
+                      accommodation:          ["ADMIN","Section: Human Resources Operations","Section: Treasury & Financial Accounting"],
+                      hr_operations_review:   ["ADMIN","Section: Human Resources Operations"],
                       overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       vendor_contracts:         ["ADMIN"],

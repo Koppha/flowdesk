@@ -19,6 +19,8 @@ import { workflowsRouter } from "./modules/workflows/workflows.routes.js";
 import { reportingLinesRouter } from "./modules/reporting-lines/reporting-lines.routes.js";
 import { requestTypesRouter } from "./modules/request-types/request-types.routes.js";
 import { customRequestsRouter } from "./modules/custom-requests/custom-requests.routes.js";
+import { brsRouter } from "./modules/brs/brs.routes.js";
+import { brsAdminRouter } from "./modules/brs/brs-admin.routes.js";
 import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
@@ -91,6 +93,8 @@ export function createApp() {
   app.use("/reporting-lines", reportingLinesRouter);
   app.use("/request-types", requestTypesRouter);
   app.use("/custom-requests", customRequestsRouter);
+  app.use("/brs", brsRouter);
+  app.use("/brs-types", brsAdminRouter);
   app.use("/email-actions", emailActionsRouter);
   app.use("/pdf-templates", pdfTemplatesRouter);
   app.use("/deductions", deductionsRouter);

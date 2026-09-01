@@ -2481,6 +2481,22 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
                     <div className="review-field-value">{detail.requester_name || "—"}</div>
                   </div>
                 </div>
+                {detail.request_type_code === "BRS_APPROVAL" && (
+                  <div className="review-field-item" style={{ gridColumn: "1 / -1" }}>
+                    <div className="review-field-icon"><FileText size={16} /></div>
+                    <div>
+                      <div className="review-field-label">Business Requirement Specification</div>
+                      <div className="review-field-value">{detail.data?.brs_title || "—"} {detail.data?.brs_reference_no ? `(${detail.data.brs_reference_no})` : ""}</div>
+                      <button
+                        className="button small-button button-subtle"
+                        style={{ marginTop: 6 }}
+                        onClick={() => { void openBlobInNewTab(() => api.brsPdfBlob(detail.data.brs_document_id)); }}
+                      >
+                        View full specification (PDF)
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {(detail.fields || []).map((f: any) => {
                   const value = detail.data?.[f.field_key];
                   if (value === undefined || value === null || value === "") return null;
