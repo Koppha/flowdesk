@@ -512,7 +512,7 @@ export function isCapturePendingItem(item: any) {
 //    on from the Approval Inbox).
 export function needsAccommodationBooking(item: any) {
   if (item.doc_type === "ADVANCE") return item.current_step_requires_accommodation === true;
-  if (item.doc_type === "ACCOMMODATION") return item.status === "SUBMITTED";
+  if (item.doc_type === "ACCOMMODATION") return ["DRAFT", "SUBMITTED"].includes(item.status);
   return false;
 }
 
@@ -626,16 +626,8 @@ export default function Inbox(props: {
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
     for (const it of scopedItems) {
-      // An advance whose parallel accommodation step is still waiting is
-      // actionable accommodation work even before HR creates the separate
-      // accommodation_requests record. Grouping only by the underlying
-      // ADVANCE doc_type hid that work inside the Advance tab (notably in
-      // PROD), while a later SUBMITTED accommodation row correctly appeared
-      // under Travel Accommodation. Treat both lifecycle representations as
-      // one queue so Admin/HR/Treasury see a consistent tab throughout.
-      const queueDocType = needsAccommodationBooking(it) ? "ACCOMMODATION" : it.doc_type;
-      g[queueDocType] = g[queueDocType] || [];
-      g[queueDocType].push(it);
+      g[it.doc_type] = g[it.doc_type] || [];
+      g[it.doc_type].push(it);
     }
     return g;
   }, [scopedItems]);
@@ -1322,12 +1314,24 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
 
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
-    (isWorkflowDriven
+    ((isWorkflowDriven
       ? isMyWorkflowStep && !isAccommodationStep && (item as any).current_step_can_rollback !== false
       : ((role === "MANAGER" && item.status === "SUBMITTED") ||
           (role === "MANAGER" && item.status === "HR_OFFICER") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
-          (role === "EXCO" && item.status === "COUNTERSIGNED")));
+          (role === "EXCO" && item.status === "COUNTERSIGNED"))) ||
+      // Finance/Treasury or ADMIN can send a paid-in-error advance all the
+      // way back to draft from Capture/Payments too, not just pre-payment -
+      // see advances.routes.ts's /:id/rollback post-completion bypass.
+      ((role === "ADMIN" || isFinanceDept) && item.status === "PAID"));
+  // Cancel voids the advance outright (a terminal marker, not a "start
+  // over") - available from Capture/Payments even once PAID, when a
+  // correction that still preserves the record (rather than resubmitting)
+  // is what's needed.
+  const canCancelAdvance =
+    item.doc_type === "ADVANCE" &&
+    (role === "ADMIN" || isFinanceDept) &&
+    !["CANCELLED", "REJECTED", "DRAFT"].includes(item.status);
   const canRejectAdvance =
     item.doc_type === "ADVANCE" &&
     (isWorkflowDriven
@@ -1390,8 +1394,22 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canSettle = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && item.status === "FINANCE_VERIFIED";
-  const canRequestCorrection = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && item.status === "FINANCE_VERIFIED";
+  // Every status a claim can sit at once its own approval_chain has already
+  // fully completed - legacy and the new trip-completion outcome statuses
+  // alike (see claims.routes.ts's POST_CHAIN_STATUSES). "Request Correction"
+  // (send back to draft) is available from any of them, not just the old
+  // FINANCE_VERIFIED-only case - a claim settled/completed in error still
+  // needs a way back to draft.
+  const claimPostChainStatuses = ["FINANCE_VERIFIED", "PAYMENT_PROCESSING", "SETTLED", "CLOSED", ...Array.from(CLEARANCE_OUTCOME_STATUSES)];
+  const canRequestCorrection = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && claimPostChainStatuses.includes(item.status);
   const canMarkSettled = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && item.status === "PAYMENT_PROCESSING";
+  // Cancel voids the clearance outright (a terminal marker, not a "start
+  // over") - available even once settled/completed, when a correction that
+  // still preserves the record (rather than resubmitting) is what's needed.
+  const canCancelClaim =
+    item.doc_type === "CLAIM" &&
+    (role === "ADMIN" || isFinanceDept) &&
+    !["CANCELLED", "REJECTED", "DRAFT"].includes(item.status);
 
   const noActionMessage = (() => {
     if (item.doc_type === "ADVANCE" && role === "MANAGER" && !["SUBMITTED", "HR_OFFICER"].includes(item.status)) {
@@ -1516,6 +1534,24 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     }
     setRollbackError(null);
     void act(() => api.rollbackClaim(item.id, comments.trim()));
+  }
+
+  function handleCancelAdvance() {
+    if (!comments.trim()) {
+      setRollbackError("Enter a reason before cancelling this advance.");
+      return;
+    }
+    setRollbackError(null);
+    void act(() => api.cancelAdvance(item.id, comments.trim()));
+  }
+
+  function handleCancelClaim() {
+    if (!comments.trim()) {
+      setRollbackError("Enter a reason before cancelling this clearance.");
+      return;
+    }
+    setRollbackError(null);
+    void act(() => api.cancelClaim(item.id, comments.trim()));
   }
 
   function handleRejectAdvance() {
@@ -1796,7 +1832,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 <div className="review-card">
                   <div className="review-card-title">
                     {canSettle ? "Finance Comments (required)" :
-                      canRejectClaim || canRollbackClaim || canRequestCorrection ? "Comments (required for Roll Back / Reject / Request Correction)" : "Comments (optional)"}
+                      canRejectClaim || canRollbackClaim || canRequestCorrection || canCancelClaim ? "Comments (required for Roll Back / Reject / Request Correction / Cancel)" : "Comments (optional)"}
                   </div>
                   <div style={{ padding: 14 }}>
                     <textarea
@@ -1865,7 +1901,12 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       Mark Settled
                     </button>
                   )}
-                  {!(canApproveClaim || canRejectClaim || canRollbackClaim || canRequestCorrection || canSettle || canMarkSettled) && (
+                  {canCancelClaim && (
+                    <button className="button small-button button-danger" disabled={busy} onClick={handleCancelClaim}>
+                      Cancel Clearance
+                    </button>
+                  )}
+                  {!(canApproveClaim || canRejectClaim || canRollbackClaim || canRequestCorrection || canSettle || canMarkSettled || canCancelClaim) && (
                     <div className="review-empty-note">{noActionMessage}</div>
                   )}
                 </div>
@@ -2258,7 +2299,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
               <div className="review-form-grid review-form-grid-2">
                 <label>
                   <span>
-                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canUndoCapture ? "Comments (required for Roll Back / Reject / Undo Capture)" : "Comments (optional)"}
+                    {canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canUndoCapture || canCancelAdvance ? "Comments (required for Roll Back / Reject / Undo Capture / Cancel)" : "Comments (optional)"}
                   </span>
                   <textarea
                     className="review-control review-textarea"
@@ -2268,7 +2309,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       if (rollbackError) setRollbackError(null);
                       if (error === "Enter comments before rejecting this advance.") setError(null);
                     }}
-                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canUndoCapture ? "Enter reason for rollback/reject/undo" : ""}
+                    placeholder={canRollbackAdvance || canRejectAdvance || canRejectAccommodation || canUndoCapture || canCancelAdvance ? "Enter reason for rollback/reject/undo/cancel" : ""}
                   />
                   {rollbackError && (
                     <div className="review-warning">
@@ -2349,7 +2390,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   </button>
                 )}
 
-                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canUndoCapture)) && (
+                {canCancelAdvance && (
+                  <button className="button small-button button-danger" disabled={busy} onClick={handleCancelAdvance}>
+                    Cancel Advance
+                  </button>
+                )}
+
+                {!((canRollbackAdvance || canRejectAdvance || canApproveAdvance || canMarkPaid || canCreateAccommodation || canMarkAccommodationPaid || canRejectAccommodation || canUndoCapture || canCancelAdvance)) && (
                   <div className="review-empty-note">{noActionMessage}</div>
                 )}
               </div>

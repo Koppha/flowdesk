@@ -379,6 +379,7 @@ export const api = {
 
   rollbackAdvance: (id: string, comments?: string) => req(`/advances/${id}/rollback`, { method: "POST", body: JSON.stringify({ comments }) }),
   undoAdvanceCapture: (id: string, comments: string) => req(`/advances/${id}/undo-capture`, { method: "POST", body: JSON.stringify({ comments }) }),
+  cancelAdvance: (id: string, comments: string) => req(`/advances/${id}/cancel`, { method: "POST", body: JSON.stringify({ comments }) }),
   advancePdf: (id: string) => fetchBlob(`/advances/${id}/pdf`),
   rejectAdvance: (id: string, comments: string) => req(`/advances/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   approveAdvance: (id: string, approved_total: number, comments?: string) =>
@@ -387,10 +388,13 @@ export const api = {
   payments: (params: { status?: "pending" | "paid" | "all"; limit?: number; offset?: number } = {}) =>
     req(`/advances/payments?${new URLSearchParams(params as any).toString()}`),
   paymentsAccess: () => req("/advances/payments/access"),
+  accommodationPayments: (params: { status?: "pending" | "paid" | "all"; limit?: number; offset?: number } = {}) =>
+    req(`/accommodation/payments?${new URLSearchParams(params as any).toString()}`),
 
   approveClaim: (id: string, comments?: string) => req(`/claims/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
   rejectClaim: (id: string, comments: string) => req(`/claims/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   rollbackClaim: (id: string, comments?: string) => req(`/claims/${id}/rollback`, { method: "POST", body: JSON.stringify({ comments }) }),
+  cancelClaim: (id: string, comments: string) => req(`/claims/${id}/cancel`, { method: "POST", body: JSON.stringify({ comments }) }),
   financeDecideClaim: (id: string, payload: {
     finance_decision: "ACCEPTED" | "REFUND_FROM_EMPLOYEE" | "REIMBURSE_EMPLOYEE";
     finance_comments: string;
