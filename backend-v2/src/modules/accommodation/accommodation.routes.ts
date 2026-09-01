@@ -289,7 +289,7 @@ async function canViewAccommodation(args: { role: string; sectionId?: string | n
   return isEligibleOnLinkedAdvanceCaptureStep(args.row, args);
 }
 
-accommodationRouter.get("/", async (req: AuthedRequest, res, next) => {
+accommodationRouter.get("/", requireFeatureAccess("accommodation", ["ADMIN", "Section: Human Resources Operations", "Section: Treasury & Financial Accounting"]), async (req: AuthedRequest, res, next) => {
   try {
     const mine = req.query.mine === "true";
     const params: unknown[] = [];
@@ -320,6 +320,72 @@ accommodationRouter.get("/", async (req: AuthedRequest, res, next) => {
       params
     );
     return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Accommodation payments endpoint - mirrors advances/payments but for accommodation records
+// Returns submitted and paid accommodation bookings for payment tracking
+accommodationRouter.get("/payments", async (req: AuthedRequest, res, next) => {
+  try {
+    const role = req.user!.role;
+    const isCentralFinance = await isCompensationFinanceSection(req.user!.sectionId);
+    const allowed = role === "ADMIN" || isCentralFinance;
+    if (!allowed) throw forbidden();
+
+    const statusParam = String(req.query.status || "all") as "pending" | "paid" | "all";
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const rows = await query<any>(
+      `SELECT acc.id, acc.status, acc.amount, acc.location, acc.provider,
+              acc.created_at, acc.paid_at, acc.paid_reference,
+              acc.created_by_id, acc.requester_id,
+              requester.full_name AS requester_name, requester.department,
+              dv.name AS division, COALESCE(tt.currency, 'LSL') AS currency
+         FROM accommodation_requests acc
+         JOIN users requester ON requester.id = acc.requester_id
+         JOIN advance_requests ar ON ar.id = acc.advance_request_id
+         LEFT JOIN travel_types tt ON tt.code = ar.type
+         LEFT JOIN divisions dv ON dv.id = requester.division_id
+        WHERE acc.status IN ('SUBMITTED','PAID')
+        ORDER BY acc.created_at DESC`
+    );
+
+    const items: any[] = [];
+    for (const a of rows) {
+      const canSeeAllAccommodation = role === "ADMIN" || isCentralFinance;
+      const isOwner = a.created_by_id === req.user!.userId || a.requester_id === req.user!.userId;
+      if (!canSeeAllAccommodation && !isOwner) continue;
+
+      items.push({
+        doc_type: "ACCOMMODATION",
+        id: a.id,
+        status: a.status,
+        payment_status: a.status === "PAID" ? "PAID" : "PENDING",
+        type: "ACCOMMODATION",
+        currency: a.currency,
+        requested_total: Number(a.amount),
+        approved_total: Number(a.amount),
+        purpose: [a.location, a.provider].filter(Boolean).join(" - ") || "Accommodation booking",
+        requester_name: a.requester_name,
+        department: a.department,
+        division: a.division ?? null,
+        created_at: a.created_at,
+        paid_at: a.paid_at,
+        paid_reference: a.paid_reference,
+        approved_by_name: null,
+        pdf_filename: `accommodation-${a.id}.pdf`
+      });
+    }
+
+    items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const filtered = statusParam === "all" ? items : items.filter((r) => r.payment_status === statusParam.toUpperCase());
+    const total = filtered.length;
+    const paginated = filtered.slice(offset, offset + limit);
+    return res.json({ items: paginated, total, limit, offset });
   } catch (err) {
     return next(err);
   }

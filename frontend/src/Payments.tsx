@@ -78,8 +78,12 @@ export default function Payments(props: { onBack?: () => void }) {
   async function refresh() {
     setError(null);
     try {
-      const resp = await api.payments({ status: "all", limit: 200 });
-      setItems(resp.items || []);
+      const [advancesResp, accommodationResp] = await Promise.all([
+        api.payments({ status: "all", limit: 200 }),
+        api.accommodationPayments({ status: "all", limit: 200 })
+      ]);
+      const allItems = [...(advancesResp.items || []), ...(accommodationResp.items || [])];
+      setItems(allItems);
     } catch (e: any) {
       setError(String(e.message));
     }

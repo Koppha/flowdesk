@@ -537,7 +537,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     // per the requester's own division at submission time, so this is
     // naturally scoped to that one company already, no separate division
     // filter needed). The HR user who created it or the traveller it's for
-    // can always view their own, regardless of company.
+    // can always view their own, regardless of company. DRAFT bookings are
+    // real accommodation documents and Admin must have visibility into them
+    // to ensure no Accommodation tab is hidden when records exist.
     const loadAccommodationItems = async () => {
       const isAdmin = rule === "ALL";
       const canAct = isAdmin || (await isCompensationFinanceSection(req.user!.sectionId));
@@ -554,18 +556,27 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
            JOIN users creator ON creator.id = acc.created_by_id
            JOIN advance_requests ar ON ar.id = acc.advance_request_id
            LEFT JOIN divisions dv ON dv.id = requester.division_id
-          WHERE acc.status <> 'DRAFT'
           ORDER BY acc.created_at DESC`
       );
       for (const a of rows) {
         if (items.some((i: any) => i.id === a.id)) continue;
         const isOwner = a.created_by_id === req.user!.userId || a.requester_id === req.user!.userId;
-        if (!canAct && !captureViewOnly && !isOwner) {
-          const chain = (a.approval_chain ?? []) as ChainStep[];
-          const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
-          const chainEligible = captureStep ? await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId) : false;
-          if (!chainEligible) continue;
+        
+        // DRAFT bookings are real accommodation documents. Include them for
+        // Admin and owner/creator only (keep private from other unrelated viewers
+        // until submitted to Finance).
+        if (a.status === "DRAFT") {
+          if (!isAdmin && !isOwner) continue;
+        } else {
+          // For non-DRAFT accommodation records, check additional access rules
+          if (!canAct && !captureViewOnly && !isOwner) {
+            const chain = (a.approval_chain ?? []) as ChainStep[];
+            const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
+            const chainEligible = captureStep ? await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId) : false;
+            if (!chainEligible) continue;
+          }
         }
+        
         items.push({
           doc_type: "ACCOMMODATION",
           id: a.id,
