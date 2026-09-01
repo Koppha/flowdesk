@@ -1396,7 +1396,12 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // reporting (advanceClaimWorkflowStep's financial_outcome routing), not a
   // real approval decision, so it gets its own single "Close" action instead
   // of the full Approve/Reject/Roll Back trio every other step shows.
-  const isDeptCloseStep = isWorkflowDrivenClaim && (item as any).current_step_action_type === "DEPT_CLOSE";
+  // COUNTER_SIGN steps get the same treatment - the approval-progress strip
+  // already stops counting the chain as "real approval" after the last
+  // APPROVE step (see approvalProgressStages above), so any workflow whose
+  // final step is a COUNTER_SIGN rather than a DEPT_CLOSE is the same kind
+  // of passthrough sign-off, not a fresh decision worth a Reject/Roll Back.
+  const isDeptCloseStep = isWorkflowDrivenClaim && ["DEPT_CLOSE", "COUNTER_SIGN"].includes((item as any).current_step_action_type);
   const canApproveClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep && !isDeptCloseStep;
   const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep && !isDeptCloseStep;
