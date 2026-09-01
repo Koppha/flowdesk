@@ -687,6 +687,9 @@ export default function App() {
   const [reportAdvances, setReportAdvances] = useState<any[]>([]);
   const [reportClaims, setReportClaims] = useState<any[]>([]);
   const [dashboardSearch, setDashboardSearch] = useState("");
+  const [dashboardSearchLive, setDashboardSearchLive] = useState<{ advances: any[]; claims: any[] }>({ advances: [], claims: [] });
+  const [dashboardSearchLoading, setDashboardSearchLoading] = useState(false);
+  const [dashboardSearchSyncedAt, setDashboardSearchSyncedAt] = useState<Date | null>(null);
   const [inboxCount, setInboxCount] = useState(0);
   const [inboxItems, setInboxItems] = useState<any[]>([]);
   const [captureCount, setCaptureCount] = useState(0);
@@ -3536,37 +3539,50 @@ export default function App() {
   }
 
   // dashboard quick search across advances and clearances
+  // Live, debounced query against the real system (GET /search) rather than
+  // a client-side filter over the dashboard's own "mine=true" advances/claims
+  // cache — that cache never contained other employees' requests at all, so
+  // Quick Search could never actually find anyone but yourself. The backend
+  // applies the same report_advances-gated "search everyone vs. just your
+  // own" scoping GET /advances and GET /claims already use.
+  useEffect(() => {
+    const term = dashboardSearch.trim();
+    if (!term) {
+      setDashboardSearchLive({ advances: [], claims: [] });
+      setDashboardSearchLoading(false);
+      return;
+    }
+    setDashboardSearchLoading(true);
+    const handle = setTimeout(() => {
+      api.dashboardSearch(term)
+        .then((res: any) => {
+          setDashboardSearchLive({ advances: Array.isArray(res?.advances) ? res.advances : [], claims: Array.isArray(res?.claims) ? res.claims : [] });
+          setDashboardSearchSyncedAt(new Date());
+        })
+        .catch(() => setDashboardSearchLive({ advances: [], claims: [] }))
+        .finally(() => setDashboardSearchLoading(false));
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [dashboardSearch]);
+
   const dashboardSearchResults = useMemo(() => {
-    const term = dashboardSearch.trim().toLowerCase();
-    if (!term) return [];
-    const advanceResults = advances
-      .filter((a) => {
-        const requester = (a.requester_name || profile?.full_name || me?.fullName || "").toLowerCase();
-        const type = travelTypeLabel(a.type, travelTypes).toLowerCase();
-        const status = (currentApprovalStepLabel(a) || advanceStageLabel(a)).toLowerCase();
-        return requester.includes(term) || type.includes(term) || status.includes(term) || String(a.type || "").toLowerCase().includes(term);
-      })
-      .map((a) => ({
-        kind: "advance" as const,
-        id: a.id,
-        title: `${a.requester_name || profile?.full_name || me?.fullName || "—"} · ${travelTypeLabel(a.type, travelTypes)}`,
-        subtitle: currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a),
-      }));
-    const claimResults = claims
-      .filter((c) => {
-        const requester = (c.requester_name || profile?.full_name || me?.fullName || "").toLowerCase();
-        const type = travelTypeLabel(c.type, travelTypes).toLowerCase();
-        const status = String(c.status || "").toLowerCase();
-        return requester.includes(term) || type.includes(term) || status.includes(term);
-      })
-      .map((c) => ({
-        kind: "clearance" as const,
-        id: c.id,
-        title: `${c.requester_name || profile?.full_name || me?.fullName || "—"} · ${travelTypeLabel(c.type, travelTypes)}`,
-        subtitle: String(c.status || "").replace(/_/g, " "),
-      }));
+    if (!dashboardSearch.trim()) return [];
+    const advanceResults = dashboardSearchLive.advances.map((a) => ({
+      kind: "advance" as const,
+      id: a.id,
+      mine: a.requester_id === profile?.id,
+      title: `${a.requester_name || "—"} · ${travelTypeLabel(a.type, travelTypes)}`,
+      subtitle: currentApprovalStepLabel(a) ? `Pending ${currentApprovalStepLabel(a)} Approval` : advanceStageLabel(a),
+    }));
+    const claimResults = dashboardSearchLive.claims.map((c) => ({
+      kind: "clearance" as const,
+      id: c.id,
+      mine: c.claimant_id === profile?.id,
+      title: `${c.requester_name || "—"} · ${travelTypeLabel(c.type, travelTypes)}`,
+      subtitle: String(c.status || "").replace(/_/g, " "),
+    }));
     return [...advanceResults, ...claimResults].slice(0, 8);
-  }, [dashboardSearch, advances, claims, travelTypes, profile, me]);
+  }, [dashboardSearch, dashboardSearchLive, travelTypes, profile?.id]);
 
   // recent activity feed for the dashboard, built from my own advances & clearances
   const dashboardRecentActivity = useMemo(() => {
@@ -8205,7 +8221,9 @@ export default function App() {
                   />
                   {dashboardSearch.trim() && (
                     <div className="dashboard-search-results">
-                      {dashboardSearchResults.length === 0 ? (
+                      {dashboardSearchLoading ? (
+                        <div className="dashboard-search-result-empty">Searching…</div>
+                      ) : dashboardSearchResults.length === 0 ? (
                         <div className="dashboard-search-result-empty">No matches found.</div>
                       ) : (
                         dashboardSearchResults.map((r) => (
@@ -8214,7 +8232,13 @@ export default function App() {
                             className="dashboard-search-result"
                             onClick={() => {
                               setDashboardSearch("");
-                              setPage(r.kind === "advance" ? "MY_ADVANCES" : "MY_CLEARANCES");
+                              // Own request → straight to the personal list it lives on.
+                              // Someone else's (only findable at all if this viewer has
+                              // report_advances access) → the org-wide report, since
+                              // there's no single-record deep link for another
+                              // employee's advance/clearance yet.
+                              if (r.kind === "advance") setPage(r.mine ? "MY_ADVANCES" : "REPORT_ADVANCES");
+                              else setPage(r.mine ? "MY_CLEARANCES" : "REPORT_CLEARANCE_STATUS");
                             }}
                           >
                             <span className="dashboard-search-result-title">{r.title}</span>
@@ -8226,7 +8250,7 @@ export default function App() {
                   )}
                   <div className="dashboard-sync-chip">
                     <span>Last sync</span>
-                    <strong>{new Date().toLocaleString()}</strong>
+                    <strong>{dashboardSearchSyncedAt ? dashboardSearchSyncedAt.toLocaleString() : "—"}</strong>
                   </div>
                 </div>
               </div>
