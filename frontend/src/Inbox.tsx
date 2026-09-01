@@ -1390,9 +1390,16 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       ? Boolean(item.current_step_actionable_by_me)
       : item.current_step_approver_id === me?.userId
   );
+  // DEPT_CLOSE is HR Operations' own round-robin-assigned final step
+  // (see workflowEngine.ts's pickRoundRobinAssignee("clearance_close_hr_ops", ...))
+  // - it just passes an already-approved clearance on into Treasury
+  // reporting (advanceClaimWorkflowStep's financial_outcome routing), not a
+  // real approval decision, so it gets its own single "Close" action instead
+  // of the full Approve/Reject/Roll Back trio every other step shows.
+  const isDeptCloseStep = isWorkflowDrivenClaim && (item as any).current_step_action_type === "DEPT_CLOSE";
   const canApproveClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
-  const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
-  const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep;
+  const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep && !isDeptCloseStep;
+  const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep && !isDeptCloseStep;
   const canSettle = item.doc_type === "CLAIM" && (role === "ADMIN" || isFinanceDept) && item.status === "FINANCE_VERIFIED";
   // Every status a claim can sit at once its own approval_chain has already
   // fully completed - legacy and the new trip-completion outcome statuses
@@ -1851,7 +1858,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                 <div className="review-action-row review-action-row-page">
                   {canApproveClaim && (
                     <button className="button small-button button-primary" disabled={busy} onClick={() => act(() => api.approveClaim(item.id, comments))}>
-                      Approve Clearance
+                      {isDeptCloseStep ? "Close" : "Approve Clearance"}
                     </button>
                   )}
                   {canRejectClaim && (
