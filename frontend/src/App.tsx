@@ -4533,12 +4533,6 @@ export default function App() {
               </div>
             </div>
           )}
-          {canAccessFeature("accommodation") && (
-            <a href="#" className={navItemClass(page === "ACCOMMODATION")} onClick={(e) => { e.preventDefault(); setPage("ACCOMMODATION"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Accommodation</a>
-          )}
-          {hasTreasuryAccess && (
-            <a href="#" className={navItemClass(page === "TREASURY_PROCESSING")} onClick={(e) => { e.preventDefault(); setPage("TREASURY_PROCESSING"); }}><span className="sidebar-nav-icon"><Landmark size={18} aria-hidden /></span>Trip Clearance Processing <b>{treasuryCount}</b></a>
-          )}
           {hasItProvisioningAccess && (
             <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>
           )}
