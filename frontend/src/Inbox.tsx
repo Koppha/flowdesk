@@ -620,6 +620,16 @@ export default function Inbox(props: {
     else if (delegationScope === "DELEGATED") result = result.filter((it: any) => it.is_delegated);
     if (mode === "capture" && divisionFilter !== "ALL") result = result.filter((it: any) => it.division === divisionFilter);
     if (mode === "capture") result = result.filter((it: any) => (captureStatusFilter === "CAPTURED") === (it.capture_done === true));
+    // Advances only ever land in `items` here once they've reached their own
+    // DEPT_CAPTURE step (loadCaptureHistoryItems gates on that server-side),
+    // but claims have no such dedicated capture-stage loader - the ADMIN
+    // backstop surfaces every claim with ANY pending step, so a claim still
+    // waiting on Manager/EXCO/Countersign approval was showing up in the
+    // Capture Inbox right alongside ones genuinely ready to close. A claim
+    // only belongs here once it's reached its own passthrough closing step
+    // (DEPT_CLOSE, or a workflow whose final step is tagged COUNTER_SIGN -
+    // see isDeptCloseStep's own comment further down this file).
+    if (mode === "capture") result = result.filter((it: any) => it.doc_type !== "CLAIM" || ["DEPT_CLOSE", "COUNTER_SIGN"].includes(it.current_step_action_type));
     return result;
   }, [items, delegationScope, mode, divisionFilter, captureStatusFilter]);
 
