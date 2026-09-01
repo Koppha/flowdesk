@@ -4520,9 +4520,6 @@ export default function App() {
           {canAccessFeature("accommodation") && (
             <a href="#" className={navItemClass(page === "ACCOMMODATION")} onClick={(e) => { e.preventDefault(); setPage("ACCOMMODATION"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Accommodation</a>
           )}
-          {canAccessFeature("hr_operations_review") && (
-            <a href="#" className={navItemClass(page === "PAYBACK_REVIEW")} onClick={(e) => { e.preventDefault(); setPage("PAYBACK_REVIEW"); }}><span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>HR Operations Review</a>
-          )}
           {hasTreasuryAccess && (
             <a href="#" className={navItemClass(page === "TREASURY_PROCESSING")} onClick={(e) => { e.preventDefault(); setPage("TREASURY_PROCESSING"); }}><span className="sidebar-nav-icon"><Landmark size={18} aria-hidden /></span>Trip Clearance Processing <b>{treasuryCount}</b></a>
           )}
