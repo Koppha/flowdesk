@@ -626,8 +626,16 @@ export default function Inbox(props: {
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
     for (const it of scopedItems) {
-      g[it.doc_type] = g[it.doc_type] || [];
-      g[it.doc_type].push(it);
+      // An advance whose parallel accommodation step is still waiting is
+      // actionable accommodation work even before HR creates the separate
+      // accommodation_requests record. Grouping only by the underlying
+      // ADVANCE doc_type hid that work inside the Advance tab (notably in
+      // PROD), while a later SUBMITTED accommodation row correctly appeared
+      // under Travel Accommodation. Treat both lifecycle representations as
+      // one queue so Admin/HR/Treasury see a consistent tab throughout.
+      const queueDocType = needsAccommodationBooking(it) ? "ACCOMMODATION" : it.doc_type;
+      g[queueDocType] = g[queueDocType] || [];
+      g[queueDocType].push(it);
     }
     return g;
   }, [scopedItems]);
