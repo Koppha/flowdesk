@@ -267,6 +267,10 @@ export const api = {
   // feature permission. Used only by the Reports screens, never by the
   // personal My Advances/My Clearances pages.
   allAdvances: () => req("/advances"),
+  // Dashboard Quick Search — live query, not a filter over already-loaded
+  // "mine" data. Server-side scoped the same way (report_advances holders
+  // search everyone, everyone else only their own).
+  dashboardSearch: (q: string) => req(`/search?q=${encodeURIComponent(q)}`),
   reconciliationReport: (from: string, to: string) =>
     req(`/advances/reconciliation-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   clearanceStatusReport: () => req("/advances/clearance-status-report"),

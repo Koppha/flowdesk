@@ -35,6 +35,7 @@ import { paAssignmentsRouter } from "./modules/admin/pa-assignments.routes.js";
 import { vendorContractsRouter } from "./modules/vendor-contracts/vendor-contracts.routes.js";
 import { serviceContractsRouter } from "./modules/service-contracts/service-contracts.routes.js";
 import { serviceContractsExternalRouter } from "./modules/service-contracts/service-contracts.external.routes.js";
+import { searchRouter } from "./modules/search/search.routes.js";
 
 export function createApp() {
   const app = express();
@@ -106,6 +107,7 @@ export function createApp() {
   app.use("/admin/approval-maintenance", approvalMaintenanceRouter);
   app.use("/pa-assignments", paAssignmentsRouter);
   app.use("/ai", aiRouter);
+  app.use("/search", searchRouter);
 
   app.use(errorHandler);
   return app;
