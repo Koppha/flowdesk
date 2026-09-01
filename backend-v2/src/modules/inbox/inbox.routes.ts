@@ -6,6 +6,9 @@ import { getDelegatedManagerIds, getActiveDelegationsWithTypes } from "../../lib
 import { canApproveStep, getPendingGroup, findPendingAccommodationStep, isRoundRobinCandidate, type ChainStep } from "../../lib/workflowEngine.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
+import { canViewAdvance } from "../advances/advances.routes.js";
+import { canViewClaim } from "../claims/claims.routes.js";
+import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 
 // "CAPTURE" was this system's original built-in capture action code;
 // "DEPT_CAPTURE" is the custom one actually registered and used by every
@@ -179,6 +182,101 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     }
 
     const items: any[] = [];
+
+    // Defense-in-depth: nothing returned by this endpoint may ever be
+    // visible to a viewer who couldn't also open its full detail -
+    // GET /advances/:id and GET /claims/:id both enforce canViewAdvance/
+    // canViewClaim's "requester, creator, or reached chain participant"
+    // rule, and the list must be exactly as strict. Checked once here,
+    // right before responding, rather than trusted to every loader above
+    // individually - an unapproved request must never be visible to anyone
+    // but whoever actually has to sign it, even read-only.
+    const managerChainCache = new Map<string, string[]>();
+    const managerChainFor = async (userId: string) => {
+      if (!managerChainCache.has(userId)) managerChainCache.set(userId, await getManagerChainIds(userId));
+      return managerChainCache.get(userId)!;
+    };
+    async function stripUnviewableItems(rawItems: any[]): Promise<any[]> {
+      const advanceIds = rawItems.filter((i) => i.doc_type === "ADVANCE").map((i) => i.id);
+      const claimIds = rawItems.filter((i) => i.doc_type === "CLAIM").map((i) => i.id);
+      if (!advanceIds.length && !claimIds.length) return rawItems;
+      const advanceRows = advanceIds.length
+        ? await query<any>(
+            `SELECT id, requester_id, created_by_id, approval_chain, workflow_step_order
+               FROM advance_requests WHERE id = ANY($1::uuid[])`,
+            [advanceIds]
+          )
+        : [];
+      const claimRows = claimIds.length
+        ? await query<any>(
+            `SELECT id, claimant_id, status, approval_chain, workflow_step_order
+               FROM clearance_claims WHERE id = ANY($1::uuid[])`,
+            [claimIds]
+          )
+        : [];
+      const advanceById = new Map(advanceRows.map((r) => [r.id, r]));
+      const claimById = new Map(claimRows.map((r) => [r.id, r]));
+
+      const kept: any[] = [];
+      for (const it of rawItems) {
+        if (it.doc_type === "ADVANCE") {
+          const row = advanceById.get(it.id);
+          if (!row) { kept.push(it); continue; }
+          let allowed = await canViewAdvance({
+            role: req.user!.role,
+            requesterId: row.requester_id,
+            createdById: row.created_by_id,
+            userId: req.user!.userId,
+            approvalChain: row.approval_chain,
+            workflowStepOrder: row.workflow_step_order,
+            managerChainIds: await managerChainFor(row.requester_id),
+            delegatedManagerIds
+          });
+          if (!allowed) {
+            // Preserve the intentional Finance/HR-Ops capture oversight
+            // grant (admin_feature_permissions, e.g. "Section: Human
+            // Resources Operations" holding "capture"): visible once the
+            // item's own Capture step has actually been reached, even
+            // without literal membership in that step's approval_group_name -
+            // same rule loadCaptureHistoryItems already applies above.
+            // canViewAdvance doesn't know about this admin-configurable
+            // grant, so it's re-checked here rather than widening
+            // canViewAdvance itself for every other caller.
+            const chain = (row.approval_chain || []) as ChainStep[];
+            const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
+            if (captureStep) {
+              const group = getPendingGroup(chain, row.workflow_step_order ?? 0);
+              const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
+              const captureStepReached = captureStep.approved || chain.indexOf(captureStep) <= maxReachedIdx;
+              if (captureStepReached) {
+                allowed = (await hasFeatureAccess(req.user!.userId, effectiveRole, "capture", ["ADMIN", "Section: Treasury & Financial Accounting"])) || (await isCompensationFinanceUser(req));
+              }
+            }
+          }
+          if (allowed) kept.push(it);
+          continue;
+        }
+        if (it.doc_type === "CLAIM") {
+          const row = claimById.get(it.id);
+          if (!row) { kept.push(it); continue; }
+          const allowed = await canViewClaim({
+            role: req.user!.role,
+            sectionId: req.user!.sectionId,
+            status: row.status,
+            claimantId: row.claimant_id,
+            userId: req.user!.userId,
+            approvalChain: row.approval_chain,
+            workflowStepOrder: row.workflow_step_order,
+            managerChainIds: await managerChainFor(row.claimant_id),
+            delegatedManagerIds
+          });
+          if (allowed) kept.push(it);
+          continue;
+        }
+        kept.push(it);
+      }
+      return kept;
+    }
 
     // Load workflow-driven advances where it is this user's turn to act. A
     // request's current "stage" (getPendingGroup) may contain multiple steps
@@ -968,7 +1066,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     await loadOvertimeClaimItems();
     await loadStandbyClaimItems();
 
-    if (!rule) return res.json({ items });
+    if (!rule) return res.json({ items: await stripUnviewableItems(items) });
 
     // Load legacy (non-workflow) advances by status.
     // The ownership filter still applies so each role only sees their own dept advances.
@@ -1095,7 +1193,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     }
 
-    return res.json({ items });
+    return res.json({ items: await stripUnviewableItems(items) });
   } catch (err) {
     return next(err);
   }
