@@ -134,9 +134,9 @@ export default function DataCleanup({ onBack }: { onBack: () => void }) {
         </div>
         <div className="ep-panel-body">
           <p style={{ fontSize: 13, marginBottom: 12 }}>
-            Not destructive — this re-checks every pending advance and clearance claim's currently-dynamic
-            approval step (Manager/HOD/EXCO, not fixed picks or group steps) against who that position resolves
-            to right now, and reassigns + notifies the newly-correct approver where it's changed. The same sweep
+            Not destructive — this re-checks every pending advance and clearance claim's current and future
+            unapproved dynamic steps (Manager/HOD/EXCO, not fixed picks or group steps) against the live workflow
+            and who each position resolves to now. It notifies a replacement only when the current step changes. The same sweep
             runs automatically once a day; run it here on demand after fixing a workflow, a reporting line, or a
             department's leadership.
           </p>

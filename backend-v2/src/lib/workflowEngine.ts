@@ -67,6 +67,17 @@ export function getPendingGroup(chain: ChainStep[], stepIdx: number): { indices:
   return { indices, steps: indices.map((i) => chain[i]) };
 }
 
+// Used by approval maintenance after a workflow definition changes. Unlike
+// getPendingGroup (the stage actionable right now), this includes every
+// future step whose decision has not been recorded yet, so changing a future
+// EXCO step to HOD is propagated before the request reaches it.
+export function getUnapprovedStepIndices(chain: ChainStep[], stepIdx: number): number[] {
+  return chain
+    .map((step, idx) => ({ step, idx }))
+    .filter(({ step, idx }) => idx >= stepIdx && !step.approved)
+    .map(({ idx }) => idx);
+}
+
 // A requires_accommodation step is parallel_with_previous and non-blocking
 // (see advanceWorkflowStep's lateAccommodationIdx handling in
 // advances.service.ts) - the chain's workflow_step_order pointer can move
@@ -93,7 +104,7 @@ export function findPendingAccommodationStep(chain: ChainStep[]): { index: numbe
 // level.
 export async function resolveRequesterManager(
   requesterId: string
-): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
+): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null; role: string } | null> {
   const lineRows = await query<{ manager_id: string | null }>(
     `SELECT manager_id FROM reporting_lines WHERE employee_id = $1 AND is_active = true LIMIT 1`,
     [requesterId]
@@ -124,11 +135,31 @@ export async function resolveRequesterManager(
 
   if (!managerId || managerId === requesterId) return null;
   return (
-    (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
-      `SELECT id, full_name, title, email FROM users WHERE id = $1 AND is_active = true`,
+    (await query<{ id: string; full_name: string | null; title: string | null; email: string | null; role: string }>(
+      `SELECT id, full_name, title, email, role::text AS role FROM users WHERE id = $1 AND is_active = true`,
       [managerId]
     ))[0] ?? null
   );
+}
+
+// Resolve the actual HOD tier for a requester, rather than treating a HOD
+// workflow step as another name for the requester's immediate manager. Walk
+// the reporting line until a HOD is reached; EXCO is the valid fallback when
+// the org unit has no HOD. This makes a workflow changed from MANAGER to HOD
+// route above a MANAGER such as Mothibe instead of remaining with them.
+export async function resolveRequesterHod(
+  requesterId: string
+): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null; role: string } | null> {
+  const seen = new Set<string>([requesterId]);
+  let currentId = requesterId;
+  for (let depth = 0; depth < 12; depth++) {
+    const candidate = await resolveRequesterManager(currentId);
+    if (!candidate || seen.has(candidate.id)) return null;
+    if (candidate.role === "HOD" || candidate.role === "EXCO" || candidate.role === "CEO") return candidate;
+    seen.add(candidate.id);
+    currentId = candidate.id;
+  }
+  return null;
 }
 
 // The EXCO member for a given department (plain, non-ANY_ONE-group EXCO
@@ -295,13 +326,11 @@ export async function resolveWorkflowChain(params: {
   });
   const deptExco = hasDeptExcoStep ? await resolveDeptExco(department) : null;
 
-  // A plain (non-ANY_ONE-group) MANAGER or HOD step with no fixed
-  // assigned_user_id routes to the REQUESTER's own manager (reporting_lines,
+  // A plain (non-ANY_ONE-group) MANAGER step with no fixed assigned_user_id
+  // routes to the REQUESTER's own manager (reporting_lines,
   // falling back to department leadership the same way getFallbackManagerId
   // in reporting-lines.routes.ts does when no reporting_lines row exists
-  // yet). HOD is included here because a requester's reporting_lines
-  // manager is very often the person holding the HOD title for their
-  // section — e.g. a MANAGER-role requester whose manager is an HOD; a
+  // yet). A HOD step walks that reporting line to the actual HOD tier; a
   // step explicitly assigned to specific people always wins over this.
   // Without this, a single company-wide workflow (e.g. the one Clearance
   // workflow covering every department) can never resolve its Manager/HOD
@@ -311,6 +340,7 @@ export async function resolveWorkflowChain(params: {
     return (stepCode === "MANAGER" || stepCode === "HOD") && !step.assigned_user_ids?.length && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
   });
   const requesterManager = hasDeptManagerStep && requesterId ? await resolveRequesterManager(requesterId) : null;
+  const requesterHod = hasDeptManagerStep && requesterId ? await resolveRequesterHod(requesterId) : null;
 
   // Requester-chosen overrides (e.g. a CEO/EXCO/MANAGER picking their own
   // countersigner/approver for a travel advance) replace the position's
@@ -355,9 +385,9 @@ export async function resolveWorkflowChain(params: {
     // countersigner/approver for a travel advance).
     const override = overrideByActionType.get(step.action_type);
 
-    // HOD and MANAGER steps with no explicit assignee resolve dynamically to
-    // the requester's own reporting_lines manager (see requesterManager
-    // above) — an explicitly assigned step always wins over this. HR_* steps
+    // MANAGER steps with no explicit assignee resolve dynamically to the
+    // requester's direct reporting-lines manager; HOD steps resolve to the
+    // actual HOD tier (see requesterManager/requesterHod above). HR_* steps
     // still route to the Human Resource department's leadership; plain EXCO
     // steps route to the requester's own department's EXCO member (see
     // deptExco above).
@@ -379,9 +409,9 @@ export async function resolveWorkflowChain(params: {
     // requesterManager - resolving HOD to that same person would put the
     // same approver on two consecutive steps, so escalate one level further
     // up the reporting line instead (lazily resolved and cached).
-    let hodManager = requesterManager;
-    if (isDeptHodCode && dynamicManagerAlreadyResolved && requesterManager) {
-      if (secondLevelManager === undefined) secondLevelManager = await resolveRequesterManager(requesterManager.id);
+    let hodManager = requesterHod;
+    if (isDeptHodCode && dynamicManagerAlreadyResolved && requesterManager && requesterHod?.id === requesterManager.id) {
+      if (secondLevelManager === undefined) secondLevelManager = await resolveRequesterManager(requesterHod.id);
       hodManager = secondLevelManager;
     }
 

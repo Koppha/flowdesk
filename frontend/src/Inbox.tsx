@@ -512,7 +512,7 @@ export function isCapturePendingItem(item: any) {
 //    on from the Approval Inbox).
 export function needsAccommodationBooking(item: any) {
   if (item.doc_type === "ADVANCE") return item.current_step_requires_accommodation === true;
-  if (item.doc_type === "ACCOMMODATION") return ["DRAFT", "SUBMITTED"].includes(item.status);
+  if (item.doc_type === "ACCOMMODATION") return item.status === "SUBMITTED" && !!item.current_step_actionable_by_me;
   return false;
 }
 

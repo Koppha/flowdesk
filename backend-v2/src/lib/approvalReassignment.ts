@@ -2,7 +2,9 @@ import { query } from "./db.js";
 import {
   ChainStep,
   getPendingGroup,
+  getUnapprovedStepIndices,
   resolveDeptExco,
+  resolveRequesterHod,
   resolveRequesterManager,
   resolveWorkflowChain
 } from "./workflowEngine.js";
@@ -40,7 +42,7 @@ type ResolvedApprover = { id: string; full_name: string | null; title: string | 
 async function classifyDynamicStep(
   workflowId: string,
   step: ChainStep
-): Promise<"MANAGER" | "HOD" | "EXCO" | null> {
+): Promise<{ code: "MANAGER" | "HOD" | "EXCO"; positionName: string } | null> {
   const rows = await query<{
     position_type_code: string | null;
     position_name: string;
@@ -50,7 +52,10 @@ async function classifyDynamicStep(
     approval_group_name: string | null;
   }>(
     `SELECT position_type_code, position_name, assigned_user_id, assigned_user_ids, approval_mode, approval_group_name
-       FROM workflow_steps WHERE workflow_id=$1 AND step_order=$2 LIMIT 1`,
+       FROM workflow_steps
+      WHERE workflow_id=$1 AND step_order=$2 AND is_active=true
+      ORDER BY updated_at DESC
+      LIMIT 1`,
     [workflowId, step.step_order]
   );
   const def = rows[0];
@@ -60,7 +65,7 @@ async function classifyDynamicStep(
   const hasFixedAssignees = !!def.assigned_user_id || !!(def.assigned_user_ids && def.assigned_user_ids.length);
   const isGroupStep = def.approval_mode === "ANY_ONE" && !!def.approval_group_name;
   if (hasFixedAssignees || isGroupStep) return null;
-  return code;
+  return { code, positionName: def.position_name };
 }
 
 // Re-resolves who should fill a dynamic step, exactly mirroring
@@ -76,7 +81,9 @@ async function resolveDynamicApprover(
 ): Promise<ResolvedApprover | null> {
   if (positionCode === "EXCO") return resolveDeptExco(department || "");
 
-  const candidate = await resolveRequesterManager(movedUserId);
+  const candidate = positionCode === "HOD"
+    ? await resolveRequesterHod(movedUserId)
+    : await resolveRequesterManager(movedUserId);
   if (positionCode !== "HOD" || !candidate) return candidate;
 
   // Collision avoidance: if an earlier step in this same stored chain is
@@ -92,8 +99,10 @@ async function resolveDynamicApprover(
   // his own direct manager, Lithakong Mothibe, instead of escalating to the
   // real Operations HOD, Paka Mahao).
   for (let i = 0; i < stepIdx; i++) {
-    const earlierCode = await classifyDynamicStep(workflowId, chain[i]);
-    if (earlierCode === "MANAGER") return resolveRequesterManager(candidate.id);
+    const earlierDefinition = await classifyDynamicStep(workflowId, chain[i]);
+    if (earlierDefinition?.code === "MANAGER" && chain[i].approver_id === candidate.id) {
+      return resolveRequesterManager(candidate.id);
+    }
   }
   return candidate;
 }
@@ -156,32 +165,42 @@ async function reassignAdvances(
     const chain = row.approval_chain;
     const stepIdx = row.workflow_step_order ?? 0;
     const group = getPendingGroup(chain, stepIdx);
+    const pendingNow = new Set(group.indices);
+    // A workflow edit can change a step the request has not reached yet
+    // (for example Manager -> HOD -> EXCO becoming Manager -> HOD -> HR).
+    // Sweep every still-unapproved dynamic step from the current pointer
+    // forward, not only the currently visible inbox stage.
+    const unapprovedIndices = getUnapprovedStepIndices(chain, stepIdx);
     let changed = false;
-    let lastPatched: ResolvedApprover | null = null;
+    let currentPatched: ResolvedApprover | null = null;
 
-    for (const idx of group.indices) {
+    for (const idx of unapprovedIndices) {
       const step = chain[idx];
       if (!step) continue;
-      const positionCode = await classifyDynamicStep(row.workflow_id, step);
-      if (!positionCode) continue;
+      const definition = await classifyDynamicStep(row.workflow_id, step);
+      if (!definition) continue;
+      const positionCode = definition.code;
 
       const resolved = await resolveDynamicApprover(positionCode, row.requester_id, row.requester_department, chain, idx, row.workflow_id);
       if (!resolved) {
         warnings.push({ module: "advance", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
         continue;
       }
-      if (resolved.id === step.approver_id) continue;
+      const routeChanged = step.position_type_code !== positionCode || step.position_name !== definition.positionName;
+      if (resolved.id === step.approver_id && !routeChanged) continue;
 
-      const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: positionCode };
+      const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: step.position_type_code };
       reassignments.push({
         module: "advance", requestId: row.id, requestType: row.type, positionType: positionCode,
         oldApproverId: step.approver_id, oldApproverName: step.approver_name,
         newApproverId: resolved.id, newApproverName: resolved.full_name
       });
       patchStep(step, resolved);
+      step.position_type_code = positionCode;
+      step.position_name = definition.positionName;
       changed = true;
-      lastPatched = resolved;
-      await writeAudit(auditAction, "advance_requests", row.id, actorId, before, { approver_id: resolved.id, approver_name: resolved.full_name });
+      if (pendingNow.has(idx)) currentPatched = resolved;
+      await writeAudit(auditAction, "advance_requests", row.id, actorId, before, { approver_id: resolved.id, approver_name: resolved.full_name, position_type: positionCode });
     }
 
     if (!changed) continue;
@@ -209,7 +228,7 @@ async function reassignAdvances(
 
     await query(`UPDATE advance_requests SET approval_chain=$1, updated_at=now() WHERE id=$2`, [JSON.stringify(chain), row.id]);
 
-    if (lastPatched) {
+    if (currentPatched) {
       void notifyAdvanceTask({
         advanceId: row.id,
         status: chainStepStatusForNotify(chain, stepIdx),
@@ -217,7 +236,7 @@ async function reassignAdvances(
         requesterName: null,
         department: row.requester_department,
         requestedTotal: 0,
-        nextApprover: { id: lastPatched.id, name: lastPatched.full_name, email: lastPatched.email, title: lastPatched.title },
+        nextApprover: { id: currentPatched.id, name: currentPatched.full_name, email: currentPatched.email, title: currentPatched.title },
         stepOrder: stepIdx
       });
     }
@@ -271,32 +290,38 @@ async function reassignClaims(
     const chain = row.approval_chain;
     const stepIdx = row.workflow_step_order ?? 0;
     const group = getPendingGroup(chain, stepIdx);
+    const pendingNow = new Set(group.indices);
+    const unapprovedIndices = getUnapprovedStepIndices(chain, stepIdx);
     let changed = false;
-    let lastPatched: ResolvedApprover | null = null;
+    let currentPatched: ResolvedApprover | null = null;
 
-    for (const idx of group.indices) {
+    for (const idx of unapprovedIndices) {
       const step = chain[idx];
       if (!step) continue;
-      const positionCode = await classifyDynamicStep(row.workflow_id, step);
-      if (!positionCode) continue;
+      const definition = await classifyDynamicStep(row.workflow_id, step);
+      if (!definition) continue;
+      const positionCode = definition.code;
 
       const resolved = await resolveDynamicApprover(positionCode, row.claimant_id, row.claimant_department, chain, idx, row.workflow_id);
       if (!resolved) {
         warnings.push({ module: "claim", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
         continue;
       }
-      if (resolved.id === step.approver_id) continue;
+      const routeChanged = step.position_type_code !== positionCode || step.position_name !== definition.positionName;
+      if (resolved.id === step.approver_id && !routeChanged) continue;
 
-      const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: positionCode };
+      const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: step.position_type_code };
       reassignments.push({
         module: "claim", requestId: row.id, requestType: "CLEARANCE_REQUEST", positionType: positionCode,
         oldApproverId: step.approver_id, oldApproverName: step.approver_name,
         newApproverId: resolved.id, newApproverName: resolved.full_name
       });
       patchStep(step, resolved);
+      step.position_type_code = positionCode;
+      step.position_name = definition.positionName;
       changed = true;
-      lastPatched = resolved;
-      await writeAudit(auditAction, "clearance_claims", row.id, actorId, before, { approver_id: resolved.id, approver_name: resolved.full_name });
+      if (pendingNow.has(idx)) currentPatched = resolved;
+      await writeAudit(auditAction, "clearance_claims", row.id, actorId, before, { approver_id: resolved.id, approver_name: resolved.full_name, position_type: positionCode });
     }
 
     if (!changed) continue;
@@ -314,14 +339,14 @@ async function reassignClaims(
 
     await query(`UPDATE clearance_claims SET approval_chain=$1, updated_at=now() WHERE id=$2`, [JSON.stringify(chain), row.id]);
 
-    if (lastPatched) {
+    if (currentPatched) {
       void notifyClaimTask({
         claimId: row.id,
         status: chainStepStatusForNotify(chain, stepIdx),
         claimantName: null,
         department: row.claimant_department,
         claimTotal: 0,
-        nextApprover: { id: lastPatched.id, name: lastPatched.full_name, email: lastPatched.email, title: lastPatched.title },
+        nextApprover: { id: currentPatched.id, name: currentPatched.full_name, email: currentPatched.email, title: currentPatched.title },
         stepOrder: stepIdx
       });
     }

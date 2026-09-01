@@ -666,12 +666,21 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         if (a.status === "DRAFT") {
           if (!isAdmin && !isOwner) continue;
         } else {
-          // For non-DRAFT accommodation records, check additional access rules
-          if (!canAct && !captureViewOnly && !isOwner) {
-            const chain = (a.approval_chain ?? []) as ChainStep[];
-            const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
-            const chainEligible = captureStep ? await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId) : false;
-            if (!chainEligible) continue;
+          // For non-DRAFT accommodation records, require a real workflow gate
+          // before read-only capture visibility kicks in. A general capture
+          // grant is not permission to see the booking before the linked
+          // advance's capture step has actually been reached, especially for
+          // HR Operations users who should not see an accommodation record in
+          // their portal while it is still pending approval.
+          const chain = (a.approval_chain ?? []) as ChainStep[];
+          const captureStep = chain.find((s) => isCaptureActionType(s.action_type));
+          const group = getPendingGroup(chain, Number(a.workflow_step_order ?? 0));
+          const maxReachedIdx = group.indices.length ? Math.max(...group.indices) : chain.length - 1;
+          const captureStepReached = captureStep ? (captureStep.approved || chain.indexOf(captureStep) <= maxReachedIdx) : false;
+          const chainEligible = captureStep ? await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId) : false;
+
+          if (!canAct && !isOwner && !(chainEligible || (captureViewOnly && captureStepReached))) {
+            continue;
           }
         }
 
