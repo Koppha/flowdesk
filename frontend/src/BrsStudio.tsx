@@ -332,46 +332,60 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
               </div>
             </div>
             <div className="ep-panel-body">
-              <div className="ep-form-group" style={{ maxWidth: 620 }}>
-                <label>Title</label>
-                <input className="ep-form-input" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="e.g. Complimentary Gift: Birthday and Anniversary" autoFocus />
-              </div>
-              <div className="ep-form-row" style={{ maxWidth: 620 }}>
-                <div className="ep-form-group">
-                  <label>Requesting department</label>
-                  <select className="ep-form-select" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)}>
-                    <option value="">Select…</option>
-                    {departments.map((d) => <option key={d} value={d}>{d}</option>)}
-                  </select>
+              <div className="brs-new-form-layout">
+                <div className="brs-new-form-main">
+                  <div className="ep-form-group">
+                    <label>Title</label>
+                    <input className="ep-form-input" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="e.g. Complimentary Gift: Birthday and Anniversary" autoFocus />
+                  </div>
+                  <div className="ep-form-row-3">
+                    <div className="ep-form-group">
+                      <label>Requesting department</label>
+                      <select className="ep-form-select" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)}>
+                        <option value="">Select…</option>
+                        {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </div>
+                    <div className="ep-form-group">
+                      <label>Product owner</label>
+                      <input className="ep-form-input" value={newOwner} onChange={(e) => setNewOwner(e.target.value)} placeholder="Who owns this on the business side" />
+                    </div>
+                    <div className="ep-form-group">
+                      <label>Target launch quarter</label>
+                      <select className="ep-form-select" value={newQuarter} onChange={(e) => setNewQuarter(e.target.value)}>
+                        <option value="">Select…</option>
+                        {quarterOptions.map((q) => <option key={q} value={q}>{q}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="ep-form-group" style={{ maxWidth: 280 }}>
+                    <label>Programme type</label>
+                    <select className="ep-form-select" value={newProgrammeType} onChange={(e) => setNewProgrammeType(e.target.value)}>
+                      <option value="Ongoing / permanent">Ongoing / permanent</option>
+                      <option value="Time-bound campaign">Time-bound campaign</option>
+                    </select>
+                  </div>
+                  <div className="ep-form-group">
+                    <label>Business justification</label>
+                    <RichTextField value={newJustification} onChange={setNewJustification} placeholder="Why this is worth building, backed by whatever numbers you have…" />
+                  </div>
+                  <button className="ep-btn" style={{ marginTop: 4 }} disabled={creating || !defaultTypeId || !newTitle.trim()} onClick={handleCreate}>
+                    {creating ? "Opening…" : "Open BRS →"}
+                  </button>
                 </div>
-                <div className="ep-form-group">
-                  <label>Product owner</label>
-                  <input className="ep-form-input" value={newOwner} onChange={(e) => setNewOwner(e.target.value)} placeholder="Who owns this on the business side" />
-                </div>
+                <aside className="brs-new-form-aside">
+                  <div className="brs-new-form-aside-title">How a BRS moves</div>
+                  {STAGES.map((s, i) => (
+                    <div className="brs-new-form-aside-step" key={s.key}>
+                      <span className={`brs-new-form-aside-dot ${i === 0 ? "current" : ""}`}>{i + 1}</span>
+                      <div>
+                        <div className="brs-new-form-aside-step-label">{s.label}</div>
+                        {i === 0 && <div className="brs-new-form-aside-step-hint">You're here — this form opens the Draft.</div>}
+                      </div>
+                    </div>
+                  ))}
+                </aside>
               </div>
-              <div className="ep-form-row" style={{ maxWidth: 620 }}>
-                <div className="ep-form-group">
-                  <label>Target launch quarter</label>
-                  <select className="ep-form-select" value={newQuarter} onChange={(e) => setNewQuarter(e.target.value)}>
-                    <option value="">Select…</option>
-                    {quarterOptions.map((q) => <option key={q} value={q}>{q}</option>)}
-                  </select>
-                </div>
-                <div className="ep-form-group">
-                  <label>Programme type</label>
-                  <select className="ep-form-select" value={newProgrammeType} onChange={(e) => setNewProgrammeType(e.target.value)}>
-                    <option value="Ongoing / permanent">Ongoing / permanent</option>
-                    <option value="Time-bound campaign">Time-bound campaign</option>
-                  </select>
-                </div>
-              </div>
-              <div className="ep-form-group" style={{ maxWidth: 620 }}>
-                <label>Business justification</label>
-                <RichTextField value={newJustification} onChange={setNewJustification} placeholder="Why this is worth building, backed by whatever numbers you have…" />
-              </div>
-              <button className="ep-btn" style={{ marginTop: 4 }} disabled={creating || !defaultTypeId || !newTitle.trim()} onClick={handleCreate}>
-                {creating ? "Opening…" : "Open BRS →"}
-              </button>
             </div>
           </div>
         )}
