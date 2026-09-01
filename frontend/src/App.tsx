@@ -3526,7 +3526,7 @@ export default function App() {
 
       if (submitAfterSave) {
         await api.submitClaim(claimId!);
-        if (!silent) alert("Clearance submitted successfully.");
+        if (!silent) void Swal.fire({ icon: "success", title: "Clearance Submitted", text: "Your clearance has been submitted for approval.", timer: 1800, showConfirmButton: false });
         resetClearanceForm();
         if (refreshAfterSave) await refresh();
         setPage("MY_CLEARANCES");
@@ -3534,7 +3534,7 @@ export default function App() {
       }
 
       if (refreshAfterSave) await refresh();
-      if (!silent) alert("Clearance draft saved.");
+      if (!silent) void Swal.fire({ icon: "success", title: "Draft Saved", timer: 1200, showConfirmButton: false });
       return claimId;
     } catch (e: any) {
       alert("Error saving clearance: " + e.message);

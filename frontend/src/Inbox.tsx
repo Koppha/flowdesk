@@ -1609,7 +1609,11 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     void act(() => api.approveAdvance(item.id, approvedTotal, comments));
   }
 
-  function handleCreateAccommodation() {
+  // Doesn't use the generic act() helper because that closes this modal
+  // (via onDone) the instant the request succeeds - same reasoning as
+  // handleMarkAdvancePaid below - so the success toast never had a chance
+  // to render before the component unmounted.
+  async function handleCreateAccommodation() {
     if (!accommodationEntries.length) {
       setError("Accommodation location is required.");
       return;
@@ -1629,7 +1633,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       }
     }
 
-    void act(async () => {
+    setBusy(true);
+    setError(null);
+    try {
       // Each destination gets its own draft accommodation request. Only the
       // last one is sent to finance, which advances the advance's workflow
       // step once for the whole batch (and the backend marks any remaining
@@ -1653,7 +1659,13 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
         lastId = createResp.id;
       }
       if (lastId) await api.sendAccommodationToFinance(lastId);
-    });
+      await Swal.fire({ icon: "success", title: "Accommodation Booked", text: "Sent to Finance for payment.", timer: 1800, showConfirmButton: false });
+      await props.onDone();
+    } catch (e: any) {
+      setError(String(e.message));
+    } finally {
+      setBusy(false);
+    }
   }
 
   const referenceCode = `${item.doc_type === "CLAIM" ? "CLR" : item.doc_type === "ACCOMMODATION" ? "ACC" : "ADV"}-${item.id.slice(0, 8).toUpperCase()}`;
