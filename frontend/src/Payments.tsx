@@ -6,6 +6,7 @@ import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
 interface PaymentItem {
+  doc_type: "ADVANCE" | "ACCOMMODATION";
   id: string;
   status: string;
   payment_status: "PENDING" | "PAID";
@@ -29,7 +30,8 @@ function requestNumber(item: PaymentItem) {
   const year = Number.isNaN(created.getTime()) ? new Date().getFullYear() : created.getFullYear();
   const digits = String(item.id || "").replace(/\D/g, "").slice(-5);
   const fallback = String(item.id || "00000").replace(/-/g, "").slice(0, 5).toUpperCase();
-  return `ADV-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
+  const prefix = item.doc_type === "ACCOMMODATION" ? "ACC" : "ADV";
+  return `${prefix}-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
 }
 
 function fmtDate(s: string | null | undefined) {
@@ -53,15 +55,17 @@ export default function Payments(props: { onBack?: () => void }) {
   const me = getUserFromToken();
   const isAdmin = me?.role === "ADMIN";
   // Viewing Payments can be granted to any group (e.g. HR Operations, for
-  // visibility only); actually marking something paid stays restricted to
-  // Finance dept, mirrored server-side in the mark-paid workflow-step check.
-  const canMarkPaid = isFinanceDeptClient(me?.department || "");
+  // visibility only); advance payment actions remain Finance-only. Admin is
+  // additionally authorized for accommodation payment actions server-side.
+  const isFinancePaymentActor = isFinanceDeptClient(me?.department || "");
+  const canProcessPayment = (item: PaymentItem) => isFinancePaymentActor || (isAdmin && item.doc_type === "ACCOMMODATION");
 
   const [items, setItems] = useState<PaymentItem[]>([]);
   const [tab, setTab] = useState<"pending" | "paid">("pending");
   // Company/division filter (MNO / SEFS / HigherLife) - lets Finance work
   // one company's payment queue at a time, same as the Capture Inbox tabs.
   const [divisionFilter, setDivisionFilter] = useState<"ALL" | "MNO" | "SEFS" | "HigherLife">("ALL");
+  const [documentFilter, setDocumentFilter] = useState<"ALL" | "ADVANCE" | "ACCOMMODATION">("ALL");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<PaymentItem | null>(null);
@@ -110,24 +114,35 @@ export default function Payments(props: { onBack?: () => void }) {
     [items, divisionFilter]
   );
 
-  const stats = useMemo(() => ({
-    pending: companyFiltered.filter((i) => i.payment_status === "PENDING").length,
-    pendingValueByCurrency: valueByCurrency(companyFiltered.filter((i) => i.payment_status === "PENDING")),
-    paid: companyFiltered.filter((i) => i.payment_status === "PAID").length,
-    paidValueByCurrency: valueByCurrency(companyFiltered.filter((i) => i.payment_status === "PAID"))
+  const documentCounts = useMemo(() => ({
+    ADVANCE: companyFiltered.filter((i) => i.doc_type === "ADVANCE").length,
+    ACCOMMODATION: companyFiltered.filter((i) => i.doc_type === "ACCOMMODATION").length
   }), [companyFiltered]);
 
+  const documentFiltered = useMemo(
+    () => documentFilter === "ALL" ? companyFiltered : companyFiltered.filter((i) => i.doc_type === documentFilter),
+    [companyFiltered, documentFilter]
+  );
+
+  const stats = useMemo(() => ({
+    pending: documentFiltered.filter((i) => i.payment_status === "PENDING").length,
+    pendingValueByCurrency: valueByCurrency(documentFiltered.filter((i) => i.payment_status === "PENDING")),
+    paid: documentFiltered.filter((i) => i.payment_status === "PAID").length,
+    paidValueByCurrency: valueByCurrency(documentFiltered.filter((i) => i.payment_status === "PAID"))
+  }), [documentFiltered]);
+
   const filtered = useMemo(() => {
-    const byTab = companyFiltered.filter((i) => i.payment_status === tab.toUpperCase());
+    const byTab = documentFiltered.filter((i) => i.payment_status === tab.toUpperCase());
     if (!search.trim()) return byTab;
     const q = search.toLowerCase();
     return byTab.filter((i) =>
       requestNumber(i).toLowerCase().includes(q) ||
       (i.requester_name || "").toLowerCase().includes(q) ||
+      (i.purpose || "").toLowerCase().includes(q) ||
       (i.department || "").toLowerCase().includes(q) ||
       (i.paid_reference || "").toLowerCase().includes(q)
     );
-  }, [companyFiltered, tab, search]);
+  }, [documentFiltered, tab, search]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -137,7 +152,8 @@ export default function Payments(props: { onBack?: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await api.markAdvancePaid(item.id);
+      if (item.doc_type === "ACCOMMODATION") await api.markAccommodationPaid(item.id);
+      else await api.markAdvancePaid(item.id);
       await refresh();
       setSelected(null);
     } catch (e: any) {
@@ -155,7 +171,8 @@ export default function Payments(props: { onBack?: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await api.rejectAdvance(item.id, declineReason.trim());
+      if (item.doc_type === "ACCOMMODATION") await api.rejectAccommodation(item.id, declineReason.trim());
+      else await api.rejectAdvance(item.id, declineReason.trim());
       await refresh();
       setSelected(null);
       setDeclineReason("");
@@ -172,7 +189,7 @@ export default function Payments(props: { onBack?: () => void }) {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Payments</h1>
-          <p className="ep-subtitle">Advance requests awaiting payment, and payment history.</p>
+          <p className="ep-subtitle">Advance and accommodation requests awaiting payment, and payment history.</p>
         </div>
         <div className="ep-actions">
           {props.onBack && (
@@ -233,11 +250,31 @@ export default function Payments(props: { onBack?: () => void }) {
         </button>
       </div>
 
+      <div className="ep-tabs" style={{ marginTop: 8 }}>
+        {([
+          { key: "ALL", label: "All Documents" },
+          { key: "ADVANCE", label: "Advance" },
+          { key: "ACCOMMODATION", label: "Accommodation" }
+        ] as const).map((document) => (
+          <button
+            key={document.key}
+            type="button"
+            className={`ep-tab ${documentFilter === document.key ? "active" : ""}`}
+            onClick={() => { setDocumentFilter(document.key); setPage(1); }}
+          >
+            {document.label}
+            <span className="inbox-count-chip">
+              {document.key === "ALL" ? companyFiltered.length : documentCounts[document.key]}
+            </span>
+          </button>
+        ))}
+      </div>
+
       <div className="ep-panel" style={{ marginBottom: 14 }}>
         <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 220px" }}>
             <Search size={14} />
-            <input placeholder="Search by payee, department, reference…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+            <input placeholder="Search by payee, accommodation, department, reference…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
           </div>
         </div>
       </div>
@@ -250,6 +287,7 @@ export default function Payments(props: { onBack?: () => void }) {
             <table className="ep-table">
               <thead>
                 <tr>
+                  <th>Document</th>
                   <th>Payment Reference</th>
                   <th>Request No.</th>
                   <th>Payee</th>
@@ -262,6 +300,7 @@ export default function Payments(props: { onBack?: () => void }) {
               <tbody>
                 {paged.map((item) => (
                   <tr key={item.id} style={{ cursor: "pointer" }} onClick={() => { setSelected(item); setDeclining(false); setDeclineReason(""); }}>
+                    <td>{item.doc_type === "ACCOMMODATION" ? "Accommodation" : "Advance"}</td>
                     <td>{item.paid_reference || "—"}</td>
                     <td>{requestNumber(item)}</td>
                     <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.requester_name || "—"}</td>
@@ -315,6 +354,7 @@ export default function Payments(props: { onBack?: () => void }) {
 
             <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10 }}>
               <DetailRow label="Payee" value={selected.requester_name || "—"} />
+              <DetailRow label="Document" value={selected.doc_type === "ACCOMMODATION" ? "Accommodation" : "Advance"} />
               <DetailRow label="Department" value={selected.department || "—"} />
               <DetailRow label="Amount" value={formatMoney(selected.approved_total || selected.requested_total, selected.currency)} />
               <DetailRow label="Request No." value={requestNumber(selected)} />
@@ -328,7 +368,7 @@ export default function Payments(props: { onBack?: () => void }) {
                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Attachments</div>
                 <div
                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid var(--border,#e5e7eb)", borderRadius: 8, cursor: "pointer" }}
-                  onClick={() => openBlobInNewTab(() => api.advancePdf(selected.id)).catch((e: any) => setError(e?.message || "Failed to open PDF."))}
+                  onClick={() => openBlobInNewTab(() => selected.doc_type === "ACCOMMODATION" ? api.accommodationPdf(selected.id) : api.advancePdf(selected.id)).catch((e: any) => setError(e?.message || "Failed to open PDF."))}
                 >
                   <FileText size={18} />
                   <span style={{ fontSize: 13 }}>{selected.pdf_filename}</span>
@@ -336,7 +376,7 @@ export default function Payments(props: { onBack?: () => void }) {
               </div>
             </div>
 
-            {selected.payment_status === "PENDING" && !isAdmin && canMarkPaid && declining && (
+            {selected.payment_status === "PENDING" && canProcessPayment(selected) && declining && (
               <div style={{ padding: "0 20px 14px" }}>
                 <textarea
                   className="ep-form-select"
@@ -349,7 +389,7 @@ export default function Payments(props: { onBack?: () => void }) {
             )}
 
             <div style={{ padding: "0 20px 20px", marginTop: "auto", display: "flex", gap: 8 }}>
-              {selected.payment_status === "PENDING" && !isAdmin && canMarkPaid && (
+              {selected.payment_status === "PENDING" && canProcessPayment(selected) && (
                 declining ? (
                   <>
                     <button className="button button-danger" disabled={busy} onClick={() => handleDecline(selected)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>

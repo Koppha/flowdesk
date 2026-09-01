@@ -724,8 +724,9 @@ advancesRouter.get("/payments/access", async (req: AuthedRequest, res, next) => 
 advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
   try {
     const role = req.user!.role;
+    const isCentralFinance = await isCompensationFinanceUser(req);
     const allowed = (await hasFeatureAccess(req.user!.userId, role, "payments", ["ADMIN", "Department: Finance"]))
-      || (await isCompensationFinanceUser(req));
+      || isCentralFinance;
     if (!allowed) throw forbidden();
     // Non-admin viewers only work their own company's queue - see
     // getViewerDivisionScope for the MNO/HigherLife pairing.
@@ -777,6 +778,7 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
       }
 
       classified.push({
+        doc_type: "ADVANCE",
         id: a.id,
         status: a.status,
         payment_status: paymentStatus,
@@ -795,6 +797,53 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
         pdf_filename: buildAdvancePdfFilename(a.requester_name, a.requester_employee_no, a.sequence_no)
       });
     }
+
+    // Accommodation bookings have their own SUBMITTED -> PAID lifecycle and
+    // payment endpoint, so include them as first-class payment documents.
+    // Admin and central Treasury can see every company; other explicitly
+    // granted Payments viewers retain Accommodation's owner-only visibility.
+    const accommodationRows = await query<any>(
+      `SELECT acc.id, acc.status, acc.amount, acc.location, acc.provider,
+              acc.created_at, acc.paid_at, acc.paid_reference,
+              acc.created_by_id, acc.requester_id,
+              requester.full_name AS requester_name, requester.department,
+              dv.name AS division, COALESCE(tt.currency, 'LSL') AS currency
+         FROM accommodation_requests acc
+         JOIN users requester ON requester.id = acc.requester_id
+         JOIN advance_requests ar ON ar.id = acc.advance_request_id
+         LEFT JOIN travel_types tt ON tt.code = ar.type
+         LEFT JOIN divisions dv ON dv.id = requester.division_id
+        WHERE acc.status IN ('SUBMITTED','PAID')
+        ORDER BY acc.created_at DESC`
+    );
+
+    for (const a of accommodationRows) {
+      const canSeeAllAccommodation = role === "ADMIN" || isCentralFinance;
+      const isOwner = a.created_by_id === req.user!.userId || a.requester_id === req.user!.userId;
+      if (!canSeeAllAccommodation && !isOwner) continue;
+
+      classified.push({
+        doc_type: "ACCOMMODATION",
+        id: a.id,
+        status: a.status,
+        payment_status: a.status === "PAID" ? "PAID" : "PENDING",
+        type: "ACCOMMODATION",
+        currency: a.currency,
+        requested_total: Number(a.amount),
+        approved_total: Number(a.amount),
+        purpose: [a.location, a.provider].filter(Boolean).join(" - ") || "Accommodation booking",
+        requester_name: a.requester_name,
+        department: a.department,
+        division: a.division ?? null,
+        created_at: a.created_at,
+        paid_at: a.paid_at,
+        paid_reference: a.paid_reference,
+        approved_by_name: null,
+        pdf_filename: `accommodation-${a.id}.pdf`
+      });
+    }
+
+    classified.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     const filtered = statusParam === "all" ? classified : classified.filter((r) => r.payment_status === statusParam.toUpperCase());
     const total = filtered.length;

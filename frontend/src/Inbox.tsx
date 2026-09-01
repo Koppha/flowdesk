@@ -1357,8 +1357,8 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     (isWorkflowDriven
       ? isMyWorkflowStep && isAccommodationStep
       : (role === "MANAGER" && ["HR_OFFICER", "APPROVED"].includes(item.status)));
-  const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
-  const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && isFinanceDept && item.status === "SUBMITTED";
+  const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && (role === "ADMIN" || isFinanceDept) && item.status === "SUBMITTED";
+  const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && (role === "ADMIN" || isFinanceDept) && item.status === "SUBMITTED";
   const canConfirmNotCleared =
     item.doc_type === "ADVANCE" &&
     (role === "ADMIN" || isFinanceDept) &&
