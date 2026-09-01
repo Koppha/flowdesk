@@ -735,6 +735,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             workflow_step_order: c.workflow_step_order,
             current_step_approver_id: matched.approver_id,
             current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
+            current_step_action_type: matched.action_type,
             current_step_actionable_by_me: true,
             is_delegated: !!delegatedFromId,
             delegated_from_manager_name: delegatedFromId ? delegatingManagerNames.get(delegatedFromId) ?? null : null
@@ -772,6 +773,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_position_name: group.indices.includes(chain.indexOf(participantStep!))
             ? group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + ")
             : participantStep?.position_name ?? "",
+          current_step_action_type: participantStep?.action_type ?? null,
           current_step_actionable_by_me: false
         });
       }
@@ -860,6 +862,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           workflow_step_order: c.workflow_step_order,
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
           current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
+          current_step_action_type: group.steps[0]?.action_type ?? null,
           current_step_actionable_by_me: true
         });
       }
