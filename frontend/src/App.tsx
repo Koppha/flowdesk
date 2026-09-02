@@ -939,12 +939,9 @@ export default function App() {
   const [clearanceTrips, setClearanceTrips] = useState<ClearanceTripRow[]>([emptyClearanceTripRow()]);
   const [clearanceReceipts, setClearanceReceipts] = useState<any[]>([]);
   const [clearanceSourceLines, setClearanceSourceLines] = useState<any[]>([]);
-  const [clearanceSettlementMethod, setClearanceSettlementMethod] = useState("");
-  const [clearanceSettlementEcocashNumber, setClearanceSettlementEcocashNumber] = useState("");
-  const [clearanceSettlementBankName, setClearanceSettlementBankName] = useState("");
-  const [clearanceSettlementBankAccountNumber, setClearanceSettlementBankAccountNumber] = useState("");
-  const [clearanceSettlementBankBranch, setClearanceSettlementBankBranch] = useState("");
   const [clearanceReasonForOverspend, setClearanceReasonForOverspend] = useState("");
+  const [clearanceExtraCostAmount, setClearanceExtraCostAmount] = useState("");
+  const [clearanceExtraCostDescription, setClearanceExtraCostDescription] = useState("");
 
   function emptyTravelRow(date?: string, startDistrict = ""): TravelRow {
     return {
@@ -1082,6 +1079,7 @@ export default function App() {
   // Actual expenditure is captured per trip line by the employee (Meals /
   // Transport / Other) so it can exceed the advance — the variance against the
   // advance drives the overspend / underspend settlement below.
+  const clearanceExtraCost = Number(clearanceExtraCostAmount) || 0;
   const clearanceTotals = clearanceTrips.reduce(
     (acc, trip) => {
       const meals = Number(trip.lunch) || 0;
@@ -1093,7 +1091,7 @@ export default function App() {
       acc.total += meals + transport + other;
       return acc;
     },
-    { meals: 0, transport: 0, other: 0, total: 0 }
+    { meals: 0, transport: 0, other: 0, total: clearanceExtraCost }
   );
   const clearanceBalance = Number((clearanceAdvanceAmount - clearanceTotals.total).toFixed(2));
 
@@ -3337,12 +3335,9 @@ export default function App() {
     setClearanceTrips([emptyClearanceTripRow()]);
     setClearanceReceipts([]);
     setClearanceSourceLines([]);
-    setClearanceSettlementMethod("");
-    setClearanceSettlementEcocashNumber("");
-    setClearanceSettlementBankName("");
-    setClearanceSettlementBankAccountNumber("");
-    setClearanceSettlementBankBranch("");
     setClearanceReasonForOverspend("");
+    setClearanceExtraCostAmount("");
+    setClearanceExtraCostDescription("");
   }
 
   function populateClearanceForm(detail: any) {
@@ -3368,12 +3363,9 @@ export default function App() {
         : [emptyClearanceTripRow()]
     );
     setClearanceReceipts(detail.receipts || []);
-    setClearanceSettlementMethod(detail.settlement_method_requested || "");
-    setClearanceSettlementEcocashNumber(detail.settlement_ecocash_number || "");
-    setClearanceSettlementBankName(detail.settlement_bank_name || "");
-    setClearanceSettlementBankAccountNumber(detail.settlement_bank_account_number || "");
-    setClearanceSettlementBankBranch(detail.settlement_bank_branch || "");
     setClearanceReasonForOverspend(detail.reason_for_overspend || "");
+    setClearanceExtraCostAmount(Number(detail.extra_cost_amount || 0) > 0 ? String(detail.extra_cost_amount) : "");
+    setClearanceExtraCostDescription(detail.extra_cost_description || "");
   }
 
   function updateClearanceTrip(index: number, patch: Partial<ClearanceTripRow>) {
@@ -3400,15 +3392,6 @@ export default function App() {
     const vehicleRegValue = clearanceVehicleReg.trim();
     const vehicleTypeValue = clearanceVehicleType.trim();
     const engineCcValue = clearanceEngineCc.trim();
-    const settlementEcocashValue = clearanceSettlementEcocashNumber.trim();
-    const normalizedSettlementEcocash = settlementEcocashValue.replace(/[\s-]/g, "");
-    const settlementBankNameValue = clearanceSettlementBankName.trim();
-    const settlementBankAccountValue = clearanceSettlementBankAccountNumber.trim();
-    const settlementBankBranchValue = clearanceSettlementBankBranch.trim();
-    const ecocashPattern = /^\+?\d{7,15}$/;
-    const bankNamePattern = /^[A-Za-z0-9 .,&'-]{2,60}$/;
-    const bankAccountPattern = /^[A-Za-z0-9-]{4,34}$/;
-    const branchPattern = /^[A-Za-z0-9 .,'/-]{2,60}$/;
 
     if (!clearanceLinkedAdvanceId) {
       alert("Select the paid travel advance being cleared.");
@@ -3430,46 +3413,6 @@ export default function App() {
       alert("Total actual expenditure must be greater than 0.");
       return null;
     }
-    if (requireSettlementDetails && clearanceBalance !== 0 && !clearanceSettlementMethod) {
-      alert("Please select a settlement method before submitting.");
-      return null;
-    }
-    if (requireSettlementDetails && clearanceSettlementMethod === "ECOCASH") {
-      if (!settlementEcocashValue) {
-        alert("EcoCash number is required for settlement.");
-        return null;
-      }
-      if (!ecocashPattern.test(normalizedSettlementEcocash)) {
-        alert("EcoCash number format is invalid.");
-        return null;
-      }
-    }
-    if (requireSettlementDetails && clearanceSettlementMethod === "BANK") {
-      if (!settlementBankNameValue) {
-        alert("Bank is required for settlement.");
-        return null;
-      }
-      if (!bankNamePattern.test(settlementBankNameValue)) {
-        alert("Bank name format is invalid.");
-        return null;
-      }
-      if (!settlementBankAccountValue) {
-        alert("Bank account number is required for settlement.");
-        return null;
-      }
-      if (!bankAccountPattern.test(settlementBankAccountValue)) {
-        alert("Bank account number format is invalid.");
-        return null;
-      }
-      if (!settlementBankBranchValue) {
-        alert("Bank branch is required for settlement.");
-        return null;
-      }
-      if (!branchPattern.test(settlementBankBranchValue)) {
-        alert("Bank branch format is invalid.");
-        return null;
-      }
-    }
     // Negative balance means actual expenditure exceeded the advance (the
     // company owes the employee) — an explanation is required before submit.
     if (requireSettlementDetails && clearanceBalance < 0 && !clearanceReasonForOverspend.trim()) {
@@ -3486,16 +3429,15 @@ export default function App() {
       engine_cc: engineCcValue || undefined,
       vehicle_rate: clearanceVehicleRate ? Number(clearanceVehicleRate) || 0 : undefined,
       linked_advance_id: clearanceLinkedAdvanceId,
-      settlement_method_requested: clearanceBalance !== 0 ? (clearanceSettlementMethod || undefined) : undefined,
-      settlement_ecocash_number: clearanceBalance !== 0 && clearanceSettlementMethod === "ECOCASH" ? normalizedSettlementEcocash : undefined,
-      settlement_bank_name: clearanceBalance !== 0 && clearanceSettlementMethod === "BANK" ? settlementBankNameValue : undefined,
-      settlement_bank_account_number: clearanceBalance !== 0 && clearanceSettlementMethod === "BANK" ? settlementBankAccountValue : undefined,
-      settlement_bank_branch: clearanceBalance !== 0 && clearanceSettlementMethod === "BANK" ? settlementBankBranchValue : undefined,
       reason_for_overspend: clearanceBalance < 0 ? (clearanceReasonForOverspend.trim() || undefined) : undefined
     };
   }
 
   async function persistClearance(submitAfterSave: boolean, options?: { silent?: boolean; refreshAfterSave?: boolean }) {
+    if (submitAfterSave && clearanceExtraCost > 0 && !clearanceExtraCostDescription.trim()) {
+      alert("Please provide a justification for the extra cost before submitting.");
+      return null;
+    }
     const payload = buildClearancePayload({ requireSettlementDetails: submitAfterSave });
     if (!payload) return null;
     const silent = Boolean(options?.silent);
@@ -3528,7 +3470,9 @@ export default function App() {
           dinner: Number(row.dinner) || 0,
           other_expenses: Number(row.other_expenses) || 0,
           purpose: row.purpose || undefined
-        }))
+        })),
+        extra_cost_amount: clearanceExtraCost,
+        extra_cost_description: clearanceExtraCostDescription.trim() || undefined
       });
 
       if (submitAfterSave) {
@@ -7888,15 +7832,66 @@ export default function App() {
                             );
                           })}
                           <tr>
-                            <td colSpan={3}><b>Totals</b></td>
-                            <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.meals.toFixed(2)}</td>
-                            <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.transport.toFixed(2)}</td>
-                            <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.other.toFixed(2)}</td>
+                            <td colSpan={3}>Itemized Total</td>
+                            <td style={{ textAlign: "right", fontWeight: 600 }}>{clearanceTotals.meals.toFixed(2)}</td>
+                            <td style={{ textAlign: "right", fontWeight: 600 }}>{clearanceTotals.transport.toFixed(2)}</td>
+                            <td style={{ textAlign: "right", fontWeight: 600 }}>{clearanceTotals.other.toFixed(2)}</td>
+                            <td style={{ textAlign: "right", fontWeight: 600 }}>{(clearanceTotals.total - clearanceExtraCost).toFixed(2)}</td>
+                            <td></td>
+                          </tr>
+                          {clearanceExtraCost > 0 && (
+                            <tr>
+                              <td colSpan={6} style={{ textAlign: "right" }}>Extra Cost{clearanceExtraCostDescription.trim() ? ` — ${clearanceExtraCostDescription.trim()}` : ""}</td>
+                              <td style={{ textAlign: "right", fontWeight: 600 }}>{clearanceExtraCost.toFixed(2)}</td>
+                              <td></td>
+                            </tr>
+                          )}
+                          <tr>
+                            <td colSpan={6}><b>Total</b></td>
                             <td style={{ textAlign: "right", fontWeight: 700 }}>{clearanceTotals.total.toFixed(2)}</td>
                             <td></td>
                           </tr>
                         </tbody>
                       </table>
+                    </div>
+                  </div>
+
+                  {/* Extra Cost — a lump-sum spend that doesn't fit any single
+                      day's Meals/Transport/Other line (e.g. a one-off repair
+                      or emergency booking). Added on top of the itemized
+                      total above so it actually reduces what's owed, instead
+                      of just being an unlinked receipt upload no one's
+                      settlement figure ever reflects. */}
+                  <div className="card clearance-section-card">
+                    <div className="clearance-card-header">
+                      <div>
+                        <div style={{ fontWeight: 600, color: "#2563eb" }}>Extra Cost</div>
+                        <div style={{ marginTop: 4, fontSize: 13, color: "var(--muted)" }}>
+                          A one-off cost that isn't tied to a single day above — attach proof under Receipts too.
+                        </div>
+                      </div>
+                    </div>
+                    <div className="form-row" style={{ marginTop: 12 }}>
+                      <div className="form-field">
+                        <label>Amount</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={clearanceExtraCostAmount}
+                          onChange={(e) => setClearanceExtraCostAmount(e.target.value)}
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="form-field" style={{ flex: 2 }}>
+                        <label>Justification{clearanceExtraCost > 0 ? " *" : ""}</label>
+                        <input
+                          type="text"
+                          value={clearanceExtraCostDescription}
+                          onChange={(e) => setClearanceExtraCostDescription(e.target.value)}
+                          placeholder="What is this extra cost for?"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -7978,71 +7973,6 @@ export default function App() {
                 <div className="card clearance-settlement-card">
                   <div className="clearance-settlement-title">Settlement Details</div>
 
-                  <div className="form-field">
-                    <label>Settlement Method {clearanceBalance !== 0 && <span style={{ color: "#dc2626" }}>*</span>}</label>
-                    <div className="clearance-method-options">
-                      {(["PAYROLL", "ECOCASH", "BANK"] as const).map((method) => (
-                        <label key={method} className="clearance-radio-option">
-                          <input
-                            type="radio"
-                            name="clearance-settlement-method"
-                            checked={clearanceSettlementMethod === method}
-                            onChange={() => setClearanceSettlementMethod(method)}
-                          />
-                          {method === "PAYROLL" ? "Payroll" : method === "ECOCASH" ? "ECOCASH" : "Bank Transfer"}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  {clearanceSettlementMethod === "ECOCASH" && (
-                    <div className="form-field" style={{ marginTop: 16 }}>
-                      <label>EcoCash Number <span style={{ color: "#dc2626" }}>*</span></label>
-                      <input
-                        type="text"
-                        required
-                        value={clearanceSettlementEcocashNumber}
-                        onChange={(e) => setClearanceSettlementEcocashNumber(e.target.value)}
-                        placeholder="EcoCash number"
-                      />
-                    </div>
-                  )}
-
-                  {clearanceSettlementMethod === "BANK" && (
-                    <div className="clearance-bank-fields">
-                      <div className="form-field">
-                        <label>Bank <span style={{ color: "#dc2626" }}>*</span></label>
-                        <input
-                          type="text"
-                          required
-                          value={clearanceSettlementBankName}
-                          onChange={(e) => setClearanceSettlementBankName(e.target.value)}
-                          placeholder="Bank name"
-                        />
-                      </div>
-                      <div className="form-field">
-                        <label>Account Number <span style={{ color: "#dc2626" }}>*</span></label>
-                        <input
-                          type="text"
-                          required
-                          value={clearanceSettlementBankAccountNumber}
-                          onChange={(e) => setClearanceSettlementBankAccountNumber(e.target.value)}
-                          placeholder="Bank account number"
-                        />
-                      </div>
-                      <div className="form-field">
-                        <label>Branch <span style={{ color: "#dc2626" }}>*</span></label>
-                        <input
-                          type="text"
-                          required
-                          value={clearanceSettlementBankBranch}
-                          onChange={(e) => setClearanceSettlementBankBranch(e.target.value)}
-                          placeholder="Branch"
-                        />
-                      </div>
-                    </div>
-                  )}
-
                   {clearanceBalance < 0 && (
                     <div className="form-field" style={{ marginTop: 16 }}>
                       <label>Reason for Overspend <span style={{ color: "#dc2626" }}>*</span></label>
@@ -8062,7 +7992,7 @@ export default function App() {
                       <strong>Important</strong>
                       <div style={{ marginTop: 2 }}>
                         {clearanceBalance < 0
-                          ? "Negative variance means the company owes you. Please ensure all receipts are attached."
+                          ? "Negative variance means the company owes you. You'll be refunded via the same method you chose when requesting the advance - please ensure all receipts are attached."
                           : clearanceBalance > 0
                             ? "Positive variance means you owe the company. If you've already returned the balance, attach proof under Receipts above - otherwise this amount will be deducted from your salary."
                             : "This clearance is fully balanced. Attach any supporting documents needed for reconciliation."}

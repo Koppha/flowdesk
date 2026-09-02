@@ -1831,13 +1831,25 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       </tbody>
                       {(detail.trips || []).length > 0 && (
                         <tfoot>
-                          <tr className="review-table-totals-row">
-                            <td colSpan={2}>Total</td>
+                          <tr>
+                            <td colSpan={2}>{Number(detail.extra_cost_amount || 0) > 0 ? "Itemized Total" : "Total"}</td>
                             <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0), 0), detail.currency)}</td>
                             <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.petrol_allowance || 0), 0), detail.currency)}</td>
                             <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.other_expenses || 0), 0), detail.currency)}</td>
                             <td>{fmt((detail.trips || []).reduce((sum: number, t: any) => sum + Number(t.line_total || 0), 0), detail.currency)}</td>
                           </tr>
+                          {Number(detail.extra_cost_amount || 0) > 0 && (
+                            <>
+                              <tr>
+                                <td colSpan={5}>Extra Cost{detail.extra_cost_description ? ` — ${detail.extra_cost_description}` : ""}</td>
+                                <td>{fmt(detail.extra_cost_amount, detail.currency)}</td>
+                              </tr>
+                              <tr className="review-table-totals-row">
+                                <td colSpan={5}><b>Total</b></td>
+                                <td>{fmt(Number(detail.claim_total || 0), detail.currency)}</td>
+                              </tr>
+                            </>
+                          )}
                         </tfoot>
                       )}
                     </table>

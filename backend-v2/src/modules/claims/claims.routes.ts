@@ -561,8 +561,8 @@ claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
 claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
   try {
     await assertUserCanRequest(req.user!.userId);
-    const claim = (await query<{ claimant_id: string; status: ClaimStatus; claim_total: string }>(
-      `SELECT claimant_id, status, claim_total FROM clearance_claims WHERE id=$1`,
+    const claim = (await query<{ claimant_id: string; status: ClaimStatus; claim_total: string; extra_cost_amount: string }>(
+      `SELECT claimant_id, status, claim_total, extra_cost_amount FROM clearance_claims WHERE id=$1`,
       [req.params.id]
     ))[0];
     if (!claim) throw notFound();
@@ -603,6 +603,9 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
       await query(`DELETE FROM claim_trips WHERE clearance_claim_id=$1`, [req.params.id]);
     }
 
+    // Preserve any extra cost already recorded via PUT /:id/trips - changing
+    // the linked advance here shouldn't silently drop it from the total.
+    claimTotal = Number((claimTotal + Number(claim.extra_cost_amount || 0)).toFixed(2));
     const balanceAmount = Number((advanceAmount - claimTotal).toFixed(2));
     await query(
       `UPDATE clearance_claims
@@ -623,6 +626,7 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
               settlement_bank_account_number=$16,
               settlement_bank_branch=$17,
               reason_for_overspend=$18,
+              claim_total=$19,
               updated_at=now()
         WHERE id=$1`,
       [
@@ -643,7 +647,8 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         parsed.data.settlement_bank_name ?? null,
         parsed.data.settlement_bank_account_number ?? null,
         parsed.data.settlement_bank_branch ?? null,
-        parsed.data.reason_for_overspend ?? null
+        parsed.data.reason_for_overspend ?? null,
+        claimTotal
       ]
     );
 
@@ -681,10 +686,15 @@ claimsRouter.put("/:id/trips", async (req: AuthedRequest, res, next) => {
             other_expenses: z.number().nonnegative().default(0),
             purpose: z.string().optional()
           })
-        )
+        ),
+        extra_cost_amount: z.number().nonnegative().default(0),
+        extra_cost_description: z.string().optional()
       })
       .safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    if (parsed.data.extra_cost_amount > 0 && !parsed.data.extra_cost_description?.trim()) {
+      throw badRequest("A justification is required for an extra cost");
+    }
 
     await query(`DELETE FROM claim_trips WHERE clearance_claim_id=$1`, [req.params.id]);
 
@@ -720,20 +730,18 @@ claimsRouter.put("/:id/trips", async (req: AuthedRequest, res, next) => {
       );
     }
 
-    const claimTotal = Number(
-      parsed.data.trips
-        .reduce(
-          (sum, trip) =>
-            sum +
-            (trip.petrol_allowance || 0) +
-            (trip.breakfast || 0) +
-            (trip.lunch || 0) +
-            (trip.dinner || 0) +
-            (trip.other_expenses || 0),
-          0
-        )
-        .toFixed(2)
+    const itemizedTotal = parsed.data.trips.reduce(
+      (sum, trip) =>
+        sum +
+        (trip.petrol_allowance || 0) +
+        (trip.breakfast || 0) +
+        (trip.lunch || 0) +
+        (trip.dinner || 0) +
+        (trip.other_expenses || 0),
+      0
     );
+    const extraCostAmount = parsed.data.extra_cost_amount;
+    const claimTotal = Number((itemizedTotal + extraCostAmount).toFixed(2));
     const advanceAmount = Number(claim.advance_amount || 0);
     const balanceAmount = Number((advanceAmount - claimTotal).toFixed(2));
 
@@ -741,9 +749,11 @@ claimsRouter.put("/:id/trips", async (req: AuthedRequest, res, next) => {
       `UPDATE clearance_claims
           SET claim_total=$2,
               balance_amount=$3,
+              extra_cost_amount=$4,
+              extra_cost_description=$5,
               updated_at=now()
         WHERE id=$1`,
-      [req.params.id, claimTotal, balanceAmount]
+      [req.params.id, claimTotal, balanceAmount, extraCostAmount, parsed.data.extra_cost_description?.trim() || null]
     );
 
     return res.json({ ok: true, claim_total: claimTotal, balance_amount: balanceAmount });
