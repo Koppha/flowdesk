@@ -370,6 +370,16 @@ export async function resolveWorkflowChain(params: {
   // requesterManager earlier in this chain - a later dynamic HOD step must
   // not resolve to that same person again (see secondLevelManager below).
   let dynamicManagerAlreadyResolved = false;
+  // The most recently pushed real APPROVE step's approver - lets the next
+  // APPROVE step (regardless of tier: dynamic Manager/HOD, dept EXCO, or a
+  // workflow-fixed pick) skip itself if it resolves to that same person,
+  // rather than asking them to approve the same request twice in a row
+  // (see approvalProgressStages in Inbox.tsx, which already only tracks
+  // APPROVE steps for exactly this reason). Only tracked across APPROVE
+  // steps - a DEPT_CAPTURE/MARK_PAID/DEPT_CLOSE step by the same person
+  // right after their own approval is a distinct real action, not a
+  // repeated decision, so it's left alone.
+  let lastApproveApproverId: string | null = null;
   let secondLevelManager: Awaited<ReturnType<typeof resolveRequesterManager>> | undefined;
   for (const step of steps) {
     const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
@@ -465,6 +475,15 @@ export async function resolveWorkflowChain(params: {
       isDeptHodCode           ? (hodManager?.email ?? null) :
                                 null;
 
+    // Same person, same kind of decision, back to back - not a real second
+    // review. Applies regardless of how each side resolved (dynamic lookup
+    // or a workflow-fixed pick): e.g. a small department with no HOD, whose
+    // Manager-tier fallback and whose EXCO are the same one person.
+    if (step.action_type === "APPROVE" && approverId && approverId === lastApproveApproverId) {
+      previousStepPushed = false;
+      continue;
+    }
+
     // Group steps (ANY_ONE with approval_group_name) are never "unassigned" —
     // they're routed to whoever belongs to the group, not a specific individual.
     const isGroupStep = step.approval_mode === "ANY_ONE" && !!step.approval_group_name;
@@ -521,6 +540,7 @@ export async function resolveWorkflowChain(params: {
       assigned_user_id: assignedUserId
     });
     previousStepPushed = true;
+    if (step.action_type === "APPROVE") lastApproveApproverId = approverId;
   }
 
   return { workflowId: (workflow as any).id, chain };
