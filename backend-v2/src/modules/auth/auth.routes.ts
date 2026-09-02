@@ -1111,7 +1111,8 @@ authRouter.get("/request-directory", async (req: AuthedRequest, res, next) => {
     // used by "submit on behalf of my team" flows (Attendance/Overtime).
     if (req.query.scope === "company") {
       const rows = await query(
-        `SELECT id, full_name, email, employee_no, title, department, employment_type, role, profile_completed
+        `SELECT id, full_name, email, employee_no, title, department, employment_type, role, profile_completed,
+                section_id, division_id
            FROM users
           WHERE is_active = true
           ORDER BY full_name NULLS LAST, email`
