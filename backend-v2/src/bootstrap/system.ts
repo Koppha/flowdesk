@@ -101,6 +101,14 @@ async function ensureUserSchema() {
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_account_number text`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS settlement_bank_branch text`);
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS reason_for_overspend text`);
+  // Mirrors reason_for_overspend for the opposite case: a lump-sum cost the
+  // employee incurred that doesn't fit any single day's Meals/Transport/
+  // Other line (e.g. a one-off repair or emergency booking), added on top
+  // of the itemized trip total so it actually reduces balance_amount -
+  // previously the only way to "prove" this was an unlinked receipt upload
+  // that never fed into the settlement calculation at all.
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS extra_cost_amount numeric(12,2) NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS extra_cost_description text`);
   // Claims have no currency of their own — they must stick with the currency
   // the linked advance was requested in (resolved from travel_types via
   // advance_requests.type), never a hardcoded default.
