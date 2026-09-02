@@ -1,7 +1,19 @@
 import pg from "pg";
 import { env } from "../config/env.js";
 
-const { Pool } = pg;
+const { Pool, types } = pg;
+
+// node-postgres's default DATE parser (OID 1082) builds a JS Date at LOCAL
+// midnight in the server process's own timezone, then every JSON response
+// serializes that Date via toISOString() (UTC) - on this server (Africa/
+// Maseru, +02:00) a stored date of 2026-08-23 round-trips as
+// "2026-08-22T22:00:00.000Z", landing on the 22nd for any client that reads
+// the date portion of that string (e.g. Inbox.tsx's normalizeDateInputValue
+// slicing at "T"). A plain SQL date has no time or timezone component to
+// begin with, so hand it back as the raw "YYYY-MM-DD" string pg already
+// parsed it from - no Date object, no conversion, no drift.
+types.setTypeParser(1082, (value) => value);
+
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
   max: 20,                   // up from default 10 — handles concurrent requests
