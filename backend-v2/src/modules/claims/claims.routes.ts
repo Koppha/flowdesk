@@ -102,8 +102,9 @@ export async function getClaimNotificationContext(claimId: string) {
 }
 
 async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string, excludeClaimId?: string) {
-  const adv = (await query<{ id: string; requester_id: string; type: string; status: string; approved_total: string; currency: string | null }>(
-    `SELECT ar.id, ar.requester_id, ar.type, ar.status, ar.approved_total, tt.currency
+  const adv = (await query<{ id: string; requester_id: string; type: string; status: string; approved_total: string; currency: string | null; extra_cost_amount: string; extra_cost_description: string | null }>(
+    `SELECT ar.id, ar.requester_id, ar.type, ar.status, ar.approved_total, tt.currency,
+            ar.extra_cost_amount, ar.extra_cost_description
        FROM advance_requests ar
        LEFT JOIN travel_types tt ON tt.code = ar.type
       WHERE ar.id=$1`,
@@ -124,7 +125,19 @@ async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string, exc
 
   // A clearance always sticks with the currency the linked advance was
   // requested in — never a separate/default currency.
-  return { approvedTotal: Number(adv.approved_total), currency: adv.currency || "LSL" };
+  return {
+    approvedTotal: Number(adv.approved_total),
+    currency: adv.currency || "LSL",
+    // The advance's own extra cost is already baked into approved_total (and
+    // so into this claim's advance_amount) - carry it over as the claim's
+    // starting extra_cost_amount too, so claim_total accounts for it from
+    // the start instead of the employee needing to notice and re-declare an
+    // amount the company already paid them, which would otherwise show up
+    // as a false "you owe the company" balance for money they were given
+    // and (per what they asked for) already spent.
+    extraCostAmount: Number(adv.extra_cost_amount || 0),
+    extraCostDescription: adv.extra_cost_description || null
+  };
 }
 
 async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: string) {
@@ -350,16 +363,20 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
     let advanceAmount = 0;
     let claimTotal = 0;
     let currency: string | null = null;
+    let extraCostAmount = 0;
+    let extraCostDescription: string | null = null;
     if (parsed.data.linked_advance_id) {
       const linkedAdvance = await getLinkedAdvance(parsed.data.linked_advance_id, req.user!.userId);
       advanceAmount = linkedAdvance.approvedTotal;
       currency = linkedAdvance.currency;
+      extraCostAmount = linkedAdvance.extraCostAmount;
+      extraCostDescription = linkedAdvance.extraCostDescription;
     }
 
     const rows = await query<{ id: string }>(
       `INSERT INTO clearance_claims
-        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount, currency, settlement_method_requested, settlement_ecocash_number, settlement_bank_name, settlement_bank_account_number, settlement_bank_branch, reason_for_overspend)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount, currency, settlement_method_requested, settlement_ecocash_number, settlement_bank_name, settlement_bank_account_number, settlement_bank_branch, reason_for_overspend, extra_cost_amount, extra_cost_description)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        RETURNING id`,
       [
         req.user!.userId,
@@ -380,13 +397,15 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
         parsed.data.settlement_bank_name ?? null,
         parsed.data.settlement_bank_account_number ?? null,
         parsed.data.settlement_bank_branch ?? null,
-        parsed.data.reason_for_overspend ?? null
+        parsed.data.reason_for_overspend ?? null,
+        extraCostAmount,
+        extraCostDescription
       ]
     );
 
     if (parsed.data.linked_advance_id) {
       const synced = await syncClaimTripsFromAdvance(rows[0].id, parsed.data.linked_advance_id);
-      claimTotal = synced.claimTotal;
+      claimTotal = Number((synced.claimTotal + extraCostAmount).toFixed(2));
       await query(
         `UPDATE clearance_claims
             SET claim_total=$2,
