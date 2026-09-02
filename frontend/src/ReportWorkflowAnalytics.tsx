@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { Activity, CheckCircle, GitBranch, RefreshCw, Zap } from "lucide-react";
+import { Activity, CheckCircle, ChevronLeft, ChevronRight, GitBranch, RefreshCw, Zap } from "lucide-react";
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
 interface Workflow {
   id: string;
@@ -46,6 +48,8 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -60,6 +64,10 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setPage(1); }, [workflows]);
+  const pageCount = Math.max(1, Math.ceil(workflows.length / pageSize));
+  useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
+  const pagedWorkflows = useMemo(() => workflows.slice((page - 1) * pageSize, page * pageSize), [workflows, page, pageSize]);
 
   const active   = useMemo(() => workflows.filter(w => w.status === "ACTIVE"), [workflows]);
   const inactive = useMemo(() => workflows.filter(w => w.status !== "ACTIVE"), [workflows]);
@@ -216,7 +224,7 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
                     </tr>
                   </thead>
                   <tbody>
-                    {workflows.map(w => (
+                    {pagedWorkflows.map(w => (
                       <tr key={w.id}>
                         <td style={{ fontWeight: 600 }}>{w.name}</td>
                         <td>{typeChip(w.request_type, w.advance_sub_type)}</td>
@@ -238,6 +246,21 @@ export default function ReportWorkflowAnalytics({ advances, onBack }: Props) {
                 </table>
               )}
             </div>
+            {workflows.length > 0 && (
+              <div className="ep-filter-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
+                <span style={{ fontSize: 13, color: "var(--muted)" }}>
+                  Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, workflows.length)} of {workflows.length} entries
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <select className="ep-form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+                    {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} per page</option>)}
+                  </select>
+                  <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}><ChevronLeft size={14} /></button>
+                  <span style={{ fontSize: 13, color: "var(--muted)", whiteSpace: "nowrap" }}>Page {page} of {pageCount}</span>
+                  <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount}><ChevronRight size={14} /></button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
