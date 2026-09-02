@@ -9654,6 +9654,37 @@ button.ep-kpi { cursor: pointer; }
 .ep-panel-sub   { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
 .ep-panel-body  { padding: 18px; }
 
+/* Treasury report filter bar - each field gets a fixed width so they sit in
+   a row instead of the global input/select {width:100%} reset stretching
+   every one of them onto its own full-width line. */
+.treasury-filter-bar { align-items: flex-end; }
+.treasury-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 160px;
+  flex: 0 0 auto;
+}
+.treasury-filter-field label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.treasury-filter-field .ep-form-input,
+.treasury-filter-field .ep-select { width: 100%; }
+.treasury-filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+@media (max-width: 720px) {
+  .treasury-filter-field { width: 100%; }
+  .treasury-filter-actions { margin-left: 0; width: 100%; }
+}
+
 /* ── Shared table ── */
 .ep-table-wrap  { overflow-x: auto; }
 .ep-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }

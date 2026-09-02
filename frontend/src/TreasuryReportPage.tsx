@@ -74,20 +74,37 @@ export default function TreasuryReportPage(props: {
       {extraSummary && extraSummary(data)}
 
       <div className="ep-panel">
-        <div className="ep-panel-head" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <Filter size={14} />
-          <input className="ep-form-input" type="date" placeholder="From" value={filters.date_from || ""} onChange={(e) => setFilters((f) => ({ ...f, date_from: e.target.value }))} />
-          <input className="ep-form-input" type="date" placeholder="To" value={filters.date_to || ""} onChange={(e) => setFilters((f) => ({ ...f, date_to: e.target.value }))} />
-          <input className="ep-form-input" placeholder="Division" value={filters.division || ""} onChange={(e) => setFilters((f) => ({ ...f, division: e.target.value }))} />
-          <input className="ep-form-input" placeholder="Department" value={filters.department || ""} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))} />
-          <select className="ep-select" value={filters.financial_outcome || ""} onChange={(e) => setFilters((f) => ({ ...f, financial_outcome: e.target.value }))}>
-            <option value="">All outcomes</option>
-            <option value="BALANCED">Balanced</option>
-            <option value="REFUND_DUE">Refund Due</option>
-            <option value="PAYBACK_DUE">Payback Due</option>
-          </select>
-          <button className="ep-btn" onClick={load} disabled={loading}>Apply Filters</button>
-          <button className="ep-btn-outline" onClick={exportCsv} disabled={exporting}><Download size={14} /> Export CSV</button>
+        <div className="ep-panel-head treasury-filter-bar">
+          <Filter size={14} style={{ flexShrink: 0 }} />
+          <div className="treasury-filter-field">
+            <label>From</label>
+            <input className="ep-form-input" type="date" value={filters.date_from || ""} onChange={(e) => setFilters((f) => ({ ...f, date_from: e.target.value }))} />
+          </div>
+          <div className="treasury-filter-field">
+            <label>To</label>
+            <input className="ep-form-input" type="date" value={filters.date_to || ""} onChange={(e) => setFilters((f) => ({ ...f, date_to: e.target.value }))} />
+          </div>
+          <div className="treasury-filter-field">
+            <label>Division</label>
+            <input className="ep-form-input" placeholder="Any division" value={filters.division || ""} onChange={(e) => setFilters((f) => ({ ...f, division: e.target.value }))} />
+          </div>
+          <div className="treasury-filter-field">
+            <label>Department</label>
+            <input className="ep-form-input" placeholder="Any department" value={filters.department || ""} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))} />
+          </div>
+          <div className="treasury-filter-field">
+            <label>Outcome</label>
+            <select className="ep-select" value={filters.financial_outcome || ""} onChange={(e) => setFilters((f) => ({ ...f, financial_outcome: e.target.value }))}>
+              <option value="">All outcomes</option>
+              <option value="BALANCED">Balanced</option>
+              <option value="REFUND_DUE">Refund Due</option>
+              <option value="PAYBACK_DUE">Payback Due</option>
+            </select>
+          </div>
+          <div className="treasury-filter-actions">
+            <button className="ep-btn" onClick={load} disabled={loading}>Apply Filters</button>
+            <button className="ep-btn-outline" onClick={exportCsv} disabled={exporting}><Download size={14} /> Export CSV</button>
+          </div>
         </div>
         <div className="ep-table-wrap">
           {loading ? (
