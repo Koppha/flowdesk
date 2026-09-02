@@ -415,19 +415,13 @@ export async function resolveWorkflowChain(params: {
       hodManager = secondLevelManager;
     }
 
-    // Same collision, but for a step whose approver is a FIXED, single named
-    // pick in the workflow (e.g. a specific HOD hardcoded on this step) —
-    // if that person is also who the earlier dynamic Manager step resolved
-    // to, showing them twice in a row isn't a real second review, so
-    // escalate to their own manager instead of using the fixed pick as-is.
-    // Team/section ANY_ONE group steps are never a single named person, so
-    // they're excluded from this check.
-    const isSingleFixedPick = hasFixedAssignees && step.assigned_user_ids!.length === 1
-      && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
-    let fixedAssigneeEscalation: Awaited<ReturnType<typeof resolveRequesterManager>> | null = null;
-    if (isSingleFixedPick && dynamicManagerAlreadyResolved && requesterManager && step.assigned_user_ids![0] === requesterManager.id) {
-      fixedAssigneeEscalation = await resolveRequesterManager(requesterManager.id);
-    }
+    // A step whose approver is a FIXED, single named pick in the workflow
+    // (e.g. a specific EXCO hardcoded on this step) is a deliberate choice
+    // by whoever built the workflow, not a coincidental repeat - even if an
+    // earlier dynamic step (Manager/HOD) happens to resolve to that same
+    // person (e.g. a small department where the only escalation target for
+    // both tiers is the same GM), the fixed pick is trusted as-is and the
+    // chain doesn't escalate past it looking for a "different" approver.
 
     // Multiple people can be assigned to one step — whoever acts first
     // satisfies it. The other resolution paths (HR leadership, dept EXCO/
@@ -435,7 +429,6 @@ export async function resolveWorkflowChain(params: {
     // person, so they stay single-element arrays.
     const approverIds: string[] =
       override               ? (override.id ? [override.id] : []) :
-      fixedAssigneeEscalation ? (fixedAssigneeEscalation.id ? [fixedAssigneeEscalation.id] : []) :
       hasFixedAssignees      ? step.assigned_user_ids! :
       isHrCode               ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : []) :
       isDeptExcoCode          ? (deptExco?.id ? [deptExco.id] : []) :
@@ -447,7 +440,6 @@ export async function resolveWorkflowChain(params: {
 
     const approverName =
       override               ? override.full_name :
-      fixedAssigneeEscalation ? fixedAssigneeEscalation.full_name :
       hasFixedAssignees      ? approverIds.map((id) => assignedUserMap.get(id)?.full_name || assignedUserMap.get(id)?.email).filter(Boolean).join(", ") || null :
       isHrCode               ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
       isDeptExcoCode          ? (deptExco?.full_name ?? null) :
@@ -457,7 +449,6 @@ export async function resolveWorkflowChain(params: {
 
     const approverTitle =
       override               ? override.title :
-      fixedAssigneeEscalation ? fixedAssigneeEscalation.title :
       hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.title ?? null) :
       isHrCode               ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
       isDeptExcoCode          ? (deptExco?.title ?? null) :
@@ -467,7 +458,6 @@ export async function resolveWorkflowChain(params: {
 
     const approverEmail =
       override               ? override.email :
-      fixedAssigneeEscalation ? fixedAssigneeEscalation.email :
       hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.email ?? null) :
       isHrCode               ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
       isDeptExcoCode          ? (deptExco?.email ?? null) :
@@ -485,7 +475,7 @@ export async function resolveWorkflowChain(params: {
     // Per-person contact details, in the same order as approverIds — the
     // fixed-assignee path can have more than one; every other path resolves
     // to at most one person, reusing the single name/title/email already computed.
-    const approvers = (hasFixedAssignees && !fixedAssigneeEscalation)
+    const approvers = hasFixedAssignees
       ? approverIds.map((id) => ({
           id,
           name: assignedUserMap.get(id)?.full_name ?? null,
