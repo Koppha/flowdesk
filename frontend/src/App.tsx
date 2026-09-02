@@ -2207,8 +2207,15 @@ export default function App() {
   async function loadAdminUsers() {
     setAdminUsersLoading(true);
     try {
+      // Manager Delegations is the only one of this effect's pages a
+      // non-ADMIN ever actually reaches (the others are ADMIN-gated in the
+      // sidebar) - and a manager only needs the company directory to pick
+      // their own delegate, not the full /auth/users user-management list,
+      // which requireUserManagementAccess can restrict to ADMIN-only (see
+      // admin_feature_permissions) - hitting it as a manager 403'd the
+      // whole Promise.all and broke the page for every non-admin.
       const [users, sections, departments, leaders] = await Promise.all([
-        api.adminUsers(),
+        role === "ADMIN" ? api.adminUsers() : api.requestDirectory("company"),
         api.sections(),
         api.departmentsWithSections(),
         api.leadershipUsers()
