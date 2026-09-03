@@ -193,8 +193,15 @@ export async function resolveWorkflowChain(params: {
 
   // TEMPORARY workflows (with a valid date window) take priority over STICKY ones.
   // A workflow restricted to the requester's role (requester_roles) always outranks
-  // an unrestricted one. Within each tier the specificity order is:
-  // dept+section+subtype > dept+subtype > dept+section > dept > global.
+  // an unrestricted one. Below that, precedence is a strict scope hierarchy -
+  // Section > Department > Division > company-wide - the most specific
+  // non-blank scope a workflow declares always wins, with sub-type
+  // specificity (exact match > "TRAVEL" catch-all > unrestricted) only
+  // breaking ties within the same scope tier, never overriding it. Every
+  // candidate here already passed the WHERE clause below, so a workflow
+  // with e.g. w.section set is a real, confirmed match for this requester's
+  // own section, not just present - safe to always prefer over a broader
+  // department/division/company-wide workflow regardless of sub-type.
   //
   // The division filter (w.division) exists to stop a blank-department
   // workflow scoped to one division (e.g. a SEFS-wide travel catch-all) from
@@ -234,31 +241,20 @@ export async function resolveWorkflowChain(params: {
         -- A role-restricted workflow (which already passed the WHERE filter, so it
         -- matches the requester) outranks an unrestricted one.
         CASE WHEN w.requester_roles IS NOT NULL THEN 0 ELSE 1 END,
-        -- A division-scoped workflow outranks a division-blank (fully global) one,
-        -- same idea as department specificity below.
-        CASE WHEN $6 <> '' AND lower(trim(COALESCE(w.division,''))) = lower(trim($6)) THEN 0 ELSE 1 END,
-        -- Then by specificity (most specific wins)
+        -- Scope precedence: Section > Department > Division > company-wide.
         CASE
-          WHEN $4 <> '' AND lower(trim(COALESCE(w.advance_sub_type,''))) = lower(trim($4))
-               AND lower(trim(COALESCE(w.section,''))) = lower(trim($3))
-               AND lower(trim(COALESCE(w.department,''))) = lower(trim($2)) THEN 0
-          WHEN $4 <> '' AND lower(trim(COALESCE(w.advance_sub_type,''))) = lower(trim($4))
-               AND (w.section IS NULL OR trim(w.section) = '')
-               AND lower(trim(COALESCE(w.department,''))) = lower(trim($2)) THEN 1
-          -- "TRAVEL" sub-type matches any non-SALARY/LOAN advance type, ranked just below an exact sub-type match
-          WHEN $4 <> '' AND upper(trim($4)) NOT IN ('SALARY','LOAN') AND lower(trim(COALESCE(w.advance_sub_type,''))) = 'travel'
-               AND lower(trim(COALESCE(w.section,''))) = lower(trim($3))
-               AND lower(trim(COALESCE(w.department,''))) = lower(trim($2)) THEN 2
-          WHEN $4 <> '' AND upper(trim($4)) NOT IN ('SALARY','LOAN') AND lower(trim(COALESCE(w.advance_sub_type,''))) = 'travel'
-               AND (w.section IS NULL OR trim(w.section) = '')
-               AND lower(trim(COALESCE(w.department,''))) = lower(trim($2)) THEN 3
-          WHEN (w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = '')
-               AND lower(trim(COALESCE(w.section,''))) = lower(trim($3))
-               AND lower(trim(COALESCE(w.department,''))) = lower(trim($2)) THEN 4
-          WHEN (w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = '')
-               AND (w.section IS NULL OR trim(w.section) = '')
-               AND lower(trim(COALESCE(w.department,''))) = lower(trim($2)) THEN 5
-          ELSE 6
+          WHEN w.section IS NOT NULL AND trim(w.section) <> '' THEN 0
+          WHEN w.department IS NOT NULL AND trim(w.department) <> '' THEN 1
+          WHEN w.division IS NOT NULL AND trim(w.division) <> '' THEN 2
+          ELSE 3
+        END,
+        -- Within the same scope tier: exact sub-type match > "TRAVEL"
+        -- catch-all (any non-SALARY/LOAN type) > no sub-type restriction.
+        CASE
+          WHEN $4 <> '' AND lower(trim(COALESCE(w.advance_sub_type,''))) = lower(trim($4)) THEN 0
+          WHEN $4 <> '' AND upper(trim($4)) NOT IN ('SALARY','LOAN') AND lower(trim(COALESCE(w.advance_sub_type,''))) = 'travel' THEN 1
+          WHEN w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = '' THEN 2
+          ELSE 3
         END,
         w.updated_at DESC, w.created_at DESC
       LIMIT 1`,
