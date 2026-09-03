@@ -1514,7 +1514,11 @@ export default function App() {
     setPaymentsCount(paymentsResp.total || 0);
     setHasPaymentsAccess(Boolean(paymentsAccessResp?.allowed));
     knownInboxCount.current = inboxItemCount;
-    if (justLoggedIn.current && inboxItemCount > 0) {
+    // getToken() (live, not the closure-captured `token` state) guards
+    // against a session expiring or logging out during the long fetch
+    // above - without this, the reminder could still fire and land on top
+    // of the freshly-rendered login page instead of being suppressed.
+    if (justLoggedIn.current && inboxItemCount > 0 && getToken()) {
       justLoggedIn.current = false;
       void Swal.fire({
         icon: "info",
@@ -2135,6 +2139,12 @@ export default function App() {
   }
 
   async function doLogout() {
+    // A pending "Approval Inbox" reminder (or any other open dialog) is a
+    // plain DOM overlay outside React's tree - it doesn't get torn down
+    // just because the login page re-renders underneath it. Without this,
+    // logging out (or an auth/timeout error auto-logging someone out) while
+    // that reminder was still up left it floating over the login screen.
+    Swal.close();
     clearToken();
     setTok(null);
     setProfile(null);
