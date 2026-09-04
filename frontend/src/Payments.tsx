@@ -128,25 +128,35 @@ export default function Payments(props: { onBack?: () => void }) {
     [companyFiltered, documentFilter]
   );
 
-  const stats = useMemo(() => ({
-    pending: documentFiltered.filter((i) => i.payment_status === "PENDING").length,
-    pendingValueByCurrency: valueByCurrency(documentFiltered.filter((i) => i.payment_status === "PENDING")),
-    paid: documentFiltered.filter((i) => i.payment_status === "PAID").length,
-    paidValueByCurrency: valueByCurrency(documentFiltered.filter((i) => i.payment_status === "PAID"))
-  }), [documentFiltered]);
-
-  const filtered = useMemo(() => {
-    const byTab = documentFiltered.filter((i) => i.payment_status === tab.toUpperCase());
-    if (!search.trim()) return byTab;
+  // The Pending/Paid badges must reflect the search box too - they used to
+  // be computed straight from documentFiltered (company + document type
+  // only), while the table below applied search on top of that. Any
+  // leftover search text (never cleared on switching company/document/tab)
+  // left the badge still showing the true count while the table silently
+  // filtered every row away, with nothing on screen explaining why.
+  const searchFiltered = useMemo(() => {
+    if (!search.trim()) return documentFiltered;
     const q = search.toLowerCase();
-    return byTab.filter((i) =>
+    return documentFiltered.filter((i) =>
       requestNumber(i).toLowerCase().includes(q) ||
       (i.requester_name || "").toLowerCase().includes(q) ||
       (i.purpose || "").toLowerCase().includes(q) ||
       (i.department || "").toLowerCase().includes(q) ||
       (i.paid_reference || "").toLowerCase().includes(q)
     );
-  }, [documentFiltered, tab, search]);
+  }, [documentFiltered, search]);
+
+  const stats = useMemo(() => ({
+    pending: searchFiltered.filter((i) => i.payment_status === "PENDING").length,
+    pendingValueByCurrency: valueByCurrency(searchFiltered.filter((i) => i.payment_status === "PENDING")),
+    paid: searchFiltered.filter((i) => i.payment_status === "PAID").length,
+    paidValueByCurrency: valueByCurrency(searchFiltered.filter((i) => i.payment_status === "PAID"))
+  }), [searchFiltered]);
+
+  const filtered = useMemo(
+    () => searchFiltered.filter((i) => i.payment_status === tab.toUpperCase()),
+    [searchFiltered, tab]
+  );
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
