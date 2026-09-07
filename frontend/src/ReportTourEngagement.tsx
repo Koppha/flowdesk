@@ -26,7 +26,8 @@ type UserRow = { id: string; full_name: string | null; email: string; department
 // wired up today (frontend/src/App.tsx's advance request form). Add new
 // entries here as more tours get added elsewhere in the app.
 const TOUR_LABELS: Record<string, string> = {
-  fd_advance_form_tour_seen_v1: "Advance Request Form Walkthrough"
+  fd_advance_form_tour_seen_v1: "Advance Request Form Walkthrough",
+  fd_apply_for_other_intro_v1: "Apply for Other — New Feature Intro"
 };
 
 function fmtDate(s: string | null) {

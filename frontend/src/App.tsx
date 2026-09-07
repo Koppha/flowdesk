@@ -944,6 +944,7 @@ export default function App() {
   const paymentMethodFieldRef = useRef<HTMLDivElement>(null);
   const purposeFieldRef = useRef<HTMLDivElement>(null);
   const advanceSubmitButtonRef = useRef<HTMLButtonElement>(null);
+  const requestForFieldRef = useRef<HTMLDivElement>(null);
   const [requestDate, setRequestDate] = useState(new Date().toISOString().slice(0, 10));
   const districts = LESOTHO_DISTRICTS;
   const [rows, setRows] = useState<TravelRow[]>([]);
@@ -6759,6 +6760,24 @@ export default function App() {
                   }
                 ] as TourStep[]}
               />
+              {/* Separate one-off tour (its own storageKey) so this
+                  announcement reaches people who already dismissed the
+                  4-step walkthrough above - GuidedTour's "seen" flag is a
+                  single per-tour toggle, not per-step, so adding a step to
+                  the existing tour would never reach anyone who'd already
+                  finished it. Only shown to permanent employees, since
+                  they're the only ones who'll ever see the option itself. */}
+              <GuidedTour
+                active={!editingAdvanceId && canApplyForExternal}
+                storageKey="fd_apply_for_other_intro_v1"
+                steps={[
+                  {
+                    target: requestForFieldRef as any,
+                    title: "New: Apply for Other",
+                    body: "Need an advance for a contractor, vendor, or guest with no FlowDesk account? Choose \"Apply for Other\" here — you still receive the funds via your own account and stay accountable, exactly like any other advance."
+                  }
+                ] as TourStep[]}
+              />
               <div className="request-header">
                 <div>
                   <h2>{editingAdvanceId ? "Edit Advance Request" : "Create Advance Request"}</h2>
@@ -6778,7 +6797,7 @@ export default function App() {
               <h2 className="form-title">Request Details</h2>
 
               {canCreateForOthers && !editingAdvanceId && (
-                <div className="form-field">
+                <div className="form-field" ref={requestForFieldRef}>
                   <label>Request For</label>
                   <select
                     value={isApplyForOther ? "__EXTERNAL__" : requestForUserId}
