@@ -222,7 +222,7 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
         />
       )}
       {view === "FINANCE_QUEUE" && <FinanceQueueScreen queue={financeQueue} onOpen={openClaim} />}
-      {view === "REPORTS" && <ReportsScreen role={role} />}
+      {view === "REPORTS" && <ReportsScreen role={role} isFinance={isFinance} />}
     </div>
   );
 }
@@ -697,7 +697,7 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
   // default to the request's estimate (see generate-claim) but are editable
   // while still a draft.
   const [lines, setLines] = useState<any[]>(claim.lines || []);
-  function updateLine(i: number, patch: Record<string, string>) {
+  function updateLine(i: number, patch: Record<string, any>) {
     setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
 
@@ -885,6 +885,7 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
                 <tr>
                   <th>Date</th><th>Day</th><th>From</th><th>To</th><th>Ordered By</th>
                   <th>Actual Hours</th><th>125%</th><th>150%</th><th>200%</th><th>Converted Hours</th><th>Account No.</th><th>Account Name</th>
+                  <th title="Check if this date is a public holiday not already on the calendar — e.g. one observed on a moved weekday">Holiday (200%)</th>
                 </tr>
               </thead>
               <tbody>
@@ -895,16 +896,36 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
                       <>
                         <td><input type="time" className="review-control" value={l.from_time || ""} onChange={(e) => updateLine(idx, { from_time: e.target.value })} /></td>
                         <td><input type="time" className="review-control" value={l.to_time || ""} onChange={(e) => updateLine(idx, { to_time: e.target.value })} /></td>
+                        <td><input className="review-control" style={{ minWidth: 110 }} value={l.ordered_by || ""} onChange={(e) => updateLine(idx, { ordered_by: e.target.value })} /></td>
                       </>
                     ) : (
                       <>
                         <td>{l.from_time}</td><td>{l.to_time}</td>
+                        <td>{l.ordered_by || "—"}</td>
                       </>
                     )}
-                    <td>{l.ordered_by || "—"}</td>
                     <td>{(Number(l.hours_125 || 0) + Number(l.hours_150 || 0) + Number(l.hours_200 || 0)) || "—"}</td>
                     <td>{Number(l.hours_125 || 0) || "—"}</td><td>{Number(l.hours_150 || 0) || "—"}</td><td>{Number(l.hours_200 || 0) || "—"}</td>
-                    <td>{l.converted_hours}</td><td>{l.account_number || "—"}</td><td>{l.account_name || "—"}</td>
+                    <td>{l.converted_hours}</td>
+                    {isDraft ? (
+                      <>
+                        <td><input className="review-control" style={{ minWidth: 90 }} value={l.account_number || ""} onChange={(e) => updateLine(idx, { account_number: e.target.value })} /></td>
+                        <td><input className="review-control" style={{ minWidth: 130 }} value={l.account_name || ""} onChange={(e) => updateLine(idx, { account_name: e.target.value })} /></td>
+                        <td style={{ textAlign: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(l.observed_holiday)}
+                            onChange={(e) => updateLine(idx, { observed_holiday: e.target.checked })}
+                            title="Treat this date as a public holiday for rate purposes (200%), even though the calendar doesn't already flag it — e.g. a holiday moved onto this weekday"
+                          />
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>{l.account_number || "—"}</td><td>{l.account_name || "—"}</td>
+                        <td style={{ textAlign: "center" }}>{l.observed_holiday ? "Yes" : "—"}</td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -1203,25 +1224,49 @@ function buildMonthGrid(year: number, month: number) {
   });
 }
 
+function isWeekendDate(dateStr: string): boolean {
+  const d = new Date(`${dateStr}T00:00:00`);
+  return d.getDay() === 0 || d.getDay() === 6;
+}
+
+function nextWeekdayAfter(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  do {
+    d.setDate(d.getDate() + 1);
+  } while (d.getDay() === 0 || d.getDay() === 6);
+  return dateKey(d);
+}
+
 function PublicHolidaysPanel() {
   const [holidays, setHolidays] = useState<any[]>([]);
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
+  const [observedDate, setObservedDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [viewDate, setViewDate] = useState(() => new Date());
+  const [shiftingId, setShiftingId] = useState<string | null>(null);
+  const [shiftDate, setShiftDate] = useState("");
 
   async function load() {
     setHolidays(await api.publicHolidays().catch(() => []));
   }
   useEffect(() => { void load(); }, []);
 
+  // Pre-fills a sensible "move to weekday" suggestion the moment a
+  // weekend date is picked, without forcing it — the admin/Finance user can
+  // still clear the field to leave the holiday on its gazetted weekend date.
+  useEffect(() => {
+    if (date && isWeekendDate(date)) setObservedDate((prev) => prev || nextWeekdayAfter(date));
+    else setObservedDate("");
+  }, [date]);
+
   async function add(prefillDate?: string) {
     const useDate = prefillDate || date;
     if (!useDate || !name.trim()) return;
     setSaving(true);
     try {
-      await api.createPublicHoliday({ holiday_date: useDate, name: name.trim() });
-      setDate(""); setName("");
+      await api.createPublicHoliday({ holiday_date: useDate, name: name.trim(), observed_date: observedDate || null });
+      setDate(""); setName(""); setObservedDate("");
       await load();
     } catch (e: any) {
       void Swal.fire({ icon: "error", title: "Could not add", text: e.message });
@@ -1235,7 +1280,26 @@ function PublicHolidaysPanel() {
     await load();
   }
 
+  async function confirmShift() {
+    if (!shiftingId || !shiftDate) return;
+    try {
+      await api.setHolidayObservedDate(shiftingId, shiftDate);
+      setShiftingId(null); setShiftDate("");
+      await load();
+    } catch (e: any) {
+      void Swal.fire({ icon: "error", title: "Could not set observed day", text: e.message });
+    }
+  }
+
+  async function clearShift(id: string) {
+    await api.setHolidayObservedDate(id, null);
+    await load();
+  }
+
   const holidaysByDate = new Map<string, any>(holidays.map((h) => [h.holiday_date, h]));
+  // A holiday's observed weekday renders as its own calendar entry too — both
+  // the gazetted date and the observed date earn the 200% rate.
+  const observedByDate = new Map<string, any>(holidays.filter((h) => h.observed_date).map((h) => [h.observed_date, h]));
   const grid = buildMonthGrid(viewDate.getFullYear(), viewDate.getMonth());
   const todayKey = dateKey(new Date());
 
@@ -1243,12 +1307,19 @@ function PublicHolidaysPanel() {
     <section className="ep-panel">
       <div className="ep-panel-head"><div className="ep-panel-title">Public Holiday Calendar</div></div>
       <div className="ep-panel-body">
-        <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 0 }}>Drives the 200% overtime rate bucket. Seeded from the standard Lesotho calendar — add or remove dates as needed. Click a day to add a holiday.</p>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 0 }}>Drives the 200% overtime rate bucket. Admin and Finance manage this list — click a day to add a holiday.</p>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
           <input type="date" className="review-control" value={date} onChange={(e) => setDate(e.target.value)} />
           <input className="review-control" style={{ flex: 1, minWidth: 160 }} placeholder="Holiday name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void add(); }} />
           <button className="button button-primary" type="button" disabled={saving} onClick={() => void add()}>Add</button>
         </div>
+        {date && isWeekendDate(date) && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 14, padding: "8px 10px", borderRadius: 6, background: "var(--primary-soft, #eff6ff)", fontSize: 12 }}>
+            <span>This date falls on a weekend. Observe it on</span>
+            <input type="date" className="review-control" style={{ minHeight: 32, padding: "4px 8px", width: 160 }} value={observedDate} onChange={(e) => setObservedDate(e.target.value)} />
+            <span style={{ color: "var(--muted)" }}>(clear to leave it on the weekend date only)</span>
+          </div>
+        )}
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <button className="ep-icon-btn" type="button" onClick={() => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))} aria-label="Previous month">
@@ -1270,20 +1341,21 @@ function PublicHolidaysPanel() {
           {grid.map(({ date: cellDate, inMonth }) => {
             const key = dateKey(cellDate);
             const holiday = holidaysByDate.get(key);
+            const observedFor = !holiday ? observedByDate.get(key) : null;
             const isToday = key === todayKey;
             return (
               <div
                 key={key}
-                onClick={() => { if (!holiday) setDate(key); }}
-                title={holiday ? holiday.name : undefined}
+                onClick={() => { if (!holiday && !observedFor) setDate(key); }}
+                title={holiday ? holiday.name : observedFor ? `${observedFor.name} (observed)` : undefined}
                 style={{
                   minHeight: 62,
                   padding: "4px 6px",
                   borderRadius: 6,
                   border: isToday ? "1px solid #2563eb" : "1px solid var(--border, #e5e7eb)",
-                  background: holiday ? "#fef3c7" : inMonth ? "var(--surface, #fff)" : "var(--surface-soft, #f9fafb)",
+                  background: holiday ? "#fef3c7" : observedFor ? "#e0e7ff" : inMonth ? "var(--surface, #fff)" : "var(--surface-soft, #f9fafb)",
                   opacity: inMonth ? 1 : 0.5,
-                  cursor: holiday ? "default" : "pointer",
+                  cursor: holiday || observedFor ? "default" : "pointer",
                   display: "flex",
                   flexDirection: "column",
                   gap: 2
@@ -1308,17 +1380,125 @@ function PublicHolidaysPanel() {
                     {holiday.name}
                   </span>
                 )}
+                {observedFor && (
+                  <span style={{ fontSize: 10, lineHeight: 1.2, color: "#4338ca", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                    {observedFor.name} (observed)
+                  </span>
+                )}
+                {holiday && isWeekendDate(key) && !holiday.observed_date && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setShiftingId(holiday.id); setShiftDate(nextWeekdayAfter(key)); }}
+                    style={{ background: "none", border: "none", padding: 0, fontSize: 9.5, color: "#2563eb", textAlign: "left", cursor: "pointer" }}
+                  >
+                    Move to weekday
+                  </button>
+                )}
+                {holiday && holiday.observed_date && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); void clearShift(holiday.id); }}
+                    style={{ background: "none", border: "none", padding: 0, fontSize: 9.5, color: "#2563eb", textAlign: "left", cursor: "pointer" }}
+                  >
+                    Clear observed day
+                  </button>
+                )}
               </div>
             );
           })}
+        </div>
+
+        {shiftingId && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 14, padding: "10px 12px", borderRadius: 6, background: "var(--primary-soft, #eff6ff)", fontSize: 12 }}>
+            <span>Observe on</span>
+            <input type="date" className="review-control" style={{ minHeight: 32, padding: "4px 8px", width: 160 }} value={shiftDate} onChange={(e) => setShiftDate(e.target.value)} />
+            <button className="button button-primary small-button" type="button" onClick={() => void confirmShift()}>Confirm</button>
+            <button className="button button-subtle small-button" type="button" onClick={() => { setShiftingId(null); setShiftDate(""); }}>Cancel</button>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 11, color: "var(--muted)" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: "#fef3c7", display: "inline-block" }} />Gazetted holiday</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: "#e0e7ff", display: "inline-block" }} />Observed weekday (200%)</span>
         </div>
       </div>
     </section>
   );
 }
 
-function ReportsScreen({ role }: { role: string }) {
+function ClaimPeriodsPanel() {
+  const [periods, setPeriods] = useState<any[]>([]);
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setPeriods(await api.overtimeClaimPeriods().catch(() => []));
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function open() {
+    setSaving(true);
+    try {
+      await api.openOvertimeClaimPeriod(year, month);
+      await load();
+    } catch (e: any) {
+      void Swal.fire({ icon: "error", title: "Could not open period", text: e.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function close(id: string) {
+    const confirm = await Swal.fire({ title: "Close this claim period?", text: "Employees will no longer be able to submit claims for this month.", icon: "warning", showCancelButton: true, confirmButtonText: "Close Period" });
+    if (!confirm.isConfirmed) return;
+    await api.closeOvertimeClaimPeriod(id);
+    await load();
+  }
+
+  return (
+    <section className="ep-panel">
+      <div className="ep-panel-head"><div className="ep-panel-title">Claim Periods</div></div>
+      <div className="ep-panel-body">
+        <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 0 }}>A month must be opened here before employees can submit an Overtime Claim for it. Admin and Finance manage this.</p>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <label style={{ fontSize: 12 }}>
+            <div style={{ marginBottom: 4, fontWeight: 600 }}>Year</div>
+            <input type="number" className="review-control" style={{ width: 100 }} value={year} onChange={(e) => setYear(Number(e.target.value))} />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            <div style={{ marginBottom: 4, fontWeight: 600 }}>Month</div>
+            <select className="review-control" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+              {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+            </select>
+          </label>
+          <button className="button button-primary" type="button" disabled={saving} onClick={() => void open()}>Open Period</button>
+        </div>
+        <div className="ep-table-wrap">
+          <table className="ep-table">
+            <thead><tr><th>Period</th><th>Status</th><th>Opened By</th><th>Closed By</th><th></th></tr></thead>
+            <tbody>
+              {periods.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>No claim periods yet.</td></tr>}
+              {periods.map((p) => (
+                <tr key={p.id}>
+                  <td>{monthLabel(p.year, p.month)}</td>
+                  <td><span className={`status-pill ${p.status === "OPEN" ? "status-pill-success" : "status-pill-danger"}`}>{p.status}</span></td>
+                  <td>{p.opened_by_name || "—"}</td>
+                  <td>{p.closed_by_name || "—"}</td>
+                  <td>{p.status === "OPEN" && <button className="button small-button button-subtle" type="button" onClick={() => void close(p.id)}>Close</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReportsScreen({ role, isFinance }: { role: string; isFinance: boolean }) {
   const [summary, setSummary] = useState<any>(null);
+  const canManage = role === "ADMIN" || isFinance;
 
   useEffect(() => {
     api.overtimeReportsSummary().then(setSummary).catch(() => setSummary({ by_status: [], by_preference: [], by_rate_category: { hours_125: 0, hours_150: 0, hours_200: 0 }, allowance_rows: [] }));
@@ -1328,10 +1508,11 @@ function ReportsScreen({ role }: { role: string }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {canManage && <ClaimPeriodsPanel />}
+      {canManage && <PublicHolidaysPanel />}
       {role === "ADMIN" && (
         <>
           <OvertimeRateSettingsPanel />
-          <PublicHolidaysPanel />
           <FinanceSectionsPanel />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <FinanceCodesPanel kind="COST_CENTRE" title="Cost Centres" />

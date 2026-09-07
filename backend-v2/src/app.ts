@@ -14,6 +14,7 @@ import { claimsSlaRouter } from "./modules/claims/claims-sla.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { inboxRouter } from "./modules/inbox/inbox.routes.js";
 import { overtimeRouter } from "./modules/overtime/overtime.routes.js";
+import { overtimeReportsRouter } from "./modules/overtime/overtime-reports.routes.js";
 import { travelRouter } from "./modules/travel/travel.routes.js";
 import { workflowsRouter } from "./modules/workflows/workflows.routes.js";
 import { reportingLinesRouter } from "./modules/reporting-lines/reporting-lines.routes.js";
@@ -79,6 +80,7 @@ export function createApp() {
   app.use("/claims", claimsRouter);
   app.use("/inbox", inboxRouter);
   app.use("/overtime", overtimeRouter);
+  app.use("/overtime-reports", overtimeReportsRouter);
   app.use("/standby", standbyRouter);
   app.use("/vendor-contracts", vendorContractsRouter);
   app.use("/service-contracts", serviceContractsRouter);

@@ -1,9 +1,15 @@
-import { useState } from "react";
-import { lesothoHolidayName } from "./lesothoHolidays";
+import { useEffect, useState } from "react";
+import { api } from "./api";
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
+// Reads the same admin/Finance-managed public_holidays table the Overtime
+// rate engine itself uses (via /overtime/public-holidays), instead of a
+// separate hardcoded date list — so an edit made in the Overtime Reports
+// admin panel shows up here immediately, with no second calendar to keep in
+// sync. A holiday's observed weekday (see the "move to weekday" feature)
+// renders as its own 200% day too.
 export function HolidayCalendarModal({
   year, month, onYearChange, onMonthChange, onClose
 }: {
@@ -12,6 +18,22 @@ export function HolidayCalendarModal({
   onMonthChange: (m: number) => void;
   onClose: () => void;
 }) {
+  const [holidays, setHolidays] = useState<{ holiday_date: string; observed_date: string | null; name: string }[]>([]);
+
+  useEffect(() => {
+    api.publicHolidays().then((rows: any[]) => setHolidays(Array.isArray(rows) ? rows : [])).catch(() => setHolidays([]));
+  }, []);
+
+  const holidayByDate = new Map<string, string>();
+  const observedByDate = new Map<string, string>();
+  for (const h of holidays) {
+    holidayByDate.set(h.holiday_date, h.name);
+    if (h.observed_date) observedByDate.set(h.observed_date, `${h.name} (observed)`);
+  }
+  function holidayNameFor(dateStr: string): string | null {
+    return holidayByDate.get(dateStr) || observedByDate.get(dateStr) || null;
+  }
+
   const firstOfMonth = new Date(year, month - 1, 1);
   const daysInMonth = new Date(year, month, 0).getDate();
   const startWeekday = firstOfMonth.getDay(); // 0 = Sunday
@@ -25,8 +47,8 @@ export function HolidayCalendarModal({
   }
 
   const holidaysThisMonth = cells
-    .filter((c) => c.date && lesothoHolidayName(c.date))
-    .map((c) => ({ date: c.date, name: lesothoHolidayName(c.date) as string }));
+    .filter((c) => c.date && holidayNameFor(c.date))
+    .map((c) => ({ date: c.date, name: holidayNameFor(c.date) as string }));
 
   function shiftMonth(delta: number) {
     let m = month + delta;
@@ -39,7 +61,7 @@ export function HolidayCalendarModal({
 
   function cellClass(c: { date: string; day: number; weekday: number }): string {
     if (!c.date) return "holiday-cal-cell holiday-cal-cell-empty";
-    const holiday = lesothoHolidayName(c.date);
+    const holiday = holidayNameFor(c.date);
     if (holiday || c.weekday === 0) return "holiday-cal-cell holiday-cal-cell-holiday"; // Sunday / Holiday — 200%
     if (c.weekday === 6) return "holiday-cal-cell holiday-cal-cell-saturday"; // Saturday — 150%
     return "holiday-cal-cell holiday-cal-cell-weekday"; // weekday — 125%
@@ -64,7 +86,7 @@ export function HolidayCalendarModal({
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 16 }}>
           {cells.map((c, i) => (
             <div key={i} className={cellClass(c)} style={{ borderRadius: 6, padding: "6px 0", textAlign: "center", fontSize: 12, minHeight: 28 }}
-              title={c.date ? (lesothoHolidayName(c.date) || "") : ""}>
+              title={c.date ? (holidayNameFor(c.date) || "") : ""}>
               {c.day || ""}
             </div>
           ))}

@@ -195,12 +195,39 @@ export async function ensureOvertimeSchema() {
       created_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // A holiday observed on a different (weekday) date than its gazetted date
+  // — the common case being a holiday that falls on a Saturday/Sunday, moved
+  // to the following Monday. Both dates earn the 200% rate; see
+  // getActiveHolidayDates(). Admin and Finance (isCompensationFinanceUser)
+  // manage this, not Admin-only — see the relaxed permission on the
+  // POST/DELETE routes below.
+  await query(`ALTER TABLE public_holidays ADD COLUMN IF NOT EXISTS observed_date date`);
   const existingHolidays = (await query<{ count: string }>(`SELECT count(*)::text AS count FROM public_holidays`))[0];
   if (Number(existingHolidays.count) === 0) {
     for (const h of LESOTHO_HOLIDAY_SEED) {
       await query(`INSERT INTO public_holidays (holiday_date, name) VALUES ($1,$2) ON CONFLICT (holiday_date) DO NOTHING`, [h.date, h.name]);
     }
   }
+
+  // Claim periods — Admin/Finance open a specific year+month before
+  // employees can submit an Overtime Claim for it (payroll-cycle gate; see
+  // POST /claims/:id/submit). Requests are unaffected — only Claim
+  // submission is gated, since a Claim is what actually reaches Finance for
+  // payment.
+  await query(`
+    CREATE TABLE IF NOT EXISTS overtime_claim_periods (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      year int NOT NULL,
+      month int NOT NULL,
+      status text NOT NULL DEFAULT 'OPEN',
+      opened_by_id uuid REFERENCES users(id),
+      opened_at timestamptz NOT NULL DEFAULT now(),
+      closed_by_id uuid REFERENCES users(id),
+      closed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_overtime_claim_periods_year_month ON overtime_claim_periods(year, month)`);
 }
 
 async function writeOvertimeAudit(args: { actorId: string; entityType: string; entityId: string; action: string; before?: unknown; after?: unknown }) {
@@ -249,9 +276,19 @@ async function getOvertimeRateSettings() {
   return { weekdayPct, saturdayPct, sundayHolidayPct, workingHoursPerDay };
 }
 
+// Includes both the gazetted date and, when set, the observed weekday it was
+// moved to — a holiday shifted off a weekend still earns 200% on whichever
+// of the two dates someone actually works.
 async function getActiveHolidayDates(): Promise<Set<string>> {
-  const rows = await query<{ holiday_date: string }>(`SELECT holiday_date::text AS holiday_date FROM public_holidays WHERE active=true`);
-  return new Set(rows.map((r) => r.holiday_date));
+  const rows = await query<{ holiday_date: string; observed_date: string | null }>(
+    `SELECT holiday_date::text AS holiday_date, observed_date::text AS observed_date FROM public_holidays WHERE active=true`
+  );
+  const dates = new Set<string>();
+  for (const r of rows) {
+    dates.add(r.holiday_date);
+    if (r.observed_date) dates.add(r.observed_date);
+  }
+  return dates;
 }
 
 function hoursBetween(fromTime: string, toTime: string): number {
@@ -939,6 +976,11 @@ overtimeRouter.post("/claims/:id/submit", async (req: AuthedRequest, res, next) 
     if (claim.status !== "DRAFT") throw badRequest("Claim has already been submitted");
     if (!claim.compensation_preference) throw badRequest("Choose a Compensation Preference (Pay or Days) before submitting");
 
+    const period = (await query<{ status: string }>(`SELECT status FROM overtime_claim_periods WHERE year=$1 AND month=$2`, [claim.year, claim.month]))[0];
+    if (!period || period.status !== "OPEN") {
+      throw badRequest(`Claims for ${claim.month}/${claim.year} are not open yet — Admin or Finance need to open this claim period first.`);
+    }
+
     const steps = await query<any>(
       `SELECT * FROM overtime_claim_approval_steps WHERE claim_id=$1 AND route_version=$2 ORDER BY step_order`,
       [req.params.id, claim.current_route_version]
@@ -1293,8 +1335,18 @@ overtimeRouter.get("/eligible-approvers", async (req: AuthedRequest, res, next) 
 });
 
 // ---------------------------------------------------------------------------
-// Public holiday calendar (ADMIN only) — drives the 200% rate bucket.
+// Public holiday calendar (Admin & Finance) — drives the 200% rate bucket.
+// Admin assigns which sections carry Finance authority
+// (isCompensationFinanceUser); anyone in one of those sections can manage
+// the calendar alongside Admin, same authority as Overtime Finance
+// processing — no separate permission concept.
 // ---------------------------------------------------------------------------
+
+async function requireHolidayManager(req: AuthedRequest) {
+  if (req.user!.role === "ADMIN") return;
+  if (await isCompensationFinanceUser(req)) return;
+  throw forbidden("Only an administrator or Finance can manage the public holiday calendar");
+}
 
 overtimeRouter.get("/public-holidays", async (req: AuthedRequest, res, next) => {
   try {
@@ -1302,7 +1354,9 @@ overtimeRouter.get("/public-holidays", async (req: AuthedRequest, res, next) => 
     // local timezone, not UTC, so a bare `SELECT *` here serializes each date
     // as a full ISO timestamp that's shifted a day off in any timezone ahead
     // of UTC (e.g. 2025-01-01 becomes "2024-12-31T22:00:00.000Z" at UTC+2).
-    const rows = await query<any>(`SELECT id, holiday_date::text AS holiday_date, name, active FROM public_holidays ORDER BY holiday_date`);
+    const rows = await query<any>(
+      `SELECT id, holiday_date::text AS holiday_date, observed_date::text AS observed_date, name, active FROM public_holidays ORDER BY holiday_date`
+    );
     return res.json(rows);
   } catch (err) {
     return next(err);
@@ -1311,13 +1365,22 @@ overtimeRouter.get("/public-holidays", async (req: AuthedRequest, res, next) => 
 
 overtimeRouter.post("/public-holidays", async (req: AuthedRequest, res, next) => {
   try {
-    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can manage the public holiday calendar");
-    const body = z.object({ holiday_date: z.string(), name: z.string().trim().min(1).max(120) }).safeParse(req.body);
+    await requireHolidayManager(req);
+    const body = z
+      .object({
+        holiday_date: z.string(),
+        name: z.string().trim().min(1).max(120),
+        observed_date: z.string().nullable().optional()
+      })
+      .safeParse(req.body);
     if (!body.success) throw badRequest("Invalid holiday payload", body.error.flatten());
+    if (body.data.observed_date && body.data.observed_date === body.data.holiday_date) {
+      throw badRequest("The observed date must be different from the gazetted date");
+    }
     const rows = await query<{ id: string }>(
-      `INSERT INTO public_holidays (holiday_date, name) VALUES ($1,$2)
-       ON CONFLICT (holiday_date) DO UPDATE SET name=EXCLUDED.name, active=true RETURNING id`,
-      [body.data.holiday_date, body.data.name]
+      `INSERT INTO public_holidays (holiday_date, name, observed_date) VALUES ($1,$2,$3)
+       ON CONFLICT (holiday_date) DO UPDATE SET name=EXCLUDED.name, observed_date=EXCLUDED.observed_date, active=true RETURNING id`,
+      [body.data.holiday_date, body.data.name, body.data.observed_date || null]
     );
     await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "public_holidays", entityId: rows[0].id, action: "HOLIDAY_CREATED", after: body.data });
     return res.status(201).json({ id: rows[0].id });
@@ -1326,11 +1389,83 @@ overtimeRouter.post("/public-holidays", async (req: AuthedRequest, res, next) =>
   }
 });
 
+// Sets (or clears, with observed_date: null) just the observed date on an
+// existing holiday — the "move to weekday" action, separate from re-creating
+// the whole holiday row.
+overtimeRouter.patch("/public-holidays/:id", async (req: AuthedRequest, res, next) => {
+  try {
+    await requireHolidayManager(req);
+    const body = z.object({ observed_date: z.string().nullable() }).safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid payload", body.error.flatten());
+    const holiday = (await query<{ holiday_date: string }>(`SELECT holiday_date::text AS holiday_date FROM public_holidays WHERE id=$1`, [req.params.id]))[0];
+    if (!holiday) throw notFound();
+    if (body.data.observed_date && body.data.observed_date === holiday.holiday_date) {
+      throw badRequest("The observed date must be different from the gazetted date");
+    }
+    await query(`UPDATE public_holidays SET observed_date=$1 WHERE id=$2`, [body.data.observed_date || null, req.params.id]);
+    await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "public_holidays", entityId: req.params.id, action: "HOLIDAY_OBSERVED_DATE_SET", after: body.data });
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 overtimeRouter.delete("/public-holidays/:id", async (req: AuthedRequest, res, next) => {
   try {
-    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can manage the public holiday calendar");
+    await requireHolidayManager(req);
     await query(`DELETE FROM public_holidays WHERE id=$1`, [req.params.id]);
     await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "public_holidays", entityId: req.params.id, action: "HOLIDAY_DELETED" });
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Claim periods (Admin & Finance) — a year+month must be OPEN before an
+// employee can submit an Overtime Claim for it; see the check inside
+// POST /claims/:id/submit. Requests are unaffected.
+// ---------------------------------------------------------------------------
+
+overtimeRouter.get("/claim-periods", async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query<any>(`SELECT p.*, ou.full_name AS opened_by_name, cu.full_name AS closed_by_name
+       FROM overtime_claim_periods p
+       LEFT JOIN users ou ON ou.id = p.opened_by_id
+       LEFT JOIN users cu ON cu.id = p.closed_by_id
+      ORDER BY p.year DESC, p.month DESC`);
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+overtimeRouter.post("/claim-periods", async (req: AuthedRequest, res, next) => {
+  try {
+    await requireHolidayManager(req);
+    const body = z.object({ year: z.coerce.number().int().min(2000).max(2100), month: z.coerce.number().int().min(1).max(12) }).safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid period payload", body.error.flatten());
+    const rows = await query<{ id: string }>(
+      `INSERT INTO overtime_claim_periods (year, month, status, opened_by_id, opened_at)
+       VALUES ($1,$2,'OPEN',$3,now())
+       ON CONFLICT (year, month) DO UPDATE SET status='OPEN', opened_by_id=$3, opened_at=now(), closed_by_id=NULL, closed_at=NULL
+       RETURNING id`,
+      [body.data.year, body.data.month, req.user!.userId]
+    );
+    await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "overtime_claim_periods", entityId: rows[0].id, action: "CLAIM_PERIOD_OPENED", after: body.data });
+    return res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+overtimeRouter.post("/claim-periods/:id/close", async (req: AuthedRequest, res, next) => {
+  try {
+    await requireHolidayManager(req);
+    const period = (await query<{ id: string }>(`SELECT id FROM overtime_claim_periods WHERE id=$1`, [req.params.id]))[0];
+    if (!period) throw notFound();
+    await query(`UPDATE overtime_claim_periods SET status='CLOSED', closed_by_id=$1, closed_at=now() WHERE id=$2`, [req.user!.userId, req.params.id]);
+    await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "overtime_claim_periods", entityId: req.params.id, action: "CLAIM_PERIOD_CLOSED" });
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
