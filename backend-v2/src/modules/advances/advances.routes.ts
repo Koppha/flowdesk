@@ -317,6 +317,9 @@ async function resolveAdvanceRequester(actorId: string, beneficiaryUserId: strin
   }
 
   const beneficiaryId = String(beneficiaryUserId || "").trim();
+  if (beneficiaryId && beneficiaryId !== actor.id && isReservedAdvanceType(type)) {
+    throw badRequest("Salary and loan advances can only be requested for yourself, never on behalf of someone else");
+  }
   if (!beneficiaryId || beneficiaryId === actor.id) {
     if (!isPermanentEmployee(actor) && !["INTERN", "TEMPORARY"].includes(String(actor.employment_type || "").trim().toUpperCase())) {
       throw forbidden("Only permanent employees, interns, and temporary employees can request advances for themselves");
@@ -1136,6 +1139,9 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     const parsedData: Record<string, unknown> = { ...parsed.data };
     if (typeof parsedData.type === "string") {
       parsedData.type = await assertAdvanceTypeAllowed(parsedData.type);
+      if (adv.requester_id !== adv.created_by_id && isReservedAdvanceType(parsedData.type as string)) {
+        throw badRequest("Salary and loan advances can only be requested for yourself, never on behalf of someone else");
+      }
     }
     if (parsedData.payback_months !== undefined) {
       await assertPaybackMonthsAllowed((parsedData.type as string | undefined) ?? adv.type, parsedData.payback_months as number);
