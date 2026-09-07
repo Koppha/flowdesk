@@ -16,3 +16,7 @@ backend-v2/uploads/
 .env
 .env.*
 !.env.example
+
+# local Claude Code session config (contains locally-approved command allowlists,
+# which can embed credentials typed during a session) - never commit this
+.claude/

@@ -53,6 +53,9 @@ const CreateAdvanceSchema = z.object({
   extra_cost_amount: z.coerce.number().nonnegative().optional(),
   extra_cost_description: z.string().trim().optional(),
   beneficiary_user_id: z.string().uuid().optional(),
+  external_beneficiary_id: z.string().uuid().optional(),
+  external_start_date: z.string().optional(),
+  external_end_date: z.string().optional(),
   override_chain: z.array(z.object({
     label: z.string().trim().min(1),
     user_id: z.string().uuid(),
@@ -76,6 +79,20 @@ const CreateAdvanceSchema = z.object({
   if ((data.extra_cost_amount ?? 0) > 0 && !String(data.extra_cost_description || "").trim()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["extra_cost_description"], message: "Please justify the extra cost" });
   }
+  if (data.external_beneficiary_id && data.beneficiary_user_id) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["beneficiary_user_id"], message: "\"Apply for Other\" cannot also be on behalf of another employee" });
+  }
+  if (data.external_beneficiary_id) {
+    if (!data.external_start_date) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_start_date"], message: "Start date is required" });
+    }
+    if (!data.external_end_date) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_end_date"], message: "Finish date is required" });
+    }
+    if (data.external_start_date && data.external_end_date && data.external_end_date < data.external_start_date) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_end_date"], message: "Finish date cannot be before the start date" });
+    }
+  }
 });
 
 const UpdateAdvanceSchema = z.object({
@@ -92,6 +109,9 @@ const UpdateAdvanceSchema = z.object({
   payback_months: z.coerce.number().int().positive().optional(),
   extra_cost_amount: z.coerce.number().nonnegative().optional(),
   extra_cost_description: z.string().trim().optional(),
+  external_beneficiary_id: z.string().uuid().optional(),
+  external_start_date: z.string().optional(),
+  external_end_date: z.string().optional(),
   salary_month: z.string().optional()
 }).superRefine((data, ctx) => {
   if (data.payment_method === "ECOCASH") {
@@ -110,6 +130,9 @@ const UpdateAdvanceSchema = z.object({
   }
   if ((data.extra_cost_amount ?? 0) > 0 && !String(data.extra_cost_description || "").trim()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["extra_cost_description"], message: "Please justify the extra cost" });
+  }
+  if (data.external_start_date && data.external_end_date && data.external_end_date < data.external_start_date) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_end_date"], message: "Finish date cannot be before the start date" });
   }
 });
 
@@ -137,6 +160,70 @@ const ActionCommentSchema = z.object({
 
 export const advancesRouter = Router();
 advancesRouter.use(requireAuth);
+
+// External payees ("Apply for Other") — a reusable, lightweight directory of
+// non-Econet beneficiaries (contractors, vendors, guests). No login, no
+// `users` row; the requester who names one still receives the funds
+// themselves and stays accountable (see resolveAdvanceRequester's
+// isExternalBeneficiaryAdvanceType branch). Restricted to permanent
+// employees, the same population allowed to use the feature at all, plus
+// ADMIN for oversight. Must be registered before GET /:id, otherwise
+// Express matches "/external-payees" as id="external-payees".
+async function requireExternalPayeeAccess(req: AuthedRequest) {
+  if (req.user!.role === "ADMIN") return;
+  const actor = await getUserAccountState(req.user!.userId);
+  if (!isPermanentEmployee(actor)) {
+    throw forbidden("Only permanent employees can manage external payees");
+  }
+}
+
+advancesRouter.get("/external-payees", async (req: AuthedRequest, res, next) => {
+  try {
+    await requireExternalPayeeAccess(req);
+    const rows = await query<any>(
+      `SELECT ep.*, u.full_name AS created_by_name
+         FROM external_payees ep
+         LEFT JOIN users u ON u.id = ep.created_by_id
+        WHERE ep.active = true
+        ORDER BY ep.full_name`
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+advancesRouter.post("/external-payees", async (req: AuthedRequest, res, next) => {
+  try {
+    await requireExternalPayeeAccess(req);
+    const parsed = z
+      .object({
+        full_name: z.string().trim().min(1, "Name is required"),
+        id_number: z.string().trim().optional(),
+        category: z.string().trim().optional(),
+        organisation: z.string().trim().optional(),
+        phone: z.string().trim().optional(),
+        email: z.string().trim().optional(),
+        bank_name: z.string().trim().optional(),
+        bank_account_number: z.string().trim().optional(),
+        bank_branch: z.string().trim().optional()
+      })
+      .safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payee payload", parsed.error.flatten());
+    const rows = await query<{ id: string }>(
+      `INSERT INTO external_payees (full_name, id_number, category, organisation, phone, email, bank_name, bank_account_number, bank_branch, created_by_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+      [
+        parsed.data.full_name, parsed.data.id_number || null, parsed.data.category || null, parsed.data.organisation || null,
+        parsed.data.phone || null, parsed.data.email || null, parsed.data.bank_name || null, parsed.data.bank_account_number || null,
+        parsed.data.bank_branch || null, req.user!.userId
+      ]
+    );
+    return res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    return next(err);
+  }
+});
 
 function toPaymentAccount(args: {
   payment_method: "ECOCASH" | "BANK";
@@ -688,9 +775,10 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
     const mine = req.query.mine === "true";
     if (mine) {
       const rows = await query(
-        `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ${OVERDUE_SELECT}
+        `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ep.full_name AS external_beneficiary_name, ${OVERDUE_SELECT}
            FROM advance_requests ar
            JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
            CROSS JOIN advance_recovery_settings ars
           WHERE ar.requester_id=$1 OR ar.created_by_id=$1
           ORDER BY ar.created_at DESC`,
@@ -702,9 +790,10 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
     const allowed = await hasFeatureAccess(req.user!.userId, req.user!.role, "report_advances", ["ADMIN"]);
     if (!allowed) throw forbidden("Not authorized to list all advances");
     const rows = await query(
-      `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ${OVERDUE_SELECT}
+      `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ep.full_name AS external_beneficiary_name, ${OVERDUE_SELECT}
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
+         LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
          CROSS JOIN advance_recovery_settings ars
         ORDER BY ar.created_at DESC`
     );
@@ -978,6 +1067,30 @@ advancesRouter.post("/", async (req: AuthedRequest, res, next) => {
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [targetUserId]);
       const { requester } = await resolveAdvanceRequester(req.user!.userId, parsed.data.beneficiary_user_id, type, client);
 
+      if (parsed.data.external_beneficiary_id) {
+        // "Apply for Other" (an advance for an external, non-Econet
+        // beneficiary) - restricted to permanent employees, same
+        // authorization axis as creating an advance on behalf of another
+        // (internal) employee. Schema validation already rejects this
+        // alongside beneficiary_user_id, so `requester` here is always the
+        // actor themselves.
+        if (!isPermanentEmployee(requester)) {
+          throw forbidden("Only permanent employees can apply for an advance on behalf of someone outside Econet");
+        }
+        // Admin opts specific travel types in (e.g. Local, CAM) via Travel
+        // Setup's "Allow Apply for Other" checkbox - SALARY/LOAN (not a
+        // travel_types row) and any type not flagged are rejected.
+        const eligibleType = await getTravelTypeByCode(type);
+        if (!eligibleType?.allow_external_beneficiary) {
+          throw badRequest("This advance type is not enabled for \"Apply for Other\" - ask an admin to enable it in Travel Setup");
+        }
+        const payeeRows = await client.query<{ id: string }>(
+          `SELECT id FROM external_payees WHERE id=$1 AND active=true`,
+          [parsed.data.external_beneficiary_id]
+        );
+        if (!payeeRows.rows[0]) throw badRequest("Select an active external payee");
+      }
+
       return createAdvance(
         {
           requesterId: requester.id,
@@ -1029,6 +1142,21 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     }
     if (parsedData.payment_method) {
       parsedData.payment_account = toPaymentAccount(parsed.data as any);
+    }
+    if (parsedData.external_beneficiary_id) {
+      const actor = await getUserAccountState(req.user!.userId);
+      if (!isPermanentEmployee(actor)) {
+        throw forbidden("Only permanent employees can apply for an advance on behalf of someone outside Econet");
+      }
+      const eligibleType = await getTravelTypeByCode((parsedData.type as string | undefined) ?? adv.type);
+      if (!eligibleType?.allow_external_beneficiary) {
+        throw badRequest("This advance type is not enabled for \"Apply for Other\" - ask an admin to enable it in Travel Setup");
+      }
+      const payeeRows = await query<{ id: string }>(
+        `SELECT id FROM external_payees WHERE id=$1 AND active=true`,
+        [parsedData.external_beneficiary_id]
+      );
+      if (!payeeRows[0]) throw badRequest("Select an active external payee");
     }
     delete parsedData.ecocash_number;
     delete parsedData.bank_name;

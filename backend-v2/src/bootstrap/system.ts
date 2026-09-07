@@ -34,6 +34,7 @@ export async function bootstrapSystem() {
   await ensurePdfSchema();
   await ensureClearanceSlaSchema();
   await ensureAdvanceRecoverySchema();
+  await ensureExternalPayeesSchema();
   await ensureSessionSettingsSchema();
   await ensureTourProgressSchema();
   await ensureDeductionsSchema();
@@ -1753,6 +1754,38 @@ async function ensureAdvanceRecoverySchema() {
   // travel_types.has_extra_costs set.
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS extra_cost_amount numeric(12,2) NOT NULL DEFAULT 0`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS extra_cost_description text`);
+}
+
+// "Apply for Other" — an advance requested on behalf of an external,
+// non-Econet beneficiary (a contractor, vendor, or guest with no FlowDesk
+// account). The requester still receives the funds themselves and stays
+// fully accountable; this is purely a record of who the money is actually
+// for. Reusable across requests instead of free text each time - see
+// advances.routes.ts's external_beneficiary_id handling (independent of
+// advance type - any type can carry one).
+async function ensureExternalPayeesSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS external_payees (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      full_name text NOT NULL,
+      id_number text,
+      category text,
+      organisation text,
+      phone text,
+      email text,
+      bank_name text,
+      bank_account_number text,
+      bank_branch text,
+      active boolean NOT NULL DEFAULT true,
+      created_by_id uuid REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS external_beneficiary_id uuid REFERENCES external_payees(id)`);
+  // No day-by-day travel table for Apply for Other - just the overall
+  // period the engagement/trip covers.
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS external_start_date date`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS external_end_date date`);
 }
 
 // Admin-configurable idle-session timeout: how long a user can go without

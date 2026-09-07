@@ -33,10 +33,18 @@ export async function getAdvanceById(id: string) {
     extra_cost_amount: string;
     extra_cost_description: string | null;
     travel_rate_kind: string | null;
+    external_beneficiary_id: string | null;
+    external_beneficiary_name: string | null;
+    external_beneficiary_category: string | null;
+    external_beneficiary_organisation: string | null;
   }>(
     `SELECT ar.id, ar.requester_id, ar.created_by_id, ar.status, ar.requested_total, ar.approved_total, ar.type, ar.purpose, ar.payment_account,
             ar.override_chain, ar.workflow_id, ar.workflow_step_order, ar.approval_chain,
             ar.extra_cost_amount, ar.extra_cost_description,
+            ar.external_beneficiary_id,
+            ep.full_name AS external_beneficiary_name,
+            ep.category AS external_beneficiary_category,
+            ep.organisation AS external_beneficiary_organisation,
             u.department AS requester_department,
             u.role AS requester_role,
             s.name AS requester_section,
@@ -46,6 +54,7 @@ export async function getAdvanceById(id: string) {
        JOIN users u ON u.id = ar.requester_id
        LEFT JOIN sections s ON s.id = u.section_id
        LEFT JOIN travel_types tt ON tt.code = ar.type
+       LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
       WHERE ar.id=$1`,
     [id]
   );
@@ -68,12 +77,19 @@ export async function createAdvance(
     // rows total, for travel types flagged has_extra_costs.
     extra_cost_amount?: number | null;
     extra_cost_description?: string | null;
+    // "Apply for Other" - who the money is actually for, when it's not the
+    // requester's own trip (see external_payees table). The requester still
+    // receives the funds and is accountable - this is a record only. No
+    // day-by-day travel table for this case, just the overall period.
+    external_beneficiary_id?: string | null;
+    external_start_date?: string | null;
+    external_end_date?: string | null;
   },
   client?: PoolClient
 ) {
   const sql = `INSERT INTO advance_requests
-      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, extra_cost_amount, extra_cost_description, sequence_no)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, nextval('advance_request_seq'))
+      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, extra_cost_amount, extra_cost_description, external_beneficiary_id, external_start_date, external_end_date, sequence_no)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, nextval('advance_request_seq'))
      RETURNING id`;
   const params = [
     args.requesterId,
@@ -87,7 +103,10 @@ export async function createAdvance(
     args.payback_months ?? null,
     args.override_chain?.length ? JSON.stringify(args.override_chain) : null,
     args.extra_cost_amount ?? 0,
-    args.extra_cost_description ?? null
+    args.extra_cost_description ?? null,
+    args.external_beneficiary_id ?? null,
+    args.external_start_date ?? null,
+    args.external_end_date ?? null
   ];
   const rows = client ? (await client.query<{ id: string }>(sql, params)).rows : await query<{ id: string }>(sql, params);
 

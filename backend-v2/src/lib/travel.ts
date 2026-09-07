@@ -18,6 +18,10 @@ export type TravelTypeRow = {
   active: boolean;
   requires_accommodation: boolean;
   allowed_payment_methods: string[];
+  // Admin-configured, per travel type - whether this type can be picked for
+  // "Apply for Other" (an advance for an external, non-Econet beneficiary).
+  // Off by default; an admin opts specific types in (e.g. Local, CAM).
+  allow_external_beneficiary: boolean;
 };
 
 export type TravelLocationRow = {
@@ -55,6 +59,7 @@ function mapTravelType(row: TravelTypeRow & { locations?: TravelLocationRow[] })
     currency: row.currency || "LSL",
     requires_accommodation: row.requires_accommodation ?? false,
     allowed_payment_methods: row.allowed_payment_methods?.length ? row.allowed_payment_methods : ["ECOCASH", "BANK"],
+    allow_external_beneficiary: row.allow_external_beneficiary ?? false,
     locations: row.locations || []
   };
 }
@@ -98,6 +103,10 @@ export async function ensureTravelSchema() {
   // (advance_requests.extra_cost_amount/description) - no longer a per-type toggle.
   await query(`ALTER TABLE travel_types DROP COLUMN IF EXISTS has_extra_costs`);
   await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS allowed_payment_methods text[] NOT NULL DEFAULT ARRAY['ECOCASH','BANK']`);
+  // Admin-configured, per travel type - see the "Apply for Other" advance
+  // flow (advances.routes.ts). Off by default; an admin opts specific
+  // types in.
+  await query(`ALTER TABLE travel_types ADD COLUMN IF NOT EXISTS allow_external_beneficiary boolean NOT NULL DEFAULT false`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS travel_locations (
@@ -128,7 +137,7 @@ export async function ensureTravelSchema() {
 
 export async function listTravelTypes(includeInactive = false) {
   const rows = await query<TravelTypeRow>(
-    `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods
+    `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods, allow_external_beneficiary
        FROM travel_types
       ${includeInactive ? "" : "WHERE active = true"}
       ORDER BY name`
@@ -152,7 +161,7 @@ export async function getTravelTypeByCode(code: string) {
   if (!normalized) return null;
   const row = (
     await query<TravelTypeRow>(
-      `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods
+      `SELECT id, code, name, location_mode, rate_kind, rate_general_staff, rate_exco, rate_ceo, currency, active, requires_accommodation, allowed_payment_methods, allow_external_beneficiary
          FROM travel_types
         WHERE code = $1
         LIMIT 1`,

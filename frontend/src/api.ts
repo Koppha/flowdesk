@@ -275,6 +275,8 @@ export const api = {
     req(`/advances/reconciliation-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   clearanceStatusReport: () => req("/advances/clearance-status-report"),
   createAdvance: (data: any) => req("/advances", { method: "POST", body: JSON.stringify(data) }),
+  externalPayees: () => req("/advances/external-payees"),
+  createExternalPayee: (data: any) => req("/advances/external-payees", { method: "POST", body: JSON.stringify(data) }),
   // generic update endpoint; backend should allow editing fields such as type/requested_total/salary_month/etc
   updateAdvance: (id: string, data: any) => req(`/advances/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   // travel-specific lines update (rows)
@@ -343,12 +345,24 @@ export const api = {
 
   overtimeEligibleApprovers: (search: string) => req(`/overtime/eligible-approvers?search=${encodeURIComponent(search)}`),
   publicHolidays: () => req("/overtime/public-holidays"),
-  createPublicHoliday: (data: { holiday_date: string; name: string }) => req("/overtime/public-holidays", { method: "POST", body: JSON.stringify(data) }),
+  createPublicHoliday: (data: { holiday_date: string; name: string; observed_date?: string | null }) => req("/overtime/public-holidays", { method: "POST", body: JSON.stringify(data) }),
+  setHolidayObservedDate: (id: string, observed_date: string | null) => req(`/overtime/public-holidays/${id}`, { method: "PATCH", body: JSON.stringify({ observed_date }) }),
   deletePublicHoliday: (id: string) => req(`/overtime/public-holidays/${id}`, { method: "DELETE" }),
   overtimeSettings: () => req("/overtime/settings"),
   updateOvertimeSettings: (data: any) => req("/overtime/settings", { method: "PUT", body: JSON.stringify(data) }),
   overtimeReportsSummary: () => req("/overtime/reports/summary"),
   overtimeDashboard: () => req("/overtime/dashboard"),
+
+  overtimeClaimPeriods: () => req("/overtime/claim-periods"),
+  openOvertimeClaimPeriod: (year: number, month: number) => req("/overtime/claim-periods", { method: "POST", body: JSON.stringify({ year, month }) }),
+  closeOvertimeClaimPeriod: (id: string) => req(`/overtime/claim-periods/${id}/close`, { method: "POST" }),
+
+  overtimeReport: (report: string, params: Record<string, string> = {}) =>
+    req(`/overtime-reports/${report}?${new URLSearchParams(params).toString()}`),
+  overtimeReportCsv: (report: string, params: Record<string, string> = {}) =>
+    fetchBlob(`/overtime-reports/${report}?${new URLSearchParams({ ...params, format: "csv" }).toString()}`),
+  overtimeReportPdf: (report: string, params: Record<string, string> = {}) =>
+    fetchBlob(`/overtime-reports/${report}?${new URLSearchParams({ ...params, format: "pdf" }).toString()}`),
   aiAnomalies: () => req("/ai/anomalies"),
   aiNlReport: (prompt: string) => req("/ai/nl-report", { method: "POST", body: JSON.stringify({ prompt }) }),
   aiOcrExtract: (text: string) => req("/ai/ocr-extract", { method: "POST", body: JSON.stringify({ text }) }),
