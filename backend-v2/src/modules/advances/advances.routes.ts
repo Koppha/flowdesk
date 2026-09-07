@@ -173,10 +173,18 @@ export async function writeAdvanceAudit(args: {
   );
 }
 
-// Every requester (permanent, intern, or temporary) may have at most one
-// travel advance outstanding (not yet cleared) at a time - clear it before
-// requesting another. SALARY/LOAN advances are administrative, not travel,
-// so they neither count against this limit nor are restricted by it.
+// Every requester (permanent, intern, or temporary) may have at most a
+// capped number of travel advances outstanding at a time. An advance stops
+// counting as "outstanding" as soon as the requester has INITIATED its
+// clearance (submitted it - left DRAFT) - it does not need to have reached a
+// terminal/paid state. A clearance that was REJECTED or CANCELLED never
+// went anywhere, so it does not count as having been initiated (same
+// convention already used by claims.routes.ts's own "does a live clearance
+// exist for this advance" check). This also incidentally fixes an
+// unnoticed staleness: new-style clearances now terminate at COMPLETED, not
+// the legacy CLOSED, which the old `cc.status = 'CLOSED'` check here never
+// recognized. SALARY/LOAN advances are administrative, not travel, so they
+// neither count against this limit nor are restricted by it.
 async function countOutstandingTravelAdvances(requesterId: string, client?: PoolClient): Promise<number> {
   const sql = `SELECT count(*)::text AS count
        FROM advance_requests ar
@@ -185,7 +193,7 @@ async function countOutstandingTravelAdvances(requesterId: string, client?: Pool
         AND ar.status NOT IN ('REJECTED','CANCELLED')
         AND NOT EXISTS (
           SELECT 1 FROM clearance_claims cc
-           WHERE cc.linked_advance_id = ar.id AND cc.status = 'CLOSED'
+           WHERE cc.linked_advance_id = ar.id AND cc.status NOT IN ('DRAFT','REJECTED','CANCELLED')
         )`;
   const rows = client
     ? (await client.query<{ count: string }>(sql, [requesterId])).rows
@@ -211,7 +219,7 @@ async function assertSingleOutstandingTravelAdvance(requester: { id: string; emp
   const cap = travelAdvanceCap(requester);
   const outstanding = await countOutstandingTravelAdvances(requester.id, client);
   if (outstanding >= cap) {
-    throw badRequest(`You already have ${cap} travel advance(s) outstanding - clear one before requesting another`);
+    throw badRequest(`You already have ${cap} travel advance(s) outstanding - submit a clearance for one before requesting another`);
   }
 }
 
