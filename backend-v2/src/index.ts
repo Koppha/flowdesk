@@ -19,11 +19,18 @@ async function runFollowUpScheduler() {
 runFollowUpScheduler();
 setInterval(runFollowUpScheduler, 24 * 60 * 60 * 1000);
 
-// Run once at startup then every 24 h: re-checks every pending advance/claim's
-// currently dynamically-resolved approval step against who that position
-// actually resolves to today, and reassigns + notifies when it's changed -
-// catches a manager becoming available (activated, moved, reporting line
-// fixed) after a request was already submitted against the old resolution.
+// Automatic sweep disabled per explicit request (stopped 2026-09-07) - was:
+// run once at startup then every 24h, re-checking every pending advance/
+// claim's currently dynamically-resolved approval step against who that
+// position actually resolves to today, reassigning + notifying when it
+// changed (e.g. a manager becoming available after a request was already
+// submitted against the old resolution). The underlying function is
+// untouched and still reachable on demand via the admin-only
+// POST /admin/approval-maintenance/reassign route
+// (modules/admin/approval-maintenance.routes.ts) - only the automatic
+// every-24h trigger is off. Re-enable by restoring the two lines below.
+// runApprovalReassignmentSweep();
+// setInterval(runApprovalReassignmentSweep, 24 * 60 * 60 * 1000);
 async function runApprovalReassignmentSweep() {
   try {
     const { reassignments, warnings } = await reassignAllPendingApprovals();
@@ -37,8 +44,7 @@ async function runApprovalReassignmentSweep() {
     logger.warn("approval_reassignment_sweep_failed", { error: String(err) });
   }
 }
-runApprovalReassignmentSweep();
-setInterval(runApprovalReassignmentSweep, 24 * 60 * 60 * 1000);
+void runApprovalReassignmentSweep; // retained for the admin route / re-enabling later; not auto-invoked
 
 startVendorContractReminderWorker();
 
