@@ -6918,7 +6918,7 @@ export default function App() {
               <div className="form-grid-2">
                 <div className="form-field">
                   <label>Date</label>
-                  <input type="date" value={requestDate} onChange={(e) => setRequestDate(e.target.value)} />
+                  <input type="date" value={requestDate} readOnly disabled />
                 </div>
                 <div className="form-field" ref={paymentMethodFieldRef}>
                   <label>Receive Via</label>
