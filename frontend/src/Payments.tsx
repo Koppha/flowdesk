@@ -78,12 +78,21 @@ export default function Payments(props: { onBack?: () => void }) {
   async function refresh() {
     setError(null);
     try {
-      const [advancesResp, accommodationResp] = await Promise.all([
+      // Settled independently, not Promise.all'd: a viewer who is allowed to
+      // see advance payments but (for whatever permission-config reason) is
+      // denied the accommodation sub-fetch should still see the advances they
+      // ARE allowed to act on, instead of one 403 blanking the whole page.
+      const [advancesResult, accommodationResult] = await Promise.allSettled([
         api.payments({ status: "all", limit: 200 }),
         api.accommodationPayments({ status: "all", limit: 200 })
       ]);
-      const allItems = [...(advancesResp.items || []), ...(accommodationResp.items || [])];
-      setItems(allItems);
+      const advancesItems = advancesResult.status === "fulfilled" ? (advancesResult.value.items || []) : [];
+      const accommodationItems = accommodationResult.status === "fulfilled" ? (accommodationResult.value.items || []) : [];
+      setItems([...advancesItems, ...accommodationItems]);
+      const failures = [advancesResult, accommodationResult].filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failures.length) {
+        setError(failures.map((f) => String(f.reason?.message || f.reason)).join(" | "));
+      }
     } catch (e: any) {
       setError(String(e.message));
     }

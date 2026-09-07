@@ -3,8 +3,8 @@ import path from "path";
 import multer from "multer";
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, requireAuth, requireFeatureAccess, requireRole } from "../../lib/auth.js";
-import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
+import { AuthedRequest, hasFeatureAccess, requireAuth, requireFeatureAccess, requireRole } from "../../lib/auth.js";
+import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
@@ -330,8 +330,16 @@ accommodationRouter.get("/", requireFeatureAccess("accommodation", ["ADMIN", "Se
 accommodationRouter.get("/payments", async (req: AuthedRequest, res, next) => {
   try {
     const role = req.user!.role;
-    const isCentralFinance = await isCompensationFinanceSection(req.user!.sectionId);
-    const allowed = role === "ADMIN" || isCentralFinance;
+    // Mirror GET /advances/payments' permission check exactly: also honor the
+    // admin-configured "payments" group grant (admin_feature_permissions), not
+    // just real Finance-section authority. Without this, a user granted access
+    // via a group (e.g. "Department: Finance Operations") could see/act on the
+    // advances side of the combined Payments page but get a hard 403 here,
+    // which - since the frontend fetches both in one Promise.all - blanks out
+    // the entire page instead of just omitting accommodation rows.
+    const isCentralFinance = await isCompensationFinanceUser(req);
+    const allowed = (await hasFeatureAccess(req.user!.userId, role, "payments", ["ADMIN", "Department: Finance"]))
+      || isCentralFinance;
     if (!allowed) throw forbidden();
 
     const statusParam = String(req.query.status || "all") as "pending" | "paid" | "all";
