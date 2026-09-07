@@ -247,7 +247,12 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
               <tbody>
                 {paged.map((a) => (
                   <tr key={a.id}>
-                    <td style={{ fontWeight: 600 }}>{travelTypeLabel(a.type, travelTypes)}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {travelTypeLabel(a.type, travelTypes)}
+                      {a.type === "OTHER" && a.external_beneficiary_name && (
+                        <div style={{ fontWeight: 400, fontSize: 11.5, color: "var(--muted)" }}>For {a.external_beneficiary_name}</div>
+                      )}
+                    </td>
                     <td><strong>{requestNumber(a)}</strong></td>
                     <td>
                       <span className={`status-pill ${statusTone(a.status)}`}>{currentApprovalStepLabel(a) || (isAdvancePastApproval(a) ? "Approved" : statusLabel(a.status))}</span>

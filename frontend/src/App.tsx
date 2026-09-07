@@ -46,6 +46,7 @@ import MyAdvances from "./MyAdvances";
 import MyClearances from "./MyClearances";
 import ReportApprovalPerformance from "./ReportApprovalPerformance";
 import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
+import OvertimeReportsHub from "./OvertimeReportsHub";
 import ReportAuditTrail from "./ReportAuditTrail";
 import ReportReconciliation from "./ReportReconciliation";
 import ReportTourEngagement from "./ReportTourEngagement";
@@ -434,7 +435,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -536,6 +537,7 @@ export default function App() {
   const [refundableCount, setRefundableCount] = useState(0);
   const [hasTreasuryAccess, setHasTreasuryAccess] = useState(false);
   const [treasuryCount, setTreasuryCount] = useState(0);
+  const [hasOvertimeFinanceAccess, setHasOvertimeFinanceAccess] = useState(false);
   const [hasItProvisioningAccess, setHasItProvisioningAccess] = useState(false);
   const [itProvisioningCount, setItProvisioningCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
@@ -558,6 +560,7 @@ export default function App() {
   const [newTravelTypeCurrency, setNewTravelTypeCurrency] = useState("LSL");
   const [newTravelTypeRequiresAccommodation, setNewTravelTypeRequiresAccommodation] = useState(false);
   const [newTravelTypeAllowedPaymentMethods, setNewTravelTypeAllowedPaymentMethods] = useState<("ECOCASH" | "BANK")[]>(["ECOCASH", "BANK"]);
+  const [newTravelTypeAllowExternalBeneficiary, setNewTravelTypeAllowExternalBeneficiary] = useState(false);
   const [editingTravelType, setEditingTravelType] = useState<TravelType | null>(null);
   const [showAddTravelTypeModal, setShowAddTravelTypeModal] = useState(false);
   const [showAddHotelModal, setShowAddHotelModal] = useState(false);
@@ -912,6 +915,23 @@ export default function App() {
   const [salaryAmount, setSalaryAmount] = useState("0");
   const [loanPaybackDuration, setLoanPaybackDuration] = useState("");
   const [loanAmount, setLoanAmount] = useState("");
+  // "Apply for Other" - an advance for an external, non-Econet beneficiary.
+  // The requester still receives the funds themselves (same Receive Via
+  // fields as any advance) - this is just who the money is actually for.
+  const [isApplyForOther, setIsApplyForOther] = useState(false);
+  // Apply for Other skips the day-by-day travel table entirely - just the
+  // external person's particulars, purpose, and a manually-entered amount.
+  const [otherAmount, setOtherAmount] = useState("");
+  const [otherStartDate, setOtherStartDate] = useState("");
+  const [otherFinishDate, setOtherFinishDate] = useState("");
+  const [externalPayees, setExternalPayees] = useState<any[]>([]);
+  const [externalBeneficiaryId, setExternalBeneficiaryId] = useState("");
+  const [showNewExternalPayeeForm, setShowNewExternalPayeeForm] = useState(false);
+  const [newPayeeName, setNewPayeeName] = useState("");
+  const [newPayeeCategory, setNewPayeeCategory] = useState("");
+  const [newPayeeOrg, setNewPayeeOrg] = useState("");
+  const [newPayeeContact, setNewPayeeContact] = useState("");
+  const [savingNewPayee, setSavingNewPayee] = useState(false);
   const [extraCostAmount, setExtraCostAmount] = useState("");
   const [extraCostDescription, setExtraCostDescription] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<"ECOCASH" | "BANK">("ECOCASH");
@@ -1042,7 +1062,15 @@ export default function App() {
   );
   const isSelectedCountrySouthAfrica = rows.some((row) => row.country.trim().toLowerCase() === "south africa");
   const travelTypeOptions = travelTypes.filter((type) => type.active !== false);
+  // Admin opts specific travel types in (Travel Setup's "Allow Apply for
+  // Other" checkbox) - Salary/Loan are never offered for an external
+  // beneficiary at all.
+  const applyForOtherTypeOptions = travelTypeOptions.filter((type) => type.allow_external_beneficiary);
   const isTravelAdvanceSelected = Boolean(selectedTravelType);
+  // Apply for Other never uses the day-by-day travel table/per-diem
+  // calculation, even if a real travel type happens to be selected - just
+  // the external beneficiary, purpose, and a manually-entered amount.
+  const showTravelBreakdown = isTravelAdvanceSelected && !isApplyForOther;
   const allowedPaymentMethods: ("ECOCASH" | "BANK")[] = selectedTravelType?.allowed_payment_methods?.length
     ? selectedTravelType.allowed_payment_methods
     : ["ECOCASH", "BANK"];
@@ -1058,9 +1086,10 @@ export default function App() {
     },
     { meals: 0, amount: 0 }
   );
-  const extraCost = isTravelAdvanceSelected ? (Number(extraCostAmount) || 0) : 0;
+  const extraCost = showTravelBreakdown ? (Number(extraCostAmount) || 0) : 0;
   const totalRequested = () => {
-    if (isTravelAdvanceSelected) return rowTotals.amount + extraCost;
+    if (isApplyForOther) return Number(otherAmount) || 0;
+    if (showTravelBreakdown) return rowTotals.amount + extraCost;
     if (advanceType === "SALARY") return Number(salaryAmount) || 0;
     if (advanceType === "LOAN") return Number(loanAmount) || 0;
     return 0;
@@ -1333,6 +1362,10 @@ export default function App() {
   // employment type (see resolveAdvanceRequester on the backend).
   const canCreateForOthers = (profileCompleted && employmentType === "PERMANENT") || myPaPrincipals.length > 0;
   const canOpenAdvanceForm = canRequestForSelf || canCreateForOthers;
+  // "Apply for Other" (an advance for an external, non-Econet beneficiary) -
+  // only permanent employees, same authorization axis as creating an
+  // advance on behalf of another (internal) employee.
+  const canApplyForExternal = profileCompleted && employmentType === "PERMANENT";
   const eligibleBeneficiaries = useMemo(() => {
     const fromDirectory = requestDirectory.filter(
       (user) =>
@@ -1461,7 +1494,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, treasuryAccessResp, itProvisioningAccessResp, moduleFlagsResp, vendorContractsAccessResp, serviceContractsAccessResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, treasuryAccessResp, itProvisioningAccessResp, moduleFlagsResp, vendorContractsAccessResp, serviceContractsAccessResp, overtimeDashboardResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1493,6 +1526,7 @@ export default function App() {
       }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true }, "Module flags"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.vendorContractsAccess(), { allowed: false }, "Vendor Contracts access"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.serviceContractsAccess(), { allowed: false }, "Service Contracts access"),
+      optionalStartupData<{ is_finance?: boolean }>(api.overtimeDashboard(), { is_finance: false }, "Overtime dashboard"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -1559,6 +1593,7 @@ export default function App() {
     setRefundableCount(refundableAccessResp?.pendingCount || 0);
     setHasTreasuryAccess(Boolean(treasuryAccessResp?.allowed));
     setTreasuryCount(treasuryAccessResp?.pendingCount || 0);
+    setHasOvertimeFinanceAccess(Boolean(overtimeDashboardResp?.is_finance));
     setHasItProvisioningAccess(Boolean(itProvisioningAccessResp?.allowed));
     setItProvisioningCount((itProvisioningAccessResp?.awaitingProvisioning || 0) + (itProvisioningAccessResp?.inProgress || 0));
     setHasVendorContractsAccess(Boolean(vendorContractsAccessResp?.allowed));
@@ -1956,7 +1991,8 @@ export default function App() {
         currency: newTravelTypeCurrency,
         active: true,
         requires_accommodation: newTravelTypeRequiresAccommodation,
-        allowed_payment_methods: newTravelTypeAllowedPaymentMethods
+        allowed_payment_methods: newTravelTypeAllowedPaymentMethods,
+        allow_external_beneficiary: newTravelTypeAllowExternalBeneficiary
       });
       setNewTravelTypeName("");
       setNewTravelTypeGeneralRate("0");
@@ -1965,6 +2001,7 @@ export default function App() {
       setNewTravelTypeCurrency("LSL");
       setNewTravelTypeRequiresAccommodation(false);
       setNewTravelTypeAllowedPaymentMethods(["ECOCASH", "BANK"]);
+      setNewTravelTypeAllowExternalBeneficiary(false);
       await loadTravelTypes();
       alert("Travel type saved.");
     } catch (e: any) {
@@ -1991,7 +2028,8 @@ export default function App() {
         currency: type.currency ?? "LSL",
         active: type.active !== false,
         requires_accommodation: type.requires_accommodation ?? false,
-        allowed_payment_methods: type.allowed_payment_methods
+        allowed_payment_methods: type.allowed_payment_methods,
+        allow_external_beneficiary: type.allow_external_beneficiary ?? false
       });
       await loadTravelTypes();
       alert("Travel type updated.");
@@ -2817,6 +2855,16 @@ export default function App() {
     setSalaryPaybackDuration("");
     setLoanPaybackDuration("");
     setLoanAmount("");
+    setIsApplyForOther(false);
+    setOtherAmount("");
+    setOtherStartDate("");
+    setOtherFinishDate("");
+    setExternalBeneficiaryId("");
+    setShowNewExternalPayeeForm(false);
+    setNewPayeeName("");
+    setNewPayeeCategory("");
+    setNewPayeeOrg("");
+    setNewPayeeContact("");
     setExtraCostAmount("");
     setExtraCostDescription("");
     setPaymentMethod("ECOCASH");
@@ -3300,6 +3348,14 @@ export default function App() {
     setAdvanceType(detail.type || null);
     setSalaryAmount(detail.type === "SALARY" ? String(detail.requested_total || 0) : "0");
     setLoanAmount(detail.type === "LOAN" ? String(detail.requested_total || 0) : "");
+    setIsApplyForOther(Boolean(detail.external_beneficiary_id));
+    setOtherAmount(detail.external_beneficiary_id ? String(detail.requested_total || 0) : "");
+    setOtherStartDate(detail.external_start_date || "");
+    setOtherFinishDate(detail.external_end_date || "");
+    setExternalBeneficiaryId(detail.external_beneficiary_id ? String(detail.external_beneficiary_id) : "");
+    if (detail.external_beneficiary_id) {
+      api.externalPayees().then(setExternalPayees).catch(() => setExternalPayees([]));
+    }
     setExtraCostAmount(Number(detail.extra_cost_amount || 0) > 0 ? String(detail.extra_cost_amount) : "");
     setExtraCostDescription(detail.extra_cost_description || "");
     setRows(detail.lines ? detail.lines.map((line: any) => travelRowFromLine(line)) : []);
@@ -4490,7 +4546,7 @@ export default function App() {
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
                 )}
-                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
+                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
               </div>
             </div>
           )}
@@ -4513,8 +4569,8 @@ export default function App() {
               </div>
             </div>
           )}
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               {canAccessFeature("report_advances") && (
                 <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
@@ -4634,6 +4690,8 @@ export default function App() {
             <ReportAuditReconciliation onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_DEPT_DIVISION" ? (
             <ReportDeptDivisionClearance onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_OVERTIME" ? (
+            <OvertimeReportsHub onBack={() => setPage("REPORTS")} />
           ) : page === "IT_PROVISIONING" ? (
             <ITProvisioning />
           ) : page === "OVERTIME" ? (
@@ -5966,6 +6024,10 @@ export default function App() {
                         <input type="checkbox" checked={newTravelTypeRequiresAccommodation} onChange={(e) => setNewTravelTypeRequiresAccommodation(e.target.checked)} />
                         <span>Requires accommodation booking</span>
                       </label>
+                      <label className="ep-checkbox-label">
+                        <input type="checkbox" checked={newTravelTypeAllowExternalBeneficiary} onChange={(e) => setNewTravelTypeAllowExternalBeneficiary(e.target.checked)} />
+                        <span>Allow "Apply for Other" (external beneficiary)</span>
+                      </label>
                     </div>
                     <div className="ep-modal-footer">
                       <button className="ep-btn-outline" onClick={() => setShowAddTravelTypeModal(false)}>Cancel</button>
@@ -6055,6 +6117,10 @@ export default function App() {
                       <label className="ep-checkbox-label">
                         <input type="checkbox" checked={editingTravelType.requires_accommodation ?? false} onChange={(e) => setEditingTravelType({ ...editingTravelType, requires_accommodation: e.target.checked })} />
                         <span>Requires accommodation booking</span>
+                      </label>
+                      <label className="ep-checkbox-label">
+                        <input type="checkbox" checked={editingTravelType.allow_external_beneficiary ?? false} onChange={(e) => setEditingTravelType({ ...editingTravelType, allow_external_beneficiary: e.target.checked })} />
+                        <span>Allow "Apply for Other" (external beneficiary)</span>
                       </label>
                     </div>
                     <div className="ep-modal-footer">
@@ -6352,6 +6418,9 @@ export default function App() {
                     { icon: <Clock3 size={26} />, color: "#db2777", bg: "#fce7f3", title: "Clearance Ageing", desc: "How long incomplete clearances have sat in each stage.", action: () => setPage("REPORT_AGEING"), live: true },
                     { icon: <ShieldCheck size={26} />, color: "#dc2626", bg: "#fee2e2", title: "Treasury Audit & Reconciliation", desc: "Flags settlement discrepancies, missing references, and overdue items.", action: () => setPage("REPORT_TREASURY_AUDIT"), live: true },
                     { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Department & Division", desc: "Clearance activity summarized by division and department.", action: () => setPage("REPORT_DEPT_DIVISION"), live: true },
+                  ] : []),
+                  ...(role === "ADMIN" || hasOvertimeFinanceAccess ? [
+                    { icon: <Clock3 size={26} />, color: "#b45309", bg: "#fef3c7", title: "Overtime Reports", desc: "Payment queue, allowance report, and paid history — filtered and exportable.", action: () => setPage("REPORT_OVERTIME"), live: true },
                   ] : []),
                 ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}
@@ -6711,7 +6780,29 @@ export default function App() {
               {canCreateForOthers && !editingAdvanceId && (
                 <div className="form-field">
                   <label>Request For</label>
-                  <select value={requestForUserId} onChange={(e) => setRequestForUserId(e.target.value)}>
+                  <select
+                    value={isApplyForOther ? "__EXTERNAL__" : requestForUserId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "__EXTERNAL__") {
+                        // Still a self-request underneath (requestForUserId
+                        // stays "me") - the requester receives the funds and
+                        // stays accountable, they just aren't the traveller.
+                        setIsApplyForOther(true);
+                        // A previously-picked type might not be enabled for
+                        // Apply for Other - force a fresh, valid pick.
+                        setAdvanceType(null);
+                        setRequestForUserId(profile?.id || me?.userId || "");
+                        if (externalPayees.length === 0) {
+                          api.externalPayees().then(setExternalPayees).catch(() => setExternalPayees([]));
+                        }
+                      } else {
+                        setIsApplyForOther(false);
+                        setExternalBeneficiaryId("");
+                        setRequestForUserId(val);
+                      }
+                    }}
+                  >
                     {canRequestForSelf && (
                       <option value={profile?.id || me?.userId || ""}>Myself</option>
                     )}
@@ -6720,7 +6811,96 @@ export default function App() {
                         {formatPersonLabel(user)} - {fmtEmploymentType(user.employment_type)}
                       </option>
                     ))}
+                    {canApplyForExternal && <option value="__EXTERNAL__">Apply for Other</option>}
                   </select>
+                </div>
+              )}
+
+              {isApplyForOther && (
+                <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+                  <div className="form-field">
+                    <label>External Beneficiary</label>
+                    <select value={externalBeneficiaryId} onChange={(e) => setExternalBeneficiaryId(e.target.value)}>
+                      <option value="">Select who this is for…</option>
+                      {externalPayees.map((p: any) => (
+                        <option key={p.id} value={p.id}>{p.full_name}{p.organisation ? ` — ${p.organisation}` : ""}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="link-button"
+                      style={{ marginTop: 6 }}
+                      onClick={() => setShowNewExternalPayeeForm((v) => !v)}
+                    >
+                      {showNewExternalPayeeForm ? "Cancel" : "+ New External Payee"}
+                    </button>
+                  </div>
+                  <div className="form-field">
+                    <label>Amount</label>
+                    <input type="number" value={otherAmount} onChange={(e) => setOtherAmount(e.target.value)} placeholder="0" />
+                  </div>
+                  <div className="form-grid-2">
+                    <div className="form-field">
+                      <label>Start Date</label>
+                      <input type="date" value={otherStartDate} onChange={(e) => setOtherStartDate(e.target.value)} />
+                    </div>
+                    <div className="form-field">
+                      <label>Finish Date</label>
+                      <input type="date" value={otherFinishDate} onChange={(e) => setOtherFinishDate(e.target.value)} />
+                    </div>
+                  </div>
+                  {showNewExternalPayeeForm && (
+                    <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+                      <div className="form-grid-2">
+                        <div className="form-field">
+                          <label>Full Name</label>
+                          <input value={newPayeeName} onChange={(e) => setNewPayeeName(e.target.value)} placeholder="e.g. Karabo Ntsane" />
+                        </div>
+                        <div className="form-field">
+                          <label>Category</label>
+                          <input value={newPayeeCategory} onChange={(e) => setNewPayeeCategory(e.target.value)} placeholder="e.g. Contractor" />
+                        </div>
+                        <div className="form-field">
+                          <label>Organisation</label>
+                          <input value={newPayeeOrg} onChange={(e) => setNewPayeeOrg(e.target.value)} placeholder="optional" />
+                        </div>
+                        <div className="form-field">
+                          <label>Phone / Email</label>
+                          <input value={newPayeeContact} onChange={(e) => setNewPayeeContact(e.target.value)} placeholder="optional" />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="button button-subtle small-button"
+                        disabled={savingNewPayee || !newPayeeName.trim()}
+                        onClick={async () => {
+                          setSavingNewPayee(true);
+                          try {
+                            const created: any = await api.createExternalPayee({
+                              full_name: newPayeeName.trim(),
+                              category: newPayeeCategory.trim() || undefined,
+                              organisation: newPayeeOrg.trim() || undefined,
+                              phone: newPayeeContact.trim() || undefined
+                            });
+                            const refreshed: any[] = await api.externalPayees();
+                            setExternalPayees(refreshed);
+                            setExternalBeneficiaryId(created.id);
+                            setShowNewExternalPayeeForm(false);
+                            setNewPayeeName(""); setNewPayeeCategory(""); setNewPayeeOrg(""); setNewPayeeContact("");
+                          } catch (e: any) {
+                            alert("Error: " + e.message);
+                          } finally {
+                            setSavingNewPayee(false);
+                          }
+                        }}
+                      >
+                        Save Payee
+                      </button>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>
+                    You receive the funds and remain accountable — approval follows your own workflow chain, same as any advance.
+                  </div>
                 </div>
               )}
 
@@ -6811,16 +6991,31 @@ export default function App() {
                   }}
                 >
                   <option value="">Select advance type</option>
-                  <optgroup label="Travel">
-                    {travelTypeOptions.map((type) => (
-                      <option key={type.code} value={type.code}>{type.name}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Other advances">
-                    {salaryAdvanceEnabled && <option value="SALARY">Salary</option>}
-                    {loanAdvanceEnabled && <option value="LOAN">Loan</option>}
-                  </optgroup>
+                  {isApplyForOther ? (
+                    <optgroup label="Travel">
+                      {applyForOtherTypeOptions.map((type) => (
+                        <option key={type.code} value={type.code}>{type.name}</option>
+                      ))}
+                    </optgroup>
+                  ) : (
+                    <>
+                      <optgroup label="Travel">
+                        {travelTypeOptions.map((type) => (
+                          <option key={type.code} value={type.code}>{type.name}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Other advances">
+                        {salaryAdvanceEnabled && <option value="SALARY">Salary</option>}
+                        {loanAdvanceEnabled && <option value="LOAN">Loan</option>}
+                      </optgroup>
+                    </>
+                  )}
                 </select>
+                {isApplyForOther && applyForOtherTypeOptions.length === 0 && (
+                  <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                    No advance types are enabled for "Apply for Other" yet — ask an admin to enable one in Travel Setup.
+                  </div>
+                )}
               </div>
 
               {advanceType === "SALARY" && (
@@ -6867,7 +7062,7 @@ export default function App() {
               )}
 
               {/* breakdown table for travel */}
-              {isTravelAdvanceSelected && selectedTravelType && (
+              {showTravelBreakdown && selectedTravelType && (
                 <>
                   <div className="card" style={{ marginBottom: 12, padding: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -7415,7 +7610,27 @@ export default function App() {
                         alert("Please choose a payback duration.");
                         return;
                       }
-                      if (isTravelAdvanceSelected && extraCost > 0 && !extraCostDescription.trim()) {
+                      if (isApplyForOther && !canApplyForExternal) {
+                        alert("Only permanent employees can apply for an advance on behalf of someone outside Econet.");
+                        return;
+                      }
+                      if (isApplyForOther && !externalBeneficiaryId) {
+                        alert("Select who this advance is for.");
+                        return;
+                      }
+                      if (isApplyForOther && (Number(otherAmount) || 0) <= 0) {
+                        alert("Amount must be greater than 0.");
+                        return;
+                      }
+                      if (isApplyForOther && (!otherStartDate || !otherFinishDate)) {
+                        alert("Start date and finish date are required.");
+                        return;
+                      }
+                      if (isApplyForOther && otherFinishDate < otherStartDate) {
+                        alert("Finish date cannot be before the start date.");
+                        return;
+                      }
+                      if (showTravelBreakdown && extraCost > 0 && !extraCostDescription.trim()) {
                         alert("Please justify the extra cost.");
                         return;
                       }
@@ -7461,11 +7676,11 @@ export default function App() {
                           return;
                         }
                       }
-                      if (isTravelAdvanceSelected && rows.length < 1) {
+                      if (showTravelBreakdown && rows.length < 1) {
                         alert("At least one entry is required in the travel table.");
                         return;
                       }
-                      if (isTravelAdvanceSelected && selectedTravelType) {
+                      if (showTravelBreakdown && selectedTravelType) {
                         if (selectedTravelRate <= 0) {
                           alert("HR must set the rate before this travel type can be submitted.");
                           return;
@@ -7523,7 +7738,7 @@ export default function App() {
                         base.salary_month = monthField;
                         base.payback_months = Number(salaryPaybackDuration) || undefined;
                       }
-                      if (isTravelAdvanceSelected) {
+                      if (showTravelBreakdown) {
                         base.requested_total = Number(totalRequested()) || 0;
                         base.extra_cost_amount = extraCost;
                         base.extra_cost_description = extraCostDescription.trim() || undefined;
@@ -7532,10 +7747,21 @@ export default function App() {
                         base.requested_total = Number(loanAmount) || 0;
                         base.payback_months = Number(loanPaybackDuration) || undefined;
                       }
+                      if (isApplyForOther) {
+                        // Always the manually-entered amount, overriding
+                        // whatever the selected Advance Type's own branch
+                        // above set - Apply for Other never uses the
+                        // per-diem/rows calculation, salary amount, or loan
+                        // amount, no matter which type is picked alongside it.
+                        base.requested_total = Number(otherAmount) || 0;
+                        base.external_beneficiary_id = externalBeneficiaryId;
+                        base.external_start_date = otherStartDate;
+                        base.external_end_date = otherFinishDate;
+                      }
                       if (editingAdvanceId) {
                         // update existing request
                         await api.updateAdvance(editingAdvanceId, base);
-                        if (isTravelAdvanceSelected && selectedTravelType) {
+                        if (showTravelBreakdown && selectedTravelType) {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
                             location: selectedTravelType.location_mode === "DISTRICT"
@@ -7564,7 +7790,7 @@ export default function App() {
                         // create new request, then send any additional details
                         const resp: any = await api.createAdvance(base);
                         const newId = resp.id;
-                        if (isTravelAdvanceSelected && selectedTravelType) {
+                        if (showTravelBreakdown && selectedTravelType) {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
                             location: selectedTravelType.location_mode === "DISTRICT"
@@ -7611,7 +7837,11 @@ export default function App() {
                     </div>
                     <div>
                       <dt>Request For</dt>
-                      <dd>{requestForUserId === (profile?.id || me?.userId || "") ? "Myself" : requesterName || "Myself"}</dd>
+                      <dd>
+                        {isApplyForOther
+                          ? `Apply for Other${externalBeneficiaryId ? ` — ${externalPayees.find((p: any) => p.id === externalBeneficiaryId)?.full_name || ""}` : ""}`
+                          : requestForUserId === (profile?.id || me?.userId || "") ? "Myself" : requesterName || "Myself"}
+                      </dd>
                     </div>
                     <div>
                       <dt>Date</dt>

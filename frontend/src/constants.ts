@@ -73,6 +73,7 @@ export type TravelType = {
   active?: boolean;
   requires_accommodation?: boolean;
   allowed_payment_methods?: ("ECOCASH" | "BANK")[];
+  allow_external_beneficiary?: boolean;
   locations?: TravelLocation[];
 };
 
@@ -80,6 +81,7 @@ export function travelTypeLabel(code: string | null | undefined, travelTypes: Tr
   if (!code) return "—";
   if (code === "SALARY") return "Salary";
   if (code === "LOAN") return "Loan";
+  if (code === "OTHER") return "Apply for Other";
   return travelTypes.find((type) => type.code === code)?.name || code;
 }
 
