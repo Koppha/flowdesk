@@ -55,7 +55,7 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
+import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeCurrency, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
@@ -446,10 +446,6 @@ function clearanceMonthYearRange(): number[] {
   const years: number[] = [];
   for (let y = current - 2; y <= current + 1; y++) years.push(y);
   return years;
-}
-
-function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
-  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
 }
 
 type PaybackProofFormState = { amount_paid: string; payment_date: string; reference: string; comment: string; file: File | null };

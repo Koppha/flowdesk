@@ -1,15 +1,11 @@
 import React, { useMemo, useState } from "react";
-import { formatMoney, TravelType } from "./constants";
+import { formatMoney, travelTypeCurrency, TravelType } from "./constants";
 import { CheckCircle, Clock, TrendingUp, Users, XCircle } from "lucide-react";
 
 interface Props {
   advances: any[];
   travelTypes: TravelType[];
   onBack: () => void;
-}
-
-function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
-  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
 }
 
 function fmtH(h: number | null): string {
