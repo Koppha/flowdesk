@@ -391,14 +391,18 @@ export async function resolveClaimPdfData(id: string): Promise<ResolvedPdfData> 
 
 export async function resolveAccommodationPdfData(id: string): Promise<ResolvedPdfData> {
   const rows = await query<any>(
-    `SELECT acc.*, u.full_name AS requester_name, u.department AS department
+    `SELECT acc.*, u.full_name AS requester_name, u.department AS department,
+            COALESCE(tt.currency, 'LSL') AS currency
        FROM accommodation_requests acc
        JOIN users u ON u.id = acc.requester_id
+       LEFT JOIN advance_requests ar ON ar.id = acc.advance_request_id
+       LEFT JOIN travel_types tt ON tt.code = ar.type
       WHERE acc.id = $1`,
     [id]
   );
   const acc = rows[0];
   if (!acc) throw new Error("Accommodation request not found");
+  const currency = acc.currency || "LSL";
 
   return {
     scalars: {
@@ -411,7 +415,7 @@ export async function resolveAccommodationPdfData(id: string): Promise<ResolvedP
       provider: acc.provider || "",
       check_in: formatDate(acc.check_in),
       check_out: formatDate(acc.check_out),
-      amount: formatMoney(acc.amount),
+      amount: formatMoney(acc.amount, currency),
       notes: acc.notes || "",
       paid_reference: acc.paid_reference || "",
       paid_at: formatDateTime(acc.paid_at),

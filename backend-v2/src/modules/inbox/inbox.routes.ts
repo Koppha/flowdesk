@@ -648,11 +648,13 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
                 requester.full_name AS requester_name,
                 creator.full_name AS created_by_name,
                 ar.approval_chain,
-                dv.name AS division
+                dv.name AS division,
+                COALESCE(tt.currency, 'LSL') AS currency
            FROM accommodation_requests acc
            JOIN users requester ON requester.id = acc.requester_id
            JOIN users creator ON creator.id = acc.created_by_id
            JOIN advance_requests ar ON ar.id = acc.advance_request_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
            LEFT JOIN divisions dv ON dv.id = requester.division_id
           ORDER BY acc.created_at DESC`
       );
@@ -689,6 +691,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           id: a.id,
           status: a.status,
           amount: Number(a.amount),
+          currency: a.currency,
           location: a.location,
           provider: a.provider,
           requester_name: a.requester_name,

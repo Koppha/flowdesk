@@ -1105,6 +1105,7 @@ export default function App() {
   const newClearanceAdvanceOptions = clearableTravelAdvances.filter((a) => !claimedAdvanceIds.has(a.id));
   const selectedClearanceAdvance = clearableTravelAdvances.find((a) => a.id === clearanceLinkedAdvanceId) || null;
   const clearanceAdvanceAmount = Number(selectedClearanceAdvance?.approved_total || 0);
+  const clearanceCurrency = travelTypeCurrency(selectedClearanceAdvance?.type, travelTypes);
   // Actual expenditure is captured per trip line by the employee (Meals /
   // Transport / Other) so it can exceed the advance — the variance against the
   // advance drives the overspend / underspend settlement below.
@@ -3677,16 +3678,26 @@ export default function App() {
       (groups[item.doc_type] ||= []).push(item);
     }
     return Object.entries(groups).map(([docType, items]) => {
-      const total = items.reduce((sum, it) => sum + dashboardDocTypeAmount(it), 0);
-      const byStage: Record<string, { count: number; amount: number }> = {};
+      // A single docType group (e.g. all pending ADVANCE items) can span
+      // several travel-type currencies at once (local LSL travel alongside
+      // international USD travel) - sum per currency rather than blending
+      // unlike currencies into one number, same convention as
+      // monthlySpendByCurrency above.
+      const totalsByCurrency = new Map<string, number>();
+      for (const it of items) {
+        const currency = it.currency || "LSL";
+        totalsByCurrency.set(currency, (totalsByCurrency.get(currency) || 0) + dashboardDocTypeAmount(it));
+      }
+      const byStage: Record<string, { count: number; amountsByCurrency: Map<string, number> }> = {};
       for (const it of items) {
         const stage = it.current_step_position_name;
         if (!stage) continue;
-        byStage[stage] ||= { count: 0, amount: 0 };
+        const currency = it.currency || "LSL";
+        byStage[stage] ||= { count: 0, amountsByCurrency: new Map() };
         byStage[stage].count += 1;
-        byStage[stage].amount += dashboardDocTypeAmount(it);
+        byStage[stage].amountsByCurrency.set(currency, (byStage[stage].amountsByCurrency.get(currency) || 0) + dashboardDocTypeAmount(it));
       }
-      return { docType, count: items.length, total, byStage };
+      return { docType, count: items.length, totalsByCurrency: Array.from(totalsByCurrency.entries()), byStage };
     });
   }, [inboxItems]);
 
@@ -3913,7 +3924,7 @@ export default function App() {
                       <div><dt>Process</dt><dd>{requestType}</dd></div>
                       <div><dt>Business Unit</dt><dd>{businessUnit}</dd></div>
                       <div><dt>Division</dt><dd>{department}</dd></div>
-                      <div><dt>Amount Requested</dt><dd>{fmtMoney(amount)}</dd></div>
+                      <div><dt>Amount Requested</dt><dd>{fmtMoney(amount, advance.currency ?? travelTypeCurrency(advance.type, travelTypes))}</dd></div>
                       <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
                     </dl>
                   </section>
@@ -6571,8 +6582,8 @@ export default function App() {
                                   {currentApprovalStepLabel(adv) ? `Pending ${currentApprovalStepLabel(adv)} Approval` : advanceStageLabel(adv)}
                                 </span>
                               </td>
-                              <td style={{ fontWeight: 600 }}>{fmtMoney(adv.requested_total)}</td>
-                              <td style={{ color: "var(--muted)" }}>{fmtMoney(adv.approved_total)}</td>
+                              <td style={{ fontWeight: 600 }}>{fmtMoney(adv.requested_total, travelTypeCurrency(adv.type, travelTypes))}</td>
+                              <td style={{ color: "var(--muted)" }}>{fmtMoney(adv.approved_total, travelTypeCurrency(adv.type, travelTypes))}</td>
                             </tr>
                           );
                         })}
@@ -8014,9 +8025,9 @@ export default function App() {
                 <div style={{ fontWeight: 600, color: "#2563eb", marginBottom: 14 }}>Advance Reconciliation Summary</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
                   {[
-                    { label: "Advance Received", value: fmtMoney(clearanceAdvanceAmount), sub: "", color: "var(--text)", icon: ArrowRightLeft, iconBg: "#dbeafe", iconColor: "#2563eb" },
-                    { label: "Actual Expenditure", value: fmtMoney(clearanceTotals.total), sub: "", color: "var(--text)", icon: Wallet, iconBg: "#ffedd5", iconColor: "#ea580c" },
-                    { label: "Variance (Over / Under)", value: `${clearanceBalance < 0 ? "-" : ""}${fmtMoney(Math.abs(clearanceBalance))}`, sub: "", color: clearanceBalance < 0 ? "#1d4ed8" : clearanceBalance > 0 ? "#b45309" : "#15803d", icon: User, iconBg: "#ede9fe", iconColor: "#7c3aed" },
+                    { label: "Advance Received", value: fmtMoney(clearanceAdvanceAmount, clearanceCurrency), sub: "", color: "var(--text)", icon: ArrowRightLeft, iconBg: "#dbeafe", iconColor: "#2563eb" },
+                    { label: "Actual Expenditure", value: fmtMoney(clearanceTotals.total, clearanceCurrency), sub: "", color: "var(--text)", icon: Wallet, iconBg: "#ffedd5", iconColor: "#ea580c" },
+                    { label: "Variance (Over / Under)", value: `${clearanceBalance < 0 ? "-" : ""}${fmtMoney(Math.abs(clearanceBalance), clearanceCurrency)}`, sub: "", color: clearanceBalance < 0 ? "#1d4ed8" : clearanceBalance > 0 ? "#b45309" : "#15803d", icon: User, iconBg: "#ede9fe", iconColor: "#7c3aed" },
                     {
                       label: "Settlement Status",
                       value: clearanceBalance < 0 ? "Company Owes Employee" : clearanceBalance > 0 ? "Employee Owes Company" : "Fully Cleared",
@@ -8708,15 +8719,17 @@ export default function App() {
                               </div>
                               <div className="dashboard-queue-meta">
                                 <span className="inbox-badge inbox-badge-info">Awaiting: {g.count}</span>
-                                <span className="inbox-badge inbox-badge-total">Total Amount: {fmtMoney(g.total)}</span>
+                                <span className="inbox-badge inbox-badge-total">
+                                  Total Amount: {g.totalsByCurrency.map(([currency, amount]: [string, number]) => fmtMoney(amount, currency)).join(" + ")}
+                                </span>
                               </div>
                             </div>
                             {Object.keys(g.byStage).length > 0 && (
                               <div className="dashboard-queue-stages">
-                                {Object.entries(g.byStage).map(([stage, s]) => (
+                                {Object.entries(g.byStage).map(([stage, s]: [string, any]) => (
                                   <div className="dashboard-queue-stage" key={stage}>
                                     <span>Pending {displayOrgGroupName(stage)} <b>{s.count}</b></span>
-                                    <span>{fmtMoney(s.amount)}</span>
+                                    <span>{Array.from(s.amountsByCurrency.entries() as IterableIterator<[string, number]>).map(([currency, amount]) => fmtMoney(amount, currency)).join(" + ")}</span>
                                   </div>
                                 ))}
                               </div>
