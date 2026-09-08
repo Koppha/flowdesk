@@ -666,6 +666,43 @@ accommodationRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next)
   }
 });
 
+// The accommodation-side counterpart to the advance's own /recall-payment -
+// this booking's own mark-paid is a plain SUBMITTED->PAID flip (no workflow
+// chain to restore), so recalling it is just as plain in reverse.
+accommodationRouter.post("/:id/recall-payment", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = RejectSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("A reason is required to recall a payment", parsed.error.flatten());
+
+    const row = await getAccommodationById(req.params.id);
+    if (!row) throw notFound();
+    if (!(await canActOnAccommodation({ role: req.user!.role, sectionId: req.user!.sectionId }))) throw forbidden();
+    if (row.status !== "PAID") throw badRequest("Only a paid accommodation booking can have its payment recalled.");
+
+    await query(
+      `UPDATE accommodation_requests
+          SET status='SUBMITTED',
+              paid_reference=NULL,
+              paid_at=NULL,
+              updated_at=now()
+        WHERE id=$1`,
+      [req.params.id]
+    );
+
+    await writeAccommodationAudit({
+      actorId: req.user!.userId,
+      accommodationId: req.params.id,
+      action: "ACCOMMODATION_PAYMENT_RECALLED",
+      before: { status: "PAID", paid_reference: row.paid_reference },
+      after: { status: "SUBMITTED", comments: parsed.data.comments }
+    });
+
+    return res.json({ ok: true, status: "SUBMITTED" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 accommodationRouter.post("/:id/reject", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = RejectSchema.safeParse(req.body);

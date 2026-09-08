@@ -2081,6 +2081,11 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
 
       const isNowPaid = status === "PAID";
       let paidReference: string | null = null;
+      // Exact pre-payment state, so a mistaken Mark Paid can be recalled by
+      // restoring precisely this rather than re-deriving a guess later.
+      const preSnapshot = isNowPaid
+        ? JSON.stringify({ status: locked.status, workflow_step_order: locked.workflow_step_order, approval_chain: locked.approval_chain })
+        : null;
       if (isNowPaid) {
         const seqRows = await client.query<{ seq: string }>(`SELECT nextval('payment_ref_seq') AS seq`);
         paidReference = formatPaymentReference(Number(seqRows.rows[0].seq));
@@ -2088,14 +2093,16 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
       if (newChain) {
         await client.query(
           `UPDATE advance_requests SET status=$2, workflow_step_order=$3, approval_chain=$4, paid_reference=$5,
-                  paid_at = CASE WHEN $6 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
-          [adv.id, status, newWorkflowStepOrder, JSON.stringify(newChain), paidReference, isNowPaid]
+                  paid_at = CASE WHEN $6 THEN now() ELSE paid_at END,
+                  pre_paid_snapshot = CASE WHEN $6 THEN $7::jsonb ELSE pre_paid_snapshot END, updated_at=now() WHERE id=$1`,
+          [adv.id, status, newWorkflowStepOrder, JSON.stringify(newChain), paidReference, isNowPaid, preSnapshot]
         );
       } else {
         await client.query(
           `UPDATE advance_requests SET status=$2, paid_reference=$3,
-                  paid_at = CASE WHEN $4 THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1`,
-          [adv.id, status, paidReference, isNowPaid]
+                  paid_at = CASE WHEN $4 THEN now() ELSE paid_at END,
+                  pre_paid_snapshot = CASE WHEN $4 THEN $5::jsonb ELSE pre_paid_snapshot END, updated_at=now() WHERE id=$1`,
+          [adv.id, status, paidReference, isNowPaid, preSnapshot]
         );
       }
       if (isNowPaid) {
@@ -2137,6 +2144,134 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
       }
     }
     return res.json({ ok: true, status });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Recalls a mistaken Mark Paid - the payment-officer-side counterpart to
+// undo-capture above, for when the mistake was caught one step later. Only
+// available while status is still PAID (once a clearance claim exists
+// against this advance, the payment is no longer just an internal bookkeeping
+// entry - reject/resolve that claim first) and restores the exact pre-payment
+// snapshot taken at the moment Mark Paid ran, rather than re-deriving a guess.
+advancesRouter.post("/:id/recall-payment", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = ActionCommentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("A reason is required to recall a payment", parsed.error.flatten());
+
+    const adv = await getAdvanceById(req.params.id);
+    if (!adv) throw notFound();
+    if (adv.status !== "PAID") throw badRequest("Only a paid advance can have its payment recalled.");
+
+    const activeClaim = await query<{ id: string }>(
+      `SELECT id FROM clearance_claims WHERE linked_advance_id=$1 AND status <> 'REJECTED' LIMIT 1`,
+      [adv.id]
+    );
+    if (activeClaim.length) {
+      throw badRequest("This advance already has a clearance claim in progress - reject that claim before recalling the payment.");
+    }
+
+    const role = req.user!.role;
+    const chain = (adv.approval_chain as ChainStep[] | null) || [];
+    const markPaidIdx = chain.findIndex((s) => s.action_type === "MARK_PAID" && s.approved);
+    const markPaidStep = markPaidIdx !== -1 ? chain[markPaidIdx] : null;
+
+    // Same authority as who could have marked it paid in the first place -
+    // ADMIN is intentionally allowed here (unlike mark-paid itself) since this
+    // is a corrective action, matching undo-capture's admin-can-always-fix-it
+    // stance rather than mark-paid's payer-only stance.
+    if (role !== "ADMIN") {
+      const eligible = markPaidStep
+        ? await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.sectionId)
+        : await isCompensationFinanceSection(req.user!.sectionId);
+      if (!eligible) throw forbidden("You are not eligible to recall this payment.");
+    }
+
+    const { restoredStatus, priorPaidReference } = await withTransaction(async (client) => {
+      const lockedRows = await client.query<{ status: AdvanceStatus; pre_paid_snapshot: { status: AdvanceStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null } | null; paid_reference: string | null }>(
+        `SELECT status, pre_paid_snapshot, paid_reference FROM advance_requests WHERE id=$1 FOR UPDATE`,
+        [adv.id]
+      );
+      const locked = lockedRows.rows[0];
+      if (!locked) throw notFound();
+      if (locked.status !== "PAID") throw badRequest("Only a paid advance can have its payment recalled.");
+
+      let restoredStatus: AdvanceStatus;
+      let restoredStepOrder: number | null;
+      let restoredChain: ChainStep[] | null;
+
+      if (locked.pre_paid_snapshot) {
+        restoredStatus = locked.pre_paid_snapshot.status;
+        restoredStepOrder = locked.pre_paid_snapshot.workflow_step_order;
+        restoredChain = locked.pre_paid_snapshot.approval_chain;
+      } else {
+        // Best-effort fallback for an advance paid before payment-recall
+        // snapshots existed (pre_paid_snapshot is only populated going
+        // forward): flip the last approved MARK_PAID step back to pending
+        // and point at it directly. This ignores any parallel sibling
+        // steps' exact original position - a reasonable approximation for
+        // pre-existing data, unlike the snapshot-backed path above which is
+        // exact.
+        if (markPaidIdx !== -1) {
+          restoredChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: false } : s));
+          restoredStepOrder = markPaidIdx;
+          restoredStatus = chainStepToStatus(restoredChain, markPaidIdx);
+        } else {
+          restoredChain = chain.length ? chain : null;
+          restoredStepOrder = adv.workflow_step_order ?? null;
+          restoredStatus = "APPROVED";
+        }
+      }
+
+      await client.query(
+        `UPDATE advance_requests
+            SET status=$2, workflow_step_order=$3, approval_chain=$4::jsonb, paid_reference=NULL, paid_at=NULL,
+                pre_paid_snapshot=NULL, updated_at=now()
+          WHERE id=$1`,
+        [adv.id, restoredStatus, restoredStepOrder, restoredChain ? JSON.stringify(restoredChain) : null]
+      );
+
+      // Reverse the accommodation side-effect this payment triggered, if any -
+      // matched on the exact paid_reference being recalled so an unrelated,
+      // independently-paid accommodation booking is never touched.
+      if (locked.paid_reference) {
+        await client.query(
+          `UPDATE accommodation_requests SET status='SUBMITTED', paid_reference=NULL, paid_at=NULL, updated_at=now()
+            WHERE advance_request_id=$1 AND status='PAID' AND paid_reference=$2`,
+          [adv.id, locked.paid_reference]
+        );
+      }
+
+      return { restoredStatus, priorPaidReference: locked.paid_reference };
+    });
+
+    await writeAdvanceAudit({
+      actorId: req.user!.userId,
+      advanceId: adv.id,
+      action: "ADVANCE_PAYMENT_RECALLED",
+      before: { status: "PAID", paid_reference: priorPaidReference },
+      after: { status: restoredStatus, comments: parsed.data.comments }
+    });
+
+    const notificationContext = await getAdvanceNotificationContext(adv.id);
+    if (notificationContext) {
+      await notifyAdvanceTask({
+        advanceId: adv.id,
+        status: restoredStatus,
+        advanceType: notificationContext.type,
+        requesterName: notificationContext.full_name,
+        requesterEmail: notificationContext.email,
+        department: notificationContext.department,
+        requestedTotal: Number(notificationContext.requested_total),
+        currency: notificationContext.currency,
+        extraCostAmount: Number(notificationContext.extra_cost_amount || 0),
+        extraCostDescription: notificationContext.extra_cost_description,
+        comments: parsed.data.comments
+      });
+    }
+
+    return res.json({ ok: true, status: restoredStatus });
   } catch (err) {
     return next(err);
   }

@@ -1754,6 +1754,13 @@ async function ensureAdvanceRecoverySchema() {
   // travel_types.has_extra_costs set.
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS extra_cost_amount numeric(12,2) NOT NULL DEFAULT 0`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS extra_cost_description text`);
+  // Exact snapshot of {status, workflow_step_order, approval_chain} taken the
+  // instant before a Mark Paid action lands, so a mistaken payment can be
+  // recalled by restoring precisely what came before it rather than
+  // re-deriving a guess - see POST /:id/recall-payment. Cleared back to null
+  // once consumed by a recall (or once cleared has no meaning any more,
+  // e.g. a later legitimate payment overwrites it with a fresh snapshot).
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS pre_paid_snapshot jsonb`);
 }
 
 // "Apply for Other" — an advance requested on behalf of an external,
