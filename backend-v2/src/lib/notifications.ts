@@ -668,6 +668,71 @@ export async function notifyAdvancePaid(args: {
   }
 }
 
+// ─── notifyAdvancePaymentRecalled ───────────────────────────────────────────────
+
+export async function notifyAdvancePaymentRecalled(args: {
+  advanceId: string;
+  requesterName: string | null;
+  requesterEmail: string | null;
+  department: string | null;
+  advanceType: string;
+  approvedTotal: number;
+  currency?: string | null;
+  priorPaidReference?: string | null;
+  comments: string;
+}) {
+  if (!args.requesterEmail) return;
+  try {
+    const requester = args.requesterName || "Requester";
+    const details = detailBlock([
+      ["Requester",  requester],
+      ["Division", args.department],
+      ["Type",       args.advanceType.replace(/_/g, " ")],
+      ["Amount",     fmt(args.approvedTotal, args.currency)],
+      ...(args.priorPaidReference ? [["Previous Reference", args.priorPaidReference] as [string, string]] : []),
+      ["Reason",     args.comments]
+    ]);
+
+    const body = [
+      header(`ADVANCE REQUEST — PAYMENT RECALLED`),
+      ``,
+      `Hello ${requester},`,
+      ``,
+      `Payment for this advance request has been recalled by the Payment Officer and has not gone through. It has been placed back into the payment queue and will be reprocessed.`,
+      `If you already saw funds reflected in your account, please do not treat this as final until you receive a new payment confirmation.`,
+      ``,
+      details,
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({
+      to: [args.requesterEmail],
+      subject: `[Payment Recalled] Your ${advanceTypeLabel(args.advanceType)} payment has been reversed`,
+      text: body
+    });
+
+    sendTeamsCard({
+      title: "Advance Request — Payment Recalled",
+      summary: `Advance payment recalled for ${requester}`,
+      subtitle: "Reversed — awaiting reprocessing",
+      color: "dc2626",
+      facts: [
+        { name: "Requester", value: requester },
+        { name: "Division", value: args.department || "—" },
+        { name: "Type", value: args.advanceType.replace(/_/g, " ") },
+        { name: "Amount", value: fmt(args.approvedTotal, args.currency) },
+        ...(args.priorPaidReference ? [{ name: "Previous Reference", value: args.priorPaidReference }] : []),
+        { name: "Reason", value: args.comments }
+      ]
+    }).catch((e) => logger.warn("teams_advance_payment_recalled_failed", { error: serializeError(e) }));
+  } catch (error) {
+    logger.warn("advance_payment_recalled_notification_failed", {
+      advance_id: args.advanceId, error: serializeError(error)
+    });
+  }
+}
+
 // ─── notifyAdvanceCancelled ───────────────────────────────────────────────────
 
 export async function notifyAdvanceCancelled(args: {
