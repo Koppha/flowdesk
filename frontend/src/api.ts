@@ -392,6 +392,8 @@ export const api = {
   accommodationDetail: (id: string) => req(`/accommodation-requests/${id}`),
   markAccommodationPaid: (id: string) =>
     req(`/accommodation-requests/${id}/mark-paid`, { method: "POST", body: JSON.stringify({}) }),
+  recallAccommodationPayment: (id: string, comments: string) =>
+    req(`/accommodation-requests/${id}/recall-payment`, { method: "POST", body: JSON.stringify({ comments }) }),
   rejectAccommodation: (id: string, comments: string) =>
     req(`/accommodation-requests/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
   advanceHistory: (id: string) => req(`/advances/${id}/history`),
@@ -405,6 +407,8 @@ export const api = {
   approveAdvance: (id: string, approved_total: number, comments?: string) =>
     req(`/advances/${id}/approve`, { method: "POST", body: JSON.stringify({ approved_total, comments }) }),
   markAdvancePaid: (id: string) => req(`/advances/${id}/mark-paid`, { method: "POST", body: JSON.stringify({}) }),
+  recallAdvancePayment: (id: string, comments: string) =>
+    req(`/advances/${id}/recall-payment`, { method: "POST", body: JSON.stringify({ comments }) }),
   payments: (params: { status?: "pending" | "paid" | "all"; limit?: number; offset?: number } = {}) =>
     req(`/advances/payments?${new URLSearchParams(params as any).toString()}`),
   paymentsAccess: () => req("/advances/payments/access"),

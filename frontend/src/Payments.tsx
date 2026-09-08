@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { formatMoney, isFinanceDeptClient } from "./constants";
-import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight, XCircle } from "lucide-react";
+import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight, XCircle, RotateCcw } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
@@ -59,6 +59,12 @@ export default function Payments(props: { onBack?: () => void }) {
   // additionally authorized for accommodation payment actions server-side.
   const isFinancePaymentActor = isFinanceDeptClient(me?.department || "");
   const canProcessPayment = (item: PaymentItem) => isFinancePaymentActor || (isAdmin && item.doc_type === "ACCOMMODATION");
+  // Recalling a mistaken payment is a corrective action, not a forward
+  // payment one - unlike Mark as Paid, ADMIN is allowed here for both
+  // document types (matching the server's own admin-can-always-fix-it
+  // stance for /recall-payment). The server still re-checks eligibility
+  // independently either way.
+  const canRecallPayment = (_item: PaymentItem) => isFinancePaymentActor || isAdmin;
 
   const [items, setItems] = useState<PaymentItem[]>([]);
   const [tab, setTab] = useState<"pending" | "paid">("pending");
@@ -71,6 +77,8 @@ export default function Payments(props: { onBack?: () => void }) {
   const [selected, setSelected] = useState<PaymentItem | null>(null);
   const [declining, setDeclining] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
+  const [recalling, setRecalling] = useState(false);
+  const [recallReason, setRecallReason] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -179,6 +187,27 @@ export default function Payments(props: { onBack?: () => void }) {
       else await api.markAdvancePaid(item.id);
       await refresh();
       setSelected(null);
+    } catch (e: any) {
+      setError(String(e.message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRecallPayment(item: PaymentItem) {
+    if (!recallReason.trim()) {
+      setError("Enter a reason for recalling this payment.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (item.doc_type === "ACCOMMODATION") await api.recallAccommodationPayment(item.id, recallReason.trim());
+      else await api.recallAdvancePayment(item.id, recallReason.trim());
+      await refresh();
+      setSelected(null);
+      setRecallReason("");
+      setRecalling(false);
     } catch (e: any) {
       setError(String(e.message));
     } finally {
@@ -322,7 +351,7 @@ export default function Payments(props: { onBack?: () => void }) {
               </thead>
               <tbody>
                 {paged.map((item) => (
-                  <tr key={item.id} style={{ cursor: "pointer" }} onClick={() => { setSelected(item); setDeclining(false); setDeclineReason(""); }}>
+                  <tr key={item.id} style={{ cursor: "pointer" }} onClick={() => { setSelected(item); setDeclining(false); setDeclineReason(""); setRecalling(false); setRecallReason(""); }}>
                     <td>{item.doc_type === "ACCOMMODATION" ? "Accommodation" : "Advance"}</td>
                     <td>{item.paid_reference || "—"}</td>
                     <td>{requestNumber(item)}</td>
@@ -360,7 +389,7 @@ export default function Payments(props: { onBack?: () => void }) {
       {selected && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 1200, display: "flex", justifyContent: "flex-end", background: "rgba(15, 23, 42, 0.5)" }}
-          onClick={() => { setSelected(null); setDeclining(false); setDeclineReason(""); }}
+          onClick={() => { setSelected(null); setDeclining(false); setDeclineReason(""); setRecalling(false); setRecallReason(""); }}
         >
           <div
             style={{ width: "min(480px, 100vw)", height: "100%", overflow: "auto", background: "var(--surface, #fff)", color: "var(--text)", boxShadow: "-12px 0 40px rgba(15,23,42,0.25)", display: "flex", flexDirection: "column" }}
@@ -372,7 +401,7 @@ export default function Payments(props: { onBack?: () => void }) {
                 <h2 style={{ margin: "4px 0" }}>{selected.paid_reference || "Pending Payment"}</h2>
                 <StatusBadge status={selected.payment_status} />
               </div>
-              <button className="button small-button button-subtle" onClick={() => { setSelected(null); setDeclining(false); setDeclineReason(""); }}>Close</button>
+              <button className="button small-button button-subtle" onClick={() => { setSelected(null); setDeclining(false); setDeclineReason(""); setRecalling(false); setRecallReason(""); }}>Close</button>
             </div>
 
             <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -411,6 +440,21 @@ export default function Payments(props: { onBack?: () => void }) {
               </div>
             )}
 
+            {selected.payment_status === "PAID" && canRecallPayment(selected) && recalling && (
+              <div style={{ padding: "0 20px 14px" }}>
+                <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 0 }}>
+                  This puts the request back into Pending Payment, exactly as it stood before it was marked paid. Use this for a mistaken click or a wrong reference — not once the money itself needs to be reversed at the bank.
+                </p>
+                <textarea
+                  className="ep-form-select"
+                  style={{ width: "100%", minHeight: 70, resize: "vertical" }}
+                  placeholder="Reason for recalling this payment…"
+                  value={recallReason}
+                  onChange={(e) => setRecallReason(e.target.value)}
+                />
+              </div>
+            )}
+
             <div style={{ padding: "0 20px 20px", marginTop: "auto", display: "flex", gap: 8 }}>
               {selected.payment_status === "PENDING" && canProcessPayment(selected) && (
                 declining ? (
@@ -431,6 +475,22 @@ export default function Payments(props: { onBack?: () => void }) {
                       <XCircle size={16} /> Decline
                     </button>
                   </>
+                )
+              )}
+              {selected.payment_status === "PAID" && canRecallPayment(selected) && (
+                recalling ? (
+                  <>
+                    <button className="button button-danger" disabled={busy} onClick={() => handleRecallPayment(selected)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                      <RotateCcw size={16} /> Confirm Recall
+                    </button>
+                    <button className="button button-subtle" disabled={busy} onClick={() => { setRecalling(false); setRecallReason(""); }} style={{ flex: 1 }}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button className="button button-subtle" disabled={busy} onClick={() => setRecalling(true)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                    <RotateCcw size={16} /> Recall Payment
+                  </button>
                 )
               )}
             </div>
