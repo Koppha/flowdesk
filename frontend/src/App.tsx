@@ -46,7 +46,6 @@ import MyAdvances from "./MyAdvances";
 import MyClearances from "./MyClearances";
 import ReportApprovalPerformance from "./ReportApprovalPerformance";
 import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
-import OvertimeReportsHub from "./OvertimeReportsHub";
 import ReportAuditTrail from "./ReportAuditTrail";
 import ReportReconciliation from "./ReportReconciliation";
 import ReportTourEngagement from "./ReportTourEngagement";
@@ -435,7 +434,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -533,7 +532,6 @@ export default function App() {
   const [refundableCount, setRefundableCount] = useState(0);
   const [hasTreasuryAccess, setHasTreasuryAccess] = useState(false);
   const [treasuryCount, setTreasuryCount] = useState(0);
-  const [hasOvertimeFinanceAccess, setHasOvertimeFinanceAccess] = useState(false);
   const [hasItProvisioningAccess, setHasItProvisioningAccess] = useState(false);
   const [itProvisioningCount, setItProvisioningCount] = useState(0);
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
@@ -1492,7 +1490,7 @@ export default function App() {
       if (meResp.department) setProfileDepartment(meResp.department);
     }
 
-    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, treasuryAccessResp, itProvisioningAccessResp, moduleFlagsResp, vendorContractsAccessResp, serviceContractsAccessResp, overtimeDashboardResp] = await Promise.all([
+    const [departmentsResp, directoryResp, a, c, allAdvancesResp, allClaimsResp, i, mealResp, travelResp, hotelsResp, standbyResp, featPermResp, groupsResp, rtResp, paymentsResp, paymentsAccessResp, deductionsAccessResp, refundableAccessResp, treasuryAccessResp, itProvisioningAccessResp, moduleFlagsResp, vendorContractsAccessResp, serviceContractsAccessResp] = await Promise.all([
       optionalStartupData<string[]>(api.departments(), [], "Departments"),
       optionalStartupData<RequestDirectoryUser[]>(api.requestDirectory(), [], "Request directory"),
       optionalStartupData<any[]>(api.advances(), [], "Advances"),
@@ -1524,7 +1522,6 @@ export default function App() {
       }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true }, "Module flags"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.vendorContractsAccess(), { allowed: false }, "Vendor Contracts access"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.serviceContractsAccess(), { allowed: false }, "Service Contracts access"),
-      optionalStartupData<{ is_finance?: boolean }>(api.overtimeDashboard(), { is_finance: false }, "Overtime dashboard"),
     ]);
     setDepartmentOptions(Array.isArray(departmentsResp) ? departmentsResp : []);
     setRequestDirectory(Array.isArray(directoryResp) ? directoryResp : []);
@@ -1591,7 +1588,6 @@ export default function App() {
     setRefundableCount(refundableAccessResp?.pendingCount || 0);
     setHasTreasuryAccess(Boolean(treasuryAccessResp?.allowed));
     setTreasuryCount(treasuryAccessResp?.pendingCount || 0);
-    setHasOvertimeFinanceAccess(Boolean(overtimeDashboardResp?.is_finance));
     setHasItProvisioningAccess(Boolean(itProvisioningAccessResp?.allowed));
     setItProvisioningCount((itProvisioningAccessResp?.awaitingProvisioning || 0) + (itProvisioningAccessResp?.inProgress || 0));
     setHasVendorContractsAccess(Boolean(vendorContractsAccessResp?.allowed));
@@ -4554,7 +4550,7 @@ export default function App() {
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
                 )}
-                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
+                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
               </div>
             </div>
           )}
@@ -4577,8 +4573,8 @@ export default function App() {
               </div>
             </div>
           )}
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               {canAccessFeature("report_advances") && (
                 <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
@@ -4698,8 +4694,6 @@ export default function App() {
             <ReportAuditReconciliation onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_DEPT_DIVISION" ? (
             <ReportDeptDivisionClearance onBack={() => setPage("REPORTS")} />
-          ) : page === "REPORT_OVERTIME" ? (
-            <OvertimeReportsHub onBack={() => setPage("REPORTS")} />
           ) : page === "IT_PROVISIONING" ? (
             <ITProvisioning />
           ) : page === "OVERTIME" ? (
@@ -6426,9 +6420,6 @@ export default function App() {
                     { icon: <Clock3 size={26} />, color: "#db2777", bg: "#fce7f3", title: "Clearance Ageing", desc: "How long incomplete clearances have sat in each stage.", action: () => setPage("REPORT_AGEING"), live: true },
                     { icon: <ShieldCheck size={26} />, color: "#dc2626", bg: "#fee2e2", title: "Treasury Audit & Reconciliation", desc: "Flags settlement discrepancies, missing references, and overdue items.", action: () => setPage("REPORT_TREASURY_AUDIT"), live: true },
                     { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Department & Division", desc: "Clearance activity summarized by division and department.", action: () => setPage("REPORT_DEPT_DIVISION"), live: true },
-                  ] : []),
-                  ...(role === "ADMIN" || hasOvertimeFinanceAccess ? [
-                    { icon: <Clock3 size={26} />, color: "#b45309", bg: "#fef3c7", title: "Overtime Reports", desc: "Payment queue, allowance report, and paid history — filtered and exportable.", action: () => setPage("REPORT_OVERTIME"), live: true },
                   ] : []),
                 ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}
