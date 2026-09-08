@@ -8,7 +8,7 @@ import { query, withTransaction } from "../../lib/db.js";
 import { advanceWorkflowStep, createAdvance, getAdvanceById, nextStatusOrThrow, setAdvanceStatus } from "./advances.service.js";
 import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isProfileComplete } from "../../lib/userProfile.js";
 import type { AdvanceStatus } from "./advances.types.js";
-import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvancePaymentDeclined, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
+import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvancePaymentDeclined, notifyAdvancePaymentRecalled, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
@@ -2266,6 +2266,21 @@ advancesRouter.post("/:id/recall-payment", async (req: AuthedRequest, res, next)
 
     const notificationContext = await getAdvanceNotificationContext(adv.id);
     if (notificationContext) {
+      // The requester is the one who needs to know their payment didn't
+      // actually go through, in plain terms - separate from the Finance-
+      // facing "action required" task notification below, which just says
+      // the request is back in the queue.
+      await notifyAdvancePaymentRecalled({
+        advanceId: adv.id,
+        requesterName: notificationContext.full_name,
+        requesterEmail: notificationContext.email,
+        department: notificationContext.department,
+        advanceType: notificationContext.type,
+        approvedTotal: Number(notificationContext.approved_total || notificationContext.requested_total),
+        currency: notificationContext.currency,
+        priorPaidReference,
+        comments: parsed.data.comments
+      });
       await notifyAdvanceTask({
         advanceId: adv.id,
         status: restoredStatus,
