@@ -276,7 +276,9 @@ export const api = {
   clearanceStatusReport: () => req("/advances/clearance-status-report"),
   createAdvance: (data: any) => req("/advances", { method: "POST", body: JSON.stringify(data) }),
   externalPayees: () => req("/advances/external-payees"),
+  allExternalPayees: () => req("/advances/external-payees?include_inactive=true"),
   createExternalPayee: (data: any) => req("/advances/external-payees", { method: "POST", body: JSON.stringify(data) }),
+  updateExternalPayee: (id: string, data: any) => req(`/advances/external-payees/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   // generic update endpoint; backend should allow editing fields such as type/requested_total/salary_month/etc
   updateAdvance: (id: string, data: any) => req(`/advances/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   // travel-specific lines update (rows)

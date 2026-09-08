@@ -40,6 +40,7 @@ import OrgStructure from "./OrgStructure";
 import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
 import TeamRoster from "./TeamRoster";
 import UserManagement from "./UserManagement";
+import ExternalPayees from "./ExternalPayees";
 import SlaReports from "./SlaReports";
 import ReportAdvances from "./ReportAdvances";
 import MyAdvances from "./MyAdvances";
@@ -434,7 +435,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -4597,13 +4598,14 @@ export default function App() {
             </div>
           </div>
           <div className="sidebar-section-label">Administration</div>
-          {(canAccessFeature("user_management") || canAccessFeature("roles_permissions") || canAccessFeature("manager_delegations") || delegationEligible) && (
-            <div className={`sidebar-group ${["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS"].includes(page) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          {(canAccessFeature("user_management") || canAccessFeature("roles_permissions") || canAccessFeature("manager_delegations") || delegationEligible || role === "ADMIN") && (
+            <div className={`sidebar-group ${["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
               <div className="sidebar-subnav">
                 {canAccessFeature("user_management") && <a href="#" className={navItemClass(page === "USER_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><Users size={14} aria-hidden />Users</a>}
                 {canAccessFeature("roles_permissions") && <a href="#" className={navItemClass(page === "ROLES_PERMISSIONS")} onClick={(e) => { e.preventDefault(); setPage("ROLES_PERMISSIONS"); }}><ShieldCheck size={14} aria-hidden />Roles & Permissions</a>}
                 {(canAccessFeature("manager_delegations") || delegationEligible) && <a href="#" className={navItemClass(page === "MANAGER_DELEGATIONS")} onClick={(e) => { e.preventDefault(); setPage("MANAGER_DELEGATIONS"); }}><Users size={14} aria-hidden />Manager Delegations</a>}
+                {role === "ADMIN" && <a href="#" className={navItemClass(page === "EXTERNAL_PAYEES")} onClick={(e) => { e.preventDefault(); setPage("EXTERNAL_PAYEES"); }}><Building2 size={14} aria-hidden />External Payees</a>}
               </div>
             </div>
           )}
@@ -4750,6 +4752,11 @@ export default function App() {
             <div className="ep-page">
               <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">Users</span></div>
               <UserManagement />
+            </div>
+          ) : page === "EXTERNAL_PAYEES" ? (
+            <div className="ep-page">
+              <div className="ep-breadcrumb"><span>Administration</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span>User Management</span><ChevronDown size={13} style={{transform:"rotate(-90deg)"}} /><span className="ep-breadcrumb-active">External Payees</span></div>
+              <ExternalPayees />
             </div>
           ) : page === "MANAGER_DELEGATIONS" ? (() => {
             const statuses = delegations.map(delegationDerivedStatus);

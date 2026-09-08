@@ -180,12 +180,21 @@ async function requireExternalPayeeAccess(req: AuthedRequest) {
 advancesRouter.get("/external-payees", async (req: AuthedRequest, res, next) => {
   try {
     await requireExternalPayeeAccess(req);
+    // The "Apply for Other" advance-request picker only ever wants active
+    // payees. The Admin management page (External Payees) needs the
+    // inactive/deactivated ones too, plus a per-payee usage count, so it can
+    // show history and let an admin reactivate one - gated to ADMIN so a
+    // regular permanent employee's picker never accidentally includes a
+    // deactivated payee.
+    const includeInactive = req.query.include_inactive === "true" && req.user!.role === "ADMIN";
     const rows = await query<any>(
-      `SELECT ep.*, u.full_name AS created_by_name
+      `SELECT ep.*, u.full_name AS created_by_name,
+              (SELECT count(*) FROM advance_requests ar WHERE ar.external_beneficiary_id = ep.id) AS usage_count
          FROM external_payees ep
          LEFT JOIN users u ON u.id = ep.created_by_id
-        WHERE ep.active = true
-        ORDER BY ep.full_name`
+        WHERE ep.active = true OR $1
+        ORDER BY ep.full_name`,
+      [includeInactive]
     );
     return res.json(rows);
   } catch (err) {
@@ -220,6 +229,44 @@ advancesRouter.post("/external-payees", async (req: AuthedRequest, res, next) =>
       ]
     );
     return res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Editing an existing payee's details, or deactivating/reactivating one, is
+// an Admin-only management action (distinct from the permanent-employee-level
+// "look one up / add one while requesting" access above) - this directory is
+// shared across every requester, so changing a record everyone else relies on
+// needs central oversight. Must also be registered before GET /:id.
+const ExternalPayeeUpdateSchema = z.object({
+  full_name: z.string().trim().min(1, "Name is required").optional(),
+  id_number: z.string().trim().optional(),
+  category: z.string().trim().optional(),
+  organisation: z.string().trim().optional(),
+  phone: z.string().trim().optional(),
+  email: z.string().trim().optional(),
+  bank_name: z.string().trim().optional(),
+  bank_account_number: z.string().trim().optional(),
+  bank_branch: z.string().trim().optional(),
+  active: z.boolean().optional()
+});
+
+advancesRouter.put("/external-payees/:id", async (req: AuthedRequest, res, next) => {
+  try {
+    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can edit an external payee");
+    const parsed = ExternalPayeeUpdateSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payee payload", parsed.error.flatten());
+    const fields = Object.entries(parsed.data).filter(([, v]) => v !== undefined);
+    if (!fields.length) throw badRequest("No fields to update");
+    const setClause = fields.map(([key], idx) => `${key} = $${idx + 2}`).join(", ");
+    const values = fields.map(([, v]) => v);
+    const rows = await query<{ id: string }>(
+      `UPDATE external_payees SET ${setClause} WHERE id = $1 RETURNING id`,
+      [req.params.id, ...values]
+    );
+    if (!rows.length) throw notFound("External payee not found");
+    return res.json({ id: rows[0].id });
   } catch (err) {
     return next(err);
   }
