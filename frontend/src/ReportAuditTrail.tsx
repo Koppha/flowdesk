@@ -1,10 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { formatMoney, travelTypeLabel, TravelType } from "./constants";
+import { formatMoney, travelTypeLabel, travelTypeCurrency, TravelType } from "./constants";
 import { Activity, CheckCircle, Clock, Download, FileText, XCircle } from "lucide-react";
-
-function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
-  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
-}
 
 interface Props {
   advances: any[];

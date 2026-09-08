@@ -90,6 +90,10 @@ export function isTravelTypeCode(code: string | null | undefined, travelTypes: T
   return travelTypes.some((type) => type.code === code && type.active !== false);
 }
 
+export function travelTypeCurrency(code: string | null | undefined, travelTypes: TravelType[]) {
+  return travelTypes.find((type) => type.code === code)?.currency ?? "LSL";
+}
+
 // "Finance" is MNO's free-text department name for this role; SEFS's own
 // finance team uses "Finance Operations" instead - both need to pass this
 // check (Payments/Deductions/Refundable's mark-paid/deducted/refunded
