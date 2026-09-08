@@ -55,15 +55,11 @@ export default function Payments(props: { onBack?: () => void }) {
   const me = getUserFromToken();
   const isAdmin = me?.role === "ADMIN";
   // Viewing Payments can be granted to any group (e.g. HR Operations, for
-  // visibility only); advance payment actions remain Finance-only. Admin is
-  // additionally authorized for accommodation payment actions server-side.
+  // visibility only); ADMIN is authorized to act on both advance and
+  // accommodation payments too, same as Finance - the server independently
+  // re-checks this on every action either way.
   const isFinancePaymentActor = isFinanceDeptClient(me?.department || "");
-  const canProcessPayment = (item: PaymentItem) => isFinancePaymentActor || (isAdmin && item.doc_type === "ACCOMMODATION");
-  // Recalling a mistaken payment is a corrective action, not a forward
-  // payment one - unlike Mark as Paid, ADMIN is allowed here for both
-  // document types (matching the server's own admin-can-always-fix-it
-  // stance for /recall-payment). The server still re-checks eligibility
-  // independently either way.
+  const canProcessPayment = (_item: PaymentItem) => isFinancePaymentActor || isAdmin;
   const canRecallPayment = (_item: PaymentItem) => isFinancePaymentActor || isAdmin;
 
   const [items, setItems] = useState<PaymentItem[]>([]);

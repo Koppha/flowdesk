@@ -2045,9 +2045,10 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
       let newWorkflowStepOrder: number | undefined;
 
       if (markPaidStep) {
-        // ADMIN is intentionally excluded here — Admin can view payments but must not
-        // be able to mark them paid, only the workflow's actual assigned payer can.
-        const isAuthorized = await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.sectionId);
+        // ADMIN can mark paid too, same oversight stance as recall-payment
+        // below and as reject/performAdvanceReject already takes - Admin
+        // isn't limited to view-only here.
+        const isAuthorized = role === "ADMIN" || (await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.sectionId));
         if (!isAuthorized) throw forbidden("You are not the assigned payer for this step");
 
         newChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: true } : s));
@@ -2072,8 +2073,7 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
           const finalStep = chain[chain.length - 1];
           if (finalStep?.approver_id === req.user!.userId) isFinalStepAuthorized = true;
         }
-        // ADMIN is intentionally excluded here too — view-only for Admin.
-        if (!(await isCompensationFinanceSection(req.user!.sectionId)) && !isFinalStepAuthorized) {
+        if (role !== "ADMIN" && !(await isCompensationFinanceSection(req.user!.sectionId)) && !isFinalStepAuthorized) {
           throw forbidden("Only Finance can mark an advance as paid");
         }
         status = nextStatusOrThrow(locked.status, "MARK_PAID");
