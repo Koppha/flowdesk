@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { z } from "zod";
-import { type AuthedRequest, hasFeatureAccess, requireAuth, requireFeatureAccess, requireFinance } from "../../lib/auth.js";
-import { badRequest, notFound } from "../../lib/errors.js";
+import { type AuthedRequest, hasFeatureAccess, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
+import { isCompensationFinanceUser } from "../../lib/financeAuthority.js";
+import type { NextFunction, Response } from "express";
+import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { pickRoundRobinAssignee } from "../../lib/workflowEngine.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
@@ -9,16 +11,34 @@ import { writeClaimAudit, getClaimNotificationContext } from "../claims/claims.r
 
 // Every HR-Operations-reviewed clearance (regardless of outcome - balanced,
 // refund, or a verified payback) continues here before the workflow is
-// truly COMPLETED. Treasury authority reuses isCompensationFinanceSection/
-// requireFinance - the same authority that already gates Capture/
-// Deductions/Refundable, not a separate permission concept. The queue's own
-// *visibility* (not the act-on-it authority) is additionally gated by the
-// admin-configurable "treasury_processing" feature key, mirroring
-// Deductions/Refundable's own view-vs-act split.
+// truly COMPLETED. Acting on a claim requires requireTreasuryActor below:
+// isCompensationFinanceSection (the same authority that gates Capture/
+// Deductions/Refundable) OR the admin-configured "treasury_processing"
+// group grant - the same grant that already gates the queue's own
+// visibility (requireFeatureAccess below). The two used to be a stricter
+// view-vs-act split, but with zero sections actually carrying
+// is_compensation_finance=true on this deployment, that alone silently
+// reduced "who can act" to ADMIN only - see requireTreasuryActor.
 export const treasuryRouter = Router();
 treasuryRouter.use(requireAuth);
 
 const TREASURY_FEATURE_DEFAULTS = ["ADMIN", "Section: Treasury & Financial Accounting"];
+
+// Acting on a claim (completing it) is meant to stay slightly narrower than
+// just seeing the queue (mirroring Deductions/Refundable's own view-vs-act
+// split), but on this deployment zero sections carry is_compensation_finance
+// = true, so isCompensationFinanceUser alone silently narrowed "can act" all
+// the way down to ADMIN only - real Treasury staff could see every item in
+// this queue and complete none of them. Also honoring the same
+// "treasury_processing" group grant the router-wide requireFeatureAccess
+// gate below already requires to even reach these routes closes that gap:
+// anyone let into the queue can act on what's in it.
+async function requireTreasuryActor(req: AuthedRequest, _res: Response, next: NextFunction) {
+  const allowed = (await isCompensationFinanceUser(req))
+    || (await hasFeatureAccess(req.user!.userId, req.user!.role, "treasury_processing", TREASURY_FEATURE_DEFAULTS));
+  if (!allowed) return next(forbidden());
+  return next();
+}
 
 treasuryRouter.get("/access", async (req: AuthedRequest, res, next) => {
   try {
@@ -154,7 +174,7 @@ async function completeAndNotify(claimId: string, actorId: string, message: stri
   }
 }
 
-treasuryRouter.post("/:id/complete-balanced", requireFinance, async (req: AuthedRequest, res, next) => {
+treasuryRouter.post("/:id/complete-balanced", requireTreasuryActor, async (req: AuthedRequest, res, next) => {
   try {
     const claim = await loadTreasuryClaim(req.params.id);
     if (claim.financial_outcome !== "BALANCED") throw badRequest("This action is only for a BALANCED outcome");
@@ -190,7 +210,7 @@ const ProcessRefundSchema = z.object({
   comment: z.string().trim().optional()
 });
 
-treasuryRouter.post("/:id/process-refund", requireFinance, async (req: AuthedRequest, res, next) => {
+treasuryRouter.post("/:id/process-refund", requireTreasuryActor, async (req: AuthedRequest, res, next) => {
   try {
     const claim = await loadTreasuryClaim(req.params.id);
     if (claim.financial_outcome !== "REFUND_DUE") throw badRequest("This action is only for a REFUND_DUE outcome");
@@ -243,7 +263,7 @@ const ReconcilePaybackSchema = z.object({
   comment: z.string().trim().optional()
 });
 
-treasuryRouter.post("/:id/reconcile-payback", requireFinance, async (req: AuthedRequest, res, next) => {
+treasuryRouter.post("/:id/reconcile-payback", requireTreasuryActor, async (req: AuthedRequest, res, next) => {
   try {
     const claim = await loadTreasuryClaim(req.params.id);
     if (claim.financial_outcome !== "PAYBACK_DUE") throw badRequest("This action is only for a PAYBACK_DUE outcome");
@@ -283,7 +303,7 @@ const ReturnToHrSchema = z.object({ reason: z.string().trim().min(1, "A reason i
 // Operations without discarding the prior verification or the payment
 // proof (spec: preserve the previous HR Operations verification and create
 // a new audit entry).
-treasuryRouter.post("/:id/return-to-hr", requireFinance, async (req: AuthedRequest, res, next) => {
+treasuryRouter.post("/:id/return-to-hr", requireTreasuryActor, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = ReturnToHrSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("A reason is required", parsed.error.flatten());
