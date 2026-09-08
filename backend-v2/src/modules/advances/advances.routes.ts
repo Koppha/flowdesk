@@ -2164,12 +2164,22 @@ advancesRouter.post("/:id/recall-payment", async (req: AuthedRequest, res, next)
     if (!adv) throw notFound();
     if (adv.status !== "PAID") throw badRequest("Only a paid advance can have its payment recalled.");
 
-    const activeClaim = await query<{ id: string }>(
-      `SELECT id FROM clearance_claims WHERE linked_advance_id=$1 AND status <> 'REJECTED' LIMIT 1`,
+    // A clearance claim merely in progress (submitted, under review, even
+    // sitting with Treasury) doesn't block a recall - only an actually
+    // CLEARED one does, since at that point the employee has been told, in
+    // writing, that this money is settled. status='COMPLETED' is the
+    // current system's terminal marker across all three outcome paths
+    // (balanced/refund/payback); CLOSED/SETTLED cover claims that finished
+    // under the older, pre-outcome-tracking flow.
+    const clearedClaim = await query<{ id: string }>(
+      `SELECT id FROM clearance_claims
+        WHERE linked_advance_id=$1
+          AND (status IN ('COMPLETED','CLOSED','SETTLED') OR employee_clearance_status='FULLY_CLEARED')
+        LIMIT 1`,
       [adv.id]
     );
-    if (activeClaim.length) {
-      throw badRequest("This advance already has a clearance claim in progress - reject that claim before recalling the payment.");
+    if (clearedClaim.length) {
+      throw badRequest("This advance has already been cleared - its payment can no longer be recalled.");
     }
 
     const role = req.user!.role;
