@@ -166,10 +166,26 @@ export async function resolveRequesterHod(
 // steps route here) — extracted so both the resolution-time step loop below
 // and any later re-resolution (e.g. reassigning a pending step when an
 // employee moves departments) use the exact same lookup.
+//
+// departments.exco_user_id is checked first - the actual maintained
+// leadership assignment (e.g. ensureSefsExcoReportsToCeo sets it for every
+// SEFS department to Moeketsi Mafereka, who himself sits at division level
+// with no department underneath him). The plain users-table department-
+// string match only ever finds an EXCO whose own users.department field
+// happens to equal the target department - which fails for exactly this
+// SEFS shape, silently leaving a "plain EXCO" step unresolvable even
+// though the correct answer was sitting right there in departments.
 export async function resolveDeptExco(
   department: string
 ): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
   if (!department.trim()) return null;
+  const viaDepartment = (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+    `SELECT u.id, u.full_name, u.title, u.email
+       FROM departments d JOIN users u ON u.id = d.exco_user_id
+      WHERE lower(trim(d.name)) = lower(trim($1)) AND u.is_active = true LIMIT 1`,
+    [department]
+  ))[0];
+  if (viaDepartment) return viaDepartment;
   return (
     (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
       `SELECT id, full_name, title, email FROM users WHERE role = 'EXCO' AND is_active = true AND lower(trim(department)) = lower(trim($1)) LIMIT 1`,
