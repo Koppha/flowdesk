@@ -978,12 +978,16 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
                 tt.rate_exco AS travel_rate_exco,
                 tt.rate_ceo AS travel_rate_ceo,
                 (tt.id IS NOT NULL AND tt.active = true) AS is_travel_type,
+                ep.full_name AS external_beneficiary_name,
+                ep.category AS external_beneficiary_category,
+                ep.organisation AS external_beneficiary_organisation,
                 ${OVERDUE_SELECT}
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
          JOIN users creator ON creator.id = ar.created_by_id
          LEFT JOIN travel_types tt ON tt.code = ar.type
          LEFT JOIN employment_types et ON et.code = u.employment_type
+         LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
          CROSS JOIN advance_recovery_settings ars
          WHERE ar.id=$1`,
         [req.params.id]

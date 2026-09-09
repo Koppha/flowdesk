@@ -245,7 +245,7 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
                   <tr key={a.id}>
                     <td style={{ fontWeight: 600 }}>
                       {travelTypeLabel(a.type, travelTypes)}
-                      {a.type === "OTHER" && a.external_beneficiary_name && (
+                      {a.external_beneficiary_name && (
                         <div style={{ fontWeight: 400, fontSize: 11.5, color: "var(--muted)" }}>For {a.external_beneficiary_name}</div>
                       )}
                     </td>

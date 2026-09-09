@@ -214,11 +214,14 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
     `SELECT ar.*, u.full_name AS requester_name, u.department AS department, u.employee_no AS requester_employee_no,
             u.employment_type AS requester_employment_type,
             creator.full_name AS created_by_name, tt.name AS travel_type_name, tt.currency AS currency,
-            tt.rate_kind AS travel_rate_kind
+            tt.rate_kind AS travel_rate_kind,
+            ep.full_name AS external_beneficiary_name, ep.category AS external_beneficiary_category,
+            ep.organisation AS external_beneficiary_organisation
        FROM advance_requests ar
        JOIN users u ON u.id = ar.requester_id
        JOIN users creator ON creator.id = ar.created_by_id
        LEFT JOIN travel_types tt ON tt.code = ar.type
+       LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
       WHERE ar.id = $1`,
     [id]
   );
@@ -274,6 +277,7 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
     : null;
 
   const onBehalfOf = adv.created_by_id !== adv.requester_id;
+  const applyingForOther = Boolean(adv.external_beneficiary_id);
   const isEcocash = adv.payment_method === "ECOCASH";
   const isBank = adv.payment_method === "BANK";
   const { bankName, accountNumber } = parseBankAccount(adv.payment_account);
@@ -285,11 +289,18 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
       request_id: requestId,
       created_at: formatDateTime(adv.created_at),
       created_by_name: adv.created_by_name || "",
-      request_type_label: onBehalfOf ? "On Behalf of" : "Self",
+      request_type_label: applyingForOther ? "Apply for Other" : onBehalfOf ? "On Behalf of" : "Self",
       requester_name: adv.requester_name || "",
       requester_employee_no: adv.requester_employee_no || "",
       traveller_type: employmentTypeRow?.name || adv.requester_employment_type || "",
       department: adv.department || "",
+      // The requester still receives and is accountable for the funds even
+      // when this is set - it's a record of who the trip/expense is
+      // actually for, not a payment destination. Left blank (never a
+      // placeholder like "—") so the renderer drops this row entirely for
+      // every ordinary request.
+      applying_for_name: applyingForOther ? (adv.external_beneficiary_name || "") : "",
+      applying_for_organisation: applyingForOther ? (adv.external_beneficiary_organisation || "") : "",
       status: adv.status || "",
       type_label: adv.travel_type_name || adv.type || "",
       destination: locations.join(", "),
