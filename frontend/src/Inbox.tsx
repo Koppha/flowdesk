@@ -1179,12 +1179,20 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     const onBehalfOf = detail.created_by_id && detail.requester_id && detail.created_by_id !== detail.requester_id
       ? detail.created_by_name || ""
       : "";
+    // "Apply for Other" - the requester still receives and is accountable
+    // for the money, but the trip/expense is actually for this person, not
+    // them. Every approver in the chain needs this in front of them, same
+    // as an internal on-behalf-of request.
+    const applyingFor = detail.external_beneficiary_id
+      ? [detail.external_beneficiary_name, detail.external_beneficiary_organisation].filter(Boolean).join(" — ")
+      : "";
     return {
       travellerName: detail.requester_name || "—",
       employeeNo: detail.requester_employee_no || "—",
       travellerType: detail.traveller_type || "—",
       division: detail.department || "—",
       onBehalfOf,
+      applyingFor,
       typeOfTravel: travelTypeLabel(detail.type, travelTypes),
       destination: locations.join(", ") || "—",
       departureDate: dateFrom ? fmtDate(dateFrom) : "—",
@@ -2102,6 +2110,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     <ReviewField icon={User} label="Employment Type" value={pdfFormSummary.travellerType} />
                     <ReviewField icon={Building2} label="Division" value={pdfFormSummary.division} />
                     {pdfFormSummary.onBehalfOf && <ReviewField icon={User} label="On Behalf Of" value={pdfFormSummary.onBehalfOf} />}
+                    {pdfFormSummary.applyingFor && <ReviewField icon={User} label="Applying For" value={pdfFormSummary.applyingFor} />}
                   </div>
 
                   <div className="review-card-title review-card-subtitle">Trip</div>
