@@ -286,6 +286,7 @@ export const api = {
   submitAdvance: (id: string) => req(`/advances/${id}/submit`, { method: "POST", body: JSON.stringify({}) }),
   revokeAdvance: (id: string) => req(`/advances/${id}/revoke`, { method: "POST", body: JSON.stringify({}) }),
   remindAdvance: (id: string) => req(`/advances/${id}/remind`, { method: "POST", body: JSON.stringify({}) }),
+  remindClaim: (id: string) => req(`/claims/${id}/remind`, { method: "POST", body: JSON.stringify({}) }),
   claims: () => req("/claims?mine=true"),
   allClaims: () => req("/claims"),
   createClaim: (data: any) => req("/claims", { method: "POST", body: JSON.stringify(data) }),

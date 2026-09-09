@@ -1084,6 +1084,64 @@ export async function performClaimReject(
   return { status: "REJECTED" };
 }
 
+// POST /claims/:id/remind — claimant nudges the current pending approver(s).
+// Mirrors POST /advances/:id/remind.
+claimsRouter.post("/:id/remind", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = await getClaimById(req.params.id);
+    if (!claim) throw notFound();
+
+    const userId = req.user!.userId;
+    if (req.user!.role !== "ADMIN" && claim.claimant_id !== userId) {
+      throw forbidden("Only the claimant can send a reminder");
+    }
+
+    const pendingStatuses = ["SUBMITTED", "MANAGER_APPROVED", "EXCO_APPROVED", "HR_OFFICER", "FINANCE_VERIFIED", "PAYMENT_PROCESSING"];
+    if (!pendingStatuses.includes(claim.status)) {
+      throw badRequest("No pending approver to remind for this claim");
+    }
+    if (!claim.approval_chain?.length) {
+      throw badRequest("This claim does not have an active approval workflow.");
+    }
+
+    const chain = claim.approval_chain as ChainStep[];
+    const stepIdx = claim.workflow_step_order ?? 0;
+    const group = getPendingGroup(chain, stepIdx);
+    const approvers: { id: string | null; name: string | null; email: string | null; title: string | null }[] = [];
+    for (const idx of group.indices) {
+      const step = chain[idx];
+      if (step?.approvers?.length) {
+        for (const a of step.approvers) {
+          if (a.email) approvers.push({ id: a.id ?? null, name: a.name ?? null, email: a.email, title: a.title || step.position_name });
+        }
+      } else if (step?.approver_email) {
+        approvers.push({ id: step.approver_id ?? null, name: step.approver_name ?? null, email: step.approver_email, title: (step as any).approver_title ?? step.position_name ?? null });
+      }
+    }
+    if (!approvers.length) throw badRequest("Could not determine the current approver's email");
+
+    const notificationContext = await getClaimNotificationContext(claim.id);
+    for (const approver of approvers) {
+      void notifyClaimTask({
+        claimId: claim.id,
+        status: claim.status,
+        claimantName: notificationContext?.full_name ?? null,
+        department: notificationContext?.department ?? null,
+        claimTotal: Number(claim.claim_total),
+        currency: notificationContext?.currency,
+        claimType: notificationContext?.claim_type,
+        nextApprover: approver,
+        stepOrder: stepIdx,
+        isReminder: true
+      });
+    }
+
+    return res.json({ ok: true, remindedCount: approvers.length });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 claimsRouter.post("/:id/reject", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = z.object({ comments: z.string().min(1, "Comments are required") }).safeParse(req.body);

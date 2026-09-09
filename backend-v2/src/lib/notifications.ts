@@ -811,6 +811,10 @@ export async function notifyClaimTask(args: {
   // The workflow step order nextApprover is being asked to act on — required
   // to mint a one-click email-approve/reject link bound to that exact step.
   stepOrder?: number;
+  // A follow-up nudge (POST /claims/:id/remind) rather than the original
+  // notification for this step — same action link, different subject/
+  // wording, mirroring notifyAdvanceTask's isReminder.
+  isReminder?: boolean;
 }) {
   const claimant = args.claimantName || "Claimant";
   const department = args.department || null;
@@ -882,11 +886,13 @@ export async function notifyClaimTask(args: {
         }
       }
       const body = [
-        header(`CLEARANCE CLAIM — ACTION REQUIRED`),
+        header(args.isReminder ? `CLEARANCE CLAIM — REMINDER` : `CLEARANCE CLAIM — ACTION REQUIRED`),
         ``,
         `Hello ${args.nextApprover.name || ""},`.trim(),
         ``,
-        `A clearance claim requires your ${roleLabel} action.`,
+        args.isReminder
+          ? `This is a follow-up reminder — a clearance claim is still awaiting your ${roleLabel} action.`
+          : `A clearance claim requires your ${roleLabel} action.`,
         ``,
         details,
         ``,
@@ -898,12 +904,12 @@ export async function notifyClaimTask(args: {
 
       await sendMail({
         to: [args.nextApprover.email],
-        subject: `[Action Required] ${claimTypeLabel} awaiting ${roleLabel} action`,
+        subject: `${args.isReminder ? "[Reminder]" : "[Action Required]"} ${claimTypeLabel} awaiting ${roleLabel} action`,
         text: body
       });
 
       sendTeamsCard({
-        title: "Clearance Claim — Action Required",
+        title: args.isReminder ? "Clearance Claim — Reminder" : "Clearance Claim — Action Required",
         summary: `Clearance claim from ${claimant} awaiting ${roleLabel} action`,
         subtitle: `Requires ${roleLabel} action`,
         color: "f59e0b",
