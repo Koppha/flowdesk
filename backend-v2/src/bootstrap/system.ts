@@ -1528,6 +1528,7 @@ async function ensurePdfSchema() {
   }
 
   await seedDefaultPdfTemplates();
+  await patchAdvancePdfTemplateForExternalBeneficiary();
 }
 
 function pdfSection(section: Record<string, unknown>) {
@@ -1697,6 +1698,35 @@ async function seedDefaultPdfTemplates() {
     );
     void inserted;
   }
+}
+
+// seedDefaultPdfTemplates only ever inserts a fresh template - once one
+// exists (on every real deployment by now), DEFAULT_TEMPLATE_DEFS changes
+// never reach it again. "Apply for Other" requests need their beneficiary
+// visible on the printed form the same way they now are on the on-screen
+// review, so patch the field in directly, idempotently, into whichever
+// field_grid section is titled "Requester & Employee Details" - by title,
+// not by the section's randomly-generated id, since each deployment seeded
+// its own ids independently. Every other field on an admin-customized
+// template (wording, columns, extra sections) is left completely alone.
+async function patchAdvancePdfTemplateForExternalBeneficiary() {
+  await query(`
+    WITH target AS (
+      SELECT p.id, ord - 1 AS idx, elem->'fields' AS fields
+        FROM pdf_templates p, jsonb_array_elements(p.sections) WITH ORDINALITY AS t(elem, ord)
+       WHERE p.request_type = 'ADVANCE_REQUEST' AND p.custom_request_type_id IS NULL
+         AND elem->>'type' = 'field_grid'
+         AND elem->>'title' = 'Requester & Employee Details'
+         AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements(elem->'fields') f WHERE f->>'fieldKey' = 'applying_for_name'
+         )
+    )
+    UPDATE pdf_templates p
+       SET sections = jsonb_set(p.sections, ARRAY[target.idx::text, 'fields'], target.fields || '[{"fieldKey":"applying_for_name","labelOverride":"Applying For"}]'::jsonb),
+           updated_at = now()
+      FROM target
+     WHERE p.id = target.id
+  `);
 }
 
 // Admin-configurable SLA matrix for clearance-claim approval steps, keyed by
