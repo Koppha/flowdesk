@@ -1340,7 +1340,15 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     if (!String(adv.purpose || "").trim()) throw badRequest("purpose is required");
     if (!String(adv.payment_account || "").trim()) throw badRequest("payment_account is required");
     let needsAccommodation = false;
-    if (await isTravelAdvanceType(adv.type)) {
+    if (adv.external_beneficiary_id) {
+      // "Apply for Other" never uses the day-by-day travel table, even for a
+      // travel-type advance (e.g. Local Business Travel Allowance) - the
+      // amount is entered manually and already stored in requested_total at
+      // creation/update time (see the external_beneficiary_id branch in
+      // POST / and PUT /:id). Requiring advance_lines here would demand a
+      // table the requester was never shown and can never fill in.
+      if (Number(adv.requested_total) <= 0) throw badRequest("requested_total must be > 0");
+    } else if (await isTravelAdvanceType(adv.type)) {
       // DAILY-rate types (CMA/international per diem) let one row cover
       // several days via meals_count, so "how many travel days" is the sum
       // of each row's day count, not the row count - MEAL-rate types (local
