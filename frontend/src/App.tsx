@@ -742,6 +742,7 @@ export default function App() {
   const [editingSectionObj, setEditingSectionObj] = useState<null | { id: string; name: string; exco_user_id?: string | null }>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [remindingAdvanceId, setRemindingAdvanceId] = useState<string | null>(null);
+  const [remindingClaimId, setRemindingClaimId] = useState<string | null>(null);
   const [historyAdvanceId, setHistoryAdvanceId] = useState<string | null>(null);
   const [historyAdvanceDetail, setHistoryAdvanceDetail] = useState<any | null>(null);
   const [historyEvents, setHistoryEvents] = useState<any[]>([]);
@@ -4134,6 +4135,26 @@ export default function App() {
                     <div className="tracking-owner">
                       <strong>{activeStage?.label || "Requester"}</strong>
                       <span>{clearanceStageLabel(claim)}</span>
+                      {["SUBMITTED", "MANAGER_APPROVED", "EXCO_APPROVED", "HR_OFFICER", "FINANCE_VERIFIED", "PAYMENT_PROCESSING"].includes(currentStatus) && (
+                        <button
+                          type="button"
+                          disabled={remindingClaimId === claim.id}
+                          style={remindingClaimId === claim.id ? { opacity: 0.7, cursor: "not-allowed" } : undefined}
+                          onClick={async () => {
+                            setRemindingClaimId(claim.id);
+                            try {
+                              const result: any = await api.remindClaim(claim.id);
+                              alert(`Reminder sent to ${result.remindedCount === 1 ? "the approver" : `${result.remindedCount} approvers`}. You will also receive a confirmation email.`);
+                            } catch (err: any) {
+                              alert(err?.message || "Failed to send reminder.");
+                            } finally {
+                              setRemindingClaimId(null);
+                            }
+                          }}
+                        >
+                          <Mail size={15} aria-hidden /> {remindingClaimId === claim.id ? "Sending…" : "Send Reminder"}
+                        </button>
+                      )}
                     </div>
                   </section>
                 </aside>
