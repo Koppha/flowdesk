@@ -5,7 +5,8 @@ import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { roleLabel } from "./roles";
-import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
+import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Hourglass, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
+import { BusinessUnitTabs, IconTabRow, FinanceEmptyState, type BusinessUnit } from "./components/FinanceQueueKit";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
@@ -590,9 +591,9 @@ export default function Inbox(props: {
   // Company/division filter (MNO / SEFS / HigherLife) - only meaningful in
   // the Capture Inbox, where Treasury/Finance need to work one company's
   // queue at a time rather than a single list mixing all three.
-  const [divisionFilter, setDivisionFilter] = useState<"ALL" | "MNO" | "SEFS" | "HigherLife">("ALL");
+  const [divisionFilter, setDivisionFilter] = useState<BusinessUnit>("ALL");
   const divisionCounts = useMemo(() => {
-    const counts: Record<string, number> = { MNO: 0, SEFS: 0, HigherLife: 0 };
+    const counts: Record<string, number> = { ALL: items.length, MNO: 0, SEFS: 0, HigherLife: 0 };
     for (const it of items) {
       const d = (it as any).division;
       if (d && d in counts) counts[d]++;
@@ -771,42 +772,17 @@ export default function Inbox(props: {
           ) : (
             <>
               {mode === "capture" && (
-                <div className="ep-tabs" style={{ marginBottom: 8 }}>
-                  {([
-                    { key: "ALL", label: "All Companies" },
-                    { key: "MNO", label: "MNO" },
-                    { key: "SEFS", label: "SEFS" },
-                    { key: "HigherLife", label: "HigherLife" }
-                  ] as const).map((tab) => (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      className={`ep-tab ${divisionFilter === tab.key ? "active" : ""}`}
-                      onClick={() => setDivisionFilter(tab.key)}
-                    >
-                      {tab.label}
-                      <span className="inbox-count-chip">{tab.key === "ALL" ? items.length : divisionCounts[tab.key]}</span>
-                    </button>
-                  ))}
-                </div>
+                <BusinessUnitTabs value={divisionFilter} onChange={setDivisionFilter} counts={divisionCounts} icon={Building2} allIcon={Users} />
               )}
               {mode === "capture" && (
-                <div className="ep-tabs" style={{ marginBottom: 8 }}>
-                  {([
-                    { key: "PENDING", label: "Pending" },
-                    { key: "CAPTURED", label: "Captured" }
-                  ] as const).map((tab) => (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      className={`ep-tab ${captureStatusFilter === tab.key ? "active" : ""}`}
-                      onClick={() => setCaptureStatusFilter(tab.key)}
-                    >
-                      {tab.label}
-                      <span className="inbox-count-chip">{tab.key === "PENDING" ? captureStatusCounts.pending : captureStatusCounts.captured}</span>
-                    </button>
-                  ))}
-                </div>
+                <IconTabRow
+                  value={captureStatusFilter}
+                  onChange={setCaptureStatusFilter}
+                  tabs={[
+                    { key: "PENDING", label: "Pending", count: captureStatusCounts.pending, icon: Hourglass },
+                    { key: "CAPTURED", label: "Captured", count: captureStatusCounts.captured, icon: CheckCircle2 }
+                  ]}
+                />
               )}
               {hasAnyDelegatedItems && (
                 <>
@@ -835,9 +811,7 @@ export default function Inbox(props: {
                 </>
               )}
               {scopedItems.length === 0 ? (
-                <div className="inbox-empty-state">
-                  <p>Nothing in this view.</p>
-                </div>
+                <FinanceEmptyState icon={FileText} title="Nothing in this view." hint="Try a different company or status tab above." />
               ) : (
               <div className="ep-tabs">
                 {groupKeys.map((docType) => {

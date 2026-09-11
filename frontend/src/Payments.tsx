@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { formatMoney, isFinanceDeptClient } from "./constants";
-import { Clock, CheckCircle, Wallet, FileText, Search, ChevronLeft, ChevronRight, XCircle, RotateCcw } from "lucide-react";
+import { Clock, CheckCircle, Wallet, FileText, ChevronLeft, ChevronRight, XCircle, RotateCcw, Building2, Users, Hourglass, ClipboardList } from "lucide-react";
+import { BusinessUnitTabs, IconTabRow, FinanceFilterBar, SearchField, FinanceEmptyState, type BusinessUnit } from "./components/FinanceQueueKit";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
@@ -76,7 +77,7 @@ export default function Payments(props: { onBack?: () => void }) {
   const [tab, setTab] = useState<"pending" | "paid">("pending");
   // Company/division filter (MNO / SEFS / HigherLife) - lets Finance work
   // one company's payment queue at a time, same as the Capture Inbox tabs.
-  const [divisionFilter, setDivisionFilter] = useState<"ALL" | "MNO" | "SEFS" | "HigherLife">("ALL");
+  const [divisionFilter, setDivisionFilter] = useState<BusinessUnit>("ALL");
   const [documentFilter, setDocumentFilter] = useState<"ALL" | "ADVANCE" | "ACCOMMODATION">("ALL");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -129,7 +130,7 @@ export default function Payments(props: { onBack?: () => void }) {
   }
 
   const divisionCounts = useMemo(() => {
-    const counts: Record<string, number> = { MNO: 0, SEFS: 0, HigherLife: 0 };
+    const counts: Record<string, number> = { ALL: items.length, MNO: 0, SEFS: 0, HigherLife: 0 };
     for (const i of items) {
       if (i.division && i.division in counts) counts[i.division]++;
     }
@@ -260,19 +261,21 @@ export default function Payments(props: { onBack?: () => void }) {
       {error && <pre className="inbox-error">{error}</pre>}
 
       <div className="ep-kpi-row">
-        <div className="stat-card stat-card-gold">
-          <span className="stat-icon"><Clock size={28} /></span>
+        <div className="ep-kpi ep-kpi-blue">
+          <div className="ep-kpi-icon"><Clock size={26} /></div>
           <div>
-            <div className="stat-value">{stats.pending}</div><div className="stat-label">Pending Payment</div>
+            <div className="ep-kpi-value">{stats.pending}</div>
+            <div className="ep-kpi-label">Pending Payment</div>
             {stats.pendingValueByCurrency.length === 0
               ? <small>{formatMoney(0)}</small>
               : stats.pendingValueByCurrency.map(([currency, value]) => <small key={currency} style={{ display: "block" }}>{formatMoney(value, currency)}</small>)}
           </div>
         </div>
-        <div className="stat-card stat-card-green">
-          <span className="stat-icon"><CheckCircle size={28} /></span>
+        <div className="ep-kpi ep-kpi-green">
+          <div className="ep-kpi-icon"><CheckCircle size={26} /></div>
           <div>
-            <div className="stat-value">{stats.paid}</div><div className="stat-label">Paid</div>
+            <div className="ep-kpi-value">{stats.paid}</div>
+            <div className="ep-kpi-label">Paid</div>
             {stats.paidValueByCurrency.length === 0
               ? <small>{formatMoney(0)}</small>
               : stats.paidValueByCurrency.map(([currency, value]) => <small key={currency} style={{ display: "block" }}>{formatMoney(value, currency)}</small>)}
@@ -280,67 +283,35 @@ export default function Payments(props: { onBack?: () => void }) {
         </div>
       </div>
 
-      <div className="ep-tabs" style={{ marginBottom: 8 }}>
-        {([
-          { key: "ALL", label: "All Companies" },
-          { key: "MNO", label: "MNO" },
-          { key: "SEFS", label: "SEFS" },
-          { key: "HigherLife", label: "HigherLife" }
-        ] as const).map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            className={`ep-tab ${divisionFilter === t.key ? "active" : ""}`}
-            onClick={() => { setDivisionFilter(t.key); setPage(1); }}
-          >
-            {t.label}
-            <span className="inbox-count-chip">{t.key === "ALL" ? items.length : divisionCounts[t.key]}</span>
-          </button>
-        ))}
-      </div>
+      <BusinessUnitTabs value={divisionFilter} onChange={(v) => { setDivisionFilter(v); setPage(1); }} counts={divisionCounts} icon={Building2} allIcon={Users} />
 
-      <div className="ep-tabs">
-        <button type="button" className={`ep-tab ${tab === "pending" ? "active" : ""}`} onClick={() => { setTab("pending"); setPage(1); }}>
-          Pending <span className="inbox-count-chip">{stats.pending}</span>
-        </button>
-        <button type="button" className={`ep-tab ${tab === "paid" ? "active" : ""}`} onClick={() => { setTab("paid"); setPage(1); }}>
-          Paid <span className="inbox-count-chip">{stats.paid}</span>
-        </button>
-      </div>
+      <IconTabRow
+        value={tab}
+        onChange={(v) => { setTab(v); setPage(1); }}
+        tabs={[
+          { key: "pending", label: "Pending", count: stats.pending, icon: Hourglass },
+          { key: "paid", label: "Paid", count: stats.paid, icon: CheckCircle }
+        ]}
+      />
 
-      <div className="ep-tabs" style={{ marginTop: 8 }}>
-        {([
-          { key: "ALL", label: "All Documents" },
-          { key: "ADVANCE", label: "Advance" },
-          { key: "ACCOMMODATION", label: "Accommodation" }
-        ] as const).map((document) => (
-          <button
-            key={document.key}
-            type="button"
-            className={`ep-tab ${documentFilter === document.key ? "active" : ""}`}
-            onClick={() => { setDocumentFilter(document.key); setPage(1); }}
-          >
-            {document.label}
-            <span className="inbox-count-chip">
-              {document.key === "ALL" ? companyFiltered.length : documentCounts[document.key]}
-            </span>
-          </button>
-        ))}
-      </div>
+      <IconTabRow
+        value={documentFilter}
+        onChange={(v) => { setDocumentFilter(v); setPage(1); }}
+        tabs={[
+          { key: "ALL", label: "All Documents", count: companyFiltered.length, icon: FileText },
+          { key: "ADVANCE", label: "Advance", count: documentCounts.ADVANCE, icon: Wallet },
+          { key: "ACCOMMODATION", label: "Accommodation", count: documentCounts.ACCOMMODATION, icon: ClipboardList }
+        ]}
+      />
 
-      <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
-          <div className="ep-search" style={{ flex: "1 1 220px" }}>
-            <Search size={14} />
-            <input placeholder="Search by payee, accommodation, department, reference…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
-          </div>
-        </div>
-      </div>
+      <FinanceFilterBar>
+        <SearchField label="Search" placeholder="Search by payee, accommodation, department, reference…" value={search} onChange={(v) => { setSearch(v); setPage(1); }} />
+      </FinanceFilterBar>
 
       <div className="ep-panel">
         <div className="ep-table-wrap">
           {filtered.length === 0 ? (
-            <div className="ep-empty"><p>No {tab} payments.</p></div>
+            <FinanceEmptyState icon={FileText} title={`No ${tab} payments.`} />
           ) : (
             <table className="ep-table">
               <thead>

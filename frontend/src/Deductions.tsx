@@ -3,9 +3,11 @@ import { createPortal } from "react-dom";
 import { api, getUserFromToken } from "./api";
 import { formatMoney, isFinanceDeptClient } from "./constants";
 import {
-  Clock, Wallet, HandCoins, CheckCircle2, Search, MoreHorizontal,
-  ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, X, Check
+  Clock, Wallet, HandCoins, CheckCircle2, MoreHorizontal,
+  ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, X, Check,
+  Building2, Users, FileText, Hourglass
 } from "lucide-react";
+import { BusinessUnitTabs, IconTabRow, FinanceFilterBar, FilterField, SearchField, FinanceEmptyState, type BusinessUnit } from "./components/FinanceQueueKit";
 
 const STATUS_STYLE: Record<string, [string, string]> = {
   DEDUCTED:  ["#d1fae5", "#065f46"],
@@ -101,7 +103,7 @@ export default function Deductions() {
   // Company filter (MNO / SEFS / HigherLife) - same fixed set and pattern as
   // Payments and the Capture Inbox, replacing the old free-text division
   // dropdown so this page's filtering is consistent across admin screens.
-  const [companyFilter, setCompanyFilter] = useState<"ALL" | "MNO" | "SEFS" | "HigherLife">("ALL");
+  const [companyFilter, setCompanyFilter] = useState<BusinessUnit>("ALL");
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -163,7 +165,7 @@ export default function Deductions() {
   }, [items]);
 
   const companyCounts = useMemo(() => {
-    const counts: Record<string, number> = { MNO: 0, SEFS: 0, HigherLife: 0 };
+    const counts: Record<string, number> = { ALL: items.length, MNO: 0, SEFS: 0, HigherLife: 0 };
     for (const i of items) {
       if (i.division_name && i.division_name in counts) counts[i.division_name]++;
     }
@@ -323,62 +325,35 @@ export default function Deductions() {
         </div>
       </div>
 
-      <div className="ep-tabs" style={{ marginBottom: 8 }}>
-        {([
-          { key: "ALL", label: "All Companies" },
-          { key: "MNO", label: "MNO" },
-          { key: "SEFS", label: "SEFS" },
-          { key: "HigherLife", label: "HigherLife" }
-        ] as const).map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            className={`ep-tab ${companyFilter === t.key ? "active" : ""}`}
-            onClick={() => { setCompanyFilter(t.key); setPage(1); }}
-          >
-            {t.label}
-            <span className="inbox-count-chip">{t.key === "ALL" ? items.length : companyCounts[t.key]}</span>
-          </button>
-        ))}
-      </div>
+      <BusinessUnitTabs value={companyFilter} onChange={(v) => { setCompanyFilter(v); setPage(1); }} counts={companyCounts} icon={Building2} allIcon={Users} />
 
-      <div className="ep-tabs">
-        {([
-          { key: "pending", label: "Pending", count: items.filter((i) => rowStatus(i) === "PENDING").length },
-          { key: "deducted", label: "Deducted", count: items.filter((i) => rowStatus(i) === "DEDUCTED").length },
-          { key: "all", label: "All Claims", count: items.length }
-        ] as const).map((t) => (
-          <button key={t.key} type="button" className={`ep-tab ${tab === t.key ? "active" : ""}`}
-            onClick={() => { setTab(t.key); setPage(1); }}>
-            {t.label} <span className="inbox-count-chip">{t.count}</span>
-          </button>
-        ))}
-      </div>
+      <IconTabRow
+        value={tab}
+        onChange={(v) => { setTab(v); setPage(1); }}
+        tabs={[
+          { key: "pending", label: "Pending", count: items.filter((i) => rowStatus(i) === "PENDING").length, icon: Hourglass },
+          { key: "deducted", label: "Deducted", count: items.filter((i) => rowStatus(i) === "DEDUCTED").length, icon: CheckCircle2 },
+          { key: "all", label: "All Claims", count: items.length, icon: FileText }
+        ]}
+      />
 
-      <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div className="ded-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
-          <div className="ep-search" style={{ flex: "1 1 220px" }}>
-            <Search size={14} />
-            <input placeholder="Search name, emp no, division, destination…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
-          </div>
-          <input type="date" className="ep-form-select" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} title="Closed from" />
-          <input type="date" className="ep-form-select" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} title="Closed to" />
-          {(search || companyFilter !== "ALL" || dateFrom || dateTo) && (
-            <button className="ep-btn-outline" onClick={() => { setSearch(""); setCompanyFilter("ALL"); setDateFrom(""); setDateTo(""); setPage(1); }}>
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
+      <FinanceFilterBar
+        showReset={Boolean(search || companyFilter !== "ALL" || dateFrom || dateTo)}
+        onReset={() => { setSearch(""); setCompanyFilter("ALL"); setDateFrom(""); setDateTo(""); setPage(1); }}
+      >
+        <SearchField label="Search" placeholder="Search name, emp no, division, destination…" value={search} onChange={(v) => { setSearch(v); setPage(1); }} />
+        <FilterField label="Closed From">
+          <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
+        </FilterField>
+        <FilterField label="Closed To">
+          <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
+        </FilterField>
+      </FinanceFilterBar>
 
       <div className="ep-panel">
         <div className="ep-table-wrap">
           {sorted.length === 0 ? (
-            <div className="ep-empty ded-empty">
-              <span className="ded-empty-icon"><FolderSearch size={26} /></span>
-              <p><strong>No settled clearances match your filters.</strong></p>
-              <p className="ded-empty-hint">Try adjusting your search criteria or filters.</p>
-            </div>
+            <FinanceEmptyState icon={FolderSearch} title="No settled clearances match your filters." hint="Try adjusting your search criteria or filters." />
           ) : (
             <table className="ep-table">
               <thead>
