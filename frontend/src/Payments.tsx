@@ -23,6 +23,16 @@ interface PaymentItem {
   paid_reference: string | null;
   approved_by_name: string | null;
   pdf_filename: string;
+  travel_origin_iata?: string | null;
+  travel_destination_iata?: string | null;
+  travel_return_date?: string | null;
+  external_beneficiary_id?: string | null;
+  external_start_date?: string | null;
+  external_end_date?: string | null;
+  external_beneficiary_name?: string | null;
+  external_beneficiary_organisation?: string | null;
+  trip_departure_date?: string | null;
+  trip_destination?: string | null;
 }
 
 function requestNumber(item: PaymentItem) {
@@ -410,6 +420,30 @@ export default function Payments(props: { onBack?: () => void }) {
               <DetailRow label="Request Date" value={fmtDateTime(selected.created_at)} />
               <DetailRow label="Request Status" value={selected.status} />
               <DetailRow label="Approved By" value={selected.approved_by_name || "—"} />
+              {selected.doc_type === "ADVANCE" && selected.external_beneficiary_id && (
+                <>
+                  <DetailRow
+                    label="Applying For"
+                    value={selected.external_beneficiary_name || "—"}
+                  />
+                  <DetailRow
+                    label="Trip Dates"
+                    value={`${fmtDate(selected.external_start_date)} to ${fmtDate(selected.external_end_date)}`}
+                  />
+                </>
+              )}
+              {selected.doc_type === "ADVANCE" && !selected.external_beneficiary_id && (selected.travel_destination_iata || selected.trip_destination) && (
+                <>
+                  <DetailRow
+                    label="Destination"
+                    value={selected.travel_destination_iata ? `${selected.travel_origin_iata || "—"} → ${selected.travel_destination_iata}` : (selected.trip_destination || "—")}
+                  />
+                  <DetailRow
+                    label="Trip Dates"
+                    value={`${fmtDate(selected.trip_departure_date)} to ${fmtDate(selected.travel_return_date || selected.trip_departure_date)}`}
+                  />
+                </>
+              )}
               {selected.payment_status === "PAID" && <DetailRow label="Paid Date" value={fmtDateTime(selected.paid_at)} />}
 
               <div style={{ marginTop: 8 }}>

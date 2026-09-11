@@ -8,6 +8,7 @@ import { ensureServiceContractsSchema } from "../modules/service-contracts/servi
 import { env } from "../config/env.js";
 import { ensureDepartmentGroups, ensureManagerTypesTable, ensureUserOrgColumns } from "../lib/departments.js";
 import { ensureTravelSchema } from "../lib/travel.js";
+import { ensureAirportsSchema } from "../lib/airports.js";
 import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
 import { ensureBrsSchema } from "../modules/brs/brs.schema.js";
 import { DEFAULT_ECONET_LOGO_DATA_URI } from "../lib/pdf/assets/econetLogo.js";
@@ -23,6 +24,7 @@ export async function bootstrapSystem() {
   await ensureFeatureSchema();
   await ensureWorkflowSchema();
   await ensureTravelSchema();
+  await ensureAirportsSchema();
   await ensureReportingLinesSchema();
   await ensurePaAssignmentsSchema();
   await ensureRequestTypesSchema();
@@ -1823,6 +1825,18 @@ async function ensureExternalPayeesSchema() {
   // period the engagement/trip covers.
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS external_start_date date`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS external_end_date date`);
+
+  // "Plan Your Trip" (the international/COUNTRY_CITY travel types' single
+  // origin+destination flow) - a real origin/destination pair and a return
+  // date, none of which the older multi-row advance_lines model had a place
+  // for. Departure date isn't duplicated here: it's still the one synthesized
+  // advance_lines row's `date`, exactly as a manually-filled table row would
+  // have stored it, so every existing PDF/report/review consumer of
+  // advance_lines needs no changes at all. These three columns exist purely
+  // so the redesigned screen can read a draft back accurately on re-edit.
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS travel_origin_iata text`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS travel_destination_iata text`);
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS travel_return_date date`);
 }
 
 // Admin-configurable idle-session timeout: how long a user can go without

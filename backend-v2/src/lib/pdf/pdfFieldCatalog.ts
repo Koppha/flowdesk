@@ -251,7 +251,12 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   // weekday, not chronological - so departure/return could come out as any
   // scrambled order depending on which weekdays the trip's dates fell on.
   const dates = lines.map((l) => l.line_date).filter(Boolean);
-  const dateFrom = dates[0];
+  // "Apply for Other" never has lines at all - just the overall period the
+  // engagement/trip covers, on the request itself - so deriving dates from
+  // `lines` silently left departure/return/duration blank on the PDF for
+  // every one of these.
+  const isApplyForOther = Boolean(adv.external_beneficiary_id);
+  const dateFrom = isApplyForOther ? adv.external_start_date : dates[0];
   // DAILY-rate rows (CMA/international per diem) can each represent several
   // days on a single line_date now, so the trip's real length is the sum of
   // each row's day count, not the span between the first and last row's
@@ -260,10 +265,14 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   const totalDays = isDailyRateTrip
     ? lines.reduce((sum: number, l: any) => sum + Math.max(1, Number(l.meals_count) || 1), 0)
     : null;
-  const dateTo = isDailyRateTrip && dateFrom && totalDays
+  const dateTo = isApplyForOther
+    ? adv.external_end_date
+    : isDailyRateTrip && dateFrom && totalDays
     ? new Date(new Date(dateFrom).getTime() + (totalDays - 1) * 86400000).toISOString().slice(0, 10)
     : dates[dates.length - 1];
-  const durationDays = isDailyRateTrip
+  const durationDays = isApplyForOther
+    ? (dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1) : null)
+    : isDailyRateTrip
     ? totalDays
     : (dateFrom && dateTo ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1) : null);
   const locations = Array.from(new Set(lines.map((l) => l.location).filter(Boolean))) as string[];
@@ -277,7 +286,7 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
     : null;
 
   const onBehalfOf = adv.created_by_id !== adv.requester_id;
-  const applyingForOther = Boolean(adv.external_beneficiary_id);
+  const applyingForOther = isApplyForOther;
   const isEcocash = adv.payment_method === "ECOCASH";
   const isBank = adv.payment_method === "BANK";
   const { bankName, accountNumber } = parseBankAccount(adv.payment_account);

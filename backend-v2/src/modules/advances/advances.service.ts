@@ -84,12 +84,19 @@ export async function createAdvance(
     external_beneficiary_id?: string | null;
     external_start_date?: string | null;
     external_end_date?: string | null;
+    // "Plan Your Trip" (COUNTRY_CITY travel types) - origin/destination
+    // airport and return date. Departure date isn't here; it's still the
+    // synthesized advance_lines row's own date, same as a manually-filled
+    // table row would store it.
+    travel_origin_iata?: string | null;
+    travel_destination_iata?: string | null;
+    travel_return_date?: string | null;
   },
   client?: PoolClient
 ) {
   const sql = `INSERT INTO advance_requests
-      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, extra_cost_amount, extra_cost_description, external_beneficiary_id, external_start_date, external_end_date, sequence_no)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, nextval('advance_request_seq'))
+      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, extra_cost_amount, extra_cost_description, external_beneficiary_id, external_start_date, external_end_date, travel_origin_iata, travel_destination_iata, travel_return_date, sequence_no)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, nextval('advance_request_seq'))
      RETURNING id`;
   const params = [
     args.requesterId,
@@ -106,7 +113,10 @@ export async function createAdvance(
     args.extra_cost_description ?? null,
     args.external_beneficiary_id ?? null,
     args.external_start_date ?? null,
-    args.external_end_date ?? null
+    args.external_end_date ?? null,
+    args.travel_origin_iata ?? null,
+    args.travel_destination_iata ?? null,
+    args.travel_return_date ?? null
   ];
   const rows = client ? (await client.query<{ id: string }>(sql, params)).rows : await query<{ id: string }>(sql, params);
 

@@ -228,17 +228,29 @@ async function writeAccommodationAudit(args: {
 }
 
 async function getAccommodationById(id: string) {
+  // The underlying advance's own trip info (not the accommodation booking's
+  // own check_in/check_out, which HR sets themselves) - Capture previously
+  // had no idea where or when the traveller is actually going, including
+  // whether this is an "Apply for Other" request with its own date range
+  // instead of a day-by-day travel table at all.
   const rows = await query<any>(
     `SELECT acc.*,
             creator.full_name AS created_by_name,
             requester.full_name AS requester_name,
             requester.department AS requester_department,
             ar.purpose AS advance_purpose,
-            ar.status AS advance_status
+            ar.status AS advance_status,
+            ar.type AS advance_type,
+            ar.travel_origin_iata, ar.travel_destination_iata, ar.travel_return_date,
+            ar.external_beneficiary_id, ar.external_start_date, ar.external_end_date,
+            ep.full_name AS external_beneficiary_name, ep.organisation AS external_beneficiary_organisation,
+            (SELECT MIN(al.line_date) FROM advance_lines al WHERE al.advance_request_id = ar.id) AS advance_departure_date,
+            (SELECT string_agg(DISTINCT al.location, ', ') FROM advance_lines al WHERE al.advance_request_id = ar.id) AS advance_destination
        FROM accommodation_requests acc
        JOIN users creator ON creator.id = acc.created_by_id
        JOIN users requester ON requester.id = acc.requester_id
        JOIN advance_requests ar ON ar.id = acc.advance_request_id
+       LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
       WHERE acc.id=$1`,
     [id]
   );

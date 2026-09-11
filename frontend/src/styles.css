@@ -11040,6 +11040,61 @@ html[data-theme="dark"] .tracking-empty {
 }
 .travel-delete-btn:hover { background: rgba(220,38,38,0.14); border-color: rgba(220,38,38,0.45); }
 
+/* "Plan Your Trip" - the single origin/destination/departure/return card
+   for COUNTRY_CITY (international) travel types, replacing .travel-table
+   for that location_mode only. */
+.plan-trip-card {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 16px; border-radius: 12px; margin-bottom: 14px;
+  background: color-mix(in srgb, #2563eb 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, #2563eb 20%, var(--border));
+}
+.plan-trip-icon {
+  width: 42px; height: 42px; border-radius: 11px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #2563eb; color: #fff;
+}
+.plan-trip-title { font-weight: 700; font-size: 0.98rem; }
+.plan-trip-sub { font-size: 0.82rem; color: var(--muted); margin-top: 2px; }
+
+.plan-trip-mode {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; margin-bottom: 14px;
+  border: 1.5px solid #2563eb; border-radius: 10px;
+  background: color-mix(in srgb, #2563eb 6%, var(--surface));
+  color: #2563eb; width: fit-content;
+}
+.plan-trip-mode-radio {
+  width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+  border: 4.5px solid #2563eb; background: #fff;
+}
+.plan-trip-mode-label { font-weight: 700; font-size: 0.86rem; color: var(--text); }
+.plan-trip-mode-hint { font-size: 0.76rem; color: var(--muted); }
+
+.plan-trip-route {
+  display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: end;
+  margin-bottom: 14px;
+}
+.plan-trip-swap {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: var(--surface); color: #2563eb;
+  cursor: pointer; margin-bottom: 1px;
+}
+.plan-trip-swap:hover { background: color-mix(in srgb, #2563eb 10%, var(--surface)); }
+@media (max-width: 640px) {
+  .plan-trip-route { grid-template-columns: 1fr; }
+  .plan-trip-swap { justify-self: center; transform: rotate(90deg); }
+}
+
+.plan-trip-summary {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; margin-bottom: 14px;
+  border: 1px dashed var(--border); border-radius: 8px;
+  font-size: 0.85rem; color: var(--muted);
+}
+.plan-trip-summary b { color: var(--text); font-size: 0.95rem; }
+
 /* Accommodation notice banner inside advance form */
 .accommodation-notice {
   display: flex;

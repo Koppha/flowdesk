@@ -601,6 +601,7 @@ export const api = {
   myTeam: () => req("/reporting-lines/my-team"),
 
   travelTypes: () => req("/travel/types"),
+  airports: () => req("/travel/airports"),
   createTravelType: (data: any) => req("/travel/types", { method: "POST", body: JSON.stringify(data) }),
   updateTravelType: (id: string, data: any) => req(`/travel/types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteTravelType: (id: string) => req(`/travel/types/${id}`, { method: "DELETE" }),

@@ -4,6 +4,7 @@ import { AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getTravelTypeByCode, isReservedAdvanceType, listTravelTypes, normalizeTravelCode } from "../../lib/travel.js";
+import { searchAirports } from "../../lib/airports.js";
 
 const TravelTypeSchema = z.object({
   code: z.string().trim().optional(),
@@ -34,6 +35,19 @@ const TravelLocationSchema = z.object({
 
 export const travelRouter = Router();
 travelRouter.use(requireAuth);
+
+// GET /travel/airports?q=... - backs the "Where From"/"Where To" picker on
+// the international ("Plan Your Trip") advance flow. Registered before the
+// "/types" handler is irrelevant here (no :id-shaped route to collide with),
+// but kept up top since it's the first thing that flow's screen calls.
+travelRouter.get("/airports", async (req: AuthedRequest, res, next) => {
+  try {
+    const q = String(req.query.q || "");
+    return res.json(await searchAirports(q));
+  } catch (err) {
+    return next(err);
+  }
+});
 
 travelRouter.get("/types", async (req: AuthedRequest, res, next) => {
   try {

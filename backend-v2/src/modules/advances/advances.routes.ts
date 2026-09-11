@@ -56,6 +56,9 @@ const CreateAdvanceSchema = z.object({
   external_beneficiary_id: z.string().uuid().optional(),
   external_start_date: z.string().optional(),
   external_end_date: z.string().optional(),
+  travel_origin_iata: z.string().trim().optional(),
+  travel_destination_iata: z.string().trim().optional(),
+  travel_return_date: z.string().optional(),
   override_chain: z.array(z.object({
     label: z.string().trim().min(1),
     user_id: z.string().uuid(),
@@ -92,6 +95,21 @@ const CreateAdvanceSchema = z.object({
     if (data.external_start_date && data.external_end_date && data.external_end_date < data.external_start_date) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_end_date"], message: "Finish date cannot be before the start date" });
     }
+    // Only checked at creation, not on PUT /:id - an in-flight request can
+    // legitimately sit through approval long enough for its own start date
+    // to lapse into the past, and re-validating that on an unrelated edit
+    // (e.g. fixing a typo in the purpose) would wrongly block it.
+    if (data.external_start_date && data.external_start_date < new Date().toISOString().slice(0, 10)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_start_date"], message: "Start date cannot be in the past" });
+    }
+  }
+  // "Plan Your Trip" (COUNTRY_CITY travel types). Departure date isn't on
+  // this payload at all - it's submitted separately via PUT /:id/lines as
+  // the synthesized row's own date - so "return can't be before departure"
+  // stays a client-side check (also enforced by the date picker's own `min`)
+  // rather than reaching across two endpoints' schemas to cross-validate it.
+  if (data.travel_return_date && data.travel_return_date < new Date().toISOString().slice(0, 10)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["travel_return_date"], message: "Return date cannot be in the past" });
   }
 });
 
@@ -112,6 +130,9 @@ const UpdateAdvanceSchema = z.object({
   external_beneficiary_id: z.string().uuid().optional(),
   external_start_date: z.string().optional(),
   external_end_date: z.string().optional(),
+  travel_origin_iata: z.string().trim().optional(),
+  travel_destination_iata: z.string().trim().optional(),
+  travel_return_date: z.string().optional(),
   salary_month: z.string().optional()
 }).superRefine((data, ctx) => {
   if (data.payment_method === "ECOCASH") {
@@ -884,16 +905,27 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
     const offset = Math.max(0, Number(req.query.offset) || 0);
 
+    // Payments' own detail drawer reads straight off this row (no separate
+    // per-request fetch), so the trip/beneficiary fields it shows have to be
+    // selected here explicitly - a payment officer previously had no way to
+    // see where/when someone travelled, or who an "Apply for Other" request
+    // was actually for, before releasing payment.
     const rows = await query<any>(
       `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
               ar.workflow_step_order, ar.approval_chain, ar.paid_at, ar.paid_reference,
               ar.created_at, ar.sequence_no, COALESCE(tt.currency, 'LSL') AS currency,
               u.full_name AS requester_name, u.employee_no AS requester_employee_no, u.department,
-              dv.name AS division
+              dv.name AS division,
+              ar.travel_origin_iata, ar.travel_destination_iata, ar.travel_return_date,
+              ar.external_beneficiary_id, ar.external_start_date, ar.external_end_date,
+              ep.full_name AS external_beneficiary_name, ep.organisation AS external_beneficiary_organisation,
+              (SELECT MIN(al.line_date) FROM advance_lines al WHERE al.advance_request_id = ar.id) AS trip_departure_date,
+              (SELECT string_agg(DISTINCT al.location, ', ') FROM advance_lines al WHERE al.advance_request_id = ar.id) AS trip_destination
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
          LEFT JOIN travel_types tt ON tt.code = ar.type
          LEFT JOIN divisions dv ON dv.id = u.division_id
+         LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
         WHERE ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
         ORDER BY ar.created_at DESC`
     );

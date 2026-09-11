@@ -60,6 +60,7 @@ import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, curr
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
+import { AirportPicker, airportLabel, type AirportRow } from "./shared/AirportPicker";
 import {
   ArrowRightLeft,
   BarChart3,
@@ -109,6 +110,7 @@ import {
   Users,
   Landmark,
   Wallet,
+  PhoneCall,
   Wifi,
   X,
   Zap
@@ -436,7 +438,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -922,6 +924,17 @@ export default function App() {
   const [otherAmount, setOtherAmount] = useState("");
   const [otherStartDate, setOtherStartDate] = useState("");
   const [otherFinishDate, setOtherFinishDate] = useState("");
+  // "Plan Your Trip" — the single origin/destination/departure/return card
+  // for COUNTRY_CITY (international) travel types, replacing the old
+  // multi-row table for that location_mode only; Local Travel's DISTRICT
+  // table is untouched. A single destination is submitted internally as one
+  // synthesized advance_lines row (see the showTravelBreakdown submit
+  // branch), so every existing PDF/report/review consumer needs no changes.
+  const [airports, setAirports] = useState<AirportRow[]>([]);
+  const [tripOriginIata, setTripOriginIata] = useState("");
+  const [tripDestinationIata, setTripDestinationIata] = useState("");
+  const [tripDeparture, setTripDeparture] = useState("");
+  const [tripReturn, setTripReturn] = useState("");
   const [externalPayees, setExternalPayees] = useState<any[]>([]);
   const [externalBeneficiaryId, setExternalBeneficiaryId] = useState("");
   const [showNewExternalPayeeForm, setShowNewExternalPayeeForm] = useState(false);
@@ -1065,6 +1078,34 @@ export default function App() {
   // Other" checkbox) - Salary/Loan are never offered for an external
   // beneficiary at all.
   const applyForOtherTypeOptions = travelTypeOptions.filter((type) => type.allow_external_beneficiary);
+  // "Plan Your Trip" (COUNTRY_CITY types) keeps `rows` in sync with a single
+  // synthesized entry derived from the trip planner fields, so every
+  // existing consumer of `rows` (rowTotals, the Request Summary sidebar, the
+  // submit handler's line-mapping) needs no changes at all - it just sees
+  // one line, exactly as if a user had filled the old table in by hand.
+  useEffect(() => {
+    if (selectedTravelType?.location_mode !== "COUNTRY_CITY") return;
+    const destination = airports.find((a) => a.iata_code === tripDestinationIata);
+    if (!tripDeparture || !tripReturn || !destination) {
+      setRows([]);
+      return;
+    }
+    const departureMs = new Date(tripDeparture).getTime();
+    const returnMs = new Date(tripReturn).getTime();
+    const totalDays = Number.isFinite(departureMs) && Number.isFinite(returnMs)
+      ? Math.max(1, Math.round((returnMs - departureMs) / 86400000) + 1)
+      : 1;
+    setRows([{
+      date: tripDeparture,
+      startDistrict: "",
+      destinationDistrict: "",
+      country: destination.country,
+      province: "",
+      city: destination.city,
+      meals: totalDays
+    }]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTravelType?.location_mode, tripDeparture, tripReturn, tripDestinationIata, airports]);
   const isTravelAdvanceSelected = Boolean(selectedTravelType);
   // Apply for Other never uses the day-by-day travel table/per-diem
   // calculation, even if a real travel type happens to be selected - just
@@ -1581,6 +1622,11 @@ export default function App() {
     // fragile positional destructuring) — BRS is optional, so any failure
     // here should just leave the nav item hidden, never break startup.
     api.brsModuleFlag().then((f: any) => setHasActiveBrsTypes(Boolean(f?.brs_enabled))).catch(() => setHasActiveBrsTypes(false));
+    // Same reasoning as BRS above - only feeds "Plan Your Trip" on the
+    // international advance-request flow, so a failure here shouldn't stall
+    // the rest of startup. ~6000 rows loaded once, filtered client-side by
+    // AirportPicker rather than round-tripping per keystroke.
+    api.airports().then((rows: any) => setAirports(Array.isArray(rows) ? rows : [])).catch(() => setAirports([]));
     setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
     setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
     setSalaryAdvanceEnabled(moduleFlagsResp?.salary_advance_enabled !== false);
@@ -2859,6 +2905,10 @@ export default function App() {
     setOtherAmount("");
     setOtherStartDate("");
     setOtherFinishDate("");
+    setTripOriginIata("");
+    setTripDestinationIata("");
+    setTripDeparture("");
+    setTripReturn("");
     setExternalBeneficiaryId("");
     setShowNewExternalPayeeForm(false);
     setNewPayeeName("");
@@ -3359,6 +3409,15 @@ export default function App() {
     setExtraCostAmount(Number(detail.extra_cost_amount || 0) > 0 ? String(detail.extra_cost_amount) : "");
     setExtraCostDescription(detail.extra_cost_description || "");
     setRows(detail.lines ? detail.lines.map((line: any) => travelRowFromLine(line)) : []);
+    // "Plan Your Trip" (COUNTRY_CITY types) - origin/destination/return live
+    // on the request itself (see travel_origin_iata etc.); departure is read
+    // straight off the one synthesized line rather than waiting on the
+    // `rows` state set just above, since the synthesizer effect below would
+    // otherwise immediately overwrite that same line from these very fields.
+    setTripOriginIata(detail.travel_origin_iata || "");
+    setTripDestinationIata(detail.travel_destination_iata || "");
+    setTripDeparture(detail.lines?.[0]?.line_date ? normalizeDateInputValue(detail.lines[0].line_date) : "");
+    setTripReturn(detail.travel_return_date || "");
     setAccommodationHotelChoices(
       (detail.lines || []).reduce((acc: Record<string, string>, line: any) => {
         const meta = travelMetaFromLine(line);
@@ -3773,7 +3832,12 @@ export default function App() {
     const department = advance.department || profile?.department || me?.department || "—";
     const businessUnit = advance.division_name || profile?.division_name || "—";
     const requestType = travelTypeLabel(advance.type, travelTypes);
-    const amount = Number(advance.approved_total || advance.requested_total || 0);
+    // approved_total comes back as the numeric string "0.00" (never a real 0
+    // or null) until an advance is actually approved - `||` treats that
+    // non-empty string as truthy and picks it over requested_total, showing
+    // "$0.00" for the whole time a request is still pending. Only trust
+    // approved_total once the request has actually reached that stage.
+    const amount = Number((["APPROVED", "PAID"].includes(currentStatus) ? advance.approved_total : null) ?? advance.requested_total ?? 0);
 
     return (
       <div className="tracking-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tracking-modal-title">
@@ -3854,6 +3918,55 @@ export default function App() {
 
               <div className="tracking-content-grid">
                 <div className="tracking-main-stack">
+                  {advance.external_beneficiary_id && (
+                    <section className="tracking-card">
+                      <h3>Beneficiary &amp; Trip Details</h3>
+                      <dl className="tracking-detail-list">
+                        <div><dt>Applying For</dt><dd>{advance.external_beneficiary_name || "—"}</dd></div>
+                        {advance.external_beneficiary_organisation && (
+                          <div><dt>Organisation</dt><dd>{advance.external_beneficiary_organisation}</dd></div>
+                        )}
+                        <div><dt>Start Date</dt><dd>{formatTrackingDate(advance.external_start_date, false)}</dd></div>
+                        <div><dt>Finish Date</dt><dd>{formatTrackingDate(advance.external_end_date, false)}</dd></div>
+                      </dl>
+                    </section>
+                  )}
+                  {(advance.travel_destination_iata || (Array.isArray(advance.lines) && advance.lines.length > 0)) && (
+                    <section className="tracking-card">
+                      <h3>Trip Details</h3>
+                      {advance.travel_destination_iata ? (() => {
+                        const origin = airports.find((a) => a.iata_code === advance.travel_origin_iata);
+                        const destination = airports.find((a) => a.iata_code === advance.travel_destination_iata);
+                        const departureLine = advance.lines?.[0];
+                        return (
+                          <dl className="tracking-detail-list">
+                            <div>
+                              <dt>Route</dt>
+                              <dd>{origin ? airportLabel(origin) : (advance.travel_origin_iata || "—")} → {destination ? airportLabel(destination) : advance.travel_destination_iata}</dd>
+                            </div>
+                            <div><dt>Departure</dt><dd>{departureLine ? formatTrackingDate(departureLine.line_date, false) : "—"}</dd></div>
+                            <div><dt>Return</dt><dd>{formatTrackingDate(advance.travel_return_date, false)}</dd></div>
+                            <div><dt>Duration</dt><dd>{departureLine ? `${departureLine.meals_count} day${departureLine.meals_count === 1 ? "" : "s"}` : "—"}</dd></div>
+                          </dl>
+                        );
+                      })() : (
+                        <div className="tracking-table-wrap">
+                          <table className="tracking-table">
+                            <thead><tr><th>Date</th><th>Location</th><th>Days</th></tr></thead>
+                            <tbody>
+                              {advance.lines.map((line: any, idx: number) => (
+                                <tr key={idx}>
+                                  <td>{formatTrackingDate(line.line_date, false)}</td>
+                                  <td>{line.location || "—"}</td>
+                                  <td>{line.meals_count}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </section>
+                  )}
                   <section className="tracking-card">
                     <h3>Approval Journey</h3>
                     <div className="tracking-table-wrap">
@@ -6456,7 +6569,7 @@ export default function App() {
                     { icon: <BarChart3 size={26} />, color: "#0d9488", bg: "#ccfbf1", title: "Department & Division", desc: "Clearance activity summarized by division and department.", action: () => setPage("REPORT_DEPT_DIVISION"), live: true },
                   ] : []),
                   ...(role === "ADMIN" || hasOvertimeFinanceAccess ? [
-                    { icon: <Clock3 size={26} />, color: "#b45309", bg: "#fef3c7", title: "Overtime Reports", desc: "Payment queue, allowance report, and paid history — filtered and exportable.", action: () => setPage("REPORT_OVERTIME"), live: true },
+                    { icon: <Clock3 size={26} />, color: "#b45309", bg: "#fef3c7", title: "Overtime Reports", desc: "Hours report and completed-claims history — filtered and exportable.", action: () => setPage("REPORT_OVERTIME"), live: true },
                   ] : []),
                 ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}
@@ -6896,11 +7009,11 @@ export default function App() {
                   <div className="form-grid-2">
                     <div className="form-field">
                       <label>Start Date</label>
-                      <input type="date" value={otherStartDate} onChange={(e) => setOtherStartDate(e.target.value)} />
+                      <input type="date" value={otherStartDate} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setOtherStartDate(e.target.value)} />
                     </div>
                     <div className="form-field">
                       <label>Finish Date</label>
-                      <input type="date" value={otherFinishDate} onChange={(e) => setOtherFinishDate(e.target.value)} />
+                      <input type="date" value={otherFinishDate} min={otherStartDate || new Date().toISOString().slice(0, 10)} onChange={(e) => setOtherFinishDate(e.target.value)} />
                     </div>
                   </div>
                   {showNewExternalPayeeForm && (
@@ -7042,6 +7155,10 @@ export default function App() {
                     setAccommodationHotelChoices({});
                     setExtraCostAmount("");
                     setExtraCostDescription("");
+                    setTripOriginIata("");
+                    setTripDestinationIata("");
+                    setTripDeparture("");
+                    setTripReturn("");
                   }}
                 >
                   <option value="">Select advance type</option>
@@ -7124,6 +7241,7 @@ export default function App() {
                       <b>{fmtMoney(selectedTravelRate, selectedTravelType?.currency)} per {selectedTravelUnitLabel}</b>
                     </div>
                   </div>
+                  {selectedTravelType.location_mode !== "COUNTRY_CITY" ? (
                   <table className="travel-table">
                     <thead>
                       <tr>
@@ -7316,6 +7434,82 @@ export default function App() {
                       )}
                     </tbody>
                   </table>
+                  ) : (
+                  <>
+                    <div className="plan-trip-card">
+                      <span className="plan-trip-icon"><Plane size={22} /></span>
+                      <div>
+                        <div className="plan-trip-title">Plan Your Trip</div>
+                        <div className="plan-trip-sub">Provide your travel details. This will be used to calculate your advance.</div>
+                      </div>
+                    </div>
+
+                    <div className="plan-trip-mode">
+                      <span className="plan-trip-mode-radio" />
+                      <Plane size={15} />
+                      <div>
+                        <div className="plan-trip-mode-label">Return Trip</div>
+                        <div className="plan-trip-mode-hint">I am returning to my origin</div>
+                      </div>
+                    </div>
+
+                    <div className="plan-trip-route">
+                      <div className="form-field">
+                        <label>Where from?</label>
+                        <AirportPicker airports={airports} value={tripOriginIata} onChange={setTripOriginIata} placeholder="Departure city or airport code" />
+                      </div>
+                      <button
+                        type="button"
+                        className="plan-trip-swap"
+                        title="Swap origin and destination"
+                        onClick={() => { const o = tripOriginIata; setTripOriginIata(tripDestinationIata); setTripDestinationIata(o); }}
+                      >
+                        <ArrowRightLeft size={15} />
+                      </button>
+                      <div className="form-field">
+                        <label>Where to?</label>
+                        <AirportPicker airports={airports} value={tripDestinationIata} onChange={setTripDestinationIata} placeholder="Destination city or airport code" />
+                      </div>
+                    </div>
+
+                    <div className="form-grid-2">
+                      <div className="form-field">
+                        <label>Departure</label>
+                        <input type="date" value={tripDeparture} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setTripDeparture(e.target.value)} />
+                      </div>
+                      <div className="form-field">
+                        <label>Return</label>
+                        <input type="date" value={tripReturn} min={tripDeparture || new Date().toISOString().slice(0, 10)} onChange={(e) => setTripReturn(e.target.value)} />
+                      </div>
+                    </div>
+
+                    {rows.length > 0 && (
+                      <div className="plan-trip-summary">
+                        <span>{rows[0].meals} {rows[0].meals === 1 ? "day" : "days"} × {fmtMoney(selectedTravelRate, selectedTravelType?.currency)}</span>
+                        <b>{fmtMoney(rowTotals.amount, selectedTravelType?.currency)}</b>
+                      </div>
+                    )}
+
+                    <div className="form-field">
+                      <label>Extra Cost (if any)</label>
+                      <div className="form-grid-2">
+                        <input
+                          type="text"
+                          value={extraCostDescription}
+                          onChange={(e) => setExtraCostDescription(e.target.value)}
+                          placeholder={`Justification${extraCost > 0 ? " (required)" : " — what is this extra cost for?"}`}
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={extraCostAmount}
+                          onChange={(e) => setExtraCostAmount(e.target.value)}
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+                  </>
+                  )}
 
                   {/* ── Accommodation notice for local travel ── */}
                   {selectedTravelType?.location_mode === "DISTRICT" && rows.length > 0 && (() => {
@@ -7684,6 +7878,13 @@ export default function App() {
                         alert("Finish date cannot be before the start date.");
                         return;
                       }
+                      // Create-only, matching the mirrored backend check: an in-flight
+                      // request can outlive its own start date while sitting in
+                      // approval, and an unrelated later edit shouldn't be blocked by that.
+                      if (isApplyForOther && !editingAdvanceId && otherStartDate < new Date().toISOString().slice(0, 10)) {
+                        alert("Start date cannot be in the past.");
+                        return;
+                      }
                       if (showTravelBreakdown && extraCost > 0 && !extraCostDescription.trim()) {
                         alert("Please justify the extra cost.");
                         return;
@@ -7729,6 +7930,10 @@ export default function App() {
                           alert("Bank branch format is invalid.");
                           return;
                         }
+                      }
+                      if (showTravelBreakdown && selectedTravelType?.location_mode === "COUNTRY_CITY" && rows.length < 1) {
+                        alert("Please complete your trip: origin, destination, departure and return dates.");
+                        return;
                       }
                       if (showTravelBreakdown && rows.length < 1) {
                         alert("At least one entry is required in the travel table.");
@@ -7796,6 +8001,14 @@ export default function App() {
                         base.requested_total = Number(totalRequested()) || 0;
                         base.extra_cost_amount = extraCost;
                         base.extra_cost_description = extraCostDescription.trim() || undefined;
+                      }
+                      if (showTravelBreakdown && selectedTravelType?.location_mode === "COUNTRY_CITY") {
+                        // Departure date isn't sent here - it's still just
+                        // the one synthesized line's own date, submitted via
+                        // the existing lines endpoint a few lines down.
+                        base.travel_origin_iata = tripOriginIata || undefined;
+                        base.travel_destination_iata = tripDestinationIata || undefined;
+                        base.travel_return_date = tripReturn || undefined;
                       }
                       if (advanceType === "LOAN") {
                         base.requested_total = Number(loanAmount) || 0;

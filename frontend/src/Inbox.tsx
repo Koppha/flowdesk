@@ -1170,8 +1170,17 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     if (item.doc_type !== "ADVANCE" || !detail) return null;
     const lines: any[] = detail.lines || [];
     const dates = lines.map((l) => l.line_date).filter(Boolean).sort();
-    const dateFrom = dates[0];
-    const dateTo = dates[dates.length - 1];
+    // "Apply for Other" never has lines at all (just the overall period the
+    // engagement/trip covers, on the request itself) - and the international
+    // "Plan Your Trip" flow's one synthesized line only carries the departure
+    // date, with the return date on travel_return_date instead. Either way,
+    // deriving dateTo purely from lines silently showed "—" (Apply for Other)
+    // or the departure date twice (international) instead of the real return
+    // date.
+    const dateFrom = detail.external_beneficiary_id ? detail.external_start_date : dates[0];
+    const dateTo = detail.external_beneficiary_id
+      ? detail.external_end_date
+      : detail.travel_return_date || dates[dates.length - 1];
     const durationDays = dateFrom && dateTo
       ? Math.max(1, Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1)
       : null;
@@ -2150,6 +2159,25 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     Quotations: {detail.quotations?.length ? detail.quotations.map((q: any) => q.file_name || q.path?.split("/").pop() || "Uploaded").join(", ") : "None uploaded"}
                   </div>
                   <div>Advance: {detail.advance_purpose || "—"} ({detail.advance_status || "—"})</div>
+                  {detail.external_beneficiary_id ? (
+                    <>
+                      <div>Applying For: {detail.external_beneficiary_name || "—"}{detail.external_beneficiary_organisation ? ` — ${detail.external_beneficiary_organisation}` : ""}</div>
+                      <div>Trip Dates: {detail.external_start_date ? fmtDate(detail.external_start_date) : "—"} to {detail.external_end_date ? fmtDate(detail.external_end_date) : "—"}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        Destination: {detail.travel_destination_iata
+                          ? `${detail.travel_origin_iata || "—"} → ${detail.travel_destination_iata}`
+                          : (detail.advance_destination || "—")}
+                      </div>
+                      <div>
+                        Trip Dates: {detail.advance_departure_date ? fmtDate(detail.advance_departure_date) : "—"} to {
+                          detail.travel_return_date ? fmtDate(detail.travel_return_date) : (detail.advance_departure_date ? fmtDate(detail.advance_departure_date) : "—")
+                        }
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
