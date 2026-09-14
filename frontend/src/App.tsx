@@ -4091,6 +4091,24 @@ export default function App() {
           )}
 
           <div className="tracking-modal-footer">
+            {["DRAFT","SUBMITTED","COUNTERSIGNED","HR_OFFICER","APPROVED"].includes(currentStatus) && (
+              <button
+                className="button small-button"
+                type="button"
+                style={{ color: "#dc3545", borderColor: "#dc3545" }}
+                onClick={async () => {
+                  const confirmed = await confirmAction({ title: "Cancel this request?", text: "This will cancel the request. You can do this any time before it's captured.", confirmButtonText: "Cancel Request" });
+                  if (!confirmed) return;
+                  try {
+                    await api.revokeAdvance(advance.id);
+                    setHistoryOpen(false);
+                    await refresh();
+                  } catch (e: any) { alert(e?.message || "Failed to cancel this request."); }
+                }}
+              >
+                Cancel Request
+              </button>
+            )}
             <button className="button small-button" type="button" onClick={() => setHistoryOpen(false)}>Close</button>
           </div>
         </div>
@@ -7796,10 +7814,10 @@ export default function App() {
                   setEditingAdvanceStatus(null);
                   setPage(editingAdvanceId ? "MY_ADVANCES" : "HOME");
                 }}>Cancel</button>
-                {editingAdvanceId && ["DRAFT","SUBMITTED"].includes(editingAdvanceStatus || "") && (
+                {editingAdvanceId && ["DRAFT","SUBMITTED","COUNTERSIGNED","HR_OFFICER","APPROVED"].includes(editingAdvanceStatus || "") && (
                   <button className="button" style={{ color: "#dc3545", borderColor: "#dc3545" }}
                     onClick={async () => {
-                      const confirmed = await confirmAction({ title: "Revoke advance request?", text: "This will cancel the request.", confirmButtonText: "Revoke" });
+                      const confirmed = await confirmAction({ title: "Cancel this request?", text: "This will cancel the request. You can do this any time before it's captured.", confirmButtonText: "Cancel Request" });
                       if (!confirmed) return;
                       try {
                         await api.revokeAdvance(editingAdvanceId);
@@ -7808,7 +7826,7 @@ export default function App() {
                         setPage("MY_ADVANCES");
                         await refresh();
                       } catch (e: any) { alert("Error: " + e.message); }
-                    }}>Revoke</button>
+                    }}>Cancel Request</button>
                 )}
                 <button className="button" ref={advanceSubmitButtonRef} disabled={submittingAdvance} onClick={async () => {
                     setSubmittingAdvance(true);

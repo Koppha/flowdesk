@@ -2352,6 +2352,16 @@ advancesRouter.post("/:id/revoke", async (req: AuthedRequest, res, next) => {
     if (!adv) throw notFound();
     if (adv.created_by_id !== req.user!.userId) throw forbidden("Only the creator can revoke");
 
+    // "Cancel any time before Capture" isn't the same as "any time before
+    // status reaches APPROVED" - Capture can complete before the named
+    // status gets there, depending on the workflow's step order (e.g. a
+    // parallel Capture step alongside Accommodation). Check the live chain
+    // directly rather than trusting the status label alone.
+    const chain = (adv.approval_chain as ChainStep[] | null) || [];
+    if (chain.some((s) => isCaptureActionType(s.action_type) && s.approved)) {
+      throw badRequest("This request has already been captured and can no longer be cancelled here - contact Finance/Treasury.");
+    }
+
     const status = nextStatusOrThrow(adv.status, "CANCEL");
     await setAdvanceStatus(adv.id, status);
     await writeAdvanceAudit({
