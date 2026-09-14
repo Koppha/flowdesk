@@ -7604,10 +7604,12 @@ export default function App() {
               </div>
 
               {(() => {
-                const isTravelAdvanceUiType = !!advanceType && advanceType !== "SALARY" && advanceType !== "LOAN";
-                const canPickOwnCountersigner = isTravelAdvanceUiType && ["CEO", "EXCO", "MANAGER"].includes(role);
-                const showNoWorkflowFallback = advanceWorkflowFound === false && advanceType && !canPickOwnCountersigner;
-                return canPickOwnCountersigner || showNoWorkflowFallback;
+                // Only when there's genuinely no resolved approval route for
+                // this request - a real route (like a CEO/EXCO/MANAGER's own,
+                // e.g. HOD -> EXCO Member -> ... shown in the Request Summary)
+                // is used as-is, same as everyone else's; nobody hand-picks a
+                // countersigner/approver when there's already a real one.
+                return advanceWorkflowFound === false && !!advanceType;
               })() && (
                 <div className="form-section" style={{ marginTop: 24, border: "1px solid #e2c96e", borderRadius: 8, padding: "16px 18px", background: "#fffdf0" }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>
