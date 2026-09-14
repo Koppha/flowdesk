@@ -144,16 +144,18 @@ async function reassignAdvances(
     approval_chain: ChainStep[];
     requester_department: string | null;
     requester_section: string | null;
+    requester_team: string | null;
     division: string | null;
     role: string;
   }>(
     `SELECT ar.id, ar.requester_id, ar.type, ar.workflow_id, ar.workflow_step_order, ar.approval_chain,
-            u.department AS requester_department, s.name AS requester_section,
+            u.department AS requester_department, s.name AS requester_section, tm.name AS requester_team,
             d.name AS division, u.role
        FROM advance_requests ar
        JOIN users u ON u.id = ar.requester_id
        LEFT JOIN sections s ON s.id = u.section_id
        LEFT JOIN divisions d ON d.id = u.division_id
+       LEFT JOIN teams tm ON tm.id = u.team_id
       WHERE ($1::uuid IS NULL OR ar.requester_id = $1)
         AND ar.status = ANY($2)
         AND ar.approval_chain IS NOT NULL
@@ -217,6 +219,7 @@ async function reassignAdvances(
       department: row.requester_department || "",
       division: row.division || "",
       section: row.requester_section || "",
+      team: row.requester_team || "",
       advanceSubType: row.type,
       needsAccommodation,
       requesterRole: row.role,
@@ -269,15 +272,20 @@ async function reassignClaims(
     workflow_step_order: number | null;
     approval_chain: ChainStep[];
     claimant_department: string | null;
+    claimant_division: string | null;
     claimant_section: string | null;
+    claimant_team: string | null;
     linked_advance_type: string | null;
   }>(
     `SELECT c.id, c.claimant_id, c.workflow_id, c.workflow_step_order, c.approval_chain,
-            u.department AS claimant_department, s.name AS claimant_section,
+            u.department AS claimant_department, dv.name AS claimant_division,
+            s.name AS claimant_section, tm.name AS claimant_team,
             ar.type AS linked_advance_type
        FROM clearance_claims c
        JOIN users u ON u.id = c.claimant_id
+       LEFT JOIN divisions dv ON dv.id = u.division_id
        LEFT JOIN sections s ON s.id = u.section_id
+       LEFT JOIN teams tm ON tm.id = u.team_id
        LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
       WHERE ($1::uuid IS NULL OR c.claimant_id = $1)
         AND c.status = ANY($2)
@@ -329,7 +337,9 @@ async function reassignClaims(
     const probe = await resolveWorkflowChain({
       requestType: "CLEARANCE_REQUEST",
       department: row.claimant_department || "",
+      division: row.claimant_division || "",
       section: row.claimant_section || "",
+      team: row.claimant_team || "",
       advanceSubType: row.linked_advance_type || undefined,
       requesterId: row.claimant_id
     });

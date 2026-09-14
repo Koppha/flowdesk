@@ -875,7 +875,9 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     const workflowResult = await resolveWorkflowChain({
       requestType: "CLEARANCE_REQUEST",
       department: claim.claimant_department || "",
+      division: claim.claimant_division || "",
       section: claim.claimant_section || "",
+      team: claim.claimant_team || "",
       advanceSubType: linkedAdvance?.type,
       requesterId: claim.claimant_id
     });

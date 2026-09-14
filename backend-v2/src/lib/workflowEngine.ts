@@ -199,18 +199,19 @@ export async function resolveWorkflowChain(params: {
   department: string;
   division?: string;
   section?: string;
+  team?: string;
   advanceSubType?: string;
   needsAccommodation?: boolean;
   overrideChain?: { label: string; user_id: string; user_name?: string }[];
   requesterRole?: string;
   requesterId?: string;
 }): Promise<{ workflowId: string; chain: ChainStep[] } | null> {
-  const { requestType, department, division = "", section = "", advanceSubType = "", needsAccommodation = false, overrideChain = [], requesterRole = "", requesterId = "" } = params;
+  const { requestType, department, division = "", section = "", team = "", advanceSubType = "", needsAccommodation = false, overrideChain = [], requesterRole = "", requesterId = "" } = params;
 
   // TEMPORARY workflows (with a valid date window) take priority over STICKY ones.
   // A workflow restricted to the requester's role (requester_roles) always outranks
   // an unrestricted one. Below that, precedence is a strict scope hierarchy -
-  // Section > Department > Division > company-wide - the most specific
+  // Team > Section > Department > Division > company-wide - the most specific
   // non-blank scope a workflow declares always wins, with sub-type
   // specificity (exact match > "TRAVEL" catch-all > unrestricted) only
   // breaking ties within the same scope tier, never overriding it. Every
@@ -244,6 +245,13 @@ export async function resolveWorkflowChain(params: {
         -- employee whenever their division came through blank).
         AND (w.division IS NULL OR trim(w.division) = '' OR lower(trim(w.division)) = lower(trim($6)))
         AND (w.section IS NULL OR trim(w.section) = '' OR lower(trim(w.section)) = lower(trim($3)))
+        -- Same reasoning as w.division above: a workflow scoped to a specific
+        -- team (the UI's "Section" field - Operations, for instance, has a
+        -- distinct workflow per team: Transmission, NOC, IP Core Network,
+        -- Network Quality) must only match a requester actually on that team,
+        -- not wildcard-match everyone whenever the requester's own team came
+        -- through blank.
+        AND (w.team IS NULL OR trim(w.team) = '' OR lower(trim(w.team)) = lower(trim($7)))
         AND (
           w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = ''
           OR ($4 <> '' AND lower(trim(w.advance_sub_type)) = lower(trim($4)))
@@ -257,12 +265,13 @@ export async function resolveWorkflowChain(params: {
         -- A role-restricted workflow (which already passed the WHERE filter, so it
         -- matches the requester) outranks an unrestricted one.
         CASE WHEN w.requester_roles IS NOT NULL THEN 0 ELSE 1 END,
-        -- Scope precedence: Section > Department > Division > company-wide.
+        -- Scope precedence: Team > Section > Department > Division > company-wide.
         CASE
-          WHEN w.section IS NOT NULL AND trim(w.section) <> '' THEN 0
-          WHEN w.department IS NOT NULL AND trim(w.department) <> '' THEN 1
-          WHEN w.division IS NOT NULL AND trim(w.division) <> '' THEN 2
-          ELSE 3
+          WHEN w.team IS NOT NULL AND trim(w.team) <> '' THEN 0
+          WHEN w.section IS NOT NULL AND trim(w.section) <> '' THEN 1
+          WHEN w.department IS NOT NULL AND trim(w.department) <> '' THEN 2
+          WHEN w.division IS NOT NULL AND trim(w.division) <> '' THEN 3
+          ELSE 4
         END,
         -- Within the same scope tier: exact sub-type match > "TRAVEL"
         -- catch-all (any non-SALARY/LOAN type) > no sub-type restriction.
@@ -274,7 +283,7 @@ export async function resolveWorkflowChain(params: {
         END,
         w.updated_at DESC, w.created_at DESC
       LIMIT 1`,
-    [requestType, department, section, advanceSubType, requesterRole, division]
+    [requestType, department, section, advanceSubType, requesterRole, division, team]
   );
 
   const workflow = workflows[0];

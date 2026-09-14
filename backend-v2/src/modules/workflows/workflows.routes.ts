@@ -315,6 +315,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
     const department = String(req.query.department || "").trim();
     const division = String(req.query.division || "").trim();
     const section = String(req.query.section || "").trim();
+    const team = String(req.query.team || "").trim();
     const advanceSubType = String(req.query.advance_sub_type || "").trim();
     const requesterRole = String(req.query.requester_role || "").trim();
     const amount = Number(req.query.amount || 0);
@@ -342,6 +343,10 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
           -- division must not wildcard-match a division-scoped workflow.
           AND (division IS NULL OR trim(division) = '' OR lower(trim(division)) = lower(trim($6)))
           AND (section IS NULL OR trim(section) = '' OR lower(trim(section)) = lower(trim($3)))
+          -- Same reasoning as the division filter above, one level down: a
+          -- workflow scoped to a specific team must only match a requester
+          -- actually on that team.
+          AND (team IS NULL OR trim(team) = '' OR lower(trim(team)) = lower(trim($7)))
           AND (
             advance_sub_type IS NULL OR trim(advance_sub_type) = ''
             OR ($4 <> '' AND lower(trim(advance_sub_type)) = lower(trim($4)))
@@ -352,6 +357,10 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
         ORDER BY
           CASE WHEN requester_roles IS NOT NULL THEN 0 ELSE 1 END,
           CASE WHEN $6 <> '' AND lower(trim(COALESCE(division,''))) = lower(trim($6)) THEN 0 ELSE 1 END,
+          -- Team is the most specific scope level (above section) - a
+          -- team-scoped match always outranks the section/department tiers
+          -- below, mirrored from resolveWorkflowChain's own precedence.
+          CASE WHEN $7 <> '' AND lower(trim(COALESCE(team,''))) = lower(trim($7)) THEN 0 ELSE 1 END,
           CASE
             WHEN $4 <> '' AND lower(trim(COALESCE(advance_sub_type,''))) = lower(trim($4))
                  AND lower(trim(COALESCE(section,''))) = lower(trim($3))
@@ -375,7 +384,7 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
           END,
           updated_at DESC, created_at DESC
         LIMIT 1`,
-      [requestType, department, section, advanceSubType, requesterRole, division]
+      [requestType, department, section, advanceSubType, requesterRole, division, team]
     );
     const workflow = workflows[0];
     if (!workflow) return res.json({ workflow: null, chain: [], tasks: [], warnings: ["No active workflow found."] });

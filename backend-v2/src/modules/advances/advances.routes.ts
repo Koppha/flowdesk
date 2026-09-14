@@ -1419,9 +1419,9 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       throw badRequest("Only draft advances can be submitted");
     }
 
-    const requester = (await query<{ role: string; section_id: string | null; department: string | null; division: string | null }>(
-      `SELECT u.role, u.section_id, u.department, d.name AS division
-         FROM users u LEFT JOIN divisions d ON d.id = u.division_id
+    const requester = (await query<{ role: string; section_id: string | null; department: string | null; division: string | null; team: string | null }>(
+      `SELECT u.role, u.section_id, u.department, d.name AS division, t.name AS team
+         FROM users u LEFT JOIN divisions d ON d.id = u.division_id LEFT JOIN teams t ON t.id = u.team_id
         WHERE u.id=$1`,
       [adv.requester_id]
     ))[0];
@@ -1453,6 +1453,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       department: adv.requester_department || "",
       division: requester.division || "",
       section: adv.requester_section || "",
+      team: requester.team || "",
       advanceSubType: adv.type,
       needsAccommodation,
       requesterRole: requester.role,
@@ -1495,6 +1496,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
             department: adv.requester_department || "",
             division: requester.division || "",
             section: adv.requester_section || "",
+            team: requester.team || "",
             advanceSubType: adv.type,
             needsAccommodation,
             overrideChain,

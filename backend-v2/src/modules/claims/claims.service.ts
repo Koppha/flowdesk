@@ -136,15 +136,21 @@ export async function getClaimById(id: string) {
     workflow_step_order: number | null;
     approval_chain: ChainStep[] | null;
     claimant_department: string | null;
+    claimant_division: string | null;
     claimant_section: string | null;
+    claimant_team: string | null;
   }>(
     `SELECT c.id, c.claimant_id, c.status, c.claim_total, c.balance_amount, c.reason_for_overspend, c.linked_advance_id,
             c.workflow_id, c.workflow_step_order, c.approval_chain,
             u.department AS claimant_department,
-            s.name AS claimant_section
+            dv.name AS claimant_division,
+            s.name AS claimant_section,
+            t.name AS claimant_team
        FROM clearance_claims c
        JOIN users u ON u.id = c.claimant_id
+       LEFT JOIN divisions dv ON dv.id = u.division_id
        LEFT JOIN sections s ON s.id = u.section_id
+       LEFT JOIN teams t ON t.id = u.team_id
       WHERE c.id=$1`,
     [id]
   );

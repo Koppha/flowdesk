@@ -1315,8 +1315,20 @@ export default function WorkflowBuilder() {
       else if (step.positionName.startsWith("Department: ")) targetDepartment = step.positionName.slice("Department: ".length);
     }
 
-    const orgDept = targetDepartment ? orgStructure.departments.find((d) => d?.name === targetDepartment) : null;
-    const orgSection = targetSection && orgDept ? orgStructure.sections.find((s) => s?.name === targetSection && s?.department_id === orgDept.id) : null;
+    // When a step's group names a section directly (e.g. "Section: Human
+    // Resources Operations" on a workflow whose own scope is a completely
+    // different department, like Technical), targetDepartment above is still
+    // whatever the workflow's own metadata.department is - resolving the
+    // section by name FIRST and deriving its real parent department from
+    // that (rather than assuming targetDepartment is already correct) is
+    // what makes both the org-structure HOD/EXCO lookup and the parent-
+    // department fallback below point at the section's actual department,
+    // not the unrelated workflow-level one.
+    const orgSectionByName = targetSection ? orgStructure.sections.find((s) => s?.name === targetSection) : null;
+    const orgDept = orgSectionByName
+      ? orgStructure.departments.find((d) => d?.id === orgSectionByName.department_id) ?? null
+      : (targetDepartment ? orgStructure.departments.find((d) => d?.name === targetDepartment) ?? null : null);
+    const orgSection = orgSectionByName ?? (targetSection && orgDept ? orgStructure.sections.find((s) => s?.name === targetSection && s?.department_id === orgDept.id) : null);
     const orgTeam = targetTeam ? orgStructure.teams.find((t) => t?.name === targetTeam) : null;
 
     const candidateIds = new Set<string>();
@@ -1334,13 +1346,30 @@ export default function WorkflowBuilder() {
         // "Anyone in Team/Section/Department: X" cards reuse the MANAGER position
         // code for plumbing but mean "any employee in that scope", not literally
         // users with role=MANAGER — fall through to the scope-only filter for those.
+        // Most staff only have `department` (free text) populated, not a real
+        // `section_id`/`team_id` link — an exact, un-normalized section/team
+        // match alone silently returns nobody for a section that's real but
+        // under-linked, so fall back to the section's parent department (same
+        // trim-normalized fallback the org-structure branch below already
+        // uses) rather than dead-ending here.
         if (group.startsWith("Team: ") || group.startsWith("Section: ") || group.startsWith("Department: ")) {
-          return allUsers.filter((user) => {
-            if (targetTeam) return user.team_name === targetTeam;
-            if (targetSection) return user.section_name === targetSection;
-            if (targetDepartment) return user.department === targetDepartment;
-            return true;
-          });
+          if (targetTeam) {
+            const byTeam = allUsers.filter((user) => String(user.team_name || "").trim() === String(targetTeam).trim());
+            if (byTeam.length) return byTeam;
+          }
+          if (targetSection) {
+            const normalizedSection = String(targetSection).trim();
+            const bySection = allUsers.filter((user) => String(user.section_name || "").trim() === normalizedSection);
+            if (bySection.length) return bySection;
+            const parentDeptName = orgDept?.name || targetDepartment;
+            if (parentDeptName) {
+              return allUsers.filter((user) => !user.section_name && String(user.department || "").trim() === String(parentDeptName).trim());
+            }
+          }
+          if (targetDepartment) {
+            return allUsers.filter((user) => String(user.department || "").trim() === String(targetDepartment).trim());
+          }
+          return allUsers;
         }
         const managers = allUsers.filter((user) => user.role === "MANAGER");
         if (targetTeam) return managers.filter((user) => user.team_name === targetTeam);

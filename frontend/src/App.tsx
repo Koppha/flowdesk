@@ -941,6 +941,15 @@ export default function App() {
   // no equivalent of, silently failing the submit-time validation that
   // requires it for any South Africa destination.
   const [tripProvince, setTripProvince] = useState("");
+  // Falls back to plain text when traveling by road to somewhere with no
+  // airport (e.g. Maseru -> Ladybrand) - the airport picker alone can't
+  // cover every CMA/Rest-of-Africa destination, since most are small towns
+  // reached by road, not air.
+  const [originManualEntry, setOriginManualEntry] = useState(false);
+  const [tripOriginText, setTripOriginText] = useState("");
+  const [destinationManualEntry, setDestinationManualEntry] = useState(false);
+  const [tripDestinationCity, setTripDestinationCity] = useState("");
+  const [tripDestinationCountry, setTripDestinationCountry] = useState("");
   const [externalPayees, setExternalPayees] = useState<any[]>([]);
   const [externalBeneficiaryId, setExternalBeneficiaryId] = useState("");
   const [showNewExternalPayeeForm, setShowNewExternalPayeeForm] = useState(false);
@@ -1091,8 +1100,12 @@ export default function App() {
   // one line, exactly as if a user had filled the old table in by hand.
   useEffect(() => {
     if (selectedTravelType?.location_mode !== "COUNTRY_CITY") return;
-    const destination = airports.find((a) => a.iata_code === tripDestinationIata);
-    if (!tripDeparture || !tripReturn || !destination) {
+    // Traveling by road to somewhere with no airport (e.g. Maseru ->
+    // Ladybrand) - the destination's country/city come from the manual
+    // fields instead of an airport lookup.
+    const destinationCountry = destinationManualEntry ? tripDestinationCountry.trim() : (airports.find((a) => a.iata_code === tripDestinationIata)?.country ?? "");
+    const destinationCity = destinationManualEntry ? tripDestinationCity.trim() : (airports.find((a) => a.iata_code === tripDestinationIata)?.city ?? "");
+    if (!tripDeparture || !tripReturn || !destinationCountry || !destinationCity) {
       setRows([]);
       return;
     }
@@ -1105,13 +1118,13 @@ export default function App() {
       date: tripDeparture,
       startDistrict: "",
       destinationDistrict: "",
-      country: destination.country,
-      province: destination.country.trim().toLowerCase() === "south africa" ? tripProvince : "",
-      city: destination.city,
+      country: destinationCountry,
+      province: destinationCountry.trim().toLowerCase() === "south africa" ? tripProvince : "",
+      city: destinationCity,
       meals: totalDays
     }]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTravelType?.location_mode, tripDeparture, tripReturn, tripDestinationIata, tripProvince, airports]);
+  }, [selectedTravelType?.location_mode, tripDeparture, tripReturn, tripDestinationIata, tripProvince, destinationManualEntry, tripDestinationCity, tripDestinationCountry, airports]);
   const isTravelAdvanceSelected = Boolean(selectedTravelType);
   // Apply for Other never uses the day-by-day travel table/per-diem
   // calculation, even if a real travel type happens to be selected - just
@@ -1467,6 +1480,7 @@ export default function App() {
     const dept = paPrincipal ? (paPrincipal.department || "") : (profile?.department || "");
     const section = paPrincipal ? (paPrincipal.section_name || "") : (profile?.section_name || "");
     const division = paPrincipal ? (paPrincipal.division_name || "") : (profile?.division_name || "");
+    const team = paPrincipal ? (paPrincipal.team_name || "") : (profile?.team_name || "");
     const chainRole = paPrincipal ? (paPrincipal.role || role) : role;
 
     function loadCustomChainData() {
@@ -1492,7 +1506,7 @@ export default function App() {
     setAdvanceWorkflowFound(null);
     // Pass the selected advance sub-type (and requester role) so the backend can
     // prefer a sub-type-specific and/or role-restricted workflow.
-    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, chainRole, division || undefined)
+    api.resolveWorkflow("ADVANCE_REQUEST", dept, undefined, section, advanceType || undefined, chainRole, division || undefined, team || undefined)
       .then((result: any) => {
         if (cancelled) return;
         const chain: any[] = Array.isArray(result?.chain) ? result.chain : [];
@@ -1521,7 +1535,7 @@ export default function App() {
       });
 
     return () => { cancelled = true; };
-  }, [page, profile?.department, profile?.division_name, profile?.section_name, advanceType, role, requestForUserId, myPaPrincipals]);
+  }, [page, profile?.department, profile?.division_name, profile?.section_name, profile?.team_name, advanceType, role, requestForUserId, myPaPrincipals]);
 
   async function refresh() {
     setError(null);
@@ -7480,19 +7494,49 @@ export default function App() {
                     <div className="plan-trip-route">
                       <div className="form-field">
                         <label>Where from?</label>
-                        <AirportPicker airports={airports} value={tripOriginIata} onChange={setTripOriginIata} placeholder="Departure city or airport code" />
+                        {originManualEntry ? (
+                          <input value={tripOriginText} onChange={(e) => setTripOriginText(e.target.value)} placeholder="e.g. Maseru" />
+                        ) : (
+                          <AirportPicker airports={airports} value={tripOriginIata} onChange={setTripOriginIata} placeholder="Departure city or airport code" />
+                        )}
+                        <button type="button" className="link-button" style={{ fontSize: 12, marginTop: 6 }} onClick={() => { setOriginManualEntry((v) => !v); setTripOriginIata(""); setTripOriginText(""); }}>
+                          {originManualEntry ? "Search airports instead" : "Traveling by road? Enter manually"}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        className="plan-trip-swap"
-                        title="Swap origin and destination"
-                        onClick={() => { const o = tripOriginIata; setTripOriginIata(tripDestinationIata); setTripDestinationIata(o); }}
-                      >
-                        <ArrowRightLeft size={15} />
-                      </button>
+                      {!originManualEntry && !destinationManualEntry && (
+                        <button
+                          type="button"
+                          className="plan-trip-swap"
+                          title="Swap origin and destination"
+                          onClick={() => { const o = tripOriginIata; setTripOriginIata(tripDestinationIata); setTripDestinationIata(o); }}
+                        >
+                          <ArrowRightLeft size={15} />
+                        </button>
+                      )}
                       <div className="form-field">
                         <label>Where to?</label>
-                        <AirportPicker airports={airports} value={tripDestinationIata} onChange={setTripDestinationIata} placeholder="Destination city or airport code" />
+                        {destinationManualEntry ? (
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <input value={tripDestinationCity} onChange={(e) => setTripDestinationCity(e.target.value)} placeholder="Town / city" style={{ flex: 1 }} />
+                            <input
+                              list="plan-trip-destination-country-options"
+                              value={tripDestinationCountry}
+                              onChange={(e) => setTripDestinationCountry(e.target.value)}
+                              placeholder="Country"
+                              style={{ flex: 1 }}
+                            />
+                            <datalist id="plan-trip-destination-country-options">
+                              {selectedTravelCountries.map((country) => (
+                                <option key={country} value={country} />
+                              ))}
+                            </datalist>
+                          </div>
+                        ) : (
+                          <AirportPicker airports={airports} value={tripDestinationIata} onChange={setTripDestinationIata} placeholder="Destination city or airport code" />
+                        )}
+                        <button type="button" className="link-button" style={{ fontSize: 12, marginTop: 6 }} onClick={() => { setDestinationManualEntry((v) => !v); setTripDestinationIata(""); setTripDestinationCity(""); setTripDestinationCountry(""); }}>
+                          {destinationManualEntry ? "Search airports instead" : "Traveling by road? Enter manually"}
+                        </button>
                       </div>
                     </div>
 
@@ -7507,7 +7551,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {airports.find((a) => a.iata_code === tripDestinationIata)?.country.trim().toLowerCase() === "south africa" && (
+                    {(destinationManualEntry ? tripDestinationCountry : airports.find((a) => a.iata_code === tripDestinationIata)?.country ?? "").trim().toLowerCase() === "south africa" && (
                       <div className="form-field">
                         <label>Province</label>
                         <select value={tripProvince} onChange={(e) => setTripProvince(e.target.value)}>
