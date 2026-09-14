@@ -935,6 +935,12 @@ export default function App() {
   const [tripDestinationIata, setTripDestinationIata] = useState("");
   const [tripDeparture, setTripDeparture] = useState("");
   const [tripReturn, setTripReturn] = useState("");
+  // Only asked when the destination airport resolves to a South African
+  // city - mirrors the old manual travel table's per-row province picker,
+  // which the synthesized single-line "Plan Your Trip" flow otherwise has
+  // no equivalent of, silently failing the submit-time validation that
+  // requires it for any South Africa destination.
+  const [tripProvince, setTripProvince] = useState("");
   const [externalPayees, setExternalPayees] = useState<any[]>([]);
   const [externalBeneficiaryId, setExternalBeneficiaryId] = useState("");
   const [showNewExternalPayeeForm, setShowNewExternalPayeeForm] = useState(false);
@@ -1100,12 +1106,12 @@ export default function App() {
       startDistrict: "",
       destinationDistrict: "",
       country: destination.country,
-      province: "",
+      province: destination.country.trim().toLowerCase() === "south africa" ? tripProvince : "",
       city: destination.city,
       meals: totalDays
     }]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTravelType?.location_mode, tripDeparture, tripReturn, tripDestinationIata, airports]);
+  }, [selectedTravelType?.location_mode, tripDeparture, tripReturn, tripDestinationIata, tripProvince, airports]);
   const isTravelAdvanceSelected = Boolean(selectedTravelType);
   // Apply for Other never uses the day-by-day travel table/per-diem
   // calculation, even if a real travel type happens to be selected - just
@@ -7482,6 +7488,18 @@ export default function App() {
                         <input type="date" value={tripReturn} min={tripDeparture || new Date().toISOString().slice(0, 10)} onChange={(e) => setTripReturn(e.target.value)} />
                       </div>
                     </div>
+
+                    {airports.find((a) => a.iata_code === tripDestinationIata)?.country.trim().toLowerCase() === "south africa" && (
+                      <div className="form-field">
+                        <label>Province</label>
+                        <select value={tripProvince} onChange={(e) => setTripProvince(e.target.value)}>
+                          <option value="">Select province</option>
+                          {SOUTH_AFRICA_PROVINCES.map((province) => (
+                            <option key={province} value={province}>{province}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
 
                     {rows.length > 0 && (
                       <div className="plan-trip-summary">
