@@ -275,11 +275,13 @@ async function reassignClaims(
     claimant_division: string | null;
     claimant_section: string | null;
     claimant_team: string | null;
+    claimant_role: string | null;
     linked_advance_type: string | null;
   }>(
     `SELECT c.id, c.claimant_id, c.workflow_id, c.workflow_step_order, c.approval_chain,
             u.department AS claimant_department, dv.name AS claimant_division,
             s.name AS claimant_section, tm.name AS claimant_team,
+            u.role AS claimant_role,
             ar.type AS linked_advance_type
        FROM clearance_claims c
        JOIN users u ON u.id = c.claimant_id
@@ -341,6 +343,7 @@ async function reassignClaims(
       section: row.claimant_section || "",
       team: row.claimant_team || "",
       advanceSubType: row.linked_advance_type || undefined,
+      requesterRole: row.claimant_role || "",
       requesterId: row.claimant_id
     });
     if (!probe || probe.workflowId !== row.workflow_id) {

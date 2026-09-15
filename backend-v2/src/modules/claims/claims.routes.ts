@@ -879,6 +879,7 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       section: claim.claimant_section || "",
       team: claim.claimant_team || "",
       advanceSubType: linkedAdvance?.type,
+      requesterRole: claim.claimant_role || "",
       requesterId: claim.claimant_id
     });
 

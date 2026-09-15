@@ -194,6 +194,19 @@ export async function resolveDeptExco(
   );
 }
 
+// Whoever currently holds role='CEO' - company-wide, not department-scoped,
+// since there's only ever one. Dynamic (not a fixed assignee) so a workflow
+// with a plain CEO step stays correct automatically if the CEO changes,
+// instead of needing the same manual "nobody was ever assigned" fix a
+// never-configured CEO step otherwise silently needs.
+export async function resolveCeo(): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
+  return (
+    (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+      `SELECT id, full_name, title, email FROM users WHERE role = 'CEO' AND is_active = true LIMIT 1`
+    ))[0] ?? null
+  );
+}
+
 export async function resolveWorkflowChain(params: {
   requestType: string;
   department: string;
@@ -347,6 +360,14 @@ export async function resolveWorkflowChain(params: {
   });
   const deptExco = hasDeptExcoStep ? await resolveDeptExco(department) : null;
 
+  // A plain (non-fixed) CEO step routes to whoever currently holds that
+  // role - see resolveCeo above.
+  const hasDynamicCeoStep = steps.some((step) => {
+    const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
+    return stepCode === "CEO" && !step.assigned_user_ids?.length;
+  });
+  const ceo = hasDynamicCeoStep ? await resolveCeo() : null;
+
   // A plain (non-ANY_ONE-group) MANAGER step with no fixed assigned_user_id
   // routes to the REQUESTER's own manager (reporting_lines,
   // falling back to department leadership the same way getFallbackManagerId
@@ -436,6 +457,12 @@ export async function resolveWorkflowChain(params: {
     const isDeptHodCode = code === "HOD" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const hasFixedAssignees = !!step.assigned_user_ids?.length;
 
+    const isDynamicCeoCode = code === "CEO" && !hasFixedAssignees;
+    // The CEO submitting their own request would otherwise resolve this
+    // step back to themselves - same self-approval guard as the EXCO one
+    // above.
+    if (isDynamicCeoCode && requesterId && ceo?.id === requesterId) { previousStepPushed = false; continue; }
+
     // A chain with a distinct earlier MANAGER step already used
     // requesterManager - resolving HOD to that same person would put the
     // same approver on two consecutive steps, so escalate one level further
@@ -465,6 +492,7 @@ export async function resolveWorkflowChain(params: {
       isDeptExcoCode          ? (deptExco?.id ? [deptExco.id] : []) :
       isDeptManagerCode       ? (requesterManager?.id ? [requesterManager.id] : []) :
       isDeptHodCode           ? (hodManager?.id ? [hodManager.id] : []) :
+      isDynamicCeoCode        ? (ceo?.id ? [ceo.id] : []) :
                                 [];
     const approverId = approverIds[0] ?? null;
     if (isDeptManagerCode && approverId) dynamicManagerAlreadyResolved = true;
@@ -476,6 +504,7 @@ export async function resolveWorkflowChain(params: {
       isDeptExcoCode          ? (deptExco?.full_name ?? null) :
       isDeptManagerCode       ? (requesterManager?.full_name ?? null) :
       isDeptHodCode           ? (hodManager?.full_name ?? null) :
+      isDynamicCeoCode        ? (ceo?.full_name ?? null) :
                                 null;
 
     const approverTitle =
@@ -485,6 +514,7 @@ export async function resolveWorkflowChain(params: {
       isDeptExcoCode          ? (deptExco?.title ?? null) :
       isDeptManagerCode       ? (requesterManager?.title ?? null) :
       isDeptHodCode           ? (hodManager?.title ?? null) :
+      isDynamicCeoCode        ? (ceo?.title ?? null) :
                                 null;
 
     const approverEmail =
@@ -494,6 +524,7 @@ export async function resolveWorkflowChain(params: {
       isDeptExcoCode          ? (deptExco?.email ?? null) :
       isDeptManagerCode       ? (requesterManager?.email ?? null) :
       isDeptHodCode           ? (hodManager?.email ?? null) :
+      isDynamicCeoCode        ? (ceo?.email ?? null) :
                                 null;
 
     // Same person, same kind of decision, back to back - not a real second
@@ -539,6 +570,19 @@ export async function resolveWorkflowChain(params: {
       assignedUserId = await pickRoundRobinAssignee("clearance_close_hr_ops", approverIds);
     }
 
+    // The CEO never countersigns - only approves. A step's action_type
+    // (e.g. COUNTER_SIGN on a MANAGER/HOD-tier step) is what the step was
+    // AUTHORED as, but a dynamic resolution (e.g. a requester whose own
+    // manager-tier escalates all the way up to the CEO, an unusual but real
+    // reporting-line edge case) can land the actual CEO on a step that was
+    // never meant to be CEO-specific. Whoever actually fills the step wins
+    // over how the step was labeled.
+    let resolvedActionType = step.action_type || "APPROVE";
+    if (approverId && resolvedActionType !== "APPROVE" && resolvedActionType !== "MARK_PAID" && resolvedActionType !== "DEPT_CAPTURE" && resolvedActionType !== "DEPT_ACCOMODATION" && resolvedActionType !== "DEPT_CLOSE") {
+      const resolvedUser = (await query<{ role: string }>(`SELECT role::text AS role FROM users WHERE id = $1`, [approverId]))[0];
+      if (resolvedUser?.role === "CEO") resolvedActionType = "APPROVE";
+    }
+
     chain.push({
       step_order: step.step_order,
       position_type_code: code,
@@ -555,7 +599,7 @@ export async function resolveWorkflowChain(params: {
       approval_group_name: step.approval_group_name ?? null,
       requires_accommodation: step.requires_accommodation,
       parallel_with_previous: (step.parallel_with_previous ?? false) && previousStepPushed,
-      action_type: step.action_type || "APPROVE",
+      action_type: resolvedActionType,
       can_reject: step.can_reject ?? true,
       can_rollback: step.can_rollback ?? true,
       assigned_user_id: assignedUserId

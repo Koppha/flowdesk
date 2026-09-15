@@ -139,13 +139,15 @@ export async function getClaimById(id: string) {
     claimant_division: string | null;
     claimant_section: string | null;
     claimant_team: string | null;
+    claimant_role: string | null;
   }>(
     `SELECT c.id, c.claimant_id, c.status, c.claim_total, c.balance_amount, c.reason_for_overspend, c.linked_advance_id,
             c.workflow_id, c.workflow_step_order, c.approval_chain,
             u.department AS claimant_department,
             dv.name AS claimant_division,
             s.name AS claimant_section,
-            t.name AS claimant_team
+            t.name AS claimant_team,
+            u.role AS claimant_role
        FROM clearance_claims c
        JOIN users u ON u.id = c.claimant_id
        LEFT JOIN divisions dv ON dv.id = u.division_id
