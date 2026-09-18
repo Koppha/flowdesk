@@ -1397,12 +1397,17 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   // reporting (advanceClaimWorkflowStep's financial_outcome routing), not a
   // real approval decision, so it gets its own single "Close" action instead
   // of the full Approve/Reject/Roll Back trio every other step shows.
-  // COUNTER_SIGN steps get the same treatment - the approval-progress strip
-  // already stops counting the chain as "real approval" after the last
-  // APPROVE step (see approvalProgressStages above), so any workflow whose
-  // final step is a COUNTER_SIGN rather than a DEPT_CLOSE is the same kind
-  // of passthrough sign-off, not a fresh decision worth a Reject/Roll Back.
-  const isDeptCloseStep = isWorkflowDrivenClaim && ["DEPT_CLOSE", "COUNTER_SIGN"].includes((item as any).current_step_action_type);
+  // COUNTER_SIGN steps get the same treatment ONLY when they're the chain's
+  // FINAL step - the approval-progress strip already stops counting the
+  // chain as "real approval" after the last APPROVE step (see
+  // approvalProgressStages above), so a workflow whose final step is a
+  // COUNTER_SIGN rather than a DEPT_CLOSE is the same kind of passthrough
+  // sign-off. A COUNTER_SIGN step mid-chain (e.g. a Manager step ahead of
+  // HOD/EXCO/Close) is a real decision like any other - without this check
+  // it was mislabeled "Close" and silently lost Reject/Roll Back.
+  const isFinalChainStep = Array.isArray(detail?.approval_chain) && detail.approval_chain.length > 0 &&
+    (detail?.workflow_step_order ?? -1) === detail.approval_chain.length - 1;
+  const isDeptCloseStep = isWorkflowDrivenClaim && isFinalChainStep && ["DEPT_CLOSE", "COUNTER_SIGN"].includes((item as any).current_step_action_type);
   const canApproveClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep;
   const canRejectClaim = isWorkflowDrivenClaim && isMyClaimWorkflowStep && !isDeptCloseStep;
   const canRollbackClaim = item.doc_type === "CLAIM" && isWorkflowDrivenClaim && isMyClaimWorkflowStep && !isDeptCloseStep;
