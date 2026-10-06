@@ -1288,10 +1288,23 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       ? Boolean(item.current_step_actionable_by_me)
       : item.current_step_approver_id === me?.userId
   );
-  // The current step is an accommodation-only step (e.g. HR preparing
-  // accommodation before forwarding to Finance) — at this step the assignee
-  // attaches the accommodation booking instead of approving/rejecting.
+  // requires_accommodation means "this request still needs accommodation
+  // booked" - it can be true on a Capture (or any other) item that merely
+  // co-occurs with a still-open accommodation need (see
+  // loadCaptureHistoryItems in inbox.routes.ts, which deliberately keeps
+  // this flag set on the Capture item itself so the signal survives once
+  // the chain's pending group has moved past the accommodation step). It
+  // does NOT mean the current step IS the accommodation step.
   const isAccommodationStep = isWorkflowDriven && Boolean((item as any).current_step_requires_accommodation);
+  // The current step is actually the accommodation step itself (e.g. HR
+  // preparing accommodation before forwarding to Finance) — at THIS step
+  // the assignee attaches the accommodation booking instead of
+  // approving/rejecting/capturing. Using the broader isAccommodationStep
+  // flag here instead used to suppress the real Capture/Approve button on
+  // a Capture item that merely still needed accommodation booked alongside
+  // it - a real incident: Capture staff had no way to act on an advance at
+  // all once it also needed accommodation.
+  const isAccommodationOnlyStep = isWorkflowDriven && (item as any).current_step_action_type === "DEPT_ACCOMODATION";
   const inProgressStatuses = ["SUBMITTED", "COUNTERSIGNED", "HR_OFFICER"];
   // Workflow steps can be configured (in the Workflow Designer) to label
   // their approval action "Counter Sign" instead of "Approve".
@@ -1316,7 +1329,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canRollbackAdvance =
     item.doc_type === "ADVANCE" &&
     ((isWorkflowDriven
-      ? isMyWorkflowStep && !isAccommodationStep && (item as any).current_step_can_rollback !== false
+      ? isMyWorkflowStep && !isAccommodationOnlyStep && (item as any).current_step_can_rollback !== false
       : ((role === "MANAGER" && item.status === "SUBMITTED") ||
           (role === "MANAGER" && item.status === "HR_OFFICER") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
@@ -1336,7 +1349,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canRejectAdvance =
     item.doc_type === "ADVANCE" &&
     (isWorkflowDriven
-      ? isMyWorkflowStep && !isAccommodationStep && (item as any).current_step_can_reject !== false
+      ? isMyWorkflowStep && !isAccommodationOnlyStep && (item as any).current_step_can_reject !== false
       : ((role === "MANAGER" && item.status === "SUBMITTED") ||
           (role === "MANAGER" && item.status === "HR_OFFICER") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
@@ -1346,7 +1359,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canApproveAdvance =
     item.doc_type === "ADVANCE" &&
     (isWorkflowDriven
-      ? isMyWorkflowStep && !isAccommodationStep && !isMarkPaidStep
+      ? isMyWorkflowStep && !isAccommodationOnlyStep && !isMarkPaidStep
       : ((role === "MANAGER" && item.status === "SUBMITTED") ||
           (role === "MANAGER" && item.status === "HR_OFFICER") ||
           (role === "HOD" && item.status === "COUNTERSIGNED") ||
@@ -1365,15 +1378,16 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
   const canCreateAccommodation =
     item.doc_type === "ADVANCE" &&
     isTravelAdvance &&
-    // Whether accommodation is actually needed (local/district travel,
-    // more than one travel day) is already decided server-side by whether
-    // a DEPT_ACCOMODATION step exists on this request's workflow chain and
-    // is assigned to this user (isMyWorkflowStep && isAccommodationStep,
-    // mirroring the backend's own canApproveStep check) - duplicating that
-    // decision here with usesDistrictAccommodation/isMultiDayTravel could
-    // only ever hide the button for someone the backend already assigned.
+    // Requires isAccommodationOnlyStep (the current step IS DEPT_ACCOMODATION
+    // for this viewer), not just isAccommodationStep (the request merely
+    // still needs accommodation booked by someone) - a Capture-only viewer
+    // (e.g. Treasury) is never personally eligible for the accommodation
+    // step itself, even on an item that also carries
+    // current_step_requires_accommodation=true for signal/tracking
+    // purposes. Without this, Capture staff saw "Book Accommodation" on
+    // every request still awaiting HR Ops, a job that isn't theirs.
     (isWorkflowDriven
-      ? isMyWorkflowStep && isAccommodationStep
+      ? isMyWorkflowStep && isAccommodationOnlyStep
       : (role === "MANAGER" && ["HR_OFFICER", "APPROVED"].includes(item.status)));
   const canMarkAccommodationPaid = item.doc_type === "ACCOMMODATION" && (role === "ADMIN" || isFinanceDept) && item.status === "SUBMITTED";
   const canRejectAccommodation = item.doc_type === "ACCOMMODATION" && (role === "ADMIN" || isFinanceDept) && item.status === "SUBMITTED";
