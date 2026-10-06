@@ -202,6 +202,13 @@ export async function advanceClaimWorkflowStep(args: {
 
     const group = getPendingGroup(chain, stepIdx);
 
+    // ADMIN bypass: can stand in for whichever member of the stage is next
+    // pending (skipping the canApproveStep eligibility check), but still
+    // only that ONE step - never the rest of the parallel stage. Approving
+    // the whole stage in one ADMIN click used to silently mark a sibling
+    // step as done with nobody actually assigned to it having acted - a
+    // real incident, not a hypothetical (see the identical fix in
+    // advances.service.ts's advanceWorkflowStep).
     let actedIdx: number | null = null;
     if (role === "ADMIN") {
       actedIdx = group.indices.find((idx) => !chain[idx].approved) ?? group.indices[0];
@@ -216,9 +223,6 @@ export async function advanceClaimWorkflowStep(args: {
     const currentStep = chain[actedIdx];
     const actedAt = new Date().toISOString();
     const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true, approved_at: actedAt } : s));
-    if (role === "ADMIN") {
-      for (const idx of group.indices) newChain[idx] = { ...newChain[idx], approved: true, approved_at: actedAt };
-    }
 
     const stillPending = group.indices.some((idx) => !newChain[idx].approved);
     let nextStatus: ClaimStatus;
