@@ -25,6 +25,17 @@ import { buildAdvancePdfFilename, formatPaymentReference } from "../../lib/pdf/p
 
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 
+// Lets an employee file a request for a trip they already took (requested
+// late instead of in advance) without opening the door to arbitrarily old
+// backdating - a trip/departure date is allowed up to this many days in the
+// past, never further back than that.
+const BACKDATE_GRACE_DAYS = 14;
+function earliestAllowedTripDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - BACKDATE_GRACE_DAYS);
+  return d.toISOString().slice(0, 10);
+}
+
 function normalizeEcoCashNumber(value: string | undefined) {
   return String(value || "").trim().replace(/[\s-]/g, "");
 }
@@ -97,10 +108,12 @@ const CreateAdvanceSchema = z.object({
     }
     // Only checked at creation, not on PUT /:id - an in-flight request can
     // legitimately sit through approval long enough for its own start date
-    // to lapse into the past, and re-validating that on an unrelated edit
-    // (e.g. fixing a typo in the purpose) would wrongly block it.
-    if (data.external_start_date && data.external_start_date < new Date().toISOString().slice(0, 10)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_start_date"], message: "Start date cannot be in the past" });
+    // to lapse past the backdating grace window, and re-validating that on
+    // an unrelated edit (e.g. fixing a typo in the purpose) would wrongly
+    // block it. A trip already taken can be requested late - up to
+    // BACKDATE_GRACE_DAYS back, not further.
+    if (data.external_start_date && data.external_start_date < earliestAllowedTripDate()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_start_date"], message: `Start date cannot be more than ${BACKDATE_GRACE_DAYS} days in the past` });
     }
   }
   // "Plan Your Trip" (COUNTRY_CITY travel types). Departure date isn't on
@@ -108,8 +121,10 @@ const CreateAdvanceSchema = z.object({
   // the synthesized row's own date - so "return can't be before departure"
   // stays a client-side check (also enforced by the date picker's own `min`)
   // rather than reaching across two endpoints' schemas to cross-validate it.
-  if (data.travel_return_date && data.travel_return_date < new Date().toISOString().slice(0, 10)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["travel_return_date"], message: "Return date cannot be in the past" });
+  // A trip already taken can have a return date in the past too, within the
+  // same backdating grace window as the start/departure date.
+  if (data.travel_return_date && data.travel_return_date < earliestAllowedTripDate()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["travel_return_date"], message: `Return date cannot be more than ${BACKDATE_GRACE_DAYS} days in the past` });
   }
 });
 

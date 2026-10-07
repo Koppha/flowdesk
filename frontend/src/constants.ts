@@ -45,6 +45,16 @@ export function getCurrencySymbol(code?: string | null): string {
   return CURRENCIES.find(c => c.code === code)?.symbol ?? (code ?? "M");
 }
 
+// Lets an employee file a request for a trip they already took (requested
+// late instead of in advance) - a trip/departure date can be up to this many
+// days in the past, matching the backend's own BACKDATE_GRACE_DAYS.
+export const BACKDATE_GRACE_DAYS = 14;
+export function earliestAllowedTripDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - BACKDATE_GRACE_DAYS);
+  return d.toISOString().slice(0, 10);
+}
+
 export function formatMoney(value: number | string | null | undefined, currencyCode?: string | null): string {
   const symbol = getCurrencySymbol(currencyCode);
   return `${symbol} ${Number(value || 0).toLocaleString("en-LS", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

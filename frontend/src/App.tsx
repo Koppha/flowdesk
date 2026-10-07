@@ -56,7 +56,7 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeCurrency, travelTypeLabel } from "./constants";
+import { BACKDATE_GRACE_DAYS, CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, earliestAllowedTripDate, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeCurrency, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
@@ -7047,11 +7047,11 @@ export default function App() {
                   <div className="form-grid-2">
                     <div className="form-field">
                       <label>Start Date</label>
-                      <input type="date" value={otherStartDate} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setOtherStartDate(e.target.value)} />
+                      <input type="date" value={otherStartDate} min={earliestAllowedTripDate()} onChange={(e) => setOtherStartDate(e.target.value)} />
                     </div>
                     <div className="form-field">
                       <label>Finish Date</label>
-                      <input type="date" value={otherFinishDate} min={otherStartDate || new Date().toISOString().slice(0, 10)} onChange={(e) => setOtherFinishDate(e.target.value)} />
+                      <input type="date" value={otherFinishDate} min={otherStartDate || earliestAllowedTripDate()} onChange={(e) => setOtherFinishDate(e.target.value)} />
                     </div>
                   </div>
                   {showNewExternalPayeeForm && (
@@ -7543,11 +7543,11 @@ export default function App() {
                     <div className="form-grid-2">
                       <div className="form-field">
                         <label>Departure</label>
-                        <input type="date" value={tripDeparture} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setTripDeparture(e.target.value)} />
+                        <input type="date" value={tripDeparture} min={earliestAllowedTripDate()} onChange={(e) => setTripDeparture(e.target.value)} />
                       </div>
                       <div className="form-field">
                         <label>Return</label>
-                        <input type="date" value={tripReturn} min={tripDeparture || new Date().toISOString().slice(0, 10)} onChange={(e) => setTripReturn(e.target.value)} />
+                        <input type="date" value={tripReturn} min={tripDeparture || earliestAllowedTripDate()} onChange={(e) => setTripReturn(e.target.value)} />
                       </div>
                     </div>
 
@@ -7963,8 +7963,8 @@ export default function App() {
                       // Create-only, matching the mirrored backend check: an in-flight
                       // request can outlive its own start date while sitting in
                       // approval, and an unrelated later edit shouldn't be blocked by that.
-                      if (isApplyForOther && !editingAdvanceId && otherStartDate < new Date().toISOString().slice(0, 10)) {
-                        alert("Start date cannot be in the past.");
+                      if (isApplyForOther && !editingAdvanceId && otherStartDate < earliestAllowedTripDate()) {
+                        alert(`Start date cannot be more than ${BACKDATE_GRACE_DAYS} days in the past.`);
                         return;
                       }
                       if (showTravelBreakdown && extraCost > 0 && !extraCostDescription.trim()) {
