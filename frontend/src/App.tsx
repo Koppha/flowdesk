@@ -4,6 +4,7 @@ import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, g
 import Inbox, { isCaptureItem, isCapturePendingItem, isPaymentItem, needsAccommodationBooking } from "./Inbox";
 import Payments from "./Payments";
 import Deductions from "./Deductions";
+import ViewClearances from "./ViewClearances";
 import Refundable from "./Refundable";
 import Accommodation from "./Accommodation";
 import PaybackReview from "./PaybackReview";
@@ -438,7 +439,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -4698,8 +4699,8 @@ export default function App() {
           {hasActiveBrsTypes && <a href="#" className={navItemClass(page === "BRS")} onClick={(e) => { e.preventDefault(); setPage("BRS"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>BRS Studio</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasRefundableAccess) && (
-            <div className={`sidebar-group ${(financeMenuOpen || ["CAPTURE","PAYMENTS","DEDUCTIONS","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); setFinanceMenuOpen((v) => !v); }}>
+            <div className={`sidebar-group ${(financeMenuOpen || ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); setFinanceMenuOpen((v) => !v); }}>
                 <span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Finance
                 {(() => {
                   // Only sum counts for sub-items this user can actually see below —
@@ -4723,6 +4724,9 @@ export default function App() {
                 )}
                 {hasDeductionsAccess && (
                   <a href="#" className={navItemClass(page === "DEDUCTIONS")} onClick={(e) => { e.preventDefault(); setPage("DEDUCTIONS"); }}><MinusCircle size={14} aria-hidden />Deductions <span className="inbox-count-chip">{deductionsCount}</span></a>
+                )}
+                {hasDeductionsAccess && (
+                  <a href="#" className={navItemClass(page === "VIEW_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("VIEW_CLEARANCES"); }}><Eye size={14} aria-hidden />View Clearances</a>
                 )}
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
@@ -4848,6 +4852,8 @@ export default function App() {
             <Payments onBack={() => setPage("HOME")} />
           ) : page === "DEDUCTIONS" ? (
             <Deductions />
+          ) : page === "VIEW_CLEARANCES" ? (
+            <ViewClearances />
           ) : page === "REFUNDABLE" ? (
             <Refundable />
           ) : page === "ACCOMMODATION" && canAccessFeature("accommodation") ? (

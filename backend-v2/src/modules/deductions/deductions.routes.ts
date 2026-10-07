@@ -90,6 +90,50 @@ deductionsRouter.use(async (req: AuthedRequest, res, next) => {
   }
 });
 
+// Same columns/permission/division-scoping as GET / above, but every
+// clearance regardless of status (not just CLOSED) and with no action
+// available on any row - a pure read-only roster for Finance to see where
+// every clearance company-wide actually stands, not just the ones that
+// have reached the deduction stage. A separate query (not a derivation of
+// LIST_QUERY) so this status column and broader WHERE clause don't have to
+// be spliced into a string built for a different purpose.
+const ALL_CLEARANCES_QUERY = `
+  SELECT c.id,
+         c.claimant_id AS employee_id,
+         u.full_name AS employee_name,
+         u.employee_no,
+         dv.name AS division_name,
+         c.duty_station AS destination,
+         c.month,
+         ar.approved_at AS vr_date,
+         EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
+         COALESCE(c.currency, 'LSL') AS currency,
+         c.advance_amount,
+         c.claim_total AS cleared_amount,
+         abs(c.balance_amount) AS amount_to_be_expensed,
+         CASE WHEN c.balance_amount > 0 THEN c.balance_amount ELSE 0 END AS salary_deduction,
+         CASE WHEN c.balance_amount < 0 THEN -c.balance_amount ELSE 0 END AS payable,
+         c.status::text AS status,
+         c.closed_at
+    FROM clearance_claims c
+    JOIN users u ON u.id = c.claimant_id
+    LEFT JOIN divisions dv ON dv.id = u.division_id
+    LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
+   WHERE c.status <> 'DRAFT'
+`;
+
+deductionsRouter.get("/all-clearances", async (req: AuthedRequest, res, next) => {
+  try {
+    const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
+    const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
+    const rows = await query<DeductionRow & { status: string }>(`${ALL_CLEARANCES_QUERY} ORDER BY c.updated_at DESC`);
+    const items = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
+    return res.json({ items });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 deductionsRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     // Deductions are recorded centrally by MNO's own Finance/Treasury team

@@ -611,6 +611,7 @@ export const api = {
 
   deductionsAccess: () => req("/deductions/access"),
   deductions: () => req("/deductions"),
+  allClearances: () => req("/deductions/all-clearances"),
   setDeductionActioned: (id: string, deducted: boolean) =>
     req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) }),
   refundableAccess: () => req("/refundable/access"),
