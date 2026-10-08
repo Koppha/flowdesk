@@ -621,26 +621,22 @@ export default function Inbox(props: {
     };
   }, [items, mode, divisionFilter]);
 
-  // Same Pending/All split as capture mode's Pending/Captured tabs above,
-  // but for the regular Approval Inbox: `items` here deliberately keeps
-  // every request this user is relevant to, including ones long past their
-  // own step (e.g. a manager's chain-wide view after their HOD step was
-  // approved weeks ago - see loadViewOnlyCompletedItemsForUser's comment in
-  // inbox.routes.ts) - that's correct for "can I still find/track this,"
-  // but with no split it also means nothing actually still awaiting this
-  // user's action is easy to pick out of everything they've ever touched. A
-  // user with hundreds of historical items (any long-tenured HOD/EXCO/Manager)
-  // was seeing their badge count (actionable-now only, see App.tsx's
-  // inboxItemCount) in the sidebar but an unfiltered wall of mostly-already-
-  // resolved items in the actual queue below it - no way to tell the two
-  // numbers apart in the UI they were both derived from the same `items` array.
-  const [approvalStatusFilter, setApprovalStatusFilter] = useState<"PENDING" | "ALL">("PENDING");
+  // Same Pending/Captured-style split as capture mode's tabs above, but for
+  // the regular Approval Inbox: `items` here deliberately keeps every
+  // request this user is relevant to, including ones long past their own
+  // step (e.g. a manager's chain-wide view after their HOD step was approved
+  // weeks ago - see loadViewOnlyCompletedItemsForUser's comment in
+  // inbox.routes.ts) - that's correct for "can I still find/track this," but
+  // mixed into one list it meant nothing actually still awaiting this user's
+  // action was easy to pick out of everything they've ever touched. A true
+  // partition (not an "All" tab that still mixes both in) - every item is in
+  // exactly one of these two tabs, never both, so Pending only ever holds
+  // what genuinely still needs this user's action.
+  const [approvalStatusFilter, setApprovalStatusFilter] = useState<"PENDING" | "APPROVED">("PENDING");
   const approvalStatusCounts = useMemo(() => {
-    if (mode === "capture") return { pending: 0, all: 0 };
-    return {
-      pending: items.filter((it: any) => it.current_step_actionable_by_me === true).length,
-      all: items.length
-    };
+    if (mode === "capture") return { pending: 0, approved: 0 };
+    const pending = items.filter((it: any) => it.current_step_actionable_by_me === true).length;
+    return { pending, approved: items.length - pending };
   }, [items, mode]);
 
   const scopedItems = useMemo(() => {
@@ -659,7 +655,7 @@ export default function Inbox(props: {
     // (DEPT_CLOSE, or a workflow whose final step is tagged COUNTER_SIGN -
     // see isDeptCloseStep's own comment further down this file).
     if (mode === "capture") result = result.filter((it: any) => it.doc_type !== "CLAIM" || ["DEPT_CLOSE", "COUNTER_SIGN"].includes(it.current_step_action_type));
-    if (mode !== "capture" && approvalStatusFilter === "PENDING") result = result.filter((it: any) => it.current_step_actionable_by_me === true);
+    if (mode !== "capture") result = result.filter((it: any) => (approvalStatusFilter === "PENDING") === (it.current_step_actionable_by_me === true));
     return result;
   }, [items, delegationScope, mode, divisionFilter, captureStatusFilter, approvalStatusFilter]);
 
@@ -819,7 +815,7 @@ export default function Inbox(props: {
                   onChange={setApprovalStatusFilter}
                   tabs={[
                     { key: "PENDING", label: "Pending", count: approvalStatusCounts.pending, icon: Hourglass },
-                    { key: "ALL", label: "All", count: approvalStatusCounts.all, icon: CheckCircle2 }
+                    { key: "APPROVED", label: "Approved", count: approvalStatusCounts.approved, icon: CheckCircle2 }
                   ]}
                 />
               )}
