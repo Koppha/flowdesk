@@ -40,6 +40,17 @@ import { searchRouter } from "./modules/search/search.routes.js";
 
 export function createApp() {
   const app = express();
+  // nginx reverse-proxies every request to this process over loopback (see
+  // deploy/nginx-advance-clearance.conf.example), so without this every
+  // req.ip is just 127.0.0.1 regardless of which real client sent it -
+  // express-rate-limit's default per-IP key then groups EVERY user's login
+  // attempts into one shared bucket, so once 20 attempts happen anywhere in
+  // the company within the 15-minute window, loginLimiter (rateLimit.ts)
+  // locks out every other user too, including ones who never got their
+  // password wrong - a real incident on PROD. Trusting exactly one hop
+  // reads the real client IP from X-Forwarded-For (which nginx already
+  // sets) instead, without trusting arbitrary spoofed hops from further out.
+  app.set("trust proxy", 1);
 
   app.use(helmet());
   app.use(compression());
