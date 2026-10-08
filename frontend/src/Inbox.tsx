@@ -615,6 +615,28 @@ export default function Inbox(props: {
     };
   }, [items, mode, divisionFilter]);
 
+  // Same Pending/All split as capture mode's Pending/Captured tabs above,
+  // but for the regular Approval Inbox: `items` here deliberately keeps
+  // every request this user is relevant to, including ones long past their
+  // own step (e.g. a manager's chain-wide view after their HOD step was
+  // approved weeks ago - see loadViewOnlyCompletedItemsForUser's comment in
+  // inbox.routes.ts) - that's correct for "can I still find/track this,"
+  // but with no split it also means nothing actually still awaiting this
+  // user's action is easy to pick out of everything they've ever touched. A
+  // user with hundreds of historical items (any long-tenured HOD/EXCO/Manager)
+  // was seeing their badge count (actionable-now only, see App.tsx's
+  // inboxItemCount) in the sidebar but an unfiltered wall of mostly-already-
+  // resolved items in the actual queue below it - no way to tell the two
+  // numbers apart in the UI they were both derived from the same `items` array.
+  const [approvalStatusFilter, setApprovalStatusFilter] = useState<"PENDING" | "ALL">("PENDING");
+  const approvalStatusCounts = useMemo(() => {
+    if (mode === "capture") return { pending: 0, all: 0 };
+    return {
+      pending: items.filter((it: any) => it.current_step_actionable_by_me === true).length,
+      all: items.length
+    };
+  }, [items, mode]);
+
   const scopedItems = useMemo(() => {
     let result = items;
     if (delegationScope === "MINE") result = result.filter((it: any) => !it.is_delegated);
@@ -631,8 +653,9 @@ export default function Inbox(props: {
     // (DEPT_CLOSE, or a workflow whose final step is tagged COUNTER_SIGN -
     // see isDeptCloseStep's own comment further down this file).
     if (mode === "capture") result = result.filter((it: any) => it.doc_type !== "CLAIM" || ["DEPT_CLOSE", "COUNTER_SIGN"].includes(it.current_step_action_type));
+    if (mode !== "capture" && approvalStatusFilter === "PENDING") result = result.filter((it: any) => it.current_step_actionable_by_me === true);
     return result;
-  }, [items, delegationScope, mode, divisionFilter, captureStatusFilter]);
+  }, [items, delegationScope, mode, divisionFilter, captureStatusFilter, approvalStatusFilter]);
 
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
@@ -655,17 +678,17 @@ export default function Inbox(props: {
   const [queueSearch, setQueueSearch] = useState("");
   const [queuePage, setQueuePage] = useState(1);
   const [queuePageSize, setQueuePageSize] = useState(10);
-  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope, divisionFilter, captureStatusFilter]);
+  useEffect(() => { setQueuePage(1); }, [activeGroupTab, queueSearch, delegationScope, divisionFilter, captureStatusFilter, approvalStatusFilter]);
 
-  // Capture mode's item list deliberately keeps already-captured items visible
-  // (so they can still be found/downloaded), so "awaiting" counts need to
-  // exclude those explicitly rather than just using items.length - otherwise
-  // captured items keep inflating every count on this page even after they're
-  // done. The approval inbox's items are already just what's pending, so it's
-  // a no-op there.
+  // Both modes' item lists deliberately keep already-done items visible (so
+  // they can still be found/tracked - see approvalStatusCounts above for the
+  // regular Approval Inbox's version of this), so "awaiting" counts need to
+  // exclude those explicitly rather than just using items.length, in either
+  // mode - otherwise already-resolved items keep inflating every count on
+  // this page even after they're done.
   const pendingItems = useMemo(
-    () => (mode === "capture" ? items.filter((it) => it.current_step_actionable_by_me === true) : items),
-    [items, mode]
+    () => items.filter((it) => it.current_step_actionable_by_me === true),
+    [items]
   );
 
   const metrics = useMemo(
@@ -781,6 +804,16 @@ export default function Inbox(props: {
                   tabs={[
                     { key: "PENDING", label: "Pending", count: captureStatusCounts.pending, icon: Hourglass },
                     { key: "CAPTURED", label: "Captured", count: captureStatusCounts.captured, icon: CheckCircle2 }
+                  ]}
+                />
+              )}
+              {mode !== "capture" && (
+                <IconTabRow
+                  value={approvalStatusFilter}
+                  onChange={setApprovalStatusFilter}
+                  tabs={[
+                    { key: "PENDING", label: "Pending", count: approvalStatusCounts.pending, icon: Hourglass },
+                    { key: "ALL", label: "All", count: approvalStatusCounts.all, icon: CheckCircle2 }
                   ]}
                 />
               )}
