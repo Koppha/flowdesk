@@ -790,11 +790,20 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     // status — so without this, a workflow-driven advance or claim sitting
     // at a normal, non-final approval step is invisible to every admin
     // account, even though performAdvanceApprove/performClaimApprove both
-    // already accept an admin override for that exact step. Only the
-    // person actually named on the step could see or act on it. Doesn't
-    // do per-user step matching (admin can act on any pending step, same
-    // as the approve endpoints' own role === 'ADMIN' bypass) - just
-    // surfaces the current pending step's label for context.
+    // already accept an admin override for that exact step.
+    //
+    // current_step_actionable_by_me used to be hardcoded true for every one
+    // of these - technically correct (admin CAN override any step via the
+    // approve endpoints' own role === 'ADMIN' bypass), but it meant every
+    // single in-progress request company-wide showed up as "Pending" in an
+    // admin's own inbox, including ones a specific other person (e.g. a
+    // named Manager) hasn't acted on yet - a real incident: an admin's
+    // Pending count read in the dozens, mostly other people's work, with no
+    // way to tell "needs me specifically" from "just visible to me." Now
+    // matches the real per-step eligibility (same canApproveStep check every
+    // other viewer gets), so Pending only holds items genuinely stuck with
+    // no one else positioned to act - everything else still shows up here
+    // for oversight, just correctly filed under Approved/not-mine.
     const loadAllWorkflowAdvancesForAdmin = async () => {
       const rows = await query<any>(
         `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
@@ -816,6 +825,11 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // found by a whole-chain scan, not read off the group's own steps.
         const accStep = findPendingAccommodationStep(chain);
         if ((!group.steps.length || group.steps.every((s) => s.approved)) && !accStep) continue;
+        let actionableByMe = false;
+        for (const s of group.steps) {
+          if (s.approved) continue;
+          if (await canApproveStep(s, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { actionableByMe = true; break; }
+        }
         items.push({
           doc_type: "ADVANCE",
           id: a.id,
@@ -833,7 +847,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_action_type: group.steps[0]?.action_type ?? null,
           current_step_can_reject: group.steps[0]?.can_reject ?? true,
           current_step_can_rollback: group.steps[0]?.can_rollback ?? true,
-          current_step_actionable_by_me: true
+          current_step_actionable_by_me: actionableByMe
         });
       }
     };
@@ -853,6 +867,11 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         const chain = c.approval_chain as ChainStep[];
         const group = getPendingGroup(chain, c.workflow_step_order ?? 0);
         if (!group.steps.length || group.steps.every((s) => s.approved)) continue;
+        let actionableByMe = false;
+        for (const s of group.steps) {
+          if (s.approved) continue;
+          if (await canApproveStep(s, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId)) { actionableByMe = true; break; }
+        }
         items.push({
           doc_type: "CLAIM",
           id: c.id,
@@ -866,7 +885,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_approver_id: group.steps[0]?.approver_id ?? null,
           current_step_position_name: group.steps.filter((s) => !s.approved).map((s) => s.position_name).join(" + "),
           current_step_action_type: group.steps[0]?.action_type ?? null,
-          current_step_actionable_by_me: true
+          current_step_actionable_by_me: actionableByMe
         });
       }
     };
