@@ -370,9 +370,15 @@ function itemStatusLabel(item: InboxItem) {
     !TERMINAL_STATUSES.has(status)
   ) {
     // The first ("Manager"/Supervisor) step in the chain is a countersign
-    // step; every later step is a regular approval step.
+    // step; every later step is a regular approval step. Either label was
+    // previously shown regardless of whose turn it actually is - someone
+    // who already countersigned/approved their own step saw the exact same
+    // "Pending Countersign"/"Pending Approval" text as someone whose turn it
+    // genuinely still is, with no way to tell "I'm done, it's moved on" from
+    // "I still need to act" at a glance (current_step_actionable_by_me
+    // already carries that distinction, it just wasn't being read here).
     if ((item as any).current_step_action_type === "COUNTER_SIGN" || item.current_step_position_name === "Manager") {
-      return "Pending Countersign";
+      return item.current_step_actionable_by_me ? "Pending Countersign" : "Approved";
     }
     // Once the chain has moved past actual approval-type steps and into
     // post-approval processing (Accommodation/Capture/Payment), it's already
@@ -382,7 +388,7 @@ function itemStatusLabel(item: InboxItem) {
       return "Approved";
     }
     if ((item as any).current_step_action_type === "MARK_PAID") return "Approved — Awaiting Payment";
-    return "Pending Approval";
+    return item.current_step_actionable_by_me ? "Pending Approval" : "Approved";
   }
   if (item.doc_type === "CUSTOM_REQUEST" && item.status === "IN_PROGRESS") {
     if (item.current_step_actionable_by_me) return "Pending Approval";
