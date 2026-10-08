@@ -353,6 +353,22 @@ function itemStageProgress(item: InboxItem) {
   const status = String(item.status || "").toUpperCase();
   if (item.doc_type === "CUSTOM_REQUEST") return (item.current_step_position_name && displayOrgGroupName(item.current_step_position_name)) || statusLabel(status);
   if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return item.my_title || "Pending";
+  // A claim/advance not yet at a terminal/outcome status is still
+  // genuinely "Pending"/"In Progress" company-wide, but only from the
+  // perspective of whoever's turn it actually is - showing that generic
+  // word here regardless of current_step_actionable_by_me contradicted the
+  // pill right next to it (itemStatusLabel already says "Approved" once
+  // it's past this viewer's own step). Name who it's actually with instead,
+  // the same way the CUSTOM_REQUEST branch above already does.
+  if (
+    (item.doc_type === "CLAIM" || item.doc_type === "ADVANCE") &&
+    !item.current_step_actionable_by_me &&
+    item.current_step_position_name &&
+    !TERMINAL_STATUSES.has(status) &&
+    !CLEARANCE_OUTCOME_STATUSES.has(status)
+  ) {
+    return displayOrgGroupName(item.current_step_position_name);
+  }
   if (status === "SUBMITTED") return "Pending";
   if (CLEARANCE_OUTCOME_STATUSES.has(status)) return CLEARANCE_OUTCOME_LABELS[status] || statusLabel(status);
   if (TERMINAL_STATUSES.has(status)) return statusLabel(status);
