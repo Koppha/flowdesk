@@ -12,6 +12,9 @@ import { ensureAirportsSchema } from "../lib/airports.js";
 import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
 import { ensureBrsSchema } from "../modules/brs/brs.schema.js";
 import { ensureReportingViewsSchema } from "../modules/reporting/reporting.schema.js";
+import { ensureSignaturesSchema } from "../modules/signatures/signatures.schema.js";
+import { ensureSlaReminderSchema } from "../modules/sla/sla.schema.js";
+import { ensureDistributionsSchema } from "../modules/distributions/distributions.routes.js";
 import { ensurePushTokensSchema } from "../lib/pushTokens.js";
 import { ensureMobileAppBuildsSchema } from "../lib/mobileAppBuilds.js";
 import { ensureMobileAppEventsSchema } from "../lib/mobileAppEvents.js";
@@ -56,6 +59,12 @@ export async function bootstrapSystem() {
   await ensureServiceContractsSchema();
   await ensureSalariesSchema();
   await ensureReportingViewsSchema();
+  // Created at startup, not lazily on first use: the Inbox reads
+  // signable_documents for every user, and a fresh PROD database broke the
+  // Inbox on 2026-10-13 because no one had opened Signatures yet.
+  await ensureSignaturesSchema();
+  await ensureSlaReminderSchema();
+  await ensureDistributionsSchema();
   await ensurePushTokensSchema();
   await ensureMobileAppBuildsSchema();
   await ensureMobileAppEventsSchema();

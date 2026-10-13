@@ -1862,6 +1862,37 @@ export async function notifyItProvisioningOfficers(args: {
   }
 }
 
+// An approved BRS / Change Request that its requester chose to distribute.
+export async function notifyDocumentDistributed(args: {
+  docId: string;
+  docLabel: string;
+  title: string;
+  distributedBy: string | null;
+  message: string | null;
+  where: string;
+  recipientEmails: string[];
+}) {
+  try {
+    if (!args.recipientEmails.length) return;
+    const lines = [
+      header(`${args.docLabel.toUpperCase()} — DISTRIBUTED TO YOU`),
+      ``,
+      `${args.distributedBy || "A colleague"} has shared an approved ${args.docLabel} with you:`,
+      ``,
+      `  ${args.title}`
+    ];
+    if (args.message) lines.push(``, `Message: ${args.message}`);
+    lines.push(``, `View it and download the PDF in FlowDesk: ${args.where}.`, ``, footer());
+    await sendMail({
+      to: args.recipientEmails,
+      subject: `[For your information] ${args.docLabel}: ${args.title}`.slice(0, 200),
+      text: lines.join("\n")
+    });
+  } catch (error) {
+    logger.warn("document_distribution_notification_failed", { doc_id: args.docId, error: serializeError(error) });
+  }
+}
+
 export async function notifyCustomRequestCancelled(args: {
   submissionId: string;
   requestTypeName: string;

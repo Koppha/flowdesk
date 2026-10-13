@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { hasDistributionAccess } from "../distributions/distributions.routes.js";
 import { z } from "zod";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
@@ -68,6 +69,8 @@ async function assertCanViewDocument(doc: any, actor: { userId: string; role: st
     ))[0];
     if (onChain) return;
   }
+  // Read-only access for anyone the approved BRS was distributed to.
+  if (await hasDistributionAccess("BRS", doc.id, actor.userId)) return;
   throw forbidden("You do not have access to this BRS");
 }
 
@@ -141,6 +144,31 @@ brsRouter.get("/mine", async (req: AuthedRequest, res, next) => {
          JOIN users u ON u.id = d.requester_id
         WHERE d.requester_id = $1
         ORDER BY d.created_at DESC`,
+      [req.user!.userId]
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /brs/shared-with-me — approved BRS documents distributed to the
+// current user (read-only), newest distribution first.
+brsRouter.get("/shared-with-me", async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query(
+      `SELECT d.*, bt.name AS brs_type_name, u.full_name AS requester_name,
+              x.distributed_at, x.distributed_by_name, x.message AS distribution_message
+         FROM brs_documents d
+         JOIN brs_types bt ON bt.id = d.brs_type_id
+         JOIN users u ON u.id = d.requester_id
+         JOIN LATERAL (
+           SELECT dd.created_at AS distributed_at, ub.full_name AS distributed_by_name, dd.message
+             FROM document_distributions dd LEFT JOIN users ub ON ub.id = dd.distributed_by_id
+            WHERE dd.doc_type = 'BRS' AND dd.doc_id = d.id AND $1::uuid = ANY(dd.recipient_ids)
+            ORDER BY dd.created_at DESC LIMIT 1
+         ) x ON true
+        ORDER BY x.distributed_at DESC`,
       [req.user!.userId]
     );
     return res.json(rows);

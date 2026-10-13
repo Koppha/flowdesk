@@ -9,7 +9,7 @@ import { query, pool } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
-import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
+import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentGroupsByCompany, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
 import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
 import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
 import { generateDelegationReference, getDelegationRequestTypes, setDelegationRequestTypes, writeDelegationAudit } from "../../lib/delegations.js";
@@ -667,6 +667,15 @@ authRouter.post("/verify-password", async (req: AuthedRequest, res, next) => {
 authRouter.get(["/departments", "/groups"], async (_req: AuthedRequest, res, next) => {
   try {
     return res.json(await listDepartmentGroups());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Same list as GET /departments, grouped by company for grouped pickers.
+authRouter.get("/departments-by-company", async (_req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await listDepartmentGroupsByCompany());
   } catch (err) {
     return next(err);
   }

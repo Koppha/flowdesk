@@ -22,6 +22,7 @@ import { requestTypesRouter } from "./modules/request-types/request-types.routes
 import { customRequestsRouter } from "./modules/custom-requests/custom-requests.routes.js";
 import { brsRouter } from "./modules/brs/brs.routes.js";
 import { brsAdminRouter } from "./modules/brs/brs-admin.routes.js";
+import { distributionsRouter } from "./modules/distributions/distributions.routes.js";
 import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
@@ -119,6 +120,7 @@ export function createApp() {
   app.use("/custom-requests", customRequestsRouter);
   app.use("/brs", brsRouter);
   app.use("/brs-types", brsAdminRouter);
+  app.use("/distributions", distributionsRouter);
   app.use("/email-actions", emailActionsRouter);
   app.use("/pdf-templates", pdfTemplatesRouter);
   app.use("/deductions", deductionsRouter);

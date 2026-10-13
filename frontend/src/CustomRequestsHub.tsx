@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, openBlobInNewTab } from "./api";
+import DistributeDialog from "./components/DistributeDialog";
 import { showNotice } from "./alerts";
-import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, X, Share2 } from "lucide-react";
 import { ApproverCombobox, COMBOBOX_DROPDOWN_HEIGHT, COMBOBOX_DROPDOWN_MIN_WIDTH, EMAIL_RE, userLabel, type DirectoryUser } from "./shared/ApproverCombobox";
 
 type TableFieldConfig = {
@@ -592,7 +593,10 @@ function computeTableSummary(cfg: TableFieldConfig | null | undefined, rows: Tab
 }
 
 export default function CustomRequestsHub({ profile, requestDirectory, onBack, deepLink, onDeepLinkConsumed }: CustomRequestsHubProps) {
-  const [tab, setTab] = useState<"NEW" | "MINE" | "ASSIGNED">("NEW");
+  const [tab, setTab] = useState<"NEW" | "MINE" | "ASSIGNED" | "SHARED">("NEW");
+  const [shared, setShared] = useState<Array<Submission & { requester_name?: string | null; distributed_at?: string; distributed_by_name?: string | null; distribution_message?: string | null }>>([]);
+  const [sharedLoading, setSharedLoading] = useState(false);
+  const [distributingId, setDistributingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [types, setTypes] = useState<RequestTypeSummary[]>([]);
@@ -692,6 +696,13 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
 
   useEffect(() => {
     if (tab === "ASSIGNED") loadAssignedToMe();
+    if (tab === "SHARED") {
+      setSharedLoading(true);
+      api.customRequestsSharedWithMe()
+        .then((rows: any) => setShared(Array.isArray(rows) ? rows : []))
+        .catch(() => setShared([]))
+        .finally(() => setSharedLoading(false));
+    }
   }, [tab]);
 
   useEffect(() => {
@@ -1414,10 +1425,52 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         <a href="#" className={`ep-tab ${tab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("ASSIGNED"); }}>
           <UserCheck size={14} /> Assigned to Me
         </a>
+        <a href="#" className={`ep-tab ${tab === "SHARED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("SHARED"); }}>
+          <Share2 size={14} /> Shared with Me
+        </a>
       </div>
 
       {loading ? (
         <div className="ep-loading"><p>Loading form…</p></div>
+      ) : tab === "SHARED" ? (
+        <div className="ep-panel">
+          <div className="ep-panel-head">
+            <div className="ep-panel-title">Shared with Me</div>
+            <div className="ep-panel-sub">Approved Change Requests their requesters distributed to you.</div>
+          </div>
+          <div className="ep-panel-body">
+            {sharedLoading ? (
+              <div className="ep-loading"><p>Loading…</p></div>
+            ) : !shared.length ? (
+              <div className="ep-empty"><p>Nothing has been distributed to you yet.</p></div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {shared.map((s) => (
+                  <div key={s.id} className="card" style={{ padding: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || s.request_type_name}</div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                          {s.request_type_name} by {s.requester_name || "—"} · shared by {s.distributed_by_name || "—"}
+                          {s.distributed_at ? ` on ${new Date(s.distributed_at).toLocaleDateString()}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => void downloadCustomRequestPdf(s.id)}>
+                          <FileText size={13} /> Download PDF
+                        </button>
+                        {statusBadge(s.status)}
+                      </div>
+                    </div>
+                    {s.distribution_message && (
+                      <div style={{ marginTop: 10, fontSize: 13, background: "var(--surface-soft)", padding: 10, borderRadius: 6 }}>{s.distribution_message}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       ) : tab === "ASSIGNED" ? (
         <div className="ep-panel">
           <div className="ep-panel-head">
@@ -1879,6 +1932,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                             Close Request
                           </button>
                         )}
+                        {s.request_type_code === "CHANGE_REQUEST" && ["APPROVED", "CLOSED"].includes(s.status) && (
+                          <button
+                            className="ep-btn"
+                            style={{ fontSize: 12, padding: "4px 10px" }}
+                            onClick={(e) => { e.stopPropagation(); setDistributingId(s.id); }}
+                            title="Send this approved Change Request to the people who need it"
+                          >
+                            <Share2 size={13} /> Distribute
+                          </button>
+                        )}
                         {s.status === "IN_PROGRESS" && cancellingId !== s.id && (
                           <button
                             className="ep-btn-outline"
@@ -2049,6 +2112,18 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
           </div>
         </div>
       )}
+      {distributingId && (() => {
+        const sub = mine.find((m) => m.id === distributingId);
+        return (
+          <DistributeDialog
+            docType="CHANGE_REQUEST"
+            docId={distributingId}
+            title={sub?.data?.description_of_change || sub?.request_type_name || "Change Request"}
+            onClose={() => setDistributingId(null)}
+            onDone={(count) => { void showNotice(`Distributed to ${count} ${count === 1 ? "person" : "people"}.`); }}
+          />
+        );
+      })()}
     </div>
   );
 }

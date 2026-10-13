@@ -178,6 +178,13 @@ export const api = {
   updateMyProfileContact: (data: { phone: string }) => req("/auth/me/profile", { method: "PATCH", body: JSON.stringify(data) }),
   verifyPassword: (password: string) => req("/auth/verify-password", { method: "POST", body: JSON.stringify({ password }) }),
   departments: () => req("/auth/departments"),
+  departmentsByCompany: () => req("/auth/departments-by-company"),
+  distributionOptions: () => req("/distributions/options"),
+  distributionHistory: (docType: "BRS" | "CHANGE_REQUEST", docId: string) => req(`/distributions/${docType}/${docId}`),
+  distribute: (docType: "BRS" | "CHANGE_REQUEST", docId: string, data: any) =>
+    req(`/distributions/${docType}/${docId}`, { method: "POST", body: JSON.stringify(data) }),
+  brsSharedWithMe: () => req("/brs/shared-with-me"),
+  customRequestsSharedWithMe: () => req("/custom-requests/shared-with-me"),
   groups: () => req("/auth/groups"),
   requestDirectory: (scope?: "company") => req(`/auth/request-directory${scope ? `?scope=${scope}` : ""}`),
   companyDirectory: () => req("/auth/request-directory?scope=company"),

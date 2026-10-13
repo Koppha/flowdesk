@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api, openBlobInNewTab } from "./api";
+import DistributeDialog from "./components/DistributeDialog";
 import { showNotice, confirmAction } from "./alerts";
 import { RichTextField } from "./shared/RichTextField";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
@@ -74,9 +75,11 @@ type ChainDraft = { approver_id: string; position_name: string; decision_type: "
 
 export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: BrsStudioProps) {
   const [view, setView] = useState<"landing" | "workspace">("landing");
-  const [landingTab, setLandingTab] = useState<"MINE" | "ASSIGNED">("MINE");
+  const [landingTab, setLandingTab] = useState<"MINE" | "ASSIGNED" | "SHARED">("MINE");
   const [mine, setMine] = useState<any[]>([]);
   const [assigned, setAssigned] = useState<any[]>([]);
+  const [shared, setShared] = useState<any[]>([]);
+  const [distributing, setDistributing] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -98,7 +101,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   const [newQuarter, setNewQuarter] = useState("");
   const [newProgrammeType, setNewProgrammeType] = useState("Ongoing / permanent");
   const [newJustification, setNewJustification] = useState("");
-  const [departments, setDepartments] = useState<string[]>([]);
+  const [departments, setDepartments] = useState<Array<{ company: string; departments: string[] }>>([]);
   const [creating, setCreating] = useState(false);
 
   const [docId, setDocId] = useState<string | null>(null);
@@ -133,7 +136,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   // Landing-page KPI/filter/table data - computed unconditionally (hooks
   // can't sit after the "landing" vs "workspace" early return below), even
   // though only the landing view ever reads them; cheap over these lists.
-  const rows = landingTab === "MINE" ? mine : assigned;
+  const rows = landingTab === "MINE" ? mine : landingTab === "ASSIGNED" ? assigned : shared;
 
   const kpiCounts = useMemo(() => {
     const counts = { total: rows.length, draft: 0, deptInput: 0, inApproval: 0, baseline: 0 };
@@ -192,7 +195,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     api.companyDirectory().then((rows: any) => setCompanyDirectory(Array.isArray(rows) ? rows : [])).catch(() => setCompanyDirectory([]));
     api.sections().then((rows: any) => setOrgSections(Array.isArray(rows) ? rows : [])).catch(() => setOrgSections([]));
     api.brsDefaultType().then((t: any) => setDefaultTypeId(t?.id ?? null)).catch(() => setDefaultTypeId(null));
-    api.departments().then((rows: any) => setDepartments(Array.isArray(rows) ? rows : [])).catch(() => setDepartments([]));
+    api.departmentsByCompany().then((rows: any) => setDepartments(Array.isArray(rows) ? rows : [])).catch(() => setDepartments([]));
   }, []);
 
   // Next several calendar quarters from today, e.g. "Q4 2026", "Q1 2027", …
@@ -211,8 +214,8 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
 
   function loadLanding() {
     setLoadingList(true);
-    Promise.all([api.myBrs().catch(() => []), api.assignedToMeBrs().catch(() => [])])
-      .then(([m, a]) => { setMine(Array.isArray(m) ? m : []); setAssigned(Array.isArray(a) ? a : []); })
+    Promise.all([api.myBrs().catch(() => []), api.assignedToMeBrs().catch(() => []), api.brsSharedWithMe().catch(() => [])])
+      .then(([m, a, sh]) => { setMine(Array.isArray(m) ? m : []); setAssigned(Array.isArray(a) ? a : []); setShared(Array.isArray(sh) ? sh : []); })
       .finally(() => setLoadingList(false));
   }
 
@@ -488,7 +491,11 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                       <label>Requesting department</label>
                       <select className="ep-form-select" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)}>
                         <option value="">Select…</option>
-                        {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                        {departments.map((g) => (
+                          <optgroup key={g.company} label={g.company}>
+                            {g.departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                          </optgroup>
+                        ))}
                       </select>
                     </div>
                     <div className="ep-form-group">
@@ -561,6 +568,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
         <div className="ep-tabs custom-request-tabs">
           <a href="#" className={`ep-tab ${landingTab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("MINE"); }}>My BRS</a>
           <a href="#" className={`ep-tab ${landingTab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("ASSIGNED"); }}>Assigned to Me</a>
+          <a href="#" className={`ep-tab ${landingTab === "SHARED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("SHARED"); }}>Shared with Me{shared.length ? ` (${shared.length})` : ""}</a>
         </div>
 
         <FinanceFilterBar showReset={landingShowReset} onReset={landingResetFilters} onApply={() => setPage(1)}>
@@ -586,7 +594,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             ) : !filteredRows.length ? (
               <FinanceEmptyState
                 icon={FileText}
-                title={rows.length ? "No BRS match your filters." : landingTab === "MINE" ? "You haven't opened a BRS yet." : "No BRS sections have been assigned to you yet."}
+                title={rows.length ? "No BRS match your filters." : landingTab === "MINE" ? "You haven't opened a BRS yet." : landingTab === "SHARED" ? "No approved BRS has been distributed to you yet." : "No BRS sections have been assigned to you yet."}
                 hint={rows.length ? "Try adjusting your search criteria or filters." : undefined}
               />
             ) : (
@@ -732,7 +740,11 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                           <label>Requesting department</label>
                           <select className="ep-form-select" value={intakeEdits.department || ""} onChange={(e) => setIntakeEdits((prev) => ({ ...prev, department: e.target.value }))}>
                             <option value="">Select…</option>
-                            {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                            {departments.map((g) => (
+                          <optgroup key={g.company} label={g.company}>
+                            {g.departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                          </optgroup>
+                        ))}
                           </select>
                         </div>
                         <div className="ep-form-group">
@@ -1051,10 +1063,15 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             <div className="ep-panel" style={{ marginBottom: 16 }}>
               <div className="ep-panel-head">
                 <div className="ep-panel-title">Baseline</div>
-                <div className="ep-panel-sub">Locked and published. Raise a Change Request to amend it.</div>
+                <div className="ep-panel-sub">Approved and locked. It is only shared with others when you distribute it. Raise a Change Request to amend it.</div>
               </div>
               <div className="ep-panel-body">
                 <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                  {(isRequester || profile?.role === "ADMIN") && (
+                    <button className="ep-btn" onClick={() => setDistributing(true)}>
+                      <Send size={14} /> Distribute
+                    </button>
+                  )}
                   <button className="ep-btn-outline" onClick={() => { void openBlobInNewTab(() => api.brsPdfBlob(doc.id)); }}>
                     <Download size={14} /> Download PDF
                   </button>
@@ -1078,6 +1095,15 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             );
           })()}
         </>
+      )}
+      {distributing && doc && (
+        <DistributeDialog
+          docType="BRS"
+          docId={doc.id}
+          title={`${doc.reference_no ? doc.reference_no + " — " : ""}${doc.title}`}
+          onClose={() => setDistributing(false)}
+          onDone={(count) => { void showNotice(`Distributed to ${count} ${count === 1 ? "person" : "people"}.`); }}
+        />
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { hasDistributionAccess } from "../distributions/distributions.routes.js";
 import { z } from "zod";
 import fs from "fs";
 import multer from "multer";
@@ -478,6 +479,32 @@ customRequestsRouter.get("/mine", async (req: AuthedRequest, res, next) => {
   }
 });
 
+// GET /custom-requests/shared-with-me — approved Change Requests distributed
+// to the current user (read-only). Registered before "/:id".
+customRequestsRouter.get("/shared-with-me", async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query(
+      `SELECT s.*, rt.name AS request_type_name, rt.code AS request_type_code, u.full_name AS requester_name,
+              '[]'::json AS attachments,
+              x.distributed_at, x.distributed_by_name, x.message AS distribution_message
+         FROM custom_request_submissions s
+         JOIN custom_request_types rt ON rt.id = s.request_type_id
+         JOIN users u ON u.id = s.requester_id
+         JOIN LATERAL (
+           SELECT dd.created_at AS distributed_at, ub.full_name AS distributed_by_name, dd.message
+             FROM document_distributions dd LEFT JOIN users ub ON ub.id = dd.distributed_by_id
+            WHERE dd.doc_type = 'CHANGE_REQUEST' AND dd.doc_id = s.id AND $1::uuid = ANY(dd.recipient_ids)
+            ORDER BY dd.created_at DESC LIMIT 1
+         ) x ON true
+        ORDER BY x.distributed_at DESC`,
+      [req.user!.userId]
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // GET /custom-requests/assigned-to-me — submissions where the current user
 // appears (by id) in any "user_multi" field's assignee array. Scans
 // in-progress/approved submissions across types that define such a field —
@@ -542,7 +569,9 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const chain = submission.approval_chain as Array<{ approver_id: string }>;
     const isParticipant = chain.some((s) => s.approver_id === req.user!.userId);
     const isAssignee = isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
-    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !isParticipant && !isAssignee) {
+    const isRecipient = submission.request_type_code === "CHANGE_REQUEST"
+      && await hasDistributionAccess("CHANGE_REQUEST", submission.id, req.user!.userId);
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !isParticipant && !isAssignee && !isRecipient) {
       throw forbidden();
     }
 
@@ -554,7 +583,7 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const isOwner = submission.requester_id === req.user!.userId;
     const can_view_pdf = await canAccessPdf({
       requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id,
-      userId: req.user!.userId, role: req.user!.role, isOwner, action: "view"
+      userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient, action: "view"
     });
     // Computer Request: where IT Provisioning is up to, so the requester can
     // see progress and confirm collection from their own request.
@@ -596,8 +625,10 @@ customRequestsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     const isParticipant = chain.some((s) => s.approver_id === req.user!.userId);
     const isAssignee = isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
     const isOwner = submission.requester_id === req.user!.userId;
-    if (req.user!.role !== "ADMIN" && !isOwner && !isParticipant && !isAssignee) throw forbidden();
-    if (!(await canAccessPdf({ requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id, userId: req.user!.userId, role: req.user!.role, isOwner, action: "view" }))) {
+    // Someone it was distributed to may always view its PDF, like the owner.
+    const isRecipient = await hasDistributionAccess("CHANGE_REQUEST", submission.id, req.user!.userId);
+    if (req.user!.role !== "ADMIN" && !isOwner && !isParticipant && !isAssignee && !isRecipient) throw forbidden();
+    if (!(await canAccessPdf({ requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id, userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient, action: "view" }))) {
       throw forbidden();
     }
 
@@ -1024,6 +1055,10 @@ export async function performCustomRequestAction(
       comment: comment ?? null,
       nextSteps: submission.request_type_code === "COMPUTER_REQUEST"
         ? "It has now gone to IT for provisioning. We'll email you as it progresses, and when your computer is ready to collect."
+        : submission.request_type_code === "CHANGE_REQUEST"
+        ? "It has not been sent to anyone else. When you're ready, distribute it from Custom Requests > My Requests > Distribute."
+        : submission.request_type_code === "BRS_APPROVAL"
+        ? "The BRS is now baselined. It has not been sent to anyone else. When you're ready, distribute it from BRS Studio > Distribute."
         : null
     });
   } else {

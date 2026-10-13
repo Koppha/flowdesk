@@ -27,8 +27,26 @@ emailActionsRouter.use((_req, res, next) => {
     "Content-Security-Policy",
     "default-src 'none'; img-src data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'"
   );
+  // The token is a credential: never send it on in a Referer header, never
+  // let the browser or a proxy cache the page, keep it out of search engines.
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
   next();
 });
+
+// Runs first on every page this router renders: remembers where the confirm
+// button posts (built from the address the link was opened at, so it still
+// works behind any proxy prefix), then strips the token from the address bar
+// so it isn't left visible, in browser history, or copied from the URL.
+function hideTokenScript(token: string | null) {
+  return `<script>
+    var confirmUrl = ${token ? `new URL(encodeURIComponent(${JSON.stringify(token)}) + "/confirm", location.href).href` : "null"};
+    if (window.history && history.replaceState) {
+      history.replaceState(null, "", location.pathname.replace(new RegExp("/email-actions/[^/]+/?$"), "/email-actions/") + location.hash);
+    }
+  </script>`;
+}
 
 // Self-contained page (no external CSS/JS/images) so it renders correctly
 // behind any reverse-proxy path prefix - the confirm button posts to a
@@ -55,7 +73,6 @@ function renderPage(opts: {
       </div>
       <div id="result" class="status" hidden></div>
       <script>
-        var token = ${JSON.stringify(token)};
         function submit(action) {
           var comment = document.getElementById("comment").value.trim();
           if (action === "REJECT" && !comment) {
@@ -64,7 +81,7 @@ function renderPage(opts: {
           }
           document.getElementById("approve").disabled = true;
           document.getElementById("reject").disabled = true;
-          fetch(encodeURIComponent(token) + "/confirm", {
+          fetch(confirmUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: action, comment: comment || undefined })
@@ -91,6 +108,7 @@ function renderPage(opts: {
   return renderBrandedPage({
     title: "FlowDesk &middot; Approval",
     bodyHtml: `
+      ${hideTokenScript(alreadyActioned ? null : token)}
       <h1>Approval request${approverName ? " for " + escapeHtml(approverName) : ""}</h1>
       <div class="summary">
         <div class="doc">${escapeHtml(summary?.docLabel ?? "Request")}</div>
@@ -105,7 +123,7 @@ function renderPage(opts: {
 function renderErrorPage(message: string) {
   return renderBrandedPage({
     title: "FlowDesk &middot; Approval",
-    bodyHtml: `<h1>Approval request</h1><p class="lead">${escapeHtml(message)}</p>`
+    bodyHtml: `${hideTokenScript(null)}<h1>Approval request</h1><p class="lead">${escapeHtml(message)}</p>`
   });
 }
 
@@ -233,6 +251,16 @@ async function buildSummary(docType: EmailActionDocType, docId: string) {
   if (!row) return null;
   return { docLabel: "Standby Claim", requester: row.full_name, amount: row.calculated_amount != null ? Number(row.calculated_amount) : null, status: row.status };
 }
+
+// GET /email-actions/ — where the address bar points once the token has been
+// hidden; reached only by reloading that page.
+emailActionsRouter.get("/", (req, res) => {
+  if (req.accepts(["html", "json"]) !== "html") return res.status(404).json({ error: "Not found" });
+  return res.status(200).type("html").send(renderBrandedPage({
+    title: "FlowDesk &middot; Approval",
+    bodyHtml: `<h1>Approval request</h1><p class="lead">For security, this page can't be reloaded. Open the approval link from your email again, or approve the request in FlowDesk.</p>`
+  }));
+});
 
 // GET /email-actions/:token — safe, read-only. Powers the confirmation page;
 // never mutates anything, so an email link-prefetcher hitting this is harmless.
