@@ -16,6 +16,7 @@ const PENDING_STATUSES = [
 
 const TABS: { key: string; label: string }[] = [
   { key: "ALL", label: "All" },
+  { key: "DRAFT", label: "Draft" },
   { key: "PENDING", label: "Pending" },
   { key: "SETTLED", label: "Settled" },
   { key: "ISSUES", label: "Issues" },
@@ -23,6 +24,7 @@ const TABS: { key: string; label: string }[] = [
 
 function tabStatuses(tab: string) {
   switch (tab) {
+    case "DRAFT": return ["DRAFT"];
     case "PENDING": return PENDING_STATUSES;
     case "SETTLED": return ["SETTLED", "CLOSED", "COMPLETED"];
     case "ISSUES": return ["REJECTED", "PAYBACK_PROOF_REJECTED"];
@@ -177,6 +179,19 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
         </div>
       </div>
 
+      <div className="ep-tabs">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={`ep-tab ${tab === t.key ? "active" : ""}`}
+            onClick={() => { setTab(t.key); setPage(1); }}
+          >
+            {t.label} <span className="ep-tab-count">{tabCounts[t.key]}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="ep-panel">
         <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 18px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 220px" }}>
@@ -197,19 +212,6 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
               Clear
             </button>
           )}
-        </div>
-
-        <div className="flow-tabs">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              className={`flow-tab ${tab === t.key ? "active" : ""}`}
-              onClick={() => { setTab(t.key); setPage(1); }}
-            >
-              {t.label} ({tabCounts[t.key]})
-            </button>
-          ))}
         </div>
 
         <div className="ep-table-wrap">

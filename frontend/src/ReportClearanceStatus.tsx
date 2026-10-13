@@ -316,7 +316,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
         ] as const).map((t) => (
           <button key={t.key} type="button" className={`ep-tab ${statusFilter === t.key ? "active" : ""}`}
             onClick={() => setStatusFilter(t.key)}>
-            {t.label} <span className="inbox-count-chip">{t.count}</span>
+            {t.label} <span className="ep-tab-count">{t.count}</span>
           </button>
         ))}
       </div>

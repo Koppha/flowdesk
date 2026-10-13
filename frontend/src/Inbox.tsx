@@ -904,7 +904,7 @@ export default function Inbox(props: {
                         onClick={() => setDelegationScope(tab.key)}
                       >
                         {tab.label}
-                        <span className="inbox-count-chip">
+                        <span className="ep-tab-count">
                           {tab.key === "ALL" ? items.length : items.filter((it: any) => (tab.key === "DELEGATED") === !!it.is_delegated).length}
                         </span>
                       </button>
@@ -927,7 +927,7 @@ export default function Inbox(props: {
                     >
                       <Icon size={15} aria-hidden />
                       {grouped[docType][0]?.doc_type === "CUSTOM_REQUEST" ? itemTypeLabel(grouped[docType][0] as any) : docTypeLabel(docType)}
-                      <span className="inbox-count-chip">{grouped[docType].length}</span>
+                      <span className="ep-tab-count">{grouped[docType].length}</span>
                     </button>
                   );
                 })}

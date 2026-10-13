@@ -129,6 +129,8 @@ type CustomRequestsHubProps = {
   // Change Request type and pre-fills its "Related BRS" field with this
   // reference, consumed once on mount (see the type/field-loading effects).
   deepLink?: { brsReferenceNo: string } | null;
+  // The process chosen in the sidebar's Custom Processes submenu.
+  typeId?: string | null;
   onDeepLinkConsumed?: () => void;
 };
 
@@ -592,7 +594,7 @@ function computeTableSummary(cfg: TableFieldConfig | null | undefined, rows: Tab
   return { perRow, totals };
 }
 
-export default function CustomRequestsHub({ profile, requestDirectory, onBack, deepLink, onDeepLinkConsumed }: CustomRequestsHubProps) {
+export default function CustomRequestsHub({ profile, requestDirectory, onBack, deepLink, onDeepLinkConsumed, typeId }: CustomRequestsHubProps) {
   const [tab, setTab] = useState<"NEW" | "MINE" | "ASSIGNED" | "SHARED">("NEW");
   const [shared, setShared] = useState<Array<Submission & { requester_name?: string | null; distributed_at?: string; distributed_by_name?: string | null; distribution_message?: string | null }>>([]);
   const [sharedLoading, setSharedLoading] = useState(false);
@@ -705,6 +707,12 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
     }
   }, [tab]);
 
+  // Choosing another process in the sidebar switches this page to it.
+  useEffect(() => {
+    if (typeId && types.some((t) => t.id === typeId)) setSelectedTypeId(typeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typeId]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -722,7 +730,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         // A BRS-originated deep link pre-selects Change Request instead of
         // the first type in the list — read once at mount, same as the
         // field pre-fill below.
-        const preselect = deepLink ? active.find((t) => t.code === "CHANGE_REQUEST") : null;
+        // The sidebar picks the process (typeId); a BRS deep link means
+        // Change Request.
+        const preselect = (typeId ? active.find((t) => t.id === typeId) : null)
+          || (deepLink ? active.find((t) => t.code === "CHANGE_REQUEST") : null);
         setSelectedTypeId((preselect || active[0]).id);
       } catch {
         setError("Failed to load processes.");
@@ -1397,25 +1408,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             <span className="custom-requests-title-icon">
               <ClipboardList size={18} />
             </span>
-            <h2>Custom Processes</h2>
+            <h2>{types.find((t) => t.id === selectedTypeId)?.name || "Custom Processes"}</h2>
           </div>
           <p className="custom-requests-subtitle">
-            Submit any configured process and define who needs to approve it.
+            Custom Processes — choose another process from the sidebar.
           </p>
         </div>
         <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
       </div>
 
-      {types.length > 1 && (
-        <div className="ep-form-group custom-request-type-picker">
-          <label>Process</label>
-          <select className="ep-form-select" value={selectedTypeId || ""} onChange={(e) => setSelectedTypeId(e.target.value)}>
-            {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </div>
-      )}
-
-      <div className="ep-tabs custom-request-tabs">
+      <div className="ep-tabs">
         <a href="#" className={`ep-tab ${tab === "NEW" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("NEW"); }}>
           <FileText size={14} /> New Request
         </a>

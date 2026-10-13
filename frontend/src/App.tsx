@@ -126,7 +126,9 @@ import {
   Smartphone,
   Wifi,
   X,
-  Zap
+  Zap,
+  Laptop,
+  GitPullRequest
 } from "lucide-react";
 
 type ClearanceTripRow = {
@@ -571,9 +573,6 @@ export default function App() {
   const [hasSalariesAccess, setHasSalariesAccess] = useState(false);
   const [salariesCount, setSalariesCount] = useState(0);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
-  const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
-  const [compensationMenuOpen, setCompensationMenuOpen] = useState(false);
-  const [contractsMenuOpen, setContractsMenuOpen] = useState(false);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
   const favoritePagesInitialized = useRef(false);
   const shortcutPickerRef = useRef<HTMLDivElement>(null);
@@ -752,6 +751,19 @@ export default function App() {
   // on mount (pre-selects the Change Request type and pre-fills its
   // "Related BRS" field), then cleared the same way moduleDeepLink is.
   const [changeRequestDeepLink, setChangeRequestDeepLink] = useState<{ brsReferenceNo: string } | null>(null);
+  // Custom Processes submenu: one entry per process the user can submit
+  // (same list the page itself offers - active, not internal like BRS
+  // Approval), and which one is open.
+  const [customProcessTypes, setCustomProcessTypes] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  const [customProcessTypeId, setCustomProcessTypeId] = useState<string | null>(null);
+  // Sidebar groups: open while the current page is inside them, unless the
+  // user clicked the group heading to collapse/expand it - that explicit
+  // choice wins until they navigate to another page.
+  const [groupOverride, setGroupOverride] = useState<Record<string, boolean>>({});
+  const groupOpen = (key: string, inGroup: boolean) => groupOverride[key] ?? inGroup;
+  const toggleGroup = (key: string, inGroup: boolean) =>
+    setGroupOverride((prev) => ({ ...prev, [key]: !(prev[key] ?? inGroup) }));
+  useEffect(() => { setGroupOverride({}); }, [page]);
 
   // The app is a single-page client that switches "pages" via state only, with
   // no URL changes. Without pushing history entries, the browser back button
@@ -1711,6 +1723,11 @@ export default function App() {
     setHotelsTotal(Array.isArray(hotelsResp) ? initialHotels.length : Number(hotelsResp?.total || initialHotels.length));
     setStandbyToday(Array.isArray(standbyResp?.on_standby_today) ? standbyResp.on_standby_today : []);
     setHasActiveCustomRequestTypes(Array.isArray(rtResp) && rtResp.some((rt: any) => rt.status === "ACTIVE"));
+    setCustomProcessTypes(
+      (Array.isArray(rtResp) ? rtResp : [])
+        .filter((rt: any) => rt.status === "ACTIVE" && !rt.is_internal)
+        .map((rt: any) => ({ id: rt.id, name: rt.name, code: rt.code }))
+    );
     // Fetched separately from the big Promise.all above (not woven into its
     // fragile positional destructuring) — BRS is optional, so any failure
     // here should just leave the nav item hidden, never break startup.
@@ -4854,16 +4871,16 @@ export default function App() {
             <h2>FlowDesk</h2>
           </div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
-          <div className={`sidebar-group ${["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${groupOpen("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page)) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page)); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advances <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
+              <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
               <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><CheckCircle2 size={14} aria-hidden />Clearances</a>
-              <a href="#" className={navItemClass(page === "MY_CLEARANCE_STATUS")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCE_STATUS"); }}><BarChart3 size={14} aria-hidden />My Clearance Status</a>
             </div>
           </div>
           {(hasSalariesAccess || ((canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled) || standbyModuleEnabled) && (
-            <div className={`sidebar-group ${(compensationMenuOpen || SALARIES_GROUP_PAGES.includes(page)) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(SALARIES_GROUP_PAGES.includes(page))} onClick={(e) => { e.preventDefault(); setCompensationMenuOpen((v) => !v); }}>
+            <div className={`sidebar-group ${groupOpen("salaries", SALARIES_GROUP_PAGES.includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(SALARIES_GROUP_PAGES.includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("salaries", SALARIES_GROUP_PAGES.includes(page)); }}>
                 <span className="sidebar-nav-icon"><Banknote size={18} aria-hidden /></span>Salaries
                 {salariesCount > 0 && <b>{salariesCount}</b>}
                 <strong><ChevronDown size={14} aria-hidden /></strong>
@@ -4890,13 +4907,42 @@ export default function App() {
               </div>
             </div>
           )}
-          {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Processes</a>}
-          {hasActiveBrsTypes && <a href="#" className={navItemClass(page === "BRS")} onClick={(e) => { e.preventDefault(); setPage("BRS"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>BRS Studio</a>}
+          {(hasActiveCustomRequestTypes || hasActiveBrsTypes) && (
+            <div className={`sidebar-group ${groupOpen("custom", page === "CHANGE_REQUEST" || page === "BRS") ? "open" : ""}`}>
+              <a href="#" className={navItemClass(page === "CHANGE_REQUEST" || page === "BRS")} onClick={(e) => { e.preventDefault(); toggleGroup("custom", page === "CHANGE_REQUEST" || page === "BRS"); }}>
+                <span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Processes
+                <strong><ChevronDown size={14} aria-hidden /></strong>
+              </a>
+              <div className="sidebar-subnav">
+                {customProcessTypes.map((t) => {
+                  const Icon = t.code === "COMPUTER_REQUEST" ? Laptop
+                    : t.code === "CHANGE_REQUEST" ? GitPullRequest
+                    : t.code === "ATTENDANCE_REGISTER" ? CalendarCheck
+                    : FileText;
+                  return (
+                    <a
+                      key={t.id}
+                      href="#"
+                      className={navItemClass(page === "CHANGE_REQUEST" && customProcessTypeId === t.id)}
+                      onClick={(e) => { e.preventDefault(); setCustomProcessTypeId(t.id); setPage("CHANGE_REQUEST"); }}
+                    >
+                      <Icon size={14} aria-hidden />{t.name}
+                    </a>
+                  );
+                })}
+                {hasActiveBrsTypes && (
+                  <a href="#" className={navItemClass(page === "BRS")} onClick={(e) => { e.preventDefault(); setPage("BRS"); }}>
+                    <FileText size={14} aria-hidden />BRS Studio
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
           {signatureModuleEnabled && <a href="#" className={navItemClass(page === "SIGNATURES")} onClick={(e) => { e.preventDefault(); setPage("SIGNATURES"); }}><span className="sidebar-nav-icon"><FileSignature size={18} aria-hidden /></span>Sign a Document</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasRefundableAccess) && (
-            <div className={`sidebar-group ${(financeMenuOpen || ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); setFinanceMenuOpen((v) => !v); }}>
+            <div className={`sidebar-group ${groupOpen("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)); }}>
                 <span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Finance
                 {(() => {
                   // Only sum counts for sub-items this user can actually see below —
@@ -4935,8 +4981,8 @@ export default function App() {
             <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>
           )}
           {(hasVendorContractsAccess || hasServiceContractsAccess) && (
-            <div className={`sidebar-group ${(contractsMenuOpen || ["VENDOR_CONTRACTS", "SERVICE_CONTRACTS"].includes(page)) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(page === "VENDOR_CONTRACTS" || page === "SERVICE_CONTRACTS")} onClick={(e) => { e.preventDefault(); setContractsMenuOpen((v) => !v); }}>
+            <div className={`sidebar-group ${groupOpen("contracts", ["VENDOR_CONTRACTS", "SERVICE_CONTRACTS"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(page === "VENDOR_CONTRACTS" || page === "SERVICE_CONTRACTS")} onClick={(e) => { e.preventDefault(); toggleGroup("contracts", ["VENDOR_CONTRACTS", "SERVICE_CONTRACTS"].includes(page)); }}>
                 <span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Contracts
                 <strong><ChevronDown size={14} aria-hidden /></strong>
               </a>
@@ -4950,8 +4996,8 @@ export default function App() {
               </div>
             </div>
           )}
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${groupOpen("reports", ["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page)) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page))} onClick={(e) => { e.preventDefault(); if (["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page)) toggleGroup("reports", true); else setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               {canAccessFeature("report_advances") && (
                 <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
@@ -4975,8 +5021,8 @@ export default function App() {
           </div>
           <div className="sidebar-section-label">Administration</div>
           {(canAccessFeature("user_management") || canAccessFeature("roles_permissions") || canAccessFeature("manager_delegations") || delegationEligible || role === "ADMIN") && (
-            <div className={`sidebar-group ${["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
+            <div className={`sidebar-group ${groupOpen("users", ["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page))} onClick={(e) => { e.preventDefault(); if (["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page)) toggleGroup("users", true); else setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
               <div className="sidebar-subnav">
                 {canAccessFeature("user_management") && <a href="#" className={navItemClass(page === "USER_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><Users size={14} aria-hidden />Users</a>}
                 {canAccessFeature("roles_permissions") && <a href="#" className={navItemClass(page === "ROLES_PERMISSIONS")} onClick={(e) => { e.preventDefault(); setPage("ROLES_PERMISSIONS"); }}><ShieldCheck size={14} aria-hidden />Roles & Permissions</a>}
@@ -5125,12 +5171,17 @@ export default function App() {
               onBack={() => setPage("HOME")}
               deepLink={changeRequestDeepLink}
               onDeepLinkConsumed={() => setChangeRequestDeepLink(null)}
+              typeId={customProcessTypeId}
             />
           ) : page === "BRS" ? (
             <BrsStudio
               profile={profile}
               onBack={() => setPage("HOME")}
-              onCreateChangeRequest={(doc) => { setChangeRequestDeepLink({ brsReferenceNo: doc.reference_no }); setPage("CHANGE_REQUEST"); }}
+              onCreateChangeRequest={(doc) => {
+                setChangeRequestDeepLink({ brsReferenceNo: doc.reference_no });
+                setCustomProcessTypeId(customProcessTypes.find((t) => t.code === "CHANGE_REQUEST")?.id ?? null);
+                setPage("CHANGE_REQUEST");
+              }}
             />
           ) : page === "BRS_ADMIN" ? (
             <BrsAdmin onBack={() => setPage("HOME")} />
@@ -9388,7 +9439,7 @@ export default function App() {
                     <div style={{ fontWeight: 600, fontSize: 15 }}>Custom Processes</div>
                     <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Submit a change request, attendance register, or other configured process</div>
                   </div>
-                  <button className="button button-primary" onClick={() => setPage("CHANGE_REQUEST")}>Open</button>
+                  <button className="button button-primary" onClick={() => { setCustomProcessTypeId(customProcessTypes[0]?.id ?? null); setPage("CHANGE_REQUEST"); }}>Open</button>
                 </div>
               )}
 

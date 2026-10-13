@@ -665,14 +665,10 @@ export default function ManagersOnboarding() {
       </div>
 
       {/* Tab bar */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "2px solid var(--border)", paddingBottom: 0 }}>
+      <div className="ep-tabs">
         {([["MANAGERS", "Managers"], ["TYPES", "Manager Types"]] as const).map(([tab, label]) => (
-          <button key={tab} type="button" onClick={() => setActiveTab(tab)} style={{
-            padding: "8px 20px", border: "none", borderBottom: activeTab === tab ? "2px solid #1d4ed8" : "2px solid transparent",
-            background: "none", cursor: "pointer", fontWeight: activeTab === tab ? 700 : 500,
-            color: activeTab === tab ? "#1d4ed8" : "var(--muted)", fontSize: 14, marginBottom: -2,
-          }}>
-            {tab === "TYPES" && <Layers size={13} style={{ marginRight: 5, verticalAlign: "middle" }} />}
+          <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`ep-tab ${activeTab === tab ? "active" : ""}`}>
+            {tab === "TYPES" && <Layers size={13} />}
             {label}
           </button>
         ))}

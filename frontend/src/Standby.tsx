@@ -280,7 +280,7 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
       { key: "REPORTS", label: "Reports", icon: FileBarChart, show: role === "ADMIN" || isFinance || isHr }
     ];
     return (
-      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 18, flexWrap: "wrap" }}>
+      <div className="ep-tabs">
         {tabs.filter((t) => t.show).map((t) => (
           <button
             key={t.key}
@@ -294,12 +294,7 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
               if (t.key === "APPROVALS") { void loadApprovals(); void loadCalloutApprovals(); }
               if (t.key === "DASHBOARD") void loadDashboard();
             }}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 13, fontWeight: 600,
-              border: "none", background: "none", cursor: "pointer",
-              color: view === t.key ? "#1d4ed8" : "var(--muted)",
-              borderBottom: view === t.key ? "2px solid #1d4ed8" : "2px solid transparent"
-            }}
+            className={`ep-tab ${view === t.key ? "active" : ""}`}
           >
             <t.icon size={14} aria-hidden />{t.label}
           </button>
@@ -1347,18 +1342,16 @@ function ApprovalsScreen({
 
   return (
     <section className="ep-panel">
-      <div style={{ display: "flex", gap: 4, padding: "0 16px", borderBottom: "1px solid var(--border)" }}>
+      <div className="ep-tabs">
         {(["CLAIMS", "CALLOUTS"] as const).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
-            style={{
-              padding: "10px 14px", fontSize: 13, fontWeight: 600, border: "none", background: "none", cursor: "pointer",
-              color: tab === t ? "#1d4ed8" : "var(--muted)", borderBottom: tab === t ? "2px solid #1d4ed8" : "2px solid transparent"
-            }}
+            className={`ep-tab ${tab === t ? "active" : ""}`}
           >
-            {t === "CLAIMS" ? `Claims (${approvals.length})` : `Call-Outs (${calloutApprovals.length})`}
+            {t === "CLAIMS" ? "Claims" : "Call-Outs"}
+            <span className="ep-tab-count">{t === "CLAIMS" ? approvals.length : calloutApprovals.length}</span>
           </button>
         ))}
       </div>

@@ -568,7 +568,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
         <div className="ep-tabs custom-request-tabs">
           <a href="#" className={`ep-tab ${landingTab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("MINE"); }}>My BRS</a>
           <a href="#" className={`ep-tab ${landingTab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("ASSIGNED"); }}>Assigned to Me</a>
-          <a href="#" className={`ep-tab ${landingTab === "SHARED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("SHARED"); }}>Shared with Me{shared.length ? ` (${shared.length})` : ""}</a>
+          <a href="#" className={`ep-tab ${landingTab === "SHARED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("SHARED"); }}>Shared with Me <span className="ep-tab-count">{shared.length}</span></a>
         </div>
 
         <FinanceFilterBar showReset={landingShowReset} onReset={landingResetFilters} onApply={() => setPage(1)}>

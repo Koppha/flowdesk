@@ -137,7 +137,7 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
       { key: "REPORTS", label: "Reports", icon: FileBarChart, show: role === "ADMIN" || isFinance || isHr }
     ];
     return (
-      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 18, flexWrap: "wrap" }}>
+      <div className="ep-tabs">
         {tabs.filter((t) => t.show).map((t) => (
           <button
             key={t.key}
@@ -148,12 +148,7 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
               if (t.key === "APPROVALS") void loadApprovals();
               if (t.key === "DASHBOARD") void loadDashboard();
             }}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 13, fontWeight: 600,
-              border: "none", background: "none", cursor: "pointer",
-              color: view === t.key ? "#1d4ed8" : "var(--muted)",
-              borderBottom: view === t.key ? "2px solid #1d4ed8" : "2px solid transparent"
-            }}
+            className={`ep-tab ${view === t.key ? "active" : ""}`}
           >
             <t.icon size={14} aria-hidden />{t.label}
           </button>
@@ -297,7 +292,7 @@ function MyRequestsScreen({ requests, onOpen, onNew }: { requests: any[]; onOpen
         <div className="ep-panel-title">My Overtime Requests</div>
         <button className="ep-btn" type="button" onClick={onNew}><Plus size={14} aria-hidden /> New Request</button>
       </div>
-      <div style={{ display: "flex", gap: 4, padding: "0 16px", flexWrap: "wrap" }}>
+      <div className="ep-tabs">
         {REQUEST_STATUS_TABS.map((t) => {
           const count = t.key === "ALL" ? requests.length : requests.filter((r) => r.status === t.key).length;
           return (
@@ -305,12 +300,9 @@ function MyRequestsScreen({ requests, onOpen, onNew }: { requests: any[]; onOpen
               key={t.key}
               type="button"
               onClick={() => setTab(t.key)}
-              style={{
-                padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", background: "none", cursor: "pointer",
-                color: tab === t.key ? "#1d4ed8" : "var(--muted)", borderBottom: tab === t.key ? "2px solid #1d4ed8" : "2px solid transparent"
-              }}
+              className={`ep-tab ${tab === t.key ? "active" : ""}`}
             >
-              {t.label} {count > 0 ? `(${count})` : ""}
+              {t.label} <span className="ep-tab-count">{count}</span>
             </button>
           );
         })}
@@ -925,18 +917,16 @@ function ApprovalsScreen({
 
   return (
     <section className="ep-panel">
-      <div style={{ display: "flex", gap: 4, padding: "0 16px", borderBottom: "1px solid var(--border)" }}>
+      <div className="ep-tabs">
         {(["REQUESTS", "CLAIMS"] as const).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
-            style={{
-              padding: "10px 14px", fontSize: 13, fontWeight: 600, border: "none", background: "none", cursor: "pointer",
-              color: tab === t ? "#1d4ed8" : "var(--muted)", borderBottom: tab === t ? "2px solid #1d4ed8" : "2px solid transparent"
-            }}
+            className={`ep-tab ${tab === t ? "active" : ""}`}
           >
-            {t === "REQUESTS" ? `Requests (${requestApprovals.length})` : `Claims (${claimApprovals.length})`}
+            {t === "REQUESTS" ? "Requests" : "Claims"}
+            <span className="ep-tab-count">{t === "REQUESTS" ? requestApprovals.length : claimApprovals.length}</span>
           </button>
         ))}
       </div>

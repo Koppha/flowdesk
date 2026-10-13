@@ -196,7 +196,7 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
             className={`ep-tab ${tab === t.key ? "active" : ""}`}
             onClick={() => { setTab(t.key); setPage(1); }}
           >
-            {t.label} <span className="inbox-count-chip">{tabCounts[t.key]}</span>
+            {t.label} <span className="ep-tab-count">{tabCounts[t.key]}</span>
           </button>
         ))}
       </div>
