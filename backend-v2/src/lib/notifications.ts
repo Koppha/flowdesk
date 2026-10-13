@@ -812,6 +812,56 @@ export async function notifyAdvanceCancelled(args: {
 
 // ─── notifyClaimTask ──────────────────────────────────────────────────────────
 
+// Returns true when the claim is workflow-routed (so the legacy role lookup
+// must not run), having emailed the current group step's people if any.
+async function notifyWorkflowClaimGroupStep(
+  args: { claimId: string; status: string; claimantName: string | null; isReminder?: boolean },
+  details: string
+): Promise<boolean> {
+  const row = (await query<{ approval_chain: any; workflow_step_order: number | null }>(
+    `SELECT approval_chain, workflow_step_order FROM clearance_claims WHERE id = $1`, [args.claimId]
+  ))[0];
+  const chain = Array.isArray(row?.approval_chain) ? row!.approval_chain : [];
+  if (!chain.length) return false;
+  // Only while it is actually waiting on someone - never for a rejection or
+  // any other end state, which the claimant notices further down cover.
+  const PENDING = ["SUBMITTED", "MANAGER_APPROVED", "EXCO_APPROVED", "HR_OFFICER", "FINANCE_VERIFIED"];
+  if (!PENDING.includes(args.status)) return true;
+  const step = chain[row!.workflow_step_order ?? 0];
+  if (!step?.approval_group_name) return true;
+  try {
+    const { resolveGroupMemberIds } = await import("./workflowEngine.js");
+    const ids: string[] = step.assigned_user_id ? [step.assigned_user_id] : await resolveGroupMemberIds(step.approval_group_name);
+    if (!ids.length) return true;
+    const recipients = await query<{ email: string }>(
+      `SELECT email FROM users WHERE id = ANY($1::uuid[]) AND is_active = true AND email IS NOT NULL`, [ids]
+    );
+    if (!recipients.length) return true;
+    const label = String(step.approval_group_name).replace(/^(Section|Team|Department): /, "");
+    const body = [
+      header(args.isReminder ? `CLEARANCE CLAIM — REMINDER` : `CLEARANCE CLAIM — ACTION REQUIRED`),
+      ``,
+      `Hello,`,
+      ``,
+      `A clearance claim from ${args.claimantName || "an employee"} is waiting for ${label} (${step.position_name || "next step"}).`,
+      ``,
+      details,
+      ``,
+      `Please log in to review and take action on this claim.`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({
+      to: recipients.map((r) => r.email),
+      subject: `[${args.isReminder ? "Reminder" : "Action Required"}] Clearance claim — ${label}`,
+      text: body
+    });
+  } catch (error) {
+    logger.warn("claim_group_step_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+  return true;
+}
+
 export async function notifyClaimTask(args: {
   claimId: string;
   status: string;
@@ -952,6 +1002,17 @@ export async function notifyClaimTask(args: {
     return;
   }
 
+  // ── Workflow-routed claims: the chain says who acts next ────────────────────
+  // Never fall through to the legacy role lookup below for a claim on an
+  // approval chain: it picks recipients by status alone, e.g. emailing the
+  // requester's DIVISION EXCO on "MANAGER_APPROVED" - which sent Puleng
+  // Masoabi Products & Services claims that Ketja Nhlapo owns. With no named
+  // next approver, the current step is a group step (e.g. "Section: Human
+  // Resources Operations"): tell its assigned person, or else its members.
+  // Only the approver lookup is skipped - the claimant notices further down
+  // (rejection, payback, refund...) still go out as before.
+  const workflowRouted = await notifyWorkflowClaimGroupStep(args, details);
+
   // ── Notify approver (legacy role-based recipient lookup) ────────────────────
   let roles: Role[] = [];
   if (args.status === "SUBMITTED")              roles = ["MANAGER"];
@@ -959,6 +1020,7 @@ export async function notifyClaimTask(args: {
   if (args.status === "EXCO_APPROVED")          roles = ["ADMIN"];
   if (args.status === "HR_OFFICER")      roles = ["FINANCE"];
   if (args.status === "FINANCE_VERIFIED")       roles = ["FINANCE"];
+  if (workflowRouted) roles = [];
 
   if (roles.length > 0) {
     try {

@@ -899,7 +899,7 @@ export async function isRoundRobinCandidate(step: ChainStep, userId: string, use
 // section/team join and canApproveStep's HOD/MANAGER exclusion for org-unit
 // groups, so the candidate pool always matches who could actually act on
 // the step.
-async function resolveGroupMemberIds(groupName: string): Promise<string[]> {
+export async function resolveGroupMemberIds(groupName: string): Promise<string[]> {
   const sectionMatch = groupName.startsWith("Section: ") ? groupName.slice("Section: ".length) : null;
   const teamMatch = groupName.startsWith("Team: ") ? groupName.slice("Team: ".length) : null;
   if (!sectionMatch && !teamMatch) return [];
