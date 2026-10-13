@@ -1817,6 +1817,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                             No manager found in the org structure for you — please select your manager manually.
                           </div>
                         )}
+                        {idx > 0 && chain[idx]?.approver_id && chain[idx].approver_id === chain[idx - 1]?.approver_id && (
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, marginLeft: 40 }}>
+                            Same person as the step above — they'll approve once, as {selectedType.fixed_approval_chain![idx - 1].title} &amp; {stepDef.title}.
+                          </div>
+                        )}
                       </div>
                     ))}
                   </>

@@ -628,6 +628,27 @@ export async function resolveWorkflowChain(params: {
     // or a workflow-fixed pick): e.g. a small department with no HOD, whose
     // Manager-tier fallback and whose EXCO are the same one person.
     if ((step.action_type === "APPROVE" || step.action_type === "COUNTER_SIGN") && approverId && approverId === lastApproveApproverId) {
+      // They sign once, at the higher of the two actions: a COUNTER_SIGN
+      // followed by an APPROVE for the same person becomes one APPROVE,
+      // labelled as the approval step (e.g. Ketja Nhlapo approves Products &
+      // Services clearances as its GM - he doesn't merely countersign them
+      // because its missing HOD step fell back to him first).
+      if (step.action_type === "APPROVE") {
+        for (let i = chain.length - 1; i >= 0; i--) {
+          const prev = chain[i];
+          if (prev.action_type !== "APPROVE" && prev.action_type !== "COUNTER_SIGN") continue;
+          if (prev.approver_id === approverId && prev.action_type === "COUNTER_SIGN") {
+            chain[i] = {
+              ...prev,
+              action_type: "APPROVE",
+              position_type_code: code,
+              position_name: step.position_name,
+              final_approval: prev.final_approval || step.is_final_approval
+            };
+          }
+          break;
+        }
+      }
       previousStepPushed = false;
       continue;
     }

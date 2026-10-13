@@ -287,7 +287,22 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
       }
     }
 
-    const chain = chainInput.map((step, idx) => {
+    // The same person on back-to-back steps (e.g. the requester's manager is
+    // also the default IT Manager on a Computer Request) acts once, on one
+    // step carrying both roles ("Requester's Manager & IT Manager") so the
+    // record and PDF still show both were covered. An APPROVE outranks a NOTE.
+    const mergedInput: typeof chainInput = [];
+    for (const step of chainInput) {
+      const prev = mergedInput[mergedInput.length - 1];
+      if (prev && prev.approver_id === step.approver_id) {
+        prev.position_name = `${prev.position_name} & ${step.position_name}`;
+        if (step.decision_type === "APPROVE") prev.decision_type = "APPROVE";
+        continue;
+      }
+      mergedInput.push({ ...step });
+    }
+
+    const chain = mergedInput.map((step, idx) => {
       const approver = approverMap.get(step.approver_id)!;
       return {
         step_order: idx,

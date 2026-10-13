@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { api } from "./api";
 import {
   Monitor, Laptop, Clock, Loader2, PackageCheck, CheckCircle2, Search,
-  ArrowLeft, RefreshCw, Download, HardDrive, ClipboardList, BarChart3, ChevronDown, UserCheck, Plus, Pencil, Users, User, X
+  ArrowLeft, RefreshCw, Download, HardDrive, ClipboardList, BarChart3, ChevronDown, UserCheck, Plus, Pencil, Users, User, X, Package, Wrench, Trash2
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -478,7 +478,8 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
   }
 
   const checklistComplete = checklist.length > 0 && checklist.every((c) => c.checked);
-  const canMarkProvisioned = Boolean(assignedTo) && Boolean(assetNumber.trim()) && checklistComplete;
+  // The checklist is optional - only the device and an officer are required.
+  const canMarkProvisioned = Boolean(assignedTo) && Boolean(assetNumber.trim());
 
   return (
     <>
@@ -597,11 +598,11 @@ function ProvisioningForm({ task, onChange, onReload, saving, setSaving }: {
           <div className="ep-panel-head"><div className="ep-panel-title">Complete Provisioning</div></div>
           <div style={{ padding: "14px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ fontSize: 13, color: "var(--muted)" }}>
-              To finish: capture the device, tick every checklist item as you set the computer up, then mark it provisioned. The employee is emailed to collect it.
+              To finish: capture the device and assign an officer, then mark it provisioned. Ticking the checklist is optional — use it to record what was done. The employee is emailed to collect it.
             </div>
             <ValidationRow ok={Boolean(assetNumber.trim())} label="1. Device captured (asset number)" />
             <ValidationRow ok={Boolean(assignedTo)} label="2. IT officer assigned" />
-            <ValidationRow ok={checklistComplete} label={`3. Provisioning checklist — ${checklist.filter((c) => c.checked).length} of ${checklist.length} done`} />
+            <ValidationRow ok={checklistComplete} label={`Checklist — ${checklist.filter((c) => c.checked).length} of ${checklist.length} done`} />
             <div style={{ marginLeft: 22, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "4px 16px" }}>
                 {checklist.map((c, i) => (
@@ -716,8 +717,11 @@ function AssignmentWizard(props: {
     checklist, onSaveChecklist, software, newSoftware, setNewSoftware, onSaveSoftware,
     saving, onSaveAssignment } = props;
 
+  // Once provisioned, the setup (officer, device, checklist) is the record
+  // of what was issued - shown read-only, never reopened for editing.
+  const locked = !["AWAITING_PROVISIONING", "IN_PROGRESS"].includes(task.status);
   const alreadySet = Boolean(task.assigned_to_id && task.device?.asset_number);
-  const [editing, setEditing] = useState(!alreadySet);
+  const [editing, setEditing] = useState(!alreadySet && !locked);
   const [step, setStep] = useState(0);
   const [furthest, setFurthest] = useState(0);
 
@@ -726,7 +730,9 @@ function AssignmentWizard(props: {
       <div className="ep-panel">
         <div className="ep-panel-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div className="ep-panel-title">Provisioning Setup</div>
-          <button className="ep-btn-outline" onClick={() => { setStep(0); setFurthest(WIZARD_STEPS.length - 1); setEditing(true); }}>Edit</button>
+          {locked
+            ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Locked — provisioned</span>
+            : <button className="ep-btn-outline" onClick={() => { setStep(0); setFurthest(WIZARD_STEPS.length - 1); setEditing(true); }}>Edit</button>}
         </div>
         <div style={{ padding: "14px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Assigned To"><div style={{ fontWeight: 600 }}>{task.assigned_to_name || "—"}</div></Field>
@@ -1384,7 +1390,7 @@ function Inventory({ onBack }: { onBack: () => void }) {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">Inventory</h1>
-          <p className="ep-subtitle">Every computer IT holds or has issued: stock, assigned, in repair and disposed.</p>
+          <p className="ep-subtitle">Every computer IT holds or has issued. Devices issued through a Computer Request are locked; only stock added here can be edited.</p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" onClick={onBack}><ArrowLeft size={14} /> Back</button>
@@ -1394,8 +1400,20 @@ function Inventory({ onBack }: { onBack: () => void }) {
       </div>
 
       <div className="ep-kpi-row">
-        {(["IN_STOCK", "ASSIGNED", "IN_REPAIR", "DISPOSED"] as const).map((st) => (
-          <div key={st} className="ep-kpi" style={{ cursor: "pointer", outline: statusFilter === st ? "2px solid #2563eb" : undefined }} onClick={() => setStatusFilter(statusFilter === st ? "" : st)}>
+        {([
+          ["IN_STOCK", "ep-kpi-blue", <Package size={26} />],
+          ["ASSIGNED", "ep-kpi-green", <UserCheck size={26} />],
+          ["IN_REPAIR", "ep-kpi-gold", <Wrench size={26} />],
+          ["DISPOSED", "ep-kpi-purple", <Trash2 size={26} />]
+        ] as const).map(([st, tone, icon]) => (
+          <div
+            key={st}
+            className={`ep-kpi ${tone}`}
+            style={{ cursor: "pointer", outline: statusFilter === st ? "3px solid rgba(15,23,42,0.35)" : undefined, outlineOffset: 2 }}
+            onClick={() => setStatusFilter(statusFilter === st ? "" : st)}
+            title={statusFilter === st ? "Showing only these — click to clear" : `Show only ${DEVICE_STATUS_LABEL[st].toLowerCase()} devices`}
+          >
+            <div className="ep-kpi-icon">{icon}</div>
             <div><div className="ep-kpi-value">{counts[st] || 0}</div><div className="ep-kpi-label">{DEVICE_STATUS_LABEL[st]}</div></div>
           </div>
         ))}
@@ -1444,8 +1462,8 @@ function Inventory({ onBack }: { onBack: () => void }) {
       )}
 
       <div className="ep-panel" style={{ marginBottom: 14 }}>
-        <div style={{ padding: "14px 20px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <div className="ep-search" style={{ flex: "1 1 220px", maxWidth: 320 }}>
+        <div className="ep-filter-bar" style={{ padding: "14px 20px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div className="ep-search" style={{ flex: "1 1 220px" }}>
             <Search size={14} />
             <input placeholder="Search asset, serial, model, employee…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
@@ -1456,6 +1474,9 @@ function Inventory({ onBack }: { onBack: () => void }) {
           <select className="ep-form-select" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
             <option value="">All Types</option><option value="LAPTOP">Laptop</option><option value="DESKTOP">Desktop</option>
           </select>
+          {(search || statusFilter || typeFilter) && (
+            <button className="ep-btn-outline" onClick={() => { setSearch(""); setStatusFilter(""); setTypeFilter(""); }}>Clear</button>
+          )}
         </div>
       </div>
       <div className="ep-panel">
@@ -1478,7 +1499,15 @@ function Inventory({ onBack }: { onBack: () => void }) {
                     <td style={{ fontSize: 13 }}>{d.assigned_user_name || "—"}{d.assigned_user_department ? <div style={{ fontSize: 11, color: "var(--muted)" }}>{d.assigned_user_department}</div> : null}</td>
                     <td style={{ fontSize: 13 }}>{d.location || "—"}</td>
                     <td style={{ fontSize: 13 }}>{fmtDate(d.warranty_expiry)}</td>
-                    <td><button className="ep-btn-outline" style={{ padding: "3px 8px" }} onClick={() => openEdit(d)}><Pencil size={13} /> Edit</button></td>
+                    <td>
+                      {d.provisioned_submission_id ? (
+                        <span style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }} title="Issued through a Computer Request — it only changes through that process">
+                          CR-{String(d.provisioned_submission_id).slice(0, 8).toUpperCase()}
+                        </span>
+                      ) : (
+                        <button className="ep-btn-outline" style={{ padding: "3px 8px" }} onClick={() => openEdit(d)}><Pencil size={13} /> Edit</button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

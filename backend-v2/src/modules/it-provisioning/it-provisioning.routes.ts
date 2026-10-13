@@ -166,9 +166,13 @@ itProvisioningRouter.get("/", async (req: AuthedRequest, res, next) => {
 itProvisioningRouter.get("/devices", async (_req: AuthedRequest, res, next) => {
   try {
     const rows = await query<any>(
-      `SELECT d.*, u.full_name AS assigned_user_name, u.department AS assigned_user_department
+      `SELECT d.*, u.full_name AS assigned_user_name, u.department AS assigned_user_department,
+              t.submission_id AS provisioned_submission_id, t.status AS provisioning_status
          FROM it_devices d
          LEFT JOIN users u ON u.id = d.assigned_user_id
+         LEFT JOIN LATERAL (
+           SELECT submission_id, status FROM it_provisioning_tasks WHERE device_id = d.id ORDER BY created_at DESC LIMIT 1
+         ) t ON true
         ORDER BY d.created_at DESC`
     );
     return res.json({ items: rows });
@@ -222,6 +226,13 @@ itProvisioningRouter.post("/devices", async (req: AuthedRequest, res, next) => {
 
 itProvisioningRouter.put("/devices/:deviceId", async (req: AuthedRequest, res, next) => {
   try {
+    // A device issued through a Computer Request is the record of that
+    // request - it only changes through the process (the request itself, or
+    // a later replacement's disposition), never by hand in the inventory.
+    const linked = (await query<{ submission_id: string }>(
+      `SELECT submission_id FROM it_provisioning_tasks WHERE device_id = $1 LIMIT 1`, [req.params.deviceId]
+    ))[0];
+    if (linked) throw badRequest("This device was issued through a Computer Request and can't be edited here");
     const parsed = InventoryDeviceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid device", parsed.error.flatten());
     const params = [...deviceParams(parsed.data), req.params.deviceId];
@@ -604,6 +615,9 @@ const DeviceSchema = z.object({
 itProvisioningRouter.put("/:id/device", async (req: AuthedRequest, res, next) => {
   try {
     const task = await getTaskOr404(req.params.id);
+    if (!["AWAITING_PROVISIONING", "IN_PROGRESS"].includes(task.status)) {
+      throw badRequest("This computer has already been provisioned - its device details are locked");
+    }
     const parsed = DeviceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
 
@@ -722,9 +736,9 @@ itProvisioningRouter.put("/:id/upgrade-details", async (req: AuthedRequest, res,
   }
 });
 
-// POST /:id/mark-provisioned — validated: needs an assigned IT Officer, a
-// captured device (asset + serial number), and every checklist item ticked
-// before this is allowed, matching the spec's "Provisioning Validation" gate.
+// POST /:id/mark-provisioned — needs an assigned IT Officer and a captured
+// device. The checklist is a record of what was done, not a gate: it no
+// longer has to be complete first.
 itProvisioningRouter.post("/:id/mark-provisioned", async (req: AuthedRequest, res, next) => {
   try {
     const task = await getTaskOr404(req.params.id);
@@ -733,9 +747,6 @@ itProvisioningRouter.post("/:id/mark-provisioned", async (req: AuthedRequest, re
     }
     if (!task.assigned_to_id) throw badRequest("Assign an IT Officer before marking as provisioned");
     if (!task.asset_number) throw badRequest("Capture the device's asset number and serial number before marking as provisioned");
-    const checklist = (task.checklist || []) as Array<{ label: string; checked: boolean }>;
-    const incomplete = checklist.filter((c) => !c.checked);
-    if (incomplete.length) throw badRequest(`Complete the provisioning checklist first (${incomplete.length} item${incomplete.length === 1 ? "" : "s"} outstanding)`);
 
     // Provisioned means ready: the requester is told to collect straight away.
     await query(
