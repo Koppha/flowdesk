@@ -1791,7 +1791,20 @@ authRouter.put("/users/:id", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (r
     const values: any[] = [];
     let idx = 1;
     if (parsed.data.full_name !== undefined) { fields.push(`full_name=$${idx++}`); values.push(parsed.data.full_name); }
-    if (parsed.data.email !== undefined) { fields.push(`email=$${idx++}`); values.push(normalizeEmailForStorage(parsed.data.email)); }
+    if (parsed.data.email !== undefined) {
+      // email is UNIQUE - check first so a clash (often a duplicate account
+      // auto-created by an AD login under the new address) is a clear 400,
+      // not a constraint-violation 500.
+      const email = normalizeEmailForStorage(parsed.data.email);
+      const clash = await query<{ full_name: string | null; is_active: boolean }>(
+        `SELECT full_name, is_active FROM users WHERE lower(email)=lower($1) AND id<>$2 LIMIT 1`, [email, req.params.id]
+      );
+      if (clash[0]) {
+        const who = clash[0].full_name ? ` (${clash[0].full_name}${clash[0].is_active ? "" : ", deactivated"})` : "";
+        throw badRequest(`Another user account${who} already uses ${email}. Remove or rename that account first.`);
+      }
+      fields.push(`email=$${idx++}`); values.push(email);
+    }
     // employee_no is UNIQUE - an empty string (rather than null) collides
     // with every other blank-employee_no user on the second such save, so
     // normalize blank to null the same way user creation already does.
@@ -1934,53 +1947,61 @@ authRouter.delete("/users/:id/permanent", requireRole(["ADMIN"]), async (req: Au
       ["overtime_requests", "employee_id = $1 OR created_by_id = $1"],
       ["overtime_claims", "employee_id = $1 OR created_by_id = $1"]
     ];
+    // Every other FK to users that won't clear itself on delete (NO ACTION /
+    // RESTRICT), read from the catalog so new tables are covered automatically.
+    const refs = await query<{ tbl: string; col: string; not_null: boolean }>(
+      `SELECT c.conrelid::regclass::text AS tbl, a.attname AS col, a.attnotnull AS not_null
+         FROM pg_constraint c
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+        WHERE c.contype = 'f' AND c.confrelid = 'users'::regclass
+          AND c.confdeltype IN ('a', 'r') AND array_length(c.conkey, 1) = 1`
+    );
+    // Operational artifacts (no history value) - safe to drop outright.
+    const disposable = new Set(["email_action_tokens", "manager_delegations", "tour_progress", "mobile_app_events", "user_saved_signatures"]);
+    const quote = (name: string) => name.split(".").map((part) => `"${part.replace(/"/g, "")}"`).join(".");
+
     const found: string[] = [];
-    for (const [table, where] of blockers) {
+    const addBlocker = async (table: string, where: string) => {
       const rows = await query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table} WHERE ${where}`, [id]);
       if (Number(rows[0].n) > 0) found.push(`${table.replace(/_/g, " ")} (${rows[0].n})`);
+    };
+    for (const [table, where] of blockers) await addBlocker(table, where);
+    // A NOT NULL reference can't be cleared without destroying the parent row,
+    // so it blocks the delete just like the curated list above.
+    const curated = new Set(blockers.map(([table]) => table));
+    const notNullByTable = new Map<string, string[]>();
+    for (const ref of refs) {
+      if (!ref.not_null || disposable.has(ref.tbl) || curated.has(ref.tbl)) continue;
+      notNullByTable.set(ref.tbl, [...(notNullByTable.get(ref.tbl) ?? []), ref.col]);
+    }
+    for (const [table, cols] of notNullByTable) {
+      await addBlocker(quote(table), cols.map((col) => `"${col}" = $1`).join(" OR "));
     }
     if (found.length) {
-      throw badRequest(`This user has records that can't be permanently deleted: ${found.join(", ")}. Deactivate the user instead to preserve history.`);
+      throw badRequest(`This user has records that can't be permanently deleted: ${found.map((f) => f.replace(/"/g, "")).join(", ")}. Deactivate the user instead to preserve history.`);
     }
 
-    // Nullable references that don't auto-clear on delete (NO ACTION) — set
-    // them to NULL so the user row can be removed without losing the parent rows.
-    const nullables: Array<[string, string[]]> = [
-      ["accommodation_hotels", ["created_by_id"]],
-      ["accommodation_requests", ["quotation_uploaded_by_id"]],
-      ["advance_requests", ["created_by_id"]],
-      ["audit_log", ["actor_id"]],
-      ["clearance_claims", ["assignee_user_id"]],
-      ["custom_request_attachments", ["uploaded_by_id"]],
-      ["custom_request_types", ["created_by_id"]],
-      ["departments", ["exco_user_id", "hod_user_id", "manager_user_id"]],
-      ["overtime_claims", ["manager_authorised_by_id"]],
-      ["overtime_requests", ["cto_approved_by_id", "hod_approved_by_id", "rejected_by_id", "supervisor_approved_by_id"]],
-      ["position_vacancies", ["created_by_id", "filled_by_user_id"]],
-      ["reporting_lines", ["created_by_id", "manager_id"]],
-      ["request_type_permissions", ["created_by_id"]],
-      ["sections", ["exco_user_id", "hod_user_id", "manager_user_id"]],
-      ["teams", ["leader_user_id"]],
-      ["travel_locations", ["created_by_id"]],
-      ["travel_types", ["created_by_id"]],
-      ["workflow_rules", ["additional_assigned_user_id"]],
-      ["workflow_steps", ["assigned_user_id"]],
-      ["workflows", ["created_by_id"]]
-    ];
+    // Remaining nullable references - set them to NULL so the user row can be
+    // removed without losing the parent rows.
+    const nullables = new Map<string, string[]>();
+    for (const ref of refs) {
+      if (ref.not_null || disposable.has(ref.tbl)) continue;
+      nullables.set(ref.tbl, [...(nullables.get(ref.tbl) ?? []), ref.col]);
+    }
 
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      // Operational artifacts (no history value) — safe to drop outright.
-      await client.query(`DELETE FROM email_action_tokens WHERE user_id=$1`, [id]);
-      await client.query(`DELETE FROM manager_delegations WHERE manager_id=$1 OR delegate_id=$1`, [id]);
-      for (const [table, cols] of nullables) {
-        const sets = cols.map((col) => `${col} = NULL`).join(", ");
-        const where = cols.map((col) => `${col} = $1`).join(" OR ");
-        await client.query(`UPDATE ${table} SET ${sets} WHERE ${where}`, [id]);
+      for (const ref of refs) {
+        if (disposable.has(ref.tbl)) await client.query(`DELETE FROM ${quote(ref.tbl)} WHERE "${ref.col}"=$1`, [id]);
       }
-      // CASCADE FKs (reporting_lines.employee_id, request_type_permissions.user_id,
-      // user_permission_groups.user_id) are removed automatically.
+      for (const [table, cols] of nullables) {
+        const sets = cols.map((col) => `"${col}" = CASE WHEN "${col}" = $1 THEN NULL ELSE "${col}" END`).join(", ");
+        const where = cols.map((col) => `"${col}" = $1`).join(" OR ");
+        await client.query(`UPDATE ${quote(table)} SET ${sets} WHERE ${where}`, [id]);
+      }
+      // CASCADE / SET NULL FKs (reporting_lines.employee_id, user_permission_groups.user_id, ...)
+      // are handled by Postgres itself.
       await client.query(`DELETE FROM users WHERE id=$1`, [id]);
       await client.query("COMMIT");
     } catch (e) {
