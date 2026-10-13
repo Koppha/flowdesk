@@ -65,8 +65,18 @@ function mapTravelType(row: TravelTypeRow & { locations?: TravelLocationRow[] })
 }
 
 export async function ensureTravelSchema() {
-  await query(`ALTER TABLE advance_requests ALTER COLUMN type DROP DEFAULT`);
-  await query(`ALTER TABLE advance_requests ALTER COLUMN type TYPE text USING type::text`);
+  // Guarded rather than run unconditionally on every boot: once this column
+  // is already text, re-running the ALTER (even to the same type) is
+  // rejected by Postgres if anything now depends on it - e.g.
+  // reporting_advances_flat (see reporting.schema.ts), which selects this
+  // column directly. Only ever needs to run once per environment.
+  const [current] = await query<{ data_type: string }>(
+    `SELECT data_type FROM information_schema.columns WHERE table_name = 'advance_requests' AND column_name = 'type'`
+  );
+  if (current?.data_type !== "text") {
+    await query(`ALTER TABLE advance_requests ALTER COLUMN type DROP DEFAULT`);
+    await query(`ALTER TABLE advance_requests ALTER COLUMN type TYPE text USING type::text`);
+  }
   await query(`ALTER TABLE advance_lines ADD COLUMN IF NOT EXISTS travel_meta jsonb NOT NULL DEFAULT '{}'::jsonb`);
   await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS country text`);
   await query(`ALTER TABLE accommodation_hotels ADD COLUMN IF NOT EXISTS province text`);
@@ -205,6 +215,26 @@ export async function assertPaybackMonthsAllowed(type: string, months: number | 
     throw badRequest(`Payback duration cannot exceed ${max} month${max === 1 ? "" : "s"}`);
   }
   return months as number;
+}
+
+// SALARY only - admin sets which day of the month a Salary Advance FOR
+// that same calendar month opens on (e.g. 5 - "you can apply for
+// September after the 5th of September"), via
+// SYSTEM_SETTING_KEYS.salaryAdvanceApplicationOpenDay (default 1, i.e. no
+// restriction). Only gates a request whose own Salary Month is the
+// current calendar month - applying for a past or future month is never
+// restricted by this setting.
+export async function assertSalaryMonthWindowAllowed(type: string, salaryMonth: string | undefined) {
+  if (normalizeTravelCode(type) !== "SALARY") return;
+  if (!salaryMonth) return;
+  const openDay = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceApplicationOpenDay, 1);
+  if (openDay <= 1) return;
+  const today = new Date();
+  const currentMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  if (salaryMonth.slice(0, 7) !== currentMonth) return;
+  if (today.getDate() < openDay) {
+    throw badRequest(`Salary Advance requests for the current month open on day ${openDay} - please try again then, or pick a different month.`);
+  }
 }
 
 export async function getTravelRateForCode(code: string, requesterRole?: string | null) {

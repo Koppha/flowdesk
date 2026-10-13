@@ -23,6 +23,15 @@ export const SOUTH_AFRICA_PROVINCES = [
   "Western Cape"
 ] as const;
 
+// The Common Monetary Area - the real-world currency union underlying the
+// "CMA" travel advance type.
+export const CMA_COUNTRIES = [
+  "South Africa",
+  "Namibia",
+  "Eswatini",
+  "Lesotho"
+] as const;
+
 export type TravelLocationMode = "DISTRICT" | "COUNTRY_CITY";
 export type TravelRateKind = "MEAL" | "DAILY";
 
@@ -47,11 +56,12 @@ export function getCurrencySymbol(code?: string | null): string {
 
 // Lets an employee file a request for a trip they already took (requested
 // late instead of in advance) - a trip/departure date can be up to this many
-// days in the past, matching the backend's own BACKDATE_GRACE_DAYS.
-export const BACKDATE_GRACE_DAYS = 14;
-export function earliestAllowedTripDate(): string {
+// days in the past. Admin-configurable from Travel Setup (api.travelSettings());
+// this default only applies before that setting has loaded.
+export const DEFAULT_BACKDATE_GRACE_DAYS = 14;
+export function earliestAllowedTripDate(graceDays: number = DEFAULT_BACKDATE_GRACE_DAYS): string {
   const d = new Date();
-  d.setDate(d.getDate() - BACKDATE_GRACE_DAYS);
+  d.setDate(d.getDate() - graceDays);
   return d.toISOString().slice(0, 10);
 }
 

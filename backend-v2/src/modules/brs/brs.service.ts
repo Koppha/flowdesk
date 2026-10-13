@@ -121,3 +121,43 @@ export async function returnBrsDocumentToDraft(
     comment
   });
 }
+
+// Called when the REQUESTER themselves decides to go back and fix content
+// or the approval chain, rather than waiting for an approver to reject it.
+// Unlike returnBrsDocumentToDraft (which leaves section content untouched
+// because the approval chain rejecting it is itself already terminal), this
+// also has to actively withdraw any approval routing still in flight - the
+// document is jumping back to Draft on its own initiative, so any approvals
+// already given are discarded along with it, and any section a contributor
+// had locked in as SUBMITTED is reopened for editing (otherwise going back
+// to Draft/Department Input would still render it permanently read-only).
+export async function reopenBrsDocumentForEditing(
+  documentId: string,
+  comment: string | null,
+  _reopenedBy: string | null
+): Promise<void> {
+  const doc = (await query<{ id: string; brs_approval_submission_id: string | null }>(
+    `SELECT id, brs_approval_submission_id FROM brs_documents WHERE id = $1`, [documentId]
+  ))[0];
+  if (!doc) return;
+
+  if (doc.brs_approval_submission_id) {
+    await query(
+      `UPDATE custom_request_submissions
+          SET status = 'CANCELLED', cancel_comment = $1, cancelled_at = now(), updated_at = now()
+        WHERE id = $2 AND status = 'IN_PROGRESS'`,
+      [comment || "Reopened by requester for further edits", doc.brs_approval_submission_id]
+    );
+  }
+
+  await query(
+    `UPDATE brs_document_sections SET status = 'IN_PROGRESS', updated_at = now()
+      WHERE document_id = $1 AND status = 'SUBMITTED'`,
+    [documentId]
+  );
+
+  await query(
+    `UPDATE brs_documents SET phase = 'DRAFT', return_comment = $1, brs_approval_submission_id = NULL, updated_at = now() WHERE id = $2`,
+    [comment, documentId]
+  );
+}

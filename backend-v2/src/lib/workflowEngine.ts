@@ -266,7 +266,16 @@ export async function resolveWorkflowChain(params: {
         -- through blank.
         AND (w.team IS NULL OR trim(w.team) = '' OR lower(trim(w.team)) = lower(trim($7)))
         AND (
-          w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = ''
+          -- A blank/unrestricted sub-type is meant as "matches any TRAVEL
+          -- type" (same intent as the explicit "TRAVEL" catch-all below) -
+          -- SALARY/LOAN are reserved types that must never fall through to
+          -- a workflow that never actually accounted for them, no matter
+          -- how specifically scoped that workflow otherwise is. Without
+          -- this, a department-scoped ordinary travel workflow (no
+          -- sub-type restriction) outranked the dedicated, company-wide
+          -- Salary Advance workflow purely on scope tier, routing salary
+          -- advances through a travel approval/capture/payment chain.
+          ((w.advance_sub_type IS NULL OR trim(w.advance_sub_type) = '') AND upper(trim($4)) NOT IN ('SALARY','LOAN'))
           OR ($4 <> '' AND lower(trim(w.advance_sub_type)) = lower(trim($4)))
           -- "TRAVEL" sub-type covers all travel advance types (anything other than SALARY/LOAN)
           OR ($4 <> '' AND lower(trim(w.advance_sub_type)) = 'travel' AND upper(trim($4)) NOT IN ('SALARY','LOAN'))
@@ -412,15 +421,20 @@ export async function resolveWorkflowChain(params: {
   // requesterManager earlier in this chain - a later dynamic HOD step must
   // not resolve to that same person again (see secondLevelManager below).
   let dynamicManagerAlreadyResolved = false;
-  // The most recently pushed real APPROVE step's approver - lets the next
-  // APPROVE step (regardless of tier: dynamic Manager/HOD, dept EXCO, or a
-  // workflow-fixed pick) skip itself if it resolves to that same person,
-  // rather than asking them to approve the same request twice in a row
-  // (see approvalProgressStages in Inbox.tsx, which already only tracks
-  // APPROVE steps for exactly this reason). Only tracked across APPROVE
-  // steps - a DEPT_CAPTURE/MARK_PAID/DEPT_CLOSE step by the same person
-  // right after their own approval is a distinct real action, not a
-  // repeated decision, so it's left alone.
+  // The most recently pushed APPROVE or COUNTER_SIGN step's approver - lets
+  // the next APPROVE/COUNTER_SIGN step (regardless of tier: dynamic
+  // Manager/HOD, dept EXCO, or a workflow-fixed pick) skip itself if it
+  // resolves to that same person, rather than asking them to sign off on
+  // the same request twice in a row. Covers both action types - not just
+  // APPROVE - because a HOD-tier COUNTER_SIGN step immediately followed by
+  // an EXCO-tier APPROVE step is the same redundancy (a real incident: a
+  // department with no HOD assigned falls back its HOD step to the same
+  // EXCO member its EXCO step already resolves to, putting one person on
+  // two consecutive steps with different labels but an identical decision).
+  // Only tracked across these two "personal sign-off" types - a
+  // DEPT_CAPTURE/MARK_PAID/DEPT_CLOSE step by the same person right after
+  // their own approval is a distinct real action, not a repeated decision,
+  // so it's left alone.
   let lastApproveApproverId: string | null = null;
   let secondLevelManager: Awaited<ReturnType<typeof resolveRequesterManager>> | undefined;
   for (const step of steps) {
@@ -457,6 +471,20 @@ export async function resolveWorkflowChain(params: {
     const isDeptHodCode = code === "HOD" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const hasFixedAssignees = !!step.assigned_user_ids?.length;
 
+    // A requester who already sits at HOD tier or above (HOD/EXCO/CEO/ADMIN)
+    // structurally has no "Manager" above them - resolveRequesterManager
+    // returning nobody for them is expected, not a data gap to flag for
+    // manual review (unlike the same null result for a plain EMPLOYEE/
+    // MANAGER-role requester, which almost always means their reporting
+    // line genuinely hasn't been set up yet and should keep blocking).
+    // Skip the step outright, the same way the EXCO/CEO self-approval
+    // guards above bypass a step that can't meaningfully apply to this
+    // requester - regardless of this step's own skip_if_unassigned flag.
+    if (isDeptManagerCode && !requesterManager && ["HOD", "EXCO", "CEO", "ADMIN"].includes(requesterRole)) {
+      previousStepPushed = false;
+      continue;
+    }
+
     const isDynamicCeoCode = code === "CEO" && !hasFixedAssignees;
     // The CEO submitting their own request would otherwise resolve this
     // step back to themselves - same self-approval guard as the EXCO one
@@ -471,6 +499,42 @@ export async function resolveWorkflowChain(params: {
     if (isDeptHodCode && dynamicManagerAlreadyResolved && requesterManager && requesterHod?.id === requesterManager.id) {
       if (secondLevelManager === undefined) secondLevelManager = await resolveRequesterManager(requesterHod.id);
       hodManager = secondLevelManager;
+    }
+    // Same reasoning as the MANAGER guard above, one tier up: an EXCO/CEO/
+    // ADMIN requester structurally has no HOD above them either.
+    if (isDeptHodCode && !hodManager && ["EXCO", "CEO", "ADMIN"].includes(requesterRole)) {
+      previousStepPushed = false;
+      continue;
+    }
+
+    // A step fixed to a specific ORG UNIT's position, independent of the
+    // requester's own placement (e.g. "whoever is Manager of the Human
+    // Resources Operations section", for a workflow whose approver has
+    // nothing to do with where the requester themselves sits - the Salary
+    // Advance workflow, for one). The target section/department name is
+    // carried in step.approval_group_name (plain name, no "Section: "/
+    // "Department: " prefix - that prefix is the unrelated ANY_ONE
+    // org-unit-membership group convention). Resolved fresh per step
+    // (unlike deptExco/ceo above, this isn't the same lookup for every
+    // step in the chain) and live every time a request using this workflow
+    // is created, so whoever currently holds the position is picked up
+    // automatically. Everyone who holds it is included (approver_ids can
+    // carry more than one, see canApproveStep) - not just one arbitrarily
+    // picked person - unless the requester themselves is among them, in
+    // which case they're excluded the same way the EXCO/CEO self-approval
+    // guards above exclude a requester from approving their own request.
+    const isFixedSectionManagerCode = code === "FIXED_SECTION_MANAGER";
+    const isFixedDeptExcoCode = code === "FIXED_DEPT_EXCO";
+    let fixedSectionManagers: { id: string; full_name: string | null; title: string | null; email: string | null }[] = [];
+    let fixedDeptExcos: { id: string; full_name: string | null; title: string | null; email: string | null }[] = [];
+    if (isFixedSectionManagerCode && step.approval_group_name) {
+      const sectionRow = (await query<{ id: string }>(`SELECT id FROM sections WHERE lower(trim(name)) = lower(trim($1))`, [step.approval_group_name]))[0];
+      const leadership = sectionRow ? await getSectionLeadership(sectionRow.id) : null;
+      fixedSectionManagers = (leadership?.managers ?? []).filter((m) => m.id !== requesterId);
+    }
+    if (isFixedDeptExcoCode && step.approval_group_name) {
+      const leadership = await getDepartmentLeadership(step.approval_group_name);
+      fixedDeptExcos = (leadership?.excos ?? []).filter((m) => m.id !== requesterId);
     }
 
     // A step whose approver is a FIXED, single named pick in the workflow
@@ -488,6 +552,8 @@ export async function resolveWorkflowChain(params: {
     const approverIds: string[] =
       override               ? (override.id ? [override.id] : []) :
       hasFixedAssignees      ? step.assigned_user_ids! :
+      isFixedSectionManagerCode ? fixedSectionManagers.map((m) => m.id) :
+      isFixedDeptExcoCode     ? fixedDeptExcos.map((m) => m.id) :
       isHrCode               ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : []) :
       isDeptExcoCode          ? (deptExco?.id ? [deptExco.id] : []) :
       isDeptManagerCode       ? (requesterManager?.id ? [requesterManager.id] : []) :
@@ -497,9 +563,14 @@ export async function resolveWorkflowChain(params: {
     const approverId = approverIds[0] ?? null;
     if (isDeptManagerCode && approverId) dynamicManagerAlreadyResolved = true;
 
+    // Section/department leadership can genuinely be more than one person
+    // (see fixedSectionManagers/fixedDeptExcos above) - joined the same way
+    // the fixed-assignee path already joins multiple names.
     const approverName =
       override               ? override.full_name :
       hasFixedAssignees      ? approverIds.map((id) => assignedUserMap.get(id)?.full_name || assignedUserMap.get(id)?.email).filter(Boolean).join(", ") || null :
+      isFixedSectionManagerCode ? fixedSectionManagers.map((m) => m.full_name).filter(Boolean).join(", ") || null :
+      isFixedDeptExcoCode     ? fixedDeptExcos.map((m) => m.full_name).filter(Boolean).join(", ") || null :
       isHrCode               ? (hrLeadership?.hod_name ?? hrLeadership?.manager_name ?? null) :
       isDeptExcoCode          ? (deptExco?.full_name ?? null) :
       isDeptManagerCode       ? (requesterManager?.full_name ?? null) :
@@ -510,6 +581,8 @@ export async function resolveWorkflowChain(params: {
     const approverTitle =
       override               ? override.title :
       hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.title ?? null) :
+      isFixedSectionManagerCode ? (fixedSectionManagers[0]?.title ?? null) :
+      isFixedDeptExcoCode     ? (fixedDeptExcos[0]?.title ?? null) :
       isHrCode               ? (hrLeadership?.hod_title ?? hrLeadership?.manager_title ?? null) :
       isDeptExcoCode          ? (deptExco?.title ?? null) :
       isDeptManagerCode       ? (requesterManager?.title ?? null) :
@@ -520,6 +593,8 @@ export async function resolveWorkflowChain(params: {
     const approverEmail =
       override               ? override.email :
       hasFixedAssignees      ? (assignedUserMap.get(approverId || "")?.email ?? null) :
+      isFixedSectionManagerCode ? (fixedSectionManagers[0]?.email ?? null) :
+      isFixedDeptExcoCode     ? (fixedDeptExcos[0]?.email ?? null) :
       isHrCode               ? (hrLeadership?.hod_email ?? hrLeadership?.manager_email ?? null) :
       isDeptExcoCode          ? (deptExco?.email ?? null) :
       isDeptManagerCode       ? (requesterManager?.email ?? null) :
@@ -531,7 +606,7 @@ export async function resolveWorkflowChain(params: {
     // review. Applies regardless of how each side resolved (dynamic lookup
     // or a workflow-fixed pick): e.g. a small department with no HOD, whose
     // Manager-tier fallback and whose EXCO are the same one person.
-    if (step.action_type === "APPROVE" && approverId && approverId === lastApproveApproverId) {
+    if ((step.action_type === "APPROVE" || step.action_type === "COUNTER_SIGN") && approverId && approverId === lastApproveApproverId) {
       previousStepPushed = false;
       continue;
     }
@@ -544,8 +619,9 @@ export async function resolveWorkflowChain(params: {
     const positionLabel = step.position_name;
 
     // Per-person contact details, in the same order as approverIds — the
-    // fixed-assignee path can have more than one; every other path resolves
-    // to at most one person, reusing the single name/title/email already computed.
+    // fixed-assignee and fixed-org-unit paths can have more than one; every
+    // other path resolves to at most one person, reusing the single
+    // name/title/email already computed.
     const approvers = hasFixedAssignees
       ? approverIds.map((id) => ({
           id,
@@ -553,6 +629,10 @@ export async function resolveWorkflowChain(params: {
           email: assignedUserMap.get(id)?.email ?? null,
           title: assignedUserMap.get(id)?.title ?? null
         }))
+      : isFixedSectionManagerCode
+      ? fixedSectionManagers.map((m) => ({ id: m.id, name: m.full_name, email: m.email, title: m.title }))
+      : isFixedDeptExcoCode
+      ? fixedDeptExcos.map((m) => ({ id: m.id, name: m.full_name, email: m.email, title: m.title }))
       : approverId
       ? [{ id: approverId, name: approverName ?? null, email: approverEmail ?? null, title: approverTitle ?? null }]
       : [];
@@ -605,7 +685,7 @@ export async function resolveWorkflowChain(params: {
       assigned_user_id: assignedUserId
     });
     previousStepPushed = true;
-    if (step.action_type === "APPROVE") lastApproveApproverId = approverId;
+    if (step.action_type === "APPROVE" || step.action_type === "COUNTER_SIGN") lastApproveApproverId = approverId;
   }
 
   return { workflowId: (workflow as any).id, chain };

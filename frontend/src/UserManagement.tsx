@@ -3,7 +3,7 @@ import { api } from "./api";
 import { confirmAction } from "./alerts";
 import { useEmploymentTypes, refreshEmploymentTypes, type EmploymentType } from "./useEmploymentTypes";
 import {
-  Edit3, Mail, Plus, RefreshCw, Search, Trash2, Users, X,
+  ChevronLeft, ChevronRight, Edit3, Mail, Plus, RefreshCw, Search, Trash2, Users, X,
 } from "lucide-react";
 import OrgPicker, { type OrgSelection, orgSelectionFromUser } from "./OrgPicker";
 import { roleLabel } from "./roles";
@@ -101,6 +101,10 @@ export default function UserManagement() {
   const [divFilter, setDivFilter]   = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
   // Add modal
   const [showAdd, setShowAdd]   = useState(false);
   const [addFirst, setAddFirst] = useState("");
@@ -187,6 +191,16 @@ export default function UserManagement() {
     return [u.full_name, u.email, u.employee_no, u.title, u.department, u.division_name, u.team_name]
       .some(v => (v ?? "").toLowerCase().includes(q));
   }), [users, roleFilter, divFilter, statusFilter, q]);
+
+  // A filter/search change can strand the current page past the end of the
+  // now-shorter result set (e.g. on page 3 of "All", then filtering to a
+  // role with only one page) — reset back to page 1 whenever the filters
+  // themselves change, not on every render.
+  useEffect(() => { setPage(1); }, [roleFilter, divFilter, statusFilter, q]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const paged = useMemo(() => filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize), [filtered, currentPage, pageSize]);
 
   const divisionNames = useMemo(() =>
     Array.from(new Set(users.map(u => u.division_name ?? "Unassigned"))).sort()
@@ -401,7 +415,7 @@ export default function UserManagement() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(u => {
+                {paged.map(u => {
                   const isActive = u.is_active !== false;
                   return (
                     <tr
@@ -502,6 +516,41 @@ export default function UserManagement() {
           </div>
         )}
       </div>
+
+      {/* ── Pagination ── */}
+      {filtered.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+            Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} user{filtered.length !== 1 ? "s" : ""}
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <select
+              value={pageSize}
+              onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              style={{ ...fieldStyle, width: "auto" }}
+            >
+              {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n} per page</option>)}
+            </select>
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              style={{ display: "flex", alignItems: "center", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: currentPage <= 1 ? "default" : "pointer", opacity: currentPage <= 1 ? 0.5 : 1 }}
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <span style={{ fontSize: 12, color: "var(--text)", minWidth: 70, textAlign: "center" }}>
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              style={{ display: "flex", alignItems: "center", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: currentPage >= totalPages ? "default" : "pointer", opacity: currentPage >= totalPages ? 0.5 : 1 }}
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Add User Modal ── */}
       {showAdd && (

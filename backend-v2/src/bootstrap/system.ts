@@ -11,6 +11,10 @@ import { ensureTravelSchema } from "../lib/travel.js";
 import { ensureAirportsSchema } from "../lib/airports.js";
 import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
 import { ensureBrsSchema } from "../modules/brs/brs.schema.js";
+import { ensureReportingViewsSchema } from "../modules/reporting/reporting.schema.js";
+import { ensurePushTokensSchema } from "../lib/pushTokens.js";
+import { ensureMobileAppBuildsSchema } from "../lib/mobileAppBuilds.js";
+import { ensureMobileAppEventsSchema } from "../lib/mobileAppEvents.js";
 import { DEFAULT_ECONET_LOGO_DATA_URI } from "../lib/pdf/assets/econetLogo.js";
 
 const DEFAULT_ADMIN_EMAIL = env.ADMIN_SEED_EMAIL || "admin@example.com";
@@ -50,6 +54,46 @@ export async function bootstrapSystem() {
   await ensureOvertimeSchema();
   await ensureVendorContractsSchema();
   await ensureServiceContractsSchema();
+  await ensureSalariesSchema();
+  await ensureReportingViewsSchema();
+  await ensurePushTokensSchema();
+  await ensureMobileAppBuildsSchema();
+  await ensureMobileAppEventsSchema();
+}
+
+// Salaries: a monthly payment ledger sitting alongside the already-live
+// Attendance Register custom request type (see seedAttendanceRegisterType
+// above) rather than a new attendance-capture mechanism - a Salary Register
+// "row" is really an already-submitted Attendance Register submission, and
+// this table just records that it's been paid. Kept separate from
+// custom_request_submissions so the generic Custom Processes engine stays
+// untouched by a Salaries-specific concept. Also backs paying an approved
+// Salary Advance request (submission_id left null in that case).
+async function ensureSalariesSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS salary_payments (
+      id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      submission_id      uuid REFERENCES custom_request_submissions(id),
+      advance_request_id uuid REFERENCES advance_requests(id),
+      employee_id        uuid NOT NULL REFERENCES users(id),
+      division           text,
+      department         text,
+      period             date,
+      converted_hours    numeric,
+      payment_reference  text NOT NULL,
+      payment_date       date NOT NULL,
+      comment            text,
+      paid_by_id         uuid REFERENCES users(id),
+      paid_at            timestamptz NOT NULL DEFAULT now(),
+      created_at         timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT salary_payments_one_source CHECK (
+        (submission_id IS NOT NULL AND advance_request_id IS NULL) OR
+        (submission_id IS NULL AND advance_request_id IS NOT NULL)
+      )
+    )
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_payments_submission ON salary_payments(submission_id) WHERE submission_id IS NOT NULL`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_payments_advance ON salary_payments(advance_request_id) WHERE advance_request_id IS NOT NULL`);
 }
 
 // One-click approve/reject-by-email tokens. The JWT carries only a jti;
@@ -793,6 +837,15 @@ async function ensureItProvisioningSchema() {
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_it_prov_status ON it_provisioning_tasks(status)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_it_prov_assigned ON it_provisioning_tasks(assigned_to_id)`);
+  // The requester confirms they've collected the device - that, not IT's
+  // handover record, is what completes a task.
+  await query(`ALTER TABLE it_provisioning_tasks ADD COLUMN IF NOT EXISTS collection_acknowledged_at timestamptz`);
+  await query(`ALTER TABLE it_provisioning_tasks ADD COLUMN IF NOT EXISTS collection_acknowledged_by_id uuid REFERENCES users(id) ON DELETE SET NULL`);
+  // Inventory: devices can now exist without a task (stock added by IT, or an
+  // old device recorded through a replacement's disposition).
+  await query(`ALTER TABLE it_devices ADD COLUMN IF NOT EXISTS notes text`);
+  await query(`ALTER TABLE it_devices ADD COLUMN IF NOT EXISTS location text`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_it_devices_status ON it_devices(status)`);
 
   // Admin-configurable checklist/standard-software templates, scoped by
   // computer type ('LAPTOP', 'DESKTOP', or 'ALL' for both) so e.g. a desktop
@@ -1165,6 +1218,39 @@ async function seedAttendanceRegisterType() {
       [typeId]
     );
   }
+
+  await ensureAttendanceDraftSchema();
+}
+
+// Lets an Attendance Register submission be built up incrementally (one row
+// per employee/month, day cells autosaved as the employee goes) rather than
+// only ever reaching the database on one atomic final Submit. A draft is
+// just an earlier stage of the same custom_request_submissions row - see
+// attendance.routes.ts - so this only adds the storage needed to keep at
+// most one DRAFT row per employee/month/request-type: a partial unique
+// index scoped to status='DRAFT' (non-draft submissions for the same
+// employee/month can already exist more than once and must stay allowed to)
+// and a small period-lock table an admin uses to close a month once payroll
+// processing starts. No lock row for a period means it's open - the default,
+// unrestricted state - so nothing changes for anyone until an admin
+// explicitly closes a month.
+async function ensureAttendanceDraftSchema() {
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_crs_attendance_draft_unique
+      ON custom_request_submissions (requester_id, request_type_id, (data->>'month'))
+      WHERE status = 'DRAFT'
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS custom_request_period_locks (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_type_id uuid NOT NULL REFERENCES custom_request_types(id) ON DELETE CASCADE,
+      period text NOT NULL,
+      closed_by_id uuid REFERENCES users(id),
+      closed_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (request_type_id, period)
+    )
+  `);
 }
 
 // Seeds the "Computer Request" custom request type (Econet Computer
@@ -1197,6 +1283,21 @@ async function seedComputerRequestType() {
       { title: "IS HOD/CIO", source: "ROLE_PICKER", role: "EXCO" },
       { title: "CTO", source: "ROLE_PICKER", role: "EXCO" }
     ])]
+  );
+  // "IS HOD/CIO" is signed by the IS HOD (role HOD) or the CIO (EXCO), but was
+  // seeded EXCO-only, so the HOD never appeared in its picker. Widen it once;
+  // a step that already carries `roles` is left as the admin set it.
+  await query(
+    `UPDATE custom_request_types
+        SET fixed_approval_chain = (
+          SELECT jsonb_agg(CASE WHEN step->>'title' = 'IS HOD/CIO' AND NOT step ? 'roles'
+                                THEN step || '{"roles":["HOD","EXCO"]}'::jsonb ELSE step END ORDER BY ord)
+            FROM jsonb_array_elements(fixed_approval_chain) WITH ORDINALITY AS t(step, ord))
+      WHERE id = $1
+        AND jsonb_typeof(fixed_approval_chain) = 'array'
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(fixed_approval_chain) s
+                     WHERE s->>'title' = 'IS HOD/CIO' AND NOT s ? 'roles')`,
+    [typeId]
   );
 
   const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: { label: string; value: string }[] }> = [

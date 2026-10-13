@@ -1,9 +1,11 @@
+import { filterEmailRecipients } from "./pushTokens.js";
 import nodemailer from "nodemailer";
 import { env } from "../config/env.js";
 import { query } from "./db.js";
 import { logger, serializeError } from "./logger.js";
 import { buildOnboardingMessage } from "./onboardingTemplates.js";
 import { createEmailActionToken, buildEmailActionUrl } from "./emailActionTokens.js";
+import { sendPushToUser } from "./push.js";
 
 type Role = "MANAGER" | "HOD" | "EXCO" | "FINANCE" | "CEO" | "ADMIN";
 
@@ -29,7 +31,7 @@ async function sendTeamsCard(card: TeamsCard): Promise<void> {
     summary:   card.summary,
     color:     card.color || "1d4ed8",
     facts:     card.facts,
-    actionUrl: env.CORS_ORIGIN || "http://10.3.10.59:5174",
+    actionUrl: env.APP_URL,
     timestamp: new Date().toISOString()
   };
   const controller = new AbortController();
@@ -50,7 +52,10 @@ async function sendTeamsCard(card: TeamsCard): Promise<void> {
 // ─── Transport: HTTP Email API ────────────────────────────────────────────────
 
 function textToHtml(text: string): string {
-  const loginUrl = env.CORS_ORIGIN || "http://10.3.10.59:5174";
+  // Not CORS_ORIGIN - that's often a comma-separated list of allowed
+  // origins (see app.ts), which breaks as a single clickable link/href.
+  // APP_URL is always exactly one hostname.
+  const loginUrl = env.APP_URL;
   const esc = (s: string) =>
     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -205,6 +210,8 @@ async function sendViaSmtp(to: string[], subject: string, text: string): Promise
 // ─── Unified send ─────────────────────────────────────────────────────────────
 
 async function sendMail(args: { to: string[]; subject: string; text: string }): Promise<void> {
+  // Recipients who switched email notifications off (FlowDesk Mobile > Profile).
+  args = { ...args, to: await filterEmailRecipients(args.to) };
   if (args.to.length === 0) return;
   if (env.EMAIL_API_ENABLED) {
     for (const recipient of args.to) {
@@ -283,9 +290,10 @@ function header(title: string) {
 }
 
 function footer() {
-  const url = env.CORS_ORIGIN || "http://10.3.10.59:5174";
-  // textToHtml converts "Login: <url>" into a blue button
-  return `Login: ${url}\nThis is an automated notification. Please do not reply.`;
+  // APP_URL, not CORS_ORIGIN - the latter is often a comma-separated list
+  // of allowed origins (see app.ts), which isn't a single valid link.
+  // textToHtml converts "Login: <url>" into a blue button.
+  return `Login: ${env.APP_URL}\nThis is an automated notification. Please do not reply.`;
 }
 
 function detailBlock(rows: [string, string | null | undefined][]) {
@@ -429,6 +437,14 @@ export async function notifyAdvanceTask(args: {
           ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
         ]
       }).catch((e) => logger.warn("teams_advance_approver_failed", { error: serializeError(e) }));
+
+      if (args.nextApprover.id) {
+        void sendPushToUser(args.nextApprover.id, {
+          title: args.isReminder ? "Advance reminder" : "Advance awaiting your approval",
+          body: `${requester} — ${fmt(args.requestedTotal, args.currency)}`,
+          data: { docType: "ADVANCE", docId: args.advanceId }
+        });
+      }
     } catch (error) {
       logger.warn("advance_approver_notification_failed", {
         advance_id: args.advanceId, status: args.status, error: serializeError(error)
@@ -920,6 +936,14 @@ export async function notifyClaimTask(args: {
           { name: "Status", value: statusLabel(args.status) }
         ]
       }).catch((e) => logger.warn("teams_claim_approver_failed", { error: serializeError(e) }));
+
+      if (args.nextApprover.id) {
+        void sendPushToUser(args.nextApprover.id, {
+          title: args.isReminder ? "Clearance reminder" : "Clearance claim awaiting your approval",
+          body: `${claimant} — ${fmt(args.claimTotal, args.currency)}`,
+          data: { docType: "CLAIM", docId: args.claimId }
+        });
+      }
     } catch (error) {
       logger.warn("claim_approver_notification_failed", {
         claim_id: args.claimId, status: args.status, error: serializeError(error)
@@ -1684,6 +1708,9 @@ export async function notifyCustomRequestDecision(args: {
   decision: "APPROVED" | "REJECTED";
   decidedBy: string | null;
   comment?: string | null;
+  // What happens next, for types with a stage after approval (e.g. a
+  // Computer Request moving on to IT Provisioning).
+  nextSteps?: string | null;
 }) {
   try {
     if (!args.requesterEmail) return;
@@ -1698,6 +1725,9 @@ export async function notifyCustomRequestDecision(args: {
     if (args.comment) {
       lines.push(``, `Comment: ${args.comment}`);
     }
+    if (args.nextSteps) {
+      lines.push(``, args.nextSteps);
+    }
     lines.push(``, footer());
     const body = lines.join("\n");
 
@@ -1710,6 +1740,125 @@ export async function notifyCustomRequestDecision(args: {
     logger.warn("custom_request_notification_failed", {
       submission_id: args.submissionId, error: serializeError(error)
     });
+  }
+}
+
+// Keeps the requester informed between submission and the final decision:
+// on submit, and each time a step is signed and the request moves on.
+export async function notifyCustomRequestProgress(args: {
+  submissionId: string;
+  requestTypeName: string;
+  requesterEmail: string | null;
+  requesterName: string | null;
+  event: "SUBMITTED" | "STEP_APPROVED";
+  actedBy?: string | null;
+  actedStepLabel?: string | null;
+  comment?: string | null;
+  nextApproverName: string | null;
+  nextStepLabel: string;
+}) {
+  try {
+    if (!args.requesterEmail) return;
+    const type = args.requestTypeName.toLowerCase();
+    const waiting = `It is now waiting for ${args.nextApproverName || "the next approver"} (${args.nextStepLabel}).`;
+    const lines = [
+      header(`${args.requestTypeName.toUpperCase()} — ${args.event === "SUBMITTED" ? "SUBMITTED" : "UPDATE"}`),
+      ``,
+      `Hello ${args.requesterName || ""},`,
+      ``,
+      args.event === "SUBMITTED"
+        ? `Your ${type} has been submitted. ${waiting}`
+        : `Your ${type} was approved by ${args.actedBy || "an approver"}${args.actedStepLabel ? ` (${args.actedStepLabel})` : ""}. ${waiting}`
+    ];
+    if (args.comment) lines.push(``, `Comment: ${args.comment}`);
+    lines.push(``, footer());
+    await sendMail({
+      to: [args.requesterEmail],
+      subject: args.event === "SUBMITTED"
+        ? `[Submitted] Your ${args.requestTypeName}`
+        : `[Update] Your ${args.requestTypeName} — with ${args.nextStepLabel}`,
+      text: lines.join("\n")
+    });
+  } catch (error) {
+    logger.warn("custom_request_progress_notification_failed", { submission_id: args.submissionId, error: serializeError(error) });
+  }
+}
+
+// IT Provisioning stages the requester hears about after their Computer
+// Request is approved. READY_FOR_COLLECTION and HANDED_OVER both ask them to
+// confirm collection in FlowDesk - that confirmation is what closes the task.
+export async function notifyItProvisioningRequester(args: {
+  taskId: string;
+  requesterEmail: string | null;
+  requesterName: string | null;
+  stage: "ASSIGNED" | "READY_FOR_COLLECTION" | "HANDED_OVER" | "COMPLETED";
+  officerName?: string | null;
+  assetNumber?: string | null;
+}) {
+  try {
+    if (!args.requesterEmail) return;
+    const device = args.assetNumber ? ` (asset ${args.assetNumber})` : "";
+    const confirm = `Once you have it, please open the request in FlowDesk (Custom Requests > My Requests) and click "I've collected my computer".`;
+    const body: Record<typeof args.stage, { title: string; subject: string; text: string[] }> = {
+      ASSIGNED: {
+        title: "COMPUTER REQUEST — BEING PROVISIONED",
+        subject: "[Update] Your computer is being prepared",
+        text: [`${args.officerName || "An IT officer"} is now preparing your computer. We'll email you when it's ready to collect.`]
+      },
+      READY_FOR_COLLECTION: {
+        title: "COMPUTER REQUEST — READY FOR COLLECTION",
+        subject: "[Action Required] Your computer is ready for collection",
+        text: [`Your computer${device} is ready. Please collect it from IT${args.officerName ? ` (${args.officerName})` : ""}.`, ``, confirm]
+      },
+      HANDED_OVER: {
+        title: "COMPUTER REQUEST — PLEASE CONFIRM COLLECTION",
+        subject: "[Action Required] Confirm you've collected your computer",
+        text: [`IT has recorded handing over your computer${device}.`, ``, confirm]
+      },
+      COMPLETED: {
+        title: "COMPUTER REQUEST — COMPLETED",
+        subject: "[Completed] Your Computer Request",
+        text: [`Thank you for confirming you've collected your computer${device}. Your request is now complete.`]
+      }
+    };
+    const msg = body[args.stage];
+    await sendMail({
+      to: [args.requesterEmail],
+      subject: msg.subject,
+      text: [header(msg.title), ``, `Hello ${args.requesterName || ""},`, ``, ...msg.text, ``, footer()].join("\n")
+    });
+  } catch (error) {
+    logger.warn("it_provisioning_requester_notification_failed", { task_id: args.taskId, error: serializeError(error) });
+  }
+}
+
+// IT officers: a newly approved request in their queue (one assignee, or the
+// whole default pool when it's first-to-claim), a request assigned to them by
+// someone else, or the requester confirming collection.
+export async function notifyItProvisioningOfficers(args: {
+  taskId: string;
+  recipients: Array<{ email: string | null; name: string | null }>;
+  requesterName: string | null;
+  event: "NEW_ASSIGNED" | "NEW_CLAIMABLE" | "ASSIGNED" | "COLLECTED";
+}) {
+  try {
+    const to = args.recipients.map((r) => r.email).filter((e): e is string => Boolean(e));
+    if (!to.length) return;
+    const who = args.requesterName || "an employee";
+    const text: Record<typeof args.event, { subject: string; line: string }> = {
+      NEW_ASSIGNED: { subject: "[Action Required] Computer Request to provision", line: `A Computer Request from ${who} has been fully approved and assigned to you for provisioning.` },
+      NEW_CLAIMABLE: { subject: "[Action Required] Computer Request waiting to be claimed", line: `A Computer Request from ${who} has been fully approved. Open IT Provisioning and claim it to start provisioning.` },
+      ASSIGNED: { subject: "[Action Required] Computer Request assigned to you", line: `A Computer Request from ${who} has been assigned to you for provisioning.` },
+      COLLECTED: { subject: "[Completed] Computer collected", line: `${who} has confirmed collecting their computer. The request is now complete.` }
+    };
+    const msg = text[args.event];
+    await sendMail({
+      to,
+      subject: msg.subject,
+      text: [header("IT PROVISIONING"), ``, msg.line, ``, footer()].join("\n")
+    });
+  } catch (error) {
+    logger.warn("it_provisioning_officer_notification_failed", { task_id: args.taskId, error: serializeError(error) });
   }
 }
 
@@ -2244,16 +2393,16 @@ export async function notifyStandbyClaimFinanceReady(args: {
     const recipients = await getCompensationFinanceRecipients();
     if (!recipients.length) return;
     const body = [
-      header("STANDBY CLAIM READY FOR FINANCE"),
+      header("STANDBY CLAIM AWAITING TREASURY"),
       ``,
-      `A standby claim is ready for finance processing.`,
+      `A standby claim has been fully approved and is now awaiting Treasury.`,
       ``,
       detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
       ``,
       footer()
     ].join("\n");
 
-    await sendMail({ to: recipients.map((r) => r.email), subject: `[Finance] Standby claim ${args.claimNo} ready for processing`, text: body });
+    await sendMail({ to: recipients.map((r) => r.email), subject: `[Treasury] Standby claim ${args.claimNo} awaiting Treasury`, text: body });
   } catch (error) {
     logger.warn("standby_claim_finance_ready_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
   }
@@ -2310,6 +2459,151 @@ export async function notifyStandbyClaimPaid(args: {
     await sendMail({ to: [args.employeeEmail], subject: `[Standby] Claim ${args.claimNo} has been paid`, text: body });
   } catch (error) {
     logger.warn("standby_claim_paid_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+// No more Finance stage — a claim is done the moment its approval chain
+// finishes. Compensable Hours is already known at that point (computed at
+// claim generation, never touched by Finance), so this fires straight off
+// the final approval instead of waiting on a payment step.
+export async function notifyStandbyClaimClosed(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  compensableHours: number;
+}) {
+  if (!args.employeeEmail) return;
+  try {
+    const body = [
+      header("STANDBY CLAIM CLOSED"),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your standby claim has been fully approved and is now closed.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Compensable Hours", args.compensableHours.toFixed(2)]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Standby] Claim ${args.claimNo} closed — ${args.compensableHours.toFixed(2)} compensable hours`, text: body });
+  } catch (error) {
+    logger.warn("standby_claim_closed_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+// Call-Out — a separate, event-based claim type from the monthly Standby
+// Claim above (time worked inside an active standby window, rather than a
+// month's whole standby duty). Deliberately not wired into the
+// email-action-token system (createEmailActionToken's docType lookup would
+// need a new "STANDBY_CALLOUT" branch it doesn't have) — plain notification
+// only, no inline approve/reject link.
+export async function notifyStandbyCalloutReadyForTreasury(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+}) {
+  try {
+    const recipients = await getCompensationFinanceRecipients();
+    if (!recipients.length) return;
+    const body = [
+      header("CALL-OUT AWAITING TREASURY"),
+      ``,
+      `A call-out claim has been fully approved and is now awaiting Treasury.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: recipients.map((r) => r.email), subject: `[Treasury] Call-out ${args.claimNo} awaiting Treasury`, text: body });
+  } catch (error) {
+    logger.warn("standby_callout_ready_for_treasury_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyCalloutSubmitted(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  approverName: string | null;
+  approverEmail: string | null;
+  title: string;
+}) {
+  if (!args.approverEmail) return;
+  try {
+    const body = [
+      header("CALL-OUT — REVIEW REQUIRED"),
+      ``,
+      `Hello ${args.approverName || ""},`,
+      ``,
+      `A call-out claim needs your review as ${args.title}.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.approverEmail], subject: `[Standby] Call-out ${args.claimNo} awaiting your review`, text: body });
+  } catch (error) {
+    logger.warn("standby_callout_submitted_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyCalloutReturned(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  reason: string;
+  action: "REJECTED" | "RETURNED";
+}) {
+  if (!args.employeeEmail) return;
+  const label = args.action === "REJECTED" ? "rejected" : "sent back for correction";
+  try {
+    const body = [
+      header(`CALL-OUT ${args.action}`),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your call-out claim ${args.claimNo} has been ${label}.`,
+      ``,
+      detailBlock([["Reason", args.reason]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Standby] Your call-out ${args.claimNo} was ${label}`, text: body });
+  } catch (error) {
+    logger.warn("standby_callout_returned_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+export async function notifyStandbyCalloutClosed(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  convertedHours: number;
+}) {
+  if (!args.employeeEmail) return;
+  try {
+    const body = [
+      header("CALL-OUT CLOSED"),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your call-out claim has been fully approved and is now closed.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Converted Hours", args.convertedHours.toFixed(2)]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Standby] Call-out ${args.claimNo} closed — ${args.convertedHours.toFixed(2)} converted hours`, text: body });
+  } catch (error) {
+    logger.warn("standby_callout_closed_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
   }
 }
 
@@ -2475,16 +2769,16 @@ export async function notifyOvertimeClaimFinanceReady(args: {
     const recipients = await getCompensationFinanceRecipients();
     if (!recipients.length) return;
     const body = [
-      header("OVERTIME CLAIM READY FOR FINANCE"),
+      header("OVERTIME CLAIM AWAITING TREASURY"),
       ``,
-      `An overtime claim is ready for finance processing.`,
+      `An overtime claim has been fully approved and is now awaiting Treasury.`,
       ``,
       detailBlock([["Claim No.", args.claimNo], ["Employee", args.employeeName]]),
       ``,
       footer()
     ].join("\n");
 
-    await sendMail({ to: recipients.map((r) => r.email), subject: `[Finance] Overtime claim ${args.claimNo} ready for processing`, text: body });
+    await sendMail({ to: recipients.map((r) => r.email), subject: `[Treasury] Overtime claim ${args.claimNo} awaiting Treasury`, text: body });
   } catch (error) {
     logger.warn("overtime_claim_finance_ready_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
   }
@@ -2543,6 +2837,38 @@ export async function notifyOvertimeClaimSettled(args: {
     await sendMail({ to: [args.employeeEmail], subject: `[Overtime] Claim ${args.claimNo} has been settled`, text: body });
   } catch (error) {
     logger.warn("overtime_claim_settled_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
+// No more Finance stage — a claim is done the moment its approval chain
+// finishes. Converted Hours/Equivalent Days are already known at that point
+// (computed at submission, never touched by Finance), so this fires straight
+// off the final approval instead of waiting on a payment step.
+export async function notifyOvertimeClaimClosed(args: {
+  claimId: string;
+  claimNo: string;
+  employeeName: string | null;
+  employeeEmail: string | null;
+  convertedHours: number;
+  equivalentDays: number;
+}) {
+  if (!args.employeeEmail) return;
+  try {
+    const body = [
+      header("OVERTIME CLAIM CLOSED"),
+      ``,
+      `Hello ${args.employeeName || ""},`,
+      ``,
+      `Your overtime claim has been fully approved and is now closed.`,
+      ``,
+      detailBlock([["Claim No.", args.claimNo], ["Converted Hours", args.convertedHours.toFixed(2)], ["Equivalent Days", args.equivalentDays.toFixed(2)]]),
+      ``,
+      footer()
+    ].join("\n");
+
+    await sendMail({ to: [args.employeeEmail], subject: `[Overtime] Claim ${args.claimNo} closed — ${args.convertedHours.toFixed(2)} converted hours`, text: body });
+  } catch (error) {
+    logger.warn("overtime_claim_closed_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
   }
 }
 
@@ -2609,5 +2935,118 @@ export async function notifyVendorContractExpiring(args: {
   ].join("\n");
 
   await sendMail({ to: recipients, subject: `[Vendor Contracts] ${args.contractNumber} ${stageLabel}`, text: body });
+}
+
+// ─── Electronic Signature — routing document approval route ────────────────
+
+export async function notifySignatureTurn(args: {
+  documentId: string;
+  documentTitle: string;
+  approverEmail: string | null;
+  approverName: string | null;
+  stepLabel: string;
+  verificationUrl: string;
+}) {
+  try {
+    if (!args.approverEmail) return;
+    const body = [
+      header("DOCUMENT AWAITING YOUR SIGNATURE"),
+      ``,
+      `Hello ${args.approverName || ""},`,
+      ``,
+      `"${args.documentTitle}" is ready for your signature (${args.stepLabel}).`,
+      ``,
+      detailBlock([["Document", args.documentTitle], ["Verify code", args.verificationUrl]]),
+      ``,
+      `Log in to FlowDesk, open Sign a Document → Routing Document, and open this document to add your signature.`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({ to: [args.approverEmail], subject: `[Action Required] Sign: ${args.documentTitle}`, text: body });
+  } catch (error) {
+    logger.warn("signature_turn_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
+export async function notifySignatureRejected(args: {
+  documentId: string;
+  documentTitle: string;
+  creatorEmail: string | null;
+  creatorName: string | null;
+  rejectedByName: string | null;
+  comment: string;
+}) {
+  try {
+    if (!args.creatorEmail) return;
+    const body = [
+      header("DOCUMENT REJECTED"),
+      ``,
+      `Hello ${args.creatorName || ""},`,
+      ``,
+      `${args.rejectedByName || "An approver"} rejected "${args.documentTitle}" — its approval route has stopped.`,
+      ``,
+      detailBlock([["Reason", args.comment]]),
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({ to: [args.creatorEmail], subject: `[Rejected] ${args.documentTitle}`, text: body });
+  } catch (error) {
+    logger.warn("signature_rejected_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
+export async function notifySignatureCompleted(args: {
+  documentId: string;
+  documentTitle: string;
+  creatorEmail: string | null;
+  creatorName: string | null;
+}) {
+  try {
+    if (!args.creatorEmail) return;
+    const body = [
+      header("DOCUMENT FULLY SIGNED"),
+      ``,
+      `Hello ${args.creatorName || ""},`,
+      ``,
+      `Every approver in the route has now signed "${args.documentTitle}".`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({ to: [args.creatorEmail], subject: `[Completed] ${args.documentTitle}`, text: body });
+  } catch (error) {
+    logger.warn("signature_completed_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
+// ─── SLA reminders - a step sitting too long, nudge only ───────────────────
+
+export async function notifySlaReminder(args: {
+  docType: string;
+  docId: string;
+  itemLabel: string; // e.g. "Advance Request", "Clearance", "Change Request", "Routing Document"
+  reference: string; // a title or number the approver will recognize
+  approverEmail: string | null;
+  approverName: string | null;
+  hoursPending: number;
+}) {
+  try {
+    if (!args.approverEmail) return;
+    const days = Math.floor(args.hoursPending / 24);
+    const pendingLabel = days >= 1 ? `${days} day${days === 1 ? "" : "s"}` : `${Math.round(args.hoursPending)} hours`;
+    const body = [
+      header("REMINDER — STILL AWAITING YOUR ACTION"),
+      ``,
+      `Hello ${args.approverName || ""},`,
+      ``,
+      `"${args.reference}" (${args.itemLabel}) has been waiting on your approval for ${pendingLabel}.`,
+      ``,
+      `This is just a reminder - nothing has changed or been reassigned.`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({ to: [args.approverEmail], subject: `[Reminder] ${args.itemLabel} awaiting your action — ${args.reference}`, text: body });
+  } catch (error) {
+    logger.warn("sla_reminder_notification_failed", { doc_type: args.docType, doc_id: args.docId, error: serializeError(error) });
+  }
 }
 

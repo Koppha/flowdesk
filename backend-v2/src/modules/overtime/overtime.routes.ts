@@ -27,7 +27,9 @@ import { getUserOrgPath } from "../../lib/departments.js";
 import { getUserAccountState, isProfileComplete } from "../../lib/userProfile.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { isCompensationFinanceUser } from "../../lib/financeAuthority.js";
+import { isHrOperationsUser } from "../../lib/hrAuthority.js";
 import { getBooleanSystemSetting, getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { isClaimPeriodOpen } from "../../lib/claimWindow.js";
 import { LESOTHO_HOLIDAY_SEED } from "./lesothoHolidaySeed.js";
 import {
   notifyOvertimeRequestSubmitted,
@@ -150,6 +152,16 @@ export async function ensureOvertimeSchema() {
   await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS finance_processed_at timestamptz`);
   await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS paid_at timestamptz`);
   await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS closed_at timestamptz`);
+  // Distinct from the old (now-dead) finance_processed_at/paid_at pair —
+  // this is Finance/Payroll's own "picked this up" marker for a claim that
+  // already closed with no money attached to it. See compensation-claims
+  // module.
+  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS processed_at timestamptz`);
+  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS processed_by_id uuid REFERENCES users(id)`);
+  // Treasury's own comment, written when they close the claim (see
+  // compensation-claims module) — distinct from finance_comments, which is
+  // the old (now-dead) Finance-processing stage's field.
+  await query(`ALTER TABLE overtime_claims ADD COLUMN IF NOT EXISTS treasury_comment text`);
   await query(`ALTER TABLE overtime_claims ALTER COLUMN hourly_rate DROP NOT NULL`);
   await query(`ALTER TABLE overtime_claims ALTER COLUMN hourly_rate DROP DEFAULT`);
   await query(`ALTER TABLE overtime_claims ALTER COLUMN total_amount DROP NOT NULL`);
@@ -974,11 +986,11 @@ overtimeRouter.post("/claims/:id/submit", async (req: AuthedRequest, res, next) 
     if (!claim) throw notFound();
     if (!isClaimOwner(claim, req.user!.userId) && req.user!.role !== "ADMIN") throw forbidden();
     if (claim.status !== "DRAFT") throw badRequest("Claim has already been submitted");
-    if (!claim.compensation_preference) throw badRequest("Choose a Compensation Preference (Pay or Days) before submitting");
 
-    const period = (await query<{ status: string }>(`SELECT status FROM overtime_claim_periods WHERE year=$1 AND month=$2`, [claim.year, claim.month]))[0];
-    if (!period || period.status !== "OPEN") {
-      throw badRequest(`Claims for ${claim.month}/${claim.year} are not open yet — Admin or Finance need to open this claim period first.`);
+    const beforeDays = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeClaimWindowBeforeDays, 0);
+    const afterDays = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeClaimWindowAfterDays, 0);
+    if (!isClaimPeriodOpen(claim.year, claim.month, beforeDays, afterDays)) {
+      throw badRequest(`The claim window for ${claim.month}/${claim.year} is currently closed — check the configured submission window with Admin/Finance.`);
     }
 
     const steps = await query<any>(
@@ -1077,7 +1089,7 @@ export async function performOvertimeClaimApprove(claimId: string, actor: { user
     const isFinal = claim.current_step_order >= Number(totalStepsRows.rows[0].count);
 
     if (isFinal) {
-      await client.query(`UPDATE overtime_claims SET status='FINANCE_PROCESSING', updated_at=now() WHERE id=$1`, [claimId]);
+      await client.query(`UPDATE overtime_claims SET status='AWAITING_TREASURY', updated_at=now() WHERE id=$1`, [claimId]);
     } else {
       await client.query(`UPDATE overtime_claims SET current_step_order=current_step_order+1, updated_at=now() WHERE id=$1`, [claimId]);
     }
@@ -1101,7 +1113,7 @@ export async function performOvertimeClaimApprove(claimId: string, actor: { user
       });
     }
   }
-  return { status: isFinal ? "FINANCE_PROCESSING" : "SUBMITTED", isFinal };
+  return { status: isFinal ? "AWAITING_TREASURY" : "SUBMITTED", isFinal };
 }
 
 overtimeRouter.post("/claims/:id/approve", async (req: AuthedRequest, res, next) => {
@@ -1345,7 +1357,8 @@ overtimeRouter.get("/eligible-approvers", async (req: AuthedRequest, res, next) 
 async function requireHolidayManager(req: AuthedRequest) {
   if (req.user!.role === "ADMIN") return;
   if (await isCompensationFinanceUser(req)) return;
-  throw forbidden("Only an administrator or Finance can manage the public holiday calendar");
+  if (await isHrOperationsUser(req)) return;
+  throw forbidden("Only an administrator, Finance, or HR Operations can manage the public holiday calendar and claim periods");
 }
 
 overtimeRouter.get("/public-holidays", async (req: AuthedRequest, res, next) => {
@@ -1422,58 +1435,10 @@ overtimeRouter.delete("/public-holidays/:id", async (req: AuthedRequest, res, ne
 });
 
 // ---------------------------------------------------------------------------
-// Claim periods (Admin & Finance) — a year+month must be OPEN before an
-// employee can submit an Overtime Claim for it; see the check inside
-// POST /claims/:id/submit. Requests are unaffected.
-// ---------------------------------------------------------------------------
-
-overtimeRouter.get("/claim-periods", async (req: AuthedRequest, res, next) => {
-  try {
-    const rows = await query<any>(`SELECT p.*, ou.full_name AS opened_by_name, cu.full_name AS closed_by_name
-       FROM overtime_claim_periods p
-       LEFT JOIN users ou ON ou.id = p.opened_by_id
-       LEFT JOIN users cu ON cu.id = p.closed_by_id
-      ORDER BY p.year DESC, p.month DESC`);
-    return res.json(rows);
-  } catch (err) {
-    return next(err);
-  }
-});
-
-overtimeRouter.post("/claim-periods", async (req: AuthedRequest, res, next) => {
-  try {
-    await requireHolidayManager(req);
-    const body = z.object({ year: z.coerce.number().int().min(2000).max(2100), month: z.coerce.number().int().min(1).max(12) }).safeParse(req.body);
-    if (!body.success) throw badRequest("Invalid period payload", body.error.flatten());
-    const rows = await query<{ id: string }>(
-      `INSERT INTO overtime_claim_periods (year, month, status, opened_by_id, opened_at)
-       VALUES ($1,$2,'OPEN',$3,now())
-       ON CONFLICT (year, month) DO UPDATE SET status='OPEN', opened_by_id=$3, opened_at=now(), closed_by_id=NULL, closed_at=NULL
-       RETURNING id`,
-      [body.data.year, body.data.month, req.user!.userId]
-    );
-    await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "overtime_claim_periods", entityId: rows[0].id, action: "CLAIM_PERIOD_OPENED", after: body.data });
-    return res.status(201).json({ id: rows[0].id });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-overtimeRouter.post("/claim-periods/:id/close", async (req: AuthedRequest, res, next) => {
-  try {
-    await requireHolidayManager(req);
-    const period = (await query<{ id: string }>(`SELECT id FROM overtime_claim_periods WHERE id=$1`, [req.params.id]))[0];
-    if (!period) throw notFound();
-    await query(`UPDATE overtime_claim_periods SET status='CLOSED', closed_by_id=$1, closed_at=now() WHERE id=$2`, [req.user!.userId, req.params.id]);
-    await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "overtime_claim_periods", entityId: req.params.id, action: "CLAIM_PERIOD_CLOSED" });
-    return res.json({ ok: true });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Settings (ADMIN only to change) — rate percentages + working hours/day.
+// Settings (ADMIN only to change) — rate percentages + working hours/day +
+// the claim submission window. The window replaces the old manual
+// per-month Open/Close claim-periods panel with a recurring rule (see
+// lib/claimWindow.ts): configure once, applies to every month automatically.
 // ---------------------------------------------------------------------------
 
 overtimeRouter.get("/settings", async (req: AuthedRequest, res, next) => {
@@ -1483,7 +1448,9 @@ overtimeRouter.get("/settings", async (req: AuthedRequest, res, next) => {
       rate_weekday_pct: rates.weekdayPct,
       rate_saturday_pct: rates.saturdayPct,
       rate_sunday_holiday_pct: rates.sundayHolidayPct,
-      working_hours_per_day: rates.workingHoursPerDay
+      working_hours_per_day: rates.workingHoursPerDay,
+      claim_window_before_days: await getNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeClaimWindowBeforeDays, 0),
+      claim_window_after_days: await getNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeClaimWindowAfterDays, 0)
     });
   } catch (err) {
     return next(err);
@@ -1492,13 +1459,15 @@ overtimeRouter.get("/settings", async (req: AuthedRequest, res, next) => {
 
 overtimeRouter.put("/settings", async (req: AuthedRequest, res, next) => {
   try {
-    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can change Overtime settings");
+    if (req.user!.role !== "ADMIN" && !(await isHrOperationsUser(req))) throw forbidden("Only an administrator or HR Operations can change Overtime settings");
     const body = z
       .object({
         rate_weekday_pct: z.coerce.number().min(100).max(500),
         rate_saturday_pct: z.coerce.number().min(100).max(500),
         rate_sunday_holiday_pct: z.coerce.number().min(100).max(500),
-        working_hours_per_day: z.coerce.number().min(1).max(24)
+        working_hours_per_day: z.coerce.number().min(1).max(24),
+        claim_window_before_days: z.coerce.number().int().min(0).max(31),
+        claim_window_after_days: z.coerce.number().int().min(0).max(31)
       })
       .safeParse(req.body);
     if (!body.success) throw badRequest("Invalid settings payload", body.error.flatten());
@@ -1506,6 +1475,8 @@ overtimeRouter.put("/settings", async (req: AuthedRequest, res, next) => {
     await setNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeRateSaturdayPct, body.data.rate_saturday_pct);
     await setNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeRateSundayHolidayPct, body.data.rate_sunday_holiday_pct);
     await setNumericSystemSetting(SYSTEM_SETTING_KEYS.workingHoursPerDay, body.data.working_hours_per_day);
+    await setNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeClaimWindowBeforeDays, body.data.claim_window_before_days);
+    await setNumericSystemSetting(SYSTEM_SETTING_KEYS.overtimeClaimWindowAfterDays, body.data.claim_window_after_days);
     await writeOvertimeAudit({ actorId: req.user!.userId, entityType: "overtime_settings", entityId: req.user!.userId, action: "SETTINGS_UPDATED", after: body.data });
     return res.json({ ok: true });
   } catch (err) {
@@ -1583,8 +1554,8 @@ overtimeRouter.get("/dashboard", async (req: AuthedRequest, res, next) => {
       [userId, now.getFullYear()]
     ))[0];
 
-    const paidYtd = (await query<{ total: string }>(
-      `SELECT COALESCE(SUM(total_amount),0)::text AS total FROM overtime_claims WHERE employee_id=$1 AND year=$2 AND status='CLOSED'`,
+    const closedYtd = (await query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM overtime_claims WHERE employee_id=$1 AND year=$2 AND status='CLOSED'`,
       [userId, now.getFullYear()]
     ))[0];
 
@@ -1598,9 +1569,10 @@ overtimeRouter.get("/dashboard", async (req: AuthedRequest, res, next) => {
       converted_hours_this_month: Number(convertedThisMonth.total),
       pending_approvals: Number(pendingApprovals.count),
       approved_ytd_converted_hours: Number(approvedYtd.total),
-      paid_ytd_amount: Number(paidYtd.total),
+      closed_ytd_claims: Number(closedYtd.count),
       recent_claims: recentClaims,
-      is_finance: await isCompensationFinanceUser(req)
+      is_finance: await isCompensationFinanceUser(req),
+      is_hr: await isHrOperationsUser(req)
     });
   } catch (err) {
     return next(err);

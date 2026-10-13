@@ -5,6 +5,7 @@ import { env } from "../../config/env.js";
 import { query } from "../../lib/db.js";
 import { badRequest, notFound, HttpError } from "../../lib/errors.js";
 import { EMAIL_ACTION_PURPOSE, type EmailActionDocType } from "../../lib/emailActionTokens.js";
+import { renderBrandedPage, escapeHtml } from "../../lib/htmlPageTemplate.js";
 import { performAdvanceApprove, performAdvanceReject, getAdvanceNotificationContext } from "../advances/advances.routes.js";
 import { performClaimApprove, performClaimReject, getClaimNotificationContext } from "../claims/claims.routes.js";
 import { performCustomRequestAction } from "../custom-requests/custom-requests.routes.js";
@@ -24,16 +25,10 @@ emailActionsRouter.use(emailActionLimiter);
 emailActionsRouter.use((_req, res, next) => {
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'"
+    "default-src 'none'; img-src data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'"
   );
   next();
 });
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!
-  );
-}
 
 // Self-contained page (no external CSS/JS/images) so it renders correctly
 // behind any reverse-proxy path prefix - the confirm button posts to a
@@ -49,11 +44,11 @@ function renderPage(opts: {
   const { token, approverName, alreadyActioned, liveStatus, summary } = opts;
   const amount = summary?.amount != null ? `M${summary.amount.toFixed(2)}` : "—";
   const body = alreadyActioned
-    ? `<p class="status">This request has already been actioned (current status: <strong>${escapeHtml(liveStatus)}</strong>). No further action is needed.</p>`
+    ? `<div class="status">This request has already been actioned (current status: <strong>${escapeHtml(liveStatus)}</strong>). No further action is needed.</div>`
     : `
       <div id="form">
         <textarea id="comment" placeholder="Comment (required to reject)"></textarea>
-        <div class="row">
+        <div class="actions">
           <button id="approve" class="btn approve">Approve</button>
           <button id="reject" class="btn reject">Reject</button>
         </div>
@@ -93,38 +88,25 @@ function renderPage(opts: {
         document.getElementById("reject").addEventListener("click", function () { submit("REJECT"); });
       </script>`;
 
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FlowDesk - Approval</title>
-<style>
-  body{font-family:system-ui,sans-serif;max-width:480px;margin:40px auto;padding:0 16px;color:#1f2937}
-  h1{font-size:18px}
-  .card{border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-top:12px}
-  .card div{margin-bottom:6px}
-  textarea{width:100%;min-height:70px;margin:12px 0;padding:8px;font-family:inherit;box-sizing:border-box}
-  .row{display:flex;gap:8px}
-  .btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:15px;cursor:pointer;color:#fff}
-  .approve{background:#16a34a}
-  .reject{background:#dc2626}
-  .status{margin-top:16px;font-weight:600}
-</style></head>
-<body>
-  <h1>Approval request${approverName ? " for " + escapeHtml(approverName) : ""}</h1>
-  <div class="card">
-    <div><strong>${escapeHtml(summary?.docLabel ?? "Request")}</strong></div>
-    <div>Requester: ${escapeHtml(summary?.requester ?? "—")}</div>
-    <div>Amount: ${escapeHtml(amount)}</div>
-    <div>Status: ${escapeHtml(summary?.status ?? liveStatus)}</div>
-  </div>
-  ${body}
-</body></html>`;
+  return renderBrandedPage({
+    title: "FlowDesk &middot; Approval",
+    bodyHtml: `
+      <h1>Approval request${approverName ? " for " + escapeHtml(approverName) : ""}</h1>
+      <div class="summary">
+        <div class="doc">${escapeHtml(summary?.docLabel ?? "Request")}</div>
+        <div class="kv"><span>Requester</span><strong>${escapeHtml(summary?.requester ?? "—")}</strong></div>
+        <div class="kv"><span>Amount</span><strong>${escapeHtml(amount)}</strong></div>
+        <div class="kv"><span>Status</span><strong>${escapeHtml(summary?.status ?? liveStatus)}</strong></div>
+      </div>
+      ${body}`
+  });
 }
 
 function renderErrorPage(message: string) {
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><title>FlowDesk - Approval</title>
-<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:40px auto;padding:0 16px;color:#1f2937}</style>
-</head><body><h1>Approval request</h1><p>${escapeHtml(message)}</p></body></html>`;
+  return renderBrandedPage({
+    title: "FlowDesk &middot; Approval",
+    bodyHtml: `<h1>Approval request</h1><p class="lead">${escapeHtml(message)}</p>`
+  });
 }
 
 type TokenRow = { id: string; jti: string; user_id: string; doc_type: EmailActionDocType; doc_id: string; step_order: number; route_version: number; used_at: string | null };

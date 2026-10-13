@@ -24,7 +24,9 @@ import { nextSequentialNumber } from "../../lib/sequentialNumbers.js";
 import { getUserOrgPath } from "../../lib/departments.js";
 import { isActiveTeamDelegate, getDelegatedManagerIds } from "../../lib/delegations.js";
 import { getBooleanSystemSetting, getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { isClaimPeriodOpen } from "../../lib/claimWindow.js";
 import { isCompensationFinanceUser } from "../../lib/financeAuthority.js";
+import { isHrOperationsUser } from "../../lib/hrAuthority.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveStandbyClaimPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
@@ -34,7 +36,10 @@ import {
   notifyStandbyClaimReturned,
   notifyStandbyClaimFinanceReady,
   notifyStandbyClaimProcessed,
-  notifyStandbyClaimPaid
+  notifyStandbyClaimPaid,
+  notifyStandbyCalloutSubmitted,
+  notifyStandbyCalloutReturned,
+  notifyStandbyCalloutReadyForTreasury
 } from "../../lib/notifications.js";
 
 export async function ensureStandbySchema() {
@@ -139,6 +144,63 @@ export async function ensureStandbySchema() {
   await query(`ALTER TABLE standby_approval_steps DROP CONSTRAINT IF EXISTS standby_approval_steps_claim_id_step_order_key`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_standby_approval_steps_unique ON standby_approval_steps(claim_id, route_version, step_order)`);
 
+  // Call-Outs — a Call-Out is time actually worked *inside* an active
+  // standby window (as opposed to Overtime, which is time worked outside
+  // one). A completely separate, event-based claim type from the monthly
+  // Standby Claim above: no "generate for the month" step, an employee logs
+  // one whenever a call-out happens, it's validated against their published
+  // standby_assignments, and it follows the same modern (no Finance stage)
+  // lifecycle DRAFT -> SUBMITTED -> ... -> CLOSED, closing with
+  // converted_hours as the final figure — same route-versioned approval
+  // pattern as standby_claims/standby_approval_steps above.
+  await query(`
+    CREATE TABLE IF NOT EXISTS standby_callout_claims (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      claim_no text UNIQUE NOT NULL,
+      employee_id uuid NOT NULL REFERENCES users(id),
+      created_by_id uuid NOT NULL REFERENCES users(id),
+      standby_assignment_id uuid REFERENCES standby_assignments(id) ON DELETE SET NULL,
+      call_date date NOT NULL,
+      start_time time NOT NULL,
+      end_time time NOT NULL,
+      hours numeric(6,2) NOT NULL,
+      rate_pct numeric(6,2) NOT NULL,
+      converted_hours numeric(10,2) NOT NULL,
+      reason text NOT NULL,
+      status text NOT NULL DEFAULT 'DRAFT',
+      current_route_version int NOT NULL DEFAULT 1,
+      current_step_order int NOT NULL DEFAULT 0,
+      comments text,
+      submitted_at timestamptz,
+      closed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS standby_callout_approval_steps (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      claim_id uuid NOT NULL REFERENCES standby_callout_claims(id) ON DELETE CASCADE,
+      route_version int NOT NULL DEFAULT 1,
+      step_order int NOT NULL,
+      approver_user_id uuid NOT NULL REFERENCES users(id),
+      title text NOT NULL,
+      status text NOT NULL DEFAULT 'PENDING',
+      decided_at timestamptz,
+      comments text
+    )
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_standby_callout_steps_unique ON standby_callout_approval_steps(claim_id, route_version, step_order)`);
+  // Finance/Payroll's own "picked this up" marker for a claim that closed
+  // with no money attached — distinct from standby_claims' old (now-dead)
+  // finance_processed_at/paid_at pair. See compensation-claims module.
+  await query(`ALTER TABLE standby_claims ADD COLUMN IF NOT EXISTS processed_at timestamptz`);
+  await query(`ALTER TABLE standby_claims ADD COLUMN IF NOT EXISTS processed_by_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE standby_claims ADD COLUMN IF NOT EXISTS treasury_comment text`);
+  await query(`ALTER TABLE standby_callout_claims ADD COLUMN IF NOT EXISTS processed_at timestamptz`);
+  await query(`ALTER TABLE standby_callout_claims ADD COLUMN IF NOT EXISTS processed_by_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE standby_callout_claims ADD COLUMN IF NOT EXISTS treasury_comment text`);
+
   // Governed cost centre / account-project master list Finance picks from
   // during processing, instead of free-typing values that drift out of sync
   // across claims — see the GET/POST/PATCH/DELETE /finance-codes routes.
@@ -199,6 +261,26 @@ export async function ensureStandbySchema() {
   // (rejected) row still "occupies" the slot forever.
   await query(`DROP INDEX IF EXISTS idx_standby_claims_unique_normal`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_standby_claims_unique_normal ON standby_claims(employee_id, claim_month) WHERE NOT is_adjustment AND status <> 'REJECTED'`);
+
+  // Claim periods — mirrors overtime_claim_periods exactly. A month must be
+  // explicitly opened here before an employee can submit a Standby Claim
+  // for it (checked in POST /claims/:id/submit); replaces the earlier
+  // auto-open-after-month-end date check that used to live in
+  // POST /claims/generate.
+  await query(`
+    CREATE TABLE IF NOT EXISTS standby_claim_periods (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      year int NOT NULL,
+      month int NOT NULL,
+      status text NOT NULL DEFAULT 'OPEN',
+      opened_by_id uuid REFERENCES users(id),
+      opened_at timestamptz NOT NULL DEFAULT now(),
+      closed_by_id uuid REFERENCES users(id),
+      closed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_standby_claim_periods_year_month ON standby_claim_periods(year, month)`);
 }
 
 async function writeStandbyAudit(args: { actorId: string; entityType: string; entityId: string; action: string; before?: unknown; after?: unknown }) {
@@ -571,15 +653,9 @@ standbyRouter.post("/claims/generate", async (req: AuthedRequest, res, next) => 
     if (!body.success) throw badRequest("month is required");
     const claimMonth = monthToDate(body.data.month);
 
-    // "Claim submission can only occur when the configured claim period is
-    // open" — the simplest faithful reading with no scheduler in this app:
-    // a month's standby can only be claimed once that month itself has
-    // fully ended, so nobody claims for days that haven't happened yet.
-    const monthEnded = new Date(claimMonth);
-    monthEnded.setMonth(monthEnded.getMonth() + 1);
-    if (new Date() < monthEnded && req.user!.role !== "ADMIN") {
-      throw badRequest("The claim period for this month hasn't opened yet — it opens once the month has ended");
-    }
+    // Drafting is unrestricted — only actual submission is gated by
+    // standby_claim_periods (see POST /claims/:id/submit), matching
+    // Overtime's model exactly.
 
     // REJECTED is excluded so a formally-rejected claim doesn't permanently
     // block ever generating a new one for that month — the unique index
@@ -785,6 +861,17 @@ standbyRouter.post("/claims/:id/submit", async (req: AuthedRequest, res, next) =
     if (!isClaimOwner(claim, req.user!.userId) && req.user!.role !== "ADMIN") throw forbidden();
     if (claim.status !== "DRAFT") throw badRequest("Claim has already been submitted");
 
+    // claim_month comes back as a raw "YYYY-MM-DD" string (see the DATE
+    // type-parser override in lib/db.ts) — split it directly rather than
+    // going through `new Date(...)`, which would reinterpret it in local
+    // time and risk an off-by-one month at the boundary.
+    const [claimYear, claimMonthNum] = String(claim.claim_month).slice(0, 7).split("-").map(Number);
+    const beforeDays = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyClaimWindowBeforeDays, 0);
+    const afterDays = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyClaimWindowAfterDays, 0);
+    if (!isClaimPeriodOpen(claimYear, claimMonthNum, beforeDays, afterDays)) {
+      throw badRequest(`The claim window for ${claimMonthNum}/${claimYear} is currently closed — check the configured submission window with HR/Finance/Admin.`);
+    }
+
     const steps = await query<any>(
       `SELECT sas.*, u.role AS approver_role FROM standby_approval_steps sas JOIN users u ON u.id = sas.approver_user_id WHERE sas.claim_id=$1 AND sas.route_version=$2 ORDER BY sas.step_order`,
       [req.params.id, claim.current_route_version]
@@ -897,7 +984,7 @@ export async function performStandbyClaimApprove(claimId: string, actor: { userI
     const isFinal = claim.current_step_order >= Number(totalStepsRows.rows[0].count);
 
     if (isFinal) {
-      await client.query(`UPDATE standby_claims SET status='FINANCE_PROCESSING', updated_at=now() WHERE id=$1`, [claimId]);
+      await client.query(`UPDATE standby_claims SET status='AWAITING_TREASURY', updated_at=now() WHERE id=$1`, [claimId]);
     } else {
       await client.query(`UPDATE standby_claims SET current_step_order=current_step_order+1, updated_at=now() WHERE id=$1`, [claimId]);
     }
@@ -927,7 +1014,7 @@ export async function performStandbyClaimApprove(claimId: string, actor: { userI
       });
     }
   }
-  return { status: isFinal ? "FINANCE_PROCESSING" : "SUBMITTED", isFinal };
+  return { status: isFinal ? "AWAITING_TREASURY" : "SUBMITTED", isFinal };
 }
 
 standbyRouter.post("/claims/:id/approve", async (req: AuthedRequest, res, next) => {
@@ -998,6 +1085,433 @@ standbyRouter.post("/claims/:id/send-back", async (req: AuthedRequest, res, next
 
     const employee = await getUserContact(claim.employee_id);
     void notifyStandbyClaimReturned({
+      claimId: req.params.id, claimNo: claim.claim_no, employeeName: employee?.full_name || null, employeeEmail: employee?.email || null,
+      reason: body.data.comments, action: "RETURNED"
+    });
+    return res.json({ ok: true, comments: body.data.comments });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Call-Outs — see the standby_callout_claims schema comment above for the
+// concept. Rate classification mirrors Overtime's exactly (server-side,
+// authoritative, configurable via system settings, using the same shared
+// public_holidays table) but with Call-Out's own two-bucket rate (weekday /
+// weekend-or-holiday) instead of Overtime's three.
+// ---------------------------------------------------------------------------
+
+async function getCalloutRateSettings() {
+  const [weekdayPct, weekendHolidayPct] = await Promise.all([
+    getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyCalloutRateWeekdayPct, 150),
+    getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyCalloutRateWeekendHolidayPct, 200)
+  ]);
+  return { weekdayPct, weekendHolidayPct };
+}
+
+async function getActiveHolidayDatesForCallout(): Promise<Set<string>> {
+  const rows = await query<{ holiday_date: string; observed_date: string | null }>(
+    `SELECT holiday_date::text AS holiday_date, observed_date::text AS observed_date FROM public_holidays WHERE active=true`
+  );
+  const dates = new Set<string>();
+  for (const r of rows) {
+    dates.add(r.holiday_date);
+    if (r.observed_date) dates.add(r.observed_date);
+  }
+  return dates;
+}
+
+function calloutDayOfWeekName(dateStr: string): string {
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const d = new Date(`${dateStr}T00:00:00`);
+  return names[d.getDay()] ?? "";
+}
+
+function calloutHours(startTime: string, endTime: string): number {
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  let minutes = eh * 60 + em - (sh * 60 + sm);
+  if (minutes <= 0) minutes += 24 * 60; // wraps past midnight
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
+async function classifyCallout(callDate: string, startTime: string, endTime: string) {
+  const [holidays, rates] = await Promise.all([getActiveHolidayDatesForCallout(), getCalloutRateSettings()]);
+  const day = calloutDayOfWeekName(callDate);
+  const hours = calloutHours(startTime, endTime);
+  const isWeekendOrHoliday = day === "Saturday" || day === "Sunday" || holidays.has(callDate);
+  const ratePct = isWeekendOrHoliday ? rates.weekendHolidayPct : rates.weekdayPct;
+  const convertedHours = Math.round(hours * (ratePct / 100) * 100) / 100;
+  return { hours, ratePct, convertedHours, day, isWeekendOrHoliday };
+}
+
+// "YYYY-MM-DD"+"HH:MM" -> minutes on a monotonic (not real-time) scale, used
+// only to compare two wall-clock intervals against each other — never
+// treated as an actual timestamp, so there's no timezone conversion risk.
+function calloutAbsoluteMinutes(dateStr: string, timeStr: string): number {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const [h, mi] = timeStr.split(":").map(Number);
+  return Date.UTC(y, m - 1, d, h, mi) / 60000;
+}
+
+function calloutInterval(dateStr: string, startTime: string, endTime: string): [number, number] {
+  const start = calloutAbsoluteMinutes(dateStr, startTime);
+  let end = calloutAbsoluteMinutes(dateStr, endTime);
+  if (end <= start) end += 24 * 60;
+  return [start, end];
+}
+
+function addDaysToDateString(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().slice(0, 10);
+}
+
+// Does this employee have a PUBLISHED standby assignment whose window
+// overlaps the given call-out time range? Checks both the call-out's own
+// date and the day before it, since a standard standby assignment (e.g.
+// 17:00 -> 08:00 the next day) is logged against the day it *starts*, not
+// every day it covers.
+async function findOverlappingStandbyAssignment(userId: string, callDate: string, startTime: string, endTime: string) {
+  const candidates = await query<any>(
+    `SELECT sa.* FROM standby_assignments sa
+       JOIN standby_rosters sr ON sr.id = sa.roster_id AND sr.status='PUBLISHED'
+      WHERE sa.user_id=$1 AND sa.standby_date IN ($2::date, $3::date)`,
+    [userId, callDate, addDaysToDateString(callDate, -1)]
+  );
+  const [calloutStart, calloutEnd] = calloutInterval(callDate, startTime, endTime);
+  for (const a of candidates) {
+    const [aStart, aEnd] = calloutInterval(a.standby_date, a.start_time, a.end_time);
+    if (calloutStart < aEnd && aStart < calloutEnd) return a;
+  }
+  return null;
+}
+
+function isCalloutOwner(claim: any, userId: string) {
+  return claim.employee_id === userId || claim.created_by_id === userId;
+}
+
+const CALLOUT_SCHEMA = z.object({
+  call_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  start_time: z.string().regex(/^\d{2}:\d{2}$/),
+  end_time: z.string().regex(/^\d{2}:\d{2}$/),
+  reason: z.string().trim().min(1, "Reason is required"),
+  approval_route: APPROVAL_ROUTE_SCHEMA.optional()
+});
+
+// Live check the frontend calls as the employee fills in the form, before
+// ever creating a claim. Overtime, Standby and Call-Out are no longer
+// gated against each other - a Call-Out can be requested at any time,
+// whether or not it falls inside a published standby assignment - so this
+// is now purely informational: it still tells the employee whether the
+// time overlaps one of their standby assignments (shown as a note, not a
+// block) and reports the rate/hours classification either way.
+standbyRouter.get("/callouts/eligibility", async (req: AuthedRequest, res, next) => {
+  try {
+    const query_ = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), start: z.string().regex(/^\d{2}:\d{2}$/), end: z.string().regex(/^\d{2}:\d{2}$/) }).safeParse(req.query);
+    if (!query_.success) throw badRequest("date, start, and end are required");
+    const assignment = await findOverlappingStandbyAssignment(req.user!.userId, query_.data.date, query_.data.start, query_.data.end);
+    const classified = await classifyCallout(query_.data.date, query_.data.start, query_.data.end);
+    return res.json({
+      eligible: true,
+      insideStandbyAssignment: Boolean(assignment),
+      message: assignment
+        ? null
+        : "This time doesn't fall inside any of your published standby assignments - you can still submit it as a Call-Out, or claim it as Overtime instead.",
+      ...classified,
+      standby_assignment_id: assignment?.id ?? null
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.get("/callouts", async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query<any>(
+      `SELECT cc.*, u.full_name AS employee_name FROM standby_callout_claims cc
+         JOIN users u ON u.id = cc.employee_id
+        WHERE cc.employee_id=$1 OR $2 = 'ADMIN'
+        ORDER BY cc.created_at DESC`,
+      [req.user!.userId, req.user!.role]
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+async function loadCalloutDetail(claimId: string) {
+  const claim = (await query<any>(`SELECT * FROM standby_callout_claims WHERE id=$1`, [claimId]))[0];
+  if (!claim) return null;
+  const steps = await query<any>(
+    `SELECT cas.*, u.full_name AS approver_name FROM standby_callout_approval_steps cas
+       JOIN users u ON u.id = cas.approver_user_id
+      WHERE cas.claim_id=$1 AND cas.route_version=$2 ORDER BY cas.step_order`,
+    [claimId, claim.current_route_version]
+  );
+  const routeHistory = claim.current_route_version > 1
+    ? await query<any>(
+        `SELECT cas.*, u.full_name AS approver_name FROM standby_callout_approval_steps cas
+           JOIN users u ON u.id = cas.approver_user_id
+          WHERE cas.claim_id=$1 AND cas.route_version < $2 ORDER BY cas.route_version, cas.step_order`,
+        [claimId, claim.current_route_version]
+      )
+    : [];
+  const employee = await getUserContact(claim.employee_id);
+  return { ...claim, employee_name: employee?.full_name, approval_steps: steps, route_history: routeHistory };
+}
+
+standbyRouter.get("/callouts/:id", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = await loadCalloutDetail(req.params.id);
+    if (!claim) throw notFound();
+    const isOwner = isCalloutOwner(claim, req.user!.userId);
+    const isCurrentApprover = claim.approval_steps.some((s: any) => s.step_order === claim.current_step_order && s.approver_user_id === req.user!.userId);
+    if (!isOwner && !isCurrentApprover && req.user!.role !== "ADMIN") throw forbidden();
+    return res.json({ ...claim, is_owner: isOwner, is_current_approver: isCurrentApprover });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.post("/callouts", async (req: AuthedRequest, res, next) => {
+  try {
+    const body = CALLOUT_SCHEMA.safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid call-out payload", body.error.flatten());
+    // Not gated against a published standby assignment - Overtime, Standby
+    // and Call-Out can each be requested at any time, independently.
+    // standby_assignment_id is still recorded when the time does happen to
+    // fall inside one, purely for cross-reference; it stays null otherwise.
+    const assignment = await findOverlappingStandbyAssignment(req.user!.userId, body.data.call_date, body.data.start_time, body.data.end_time);
+    const classified = await classifyCallout(body.data.call_date, body.data.start_time, body.data.end_time);
+    const claimNo = await nextSequentialNumber("STBCO", 4);
+    const claim = (await query<{ id: string }>(
+      `INSERT INTO standby_callout_claims
+         (claim_no, employee_id, created_by_id, standby_assignment_id, call_date, start_time, end_time, hours, rate_pct, converted_hours, reason)
+       VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+      [claimNo, req.user!.userId, assignment?.id ?? null, body.data.call_date, body.data.start_time, body.data.end_time, classified.hours, classified.ratePct, classified.convertedHours, body.data.reason]
+    ))[0];
+    if (body.data.approval_route?.length) {
+      let order = 1;
+      for (const step of body.data.approval_route) {
+        await query(
+          `INSERT INTO standby_callout_approval_steps (claim_id, step_order, approver_user_id, title) VALUES ($1,$2,$3,$4)`,
+          [claim.id, order++, step.approver_user_id, step.title]
+        );
+      }
+    }
+    await writeStandbyAudit({ actorId: req.user!.userId, entityType: "standby_callout_claims", entityId: claim.id, action: "CALLOUT_CREATED", after: body.data });
+    return res.status(201).json({ id: claim.id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.patch("/callouts/:id", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = (await query<any>(`SELECT * FROM standby_callout_claims WHERE id=$1`, [req.params.id]))[0];
+    if (!claim) throw notFound();
+    if (!isCalloutOwner(claim, req.user!.userId) && req.user!.role !== "ADMIN") throw forbidden();
+    if (claim.status !== "DRAFT") throw badRequest("Only a Draft call-out can be edited");
+
+    const body = CALLOUT_SCHEMA.partial().safeParse(req.body);
+    if (!body.success) throw badRequest("Invalid call-out payload", body.error.flatten());
+
+    const callDate = body.data.call_date ?? claim.call_date;
+    const startTime = body.data.start_time ?? claim.start_time;
+    const endTime = body.data.end_time ?? claim.end_time;
+    if (body.data.call_date || body.data.start_time || body.data.end_time) {
+      const assignment = await findOverlappingStandbyAssignment(req.user!.userId, callDate, startTime, endTime);
+      const classified = await classifyCallout(callDate, startTime, endTime);
+      await query(
+        `UPDATE standby_callout_claims SET standby_assignment_id=$1, call_date=$2, start_time=$3, end_time=$4, hours=$5, rate_pct=$6, converted_hours=$7, updated_at=now() WHERE id=$8`,
+        [assignment?.id ?? null, callDate, startTime, endTime, classified.hours, classified.ratePct, classified.convertedHours, claim.id]
+      );
+    }
+    if (body.data.reason !== undefined) {
+      await query(`UPDATE standby_callout_claims SET reason=$1, updated_at=now() WHERE id=$2`, [body.data.reason, claim.id]);
+    }
+    if (body.data.approval_route) {
+      await query(`DELETE FROM standby_callout_approval_steps WHERE claim_id=$1 AND route_version=$2`, [claim.id, claim.current_route_version]);
+      let order = 1;
+      for (const step of body.data.approval_route) {
+        await query(
+          `INSERT INTO standby_callout_approval_steps (claim_id, route_version, step_order, approver_user_id, title) VALUES ($1,$2,$3,$4,$5)`,
+          [claim.id, claim.current_route_version, order++, step.approver_user_id, step.title]
+        );
+      }
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.post("/callouts/:id/submit", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = (await query<any>(`SELECT * FROM standby_callout_claims WHERE id=$1`, [req.params.id]))[0];
+    if (!claim) throw notFound();
+    if (!isCalloutOwner(claim, req.user!.userId) && req.user!.role !== "ADMIN") throw forbidden();
+    if (claim.status !== "DRAFT") throw badRequest("Call-out has already been submitted");
+
+    const steps = await query<any>(
+      `SELECT cas.* FROM standby_callout_approval_steps cas WHERE cas.claim_id=$1 AND cas.route_version=$2 ORDER BY cas.step_order`,
+      [claim.id, claim.current_route_version]
+    );
+    if (!steps.length) throw badRequest("Add at least one approver to the Approval Route before submitting");
+
+    await query(
+      `UPDATE standby_callout_claims SET status='SUBMITTED', current_step_order=1, submitted_at=now(), updated_at=now() WHERE id=$1`,
+      [claim.id]
+    );
+    await writeStandbyAudit({ actorId: req.user!.userId, entityType: "standby_callout_claims", entityId: claim.id, action: "CALLOUT_SUBMITTED" });
+
+    const employee = await getUserContact(claim.employee_id);
+    const firstApprover = await getUserContact(steps[0].approver_user_id);
+    void notifyStandbyCalloutSubmitted({
+      claimId: claim.id, claimNo: claim.claim_no, employeeName: employee?.full_name || null,
+      approverName: firstApprover?.full_name || null, approverEmail: firstApprover?.email || null, title: steps[0].title
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.post("/callouts/:id/withdraw", async (req: AuthedRequest, res, next) => {
+  try {
+    const claim = (await query<any>(`SELECT * FROM standby_callout_claims WHERE id=$1`, [req.params.id]))[0];
+    if (!claim) throw notFound();
+    if (!isCalloutOwner(claim, req.user!.userId) && req.user!.role !== "ADMIN") throw forbidden();
+    if (!["DRAFT", "SUBMITTED"].includes(claim.status)) throw badRequest("This call-out can no longer be withdrawn");
+    await query(`UPDATE standby_callout_claims SET status='WITHDRAWN', updated_at=now() WHERE id=$1`, [claim.id]);
+    await writeStandbyAudit({ actorId: req.user!.userId, entityType: "standby_callout_claims", entityId: claim.id, action: "CALLOUT_WITHDRAWN" });
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.get("/callouts-approvals", async (req: AuthedRequest, res, next) => {
+  try {
+    const delegatedFor = await getDelegatedManagerIds(req.user!.userId, "STANDBY_CALLOUT");
+    const approverIds = [req.user!.userId, ...delegatedFor];
+    const rows = await query<any>(
+      `SELECT cc.*, u.full_name AS employee_name, cas.title AS my_title, cas.approver_user_id
+         FROM standby_callout_claims cc
+         JOIN standby_callout_approval_steps cas ON cas.claim_id = cc.id AND cas.step_order = cc.current_step_order AND cas.route_version = cc.current_route_version
+         JOIN users u ON u.id = cc.employee_id
+        WHERE cas.approver_user_id = ANY($1::uuid[]) AND cas.status='PENDING'
+        ORDER BY cc.submitted_at`,
+      [approverIds]
+    );
+    return res.json(rows.map((r) => ({ ...r, is_delegated: r.approver_user_id !== req.user!.userId })));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+async function assertCurrentCalloutApprover(claimId: string, actor: { userId: string; role: string }, client: PoolClient) {
+  const claimRows = await client.query<any>(`SELECT * FROM standby_callout_claims WHERE id=$1 FOR UPDATE`, [claimId]);
+  const claim = claimRows.rows[0];
+  if (!claim) throw notFound();
+  const stepRows = await client.query<any>(
+    `SELECT * FROM standby_callout_approval_steps WHERE claim_id=$1 AND route_version=$2 AND step_order=$3`,
+    [claimId, claim.current_route_version, claim.current_step_order]
+  );
+  const step = stepRows.rows[0];
+  if (!step || step.approver_user_id !== actor.userId) {
+    const delegatedFor = actor.role !== "ADMIN" ? await getDelegatedManagerIds(actor.userId, "STANDBY_CALLOUT") : [];
+    const isDelegate = Boolean(step && delegatedFor.includes(step.approver_user_id));
+    if (!isDelegate && actor.role !== "ADMIN") throw forbidden("You are not the current approver for this call-out");
+  }
+  return { claim, step };
+}
+
+standbyRouter.post("/callouts/:id/approve", async (req: AuthedRequest, res, next) => {
+  try {
+    const comments = String(req.body?.comments || "").trim() || null;
+    const { claim, isFinal } = await withTransaction(async (client) => {
+      const { claim, step } = await assertCurrentCalloutApprover(req.params.id, { userId: req.user!.userId, role: req.user!.role }, client);
+      if (claim.status !== "SUBMITTED") throw badRequest("Call-out is not awaiting approval");
+      if (step.status !== "PENDING") throw badRequest("This step has already been actioned");
+
+      await client.query(`UPDATE standby_callout_approval_steps SET status='APPROVED', decided_at=now(), comments=$2 WHERE id=$1`, [step.id, comments]);
+      const totalStepsRows = await client.query<{ count: string }>(`SELECT count(*)::text AS count FROM standby_callout_approval_steps WHERE claim_id=$1 AND route_version=$2`, [req.params.id, claim.current_route_version]);
+      const isFinal = claim.current_step_order >= Number(totalStepsRows.rows[0].count);
+
+      if (isFinal) {
+        await client.query(`UPDATE standby_callout_claims SET status='AWAITING_TREASURY', updated_at=now() WHERE id=$1`, [req.params.id]);
+      } else {
+        await client.query(`UPDATE standby_callout_claims SET current_step_order=current_step_order+1, updated_at=now() WHERE id=$1`, [req.params.id]);
+      }
+      return { claim, isFinal };
+    });
+    await writeStandbyAudit({ actorId: req.user!.userId, entityType: "standby_callout_claims", entityId: req.params.id, action: "CALLOUT_STEP_APPROVED", after: { comments } });
+
+    const employee = await getUserContact(claim.employee_id);
+    if (isFinal) {
+      void notifyStandbyCalloutReadyForTreasury({ claimId: req.params.id, claimNo: claim.claim_no, employeeName: employee?.full_name || null });
+    } else {
+      const nextStep = (await query<any>(`SELECT * FROM standby_callout_approval_steps WHERE claim_id=$1 AND route_version=$2 AND step_order=$3`, [req.params.id, claim.current_route_version, claim.current_step_order + 1]))[0];
+      const nextApprover = nextStep ? await getUserContact(nextStep.approver_user_id) : null;
+      if (nextStep && nextApprover) {
+        void notifyStandbyCalloutSubmitted({
+          claimId: req.params.id, claimNo: claim.claim_no, employeeName: employee?.full_name || null,
+          approverName: nextApprover.full_name, approverEmail: nextApprover.email, title: nextStep.title
+        });
+      }
+    }
+    return res.json({ ok: true, status: isFinal ? "AWAITING_TREASURY" : "SUBMITTED" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.post("/callouts/:id/reject", async (req: AuthedRequest, res, next) => {
+  try {
+    const body = z.object({ comments: z.string().trim().min(1, "Comments are required") }).safeParse(req.body);
+    if (!body.success) throw badRequest("Comments are required to reject");
+    const { claim } = await withTransaction(async (client) => {
+      const { claim, step } = await assertCurrentCalloutApprover(req.params.id, { userId: req.user!.userId, role: req.user!.role }, client);
+      if (claim.status !== "SUBMITTED") throw badRequest("Call-out is not awaiting approval");
+      if (step.status !== "PENDING") throw badRequest("This step has already been actioned");
+      await client.query(`UPDATE standby_callout_approval_steps SET status='REJECTED', decided_at=now(), comments=$2 WHERE id=$1`, [step.id, body.data.comments]);
+      await client.query(`UPDATE standby_callout_claims SET status='REJECTED', updated_at=now() WHERE id=$1`, [req.params.id]);
+      return { claim };
+    });
+    await writeStandbyAudit({ actorId: req.user!.userId, entityType: "standby_callout_claims", entityId: req.params.id, action: "CALLOUT_REJECTED", after: { comments: body.data.comments } });
+    const employee = await getUserContact(claim.employee_id);
+    void notifyStandbyCalloutReturned({
+      claimId: req.params.id, claimNo: claim.claim_no, employeeName: employee?.full_name || null, employeeEmail: employee?.email || null,
+      reason: body.data.comments, action: "REJECTED"
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+standbyRouter.post("/callouts/:id/send-back", async (req: AuthedRequest, res, next) => {
+  try {
+    const body = z.object({ comments: z.string().trim().min(1, "Comments are required") }).safeParse(req.body);
+    if (!body.success) throw badRequest("Comments are required to send back");
+    const { claim } = await withTransaction(async (client) => {
+      const { claim, step } = await assertCurrentCalloutApprover(req.params.id, { userId: req.user!.userId, role: req.user!.role }, client);
+      if (claim.status !== "SUBMITTED") throw badRequest("Call-out is not awaiting approval");
+      if (step.status !== "PENDING") throw badRequest("This step has already been actioned");
+      await client.query(`UPDATE standby_callout_approval_steps SET status='SENT_BACK', decided_at=now(), comments=$2 WHERE id=$1`, [step.id, body.data.comments]);
+      await client.query(
+        `UPDATE standby_callout_claims SET status='DRAFT', current_route_version=current_route_version+1, current_step_order=0, updated_at=now() WHERE id=$1`,
+        [req.params.id]
+      );
+      return { claim };
+    });
+    await writeStandbyAudit({ actorId: req.user!.userId, entityType: "standby_callout_claims", entityId: req.params.id, action: "CALLOUT_SENT_BACK", after: { comments: body.data.comments } });
+    const employee = await getUserContact(claim.employee_id);
+    void notifyStandbyCalloutReturned({
       claimId: req.params.id, claimNo: claim.claim_no, employeeName: employee?.full_name || null, employeeEmail: employee?.email || null,
       reason: body.data.comments, action: "RETURNED"
     });
@@ -1362,13 +1876,23 @@ standbyRouter.patch("/finance-sections/:id", async (req: AuthedRequest, res, nex
 // Compensation formulas/rates must be "configurable and should not be
 // embedded in UI code" — a global compensable-hours percentage and a
 // default hourly rate Finance can accept or override per claim.
+// The claim window replaces the old manual per-month Open/Close claim-
+// periods panel with a recurring rule (see lib/claimWindow.ts): configure
+// once, applies to every month automatically.
 standbyRouter.get("/settings", async (req: AuthedRequest, res, next) => {
   try {
-    const [compensableRatePct, defaultHourlyRate] = await Promise.all([
+    const [compensableRatePct, defaultHourlyRate, claimWindowBeforeDays, claimWindowAfterDays] = await Promise.all([
       getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyCompensableRatePct, 10),
-      getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyDefaultHourlyRate, 0)
+      getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyDefaultHourlyRate, 0),
+      getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyClaimWindowBeforeDays, 0),
+      getNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyClaimWindowAfterDays, 0)
     ]);
-    return res.json({ compensable_rate_pct: compensableRatePct, default_hourly_rate: defaultHourlyRate });
+    return res.json({
+      compensable_rate_pct: compensableRatePct,
+      default_hourly_rate: defaultHourlyRate,
+      claim_window_before_days: claimWindowBeforeDays,
+      claim_window_after_days: claimWindowAfterDays
+    });
   } catch (err) {
     return next(err);
   }
@@ -1376,16 +1900,24 @@ standbyRouter.get("/settings", async (req: AuthedRequest, res, next) => {
 
 standbyRouter.put("/settings", async (req: AuthedRequest, res, next) => {
   try {
-    if (req.user!.role !== "ADMIN") throw forbidden("Only an administrator can change Standby settings");
+    if (req.user!.role !== "ADMIN" && !(await isHrOperationsUser(req))) throw forbidden("Only an administrator or HR Operations can change Standby settings");
+    // default_hourly_rate is accepted but no longer sent by the UI — there's
+    // no Finance/money stage left to seed a rate for.
     const body = z
       .object({
         compensable_rate_pct: z.coerce.number().min(0).max(100),
-        default_hourly_rate: z.coerce.number().min(0)
+        default_hourly_rate: z.coerce.number().min(0).optional(),
+        claim_window_before_days: z.coerce.number().int().min(0).max(31),
+        claim_window_after_days: z.coerce.number().int().min(0).max(31)
       })
       .safeParse(req.body);
     if (!body.success) throw badRequest("Invalid settings payload", body.error.flatten());
     await setNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyCompensableRatePct, body.data.compensable_rate_pct);
-    await setNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyDefaultHourlyRate, body.data.default_hourly_rate);
+    if (body.data.default_hourly_rate !== undefined) {
+      await setNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyDefaultHourlyRate, body.data.default_hourly_rate);
+    }
+    await setNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyClaimWindowBeforeDays, body.data.claim_window_before_days);
+    await setNumericSystemSetting(SYSTEM_SETTING_KEYS.standbyClaimWindowAfterDays, body.data.claim_window_after_days);
     await writeStandbyAudit({ actorId: req.user!.userId, entityType: "standby_settings", entityId: req.user!.userId, action: "SETTINGS_UPDATED", after: body.data });
     return res.json({ ok: true });
   } catch (err) {
@@ -1495,37 +2027,36 @@ standbyRouter.get("/reports/operational", async (req: AuthedRequest, res, next) 
   }
 });
 
+// No more Finance/money stage — every closed claim already carries its
+// compensable hours, so this reports on hours rather than an amount paid.
 standbyRouter.get("/reports/financial", async (req: AuthedRequest, res, next) => {
   try {
     if (!(await isCompensationFinanceUser(req))) throw forbidden();
 
     const byMonth = await query<any>(
-      `SELECT claim_month::text AS month, sum(calculated_amount)::numeric(14,2) AS total
-         FROM standby_claims WHERE status IN ('PAID','CLOSED') AND calculated_amount IS NOT NULL
+      `SELECT claim_month::text AS month, sum(compensable_hours)::numeric(14,2) AS total
+         FROM standby_claims WHERE status = 'CLOSED'
         GROUP BY claim_month ORDER BY claim_month DESC`
     );
 
     const bySection = await query<any>(
-      `SELECT COALESCE(t.name,'Unassigned') AS section, sum(sc.calculated_amount)::numeric(14,2) AS total
+      `SELECT COALESCE(t.name,'Unassigned') AS section, sum(sc.compensable_hours)::numeric(14,2) AS total
          FROM standby_claims sc JOIN users u ON u.id=sc.employee_id LEFT JOIN teams t ON t.id=u.team_id
-        WHERE sc.status IN ('PAID','CLOSED') AND sc.calculated_amount IS NOT NULL
+        WHERE sc.status = 'CLOSED'
         GROUP BY t.name ORDER BY total DESC`
     );
 
-    const paidVsOutstanding = (await query<any>(
-      `SELECT
-         COALESCE(SUM(calculated_amount) FILTER (WHERE status='CLOSED'), 0)::numeric(14,2) AS paid,
-         COALESCE(SUM(calculated_amount) FILTER (WHERE status IN ('FINANCE_PROCESSING','PAYMENT_PENDING') AND calculated_amount IS NOT NULL), 0)::numeric(14,2) AS outstanding
-       FROM standby_claims`
+    const totalCompensableHours = (await query<{ total: string }>(
+      `SELECT COALESCE(SUM(compensable_hours), 0)::numeric(14,2) AS total FROM standby_claims WHERE status = 'CLOSED'`
     ))[0];
 
     const adjustments = await query<any>(
-      `SELECT sc.claim_no, oc.claim_no AS original_claim_no, sc.status, sc.calculated_amount, sc.comments, sc.created_at
+      `SELECT sc.claim_no, oc.claim_no AS original_claim_no, sc.status, sc.compensable_hours, sc.comments, sc.created_at
          FROM standby_claims sc LEFT JOIN standby_claims oc ON oc.id = sc.original_claim_id
         WHERE sc.is_adjustment=true ORDER BY sc.created_at DESC`
     );
 
-    return res.json({ by_month: byMonth, by_section: bySection, paid_vs_outstanding: paidVsOutstanding, adjustments });
+    return res.json({ by_month: byMonth, by_section: bySection, total_compensable_hours: Number(totalCompensableHours.total), adjustments });
   } catch (err) {
     return next(err);
   }
@@ -1553,8 +2084,8 @@ standbyRouter.get("/dashboard", async (req: AuthedRequest, res, next) => {
     const inApproval = (await query<{ count: string }>(
       `SELECT count(*)::text AS count FROM standby_claims WHERE status='SUBMITTED'`
     ))[0];
-    const financeProcessing = (await query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM standby_claims WHERE status IN ('FINANCE_PROCESSING','PAYMENT_PENDING')`
+    const closedThisMonth = (await query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM standby_claims WHERE status='CLOSED' AND closed_at >= date_trunc('month', now())`
     ))[0];
 
     const orgPath = await getUserOrgPath(req.user!.userId);
@@ -1575,9 +2106,10 @@ standbyRouter.get("/dashboard", async (req: AuthedRequest, res, next) => {
       active_rosters: Number(activeRosters.count),
       awaiting_claims: Number(awaitingClaims.count),
       in_approval: Number(inApproval.count),
-      finance_processing: Number(financeProcessing.count),
+      closed_this_month: Number(closedThisMonth.count),
       on_standby_today: onStandbyToday,
-      is_finance: await isCompensationFinanceUser(req)
+      is_finance: await isCompensationFinanceUser(req),
+      is_hr: await isHrOperationsUser(req)
     });
   } catch (err) {
     return next(err);

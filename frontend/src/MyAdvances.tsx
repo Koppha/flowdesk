@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { formatMoney, travelTypeLabel, travelTypeCurrency, isTravelTypeCode, TravelType, currentApprovalStepLabel, isAdvancePastApproval } from "./constants";
+import { getUserFromToken } from "./api";
 import { FileText, Clock3, CheckCircle2, XCircle, Edit3, RefreshCw, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface Props {
@@ -86,6 +87,12 @@ function advanceStageLabel(advance: any) {
 const PAGE_SIZE = 10;
 
 export default function MyAdvances({ advances, travelTypes, claims = [], onNew, onEdit, onTrack, onClear, onContinueClearance }: Props) {
+  // This list is fetched as "mine" but that means requester OR creator - a
+  // request someone else asked you to fill in for them (e.g. a PA raising
+  // one for their manager) lands here too, with the manager as requester and
+  // you as created_by. Without a flag, that row is visually indistinguishable
+  // from your own advance - see the "On Behalf Of" cell below.
+  const myId = getUserFromToken()?.userId;
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -247,6 +254,9 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
                       {travelTypeLabel(a.type, travelTypes)}
                       {a.external_beneficiary_name && (
                         <div style={{ fontWeight: 400, fontSize: 11.5, color: "var(--muted)" }}>For {a.external_beneficiary_name}</div>
+                      )}
+                      {a.requester_id && myId && a.requester_id !== myId && a.requester_name && (
+                        <div style={{ fontWeight: 400, fontSize: 11.5, color: "var(--muted)" }}>On Behalf Of {a.requester_name}</div>
                       )}
                     </td>
                     <td><strong>{requestNumber(a)}</strong></td>

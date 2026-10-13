@@ -5,16 +5,17 @@ import multer from "multer";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { notifyCustomRequestStep, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned } from "../../lib/notifications.js";
+import { notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder } from "../../lib/notifications.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
-import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
+import { resolveDirectManagerId } from "../reporting-lines/reporting-lines.routes.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
-import { createProvisioningTaskForSubmission } from "../it-provisioning/it-provisioning.service.js";
+import { acknowledgeCollection, createProvisioningTaskForSubmission, getProvisioningStatusForSubmission } from "../it-provisioning/it-provisioning.service.js";
 import { baselineBrsDocument, returnBrsDocumentToDraft } from "../brs/brs.service.js";
+import { isPeriodLocked } from "../attendance/attendance.routes.js";
 
 export const customRequestsRouter = Router();
 customRequestsRouter.use(requireAuth);
@@ -32,7 +33,15 @@ const uploadAttachments = multer({
   fileFilter: fileExtensionFilter(["pdf", "doc", "docx", "jpg", "jpeg", "png", "gif", "webp"])
 });
 
-type FixedApprovalStep = { title: string; source: "AUTO_MANAGER" | "ROLE_PICKER"; role?: string };
+// `roles` lets one step accept several roles (e.g. "IS HOD/CIO" = HOD or EXCO);
+// `role` is the original single-role form, still honoured.
+// `default_approver_id` pre-fills a ROLE_PICKER step (set by IT in IT
+// Provisioning for the Computer Request) - the requester's own pick wins.
+type FixedApprovalStep = { title: string; source: "AUTO_MANAGER" | "ROLE_PICKER"; role?: string; roles?: string[]; default_approver_id?: string | null };
+
+function fixedStepRoles(step: FixedApprovalStep): string[] {
+  return (step.roles?.length ? step.roles : step.role ? [step.role] : []).map((r) => r.toUpperCase());
+}
 // An assignee entry is either a person (id and/or email set) or a whole
 // team (teamId set, id/email null) — confirmed by any one member of that team.
 type AssigneeEntry = {
@@ -131,8 +140,8 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     const parsed = CreateSchema.safeParse({ request_type_id: req.body.request_type_id, data: bodyData, approval_chain: bodyChain });
     if (!parsed.success) throw badRequest("Invalid submission payload", parsed.error.flatten());
 
-    const requestType = (await query<{ id: string; name: string; status: string; fixed_approval_chain: FixedApprovalStep[] | null; is_internal: boolean }>(
-      `SELECT id, name, status, fixed_approval_chain, is_internal FROM custom_request_types WHERE id = $1 AND is_active = true`,
+    const requestType = (await query<{ id: string; code: string; name: string; status: string; fixed_approval_chain: FixedApprovalStep[] | null; is_internal: boolean }>(
+      `SELECT id, code, name, status, fixed_approval_chain, is_internal FROM custom_request_types WHERE id = $1 AND is_active = true`,
       [parsed.data.request_type_id]
     ))[0];
     if (!requestType) throw notFound("Request type not found");
@@ -143,6 +152,17 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     if (requestType.is_internal) throw badRequest("This request type cannot be submitted directly");
 
     await assertCanSubmit(req.user!.userId, req.user!.role, req.user!.department ?? null, req.user!.employmentType ?? null, requestType.id);
+
+    // Attendance Register only: an admin can close a month once payroll
+    // processing starts (attendance.routes.ts) - blocks a fresh submission
+    // the same way it already blocks new/edited drafts for that month.
+    let attendancePeriod: string | null = null;
+    if (requestType.code === "ATTENDANCE_REGISTER") {
+      attendancePeriod = String((parsed.data.data as Record<string, unknown>)?.month || "").slice(0, 7);
+      if (attendancePeriod && (await isPeriodLocked(requestType.id, attendancePeriod))) {
+        throw badRequest("This attendance period has been closed for submissions - contact HR/Admin.");
+      }
+    }
 
     const fields = await query<{ field_key: string; field_label: string; is_required: boolean; field_type: string }>(
       `SELECT field_key, field_label, is_required, field_type FROM request_type_fields WHERE request_type_id = $1 AND is_active = true`,
@@ -218,12 +238,15 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
         const stepDef = fixedChain[i];
         const submitted = parsed.data.approval_chain[i];
         if (stepDef.source === "AUTO_MANAGER") {
-          const managerId = (await getManagerChainIds(req.user!.userId))[0];
+          // The form lets the requester pick their manager by hand when the
+          // org structure can't resolve one - honour that pick as a fallback.
+          const managerId = (await resolveDirectManagerId(req.user!.userId)) ?? submitted?.approver_id ?? null;
           if (!managerId) throw badRequest("No manager is set up for you in the org structure — ask HR/Admin to set your reporting line before submitting");
           chainInput.push({ approver_id: managerId, position_name: stepDef.title, decision_type: "APPROVE" });
         } else {
-          if (!submitted?.approver_id) throw badRequest(`Please select an approver for "${stepDef.title}"`);
-          chainInput.push({ approver_id: submitted.approver_id, position_name: stepDef.title, decision_type: "APPROVE" });
+          const approverId = submitted?.approver_id || stepDef.default_approver_id || null;
+          if (!approverId) throw badRequest(`Please select an approver for "${stepDef.title}"`);
+          chainInput.push({ approver_id: approverId, position_name: stepDef.title, decision_type: "APPROVE" });
         }
       }
     } else {
@@ -253,10 +276,11 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     if (fixedChain?.length) {
       for (let i = 0; i < fixedChain.length; i++) {
         const stepDef = fixedChain[i];
-        if (stepDef.source === "ROLE_PICKER" && stepDef.role) {
+        const roles = fixedStepRoles(stepDef);
+        if (stepDef.source === "ROLE_PICKER" && roles.length) {
           const approver = approverMap.get(chainInput[i].approver_id)!;
-          if (String(approver.role).toUpperCase() !== stepDef.role.toUpperCase()) {
-            throw badRequest(`The approver for "${stepDef.title}" must have the role ${stepDef.role}`);
+          if (!roles.includes(String(approver.role).toUpperCase())) {
+            throw badRequest(`The approver for "${stepDef.title}" must have the role ${roles.join(" or ")}`);
           }
         }
       }
@@ -277,12 +301,32 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
       };
     });
 
-    const submission = (await query<{ id: string }>(
-      `INSERT INTO custom_request_submissions (request_type_id, requester_id, data, approval_chain, current_step_order, status)
-       VALUES ($1, $2, $3, $4, 0, 'IN_PROGRESS')
-       RETURNING id`,
-      [requestType.id, req.user!.userId, JSON.stringify(parsed.data.data), JSON.stringify(chain)]
-    ))[0];
+    // Attendance Register only: promote an already-autosaved DRAFT row for
+    // this requester/month in place, rather than inserting a second row and
+    // orphaning the draft - day-by-day progress becomes the real submission.
+    const draft = attendancePeriod
+      ? (await query<{ id: string }>(
+          `SELECT id FROM custom_request_submissions
+            WHERE requester_id = $1 AND request_type_id = $2 AND status = 'DRAFT' AND data->>'month' LIKE $3
+            LIMIT 1`,
+          [req.user!.userId, requestType.id, `${attendancePeriod}%`]
+        ))[0]
+      : undefined;
+
+    const submission = draft
+      ? (await query<{ id: string }>(
+          `UPDATE custom_request_submissions
+              SET data = $1, approval_chain = $2, current_step_order = 0, status = 'IN_PROGRESS', updated_at = now()
+            WHERE id = $3
+            RETURNING id`,
+          [JSON.stringify(parsed.data.data), JSON.stringify(chain), draft.id]
+        ))[0]
+      : (await query<{ id: string }>(
+          `INSERT INTO custom_request_submissions (request_type_id, requester_id, data, approval_chain, current_step_order, status)
+           VALUES ($1, $2, $3, $4, 0, 'IN_PROGRESS')
+           RETURNING id`,
+          [requestType.id, req.user!.userId, JSON.stringify(parsed.data.data), JSON.stringify(chain)]
+        ))[0];
 
     const uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
     for (const file of uploadedFiles) {
@@ -312,6 +356,16 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
           approverId: chain[0].approver_id,
           stepLabel: chain[0].position_name,
           stepOrder: 0
+        });
+        const requester = (await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = $1`, [req.user!.userId]))[0];
+        await notifyCustomRequestProgress({
+          submissionId: submission.id,
+          requestTypeName: requestType.name,
+          requesterEmail: requester?.email ?? null,
+          requesterName: requester?.full_name ?? null,
+          event: "SUBMITTED",
+          nextApproverName: chain[0].approver_name,
+          nextStepLabel: chain[0].position_name
         });
 
         // "user"/"user_multi" fields (e.g. Change Assignee) can be filled in with
@@ -405,7 +459,13 @@ customRequestsRouter.get("/mine", async (req: AuthedRequest, res, next) => {
                 (SELECT json_agg(json_build_object('id', a.id, 'original_name', a.original_name) ORDER BY a.uploaded_at)
                    FROM custom_request_attachments a WHERE a.submission_id = s.id),
                 '[]'
-              ) AS attachments
+              ) AS attachments,
+              (SELECT json_build_object('status', t.status, 'assigned_to_name', ito.full_name, 'asset_number', d.asset_number,
+                                        'ready_for_collection_at', t.ready_for_collection_at, 'collection_acknowledged_at', t.collection_acknowledged_at)
+                 FROM it_provisioning_tasks t
+                 LEFT JOIN users ito ON ito.id = t.assigned_to_id
+                 LEFT JOIN it_devices d ON d.id = t.device_id
+                WHERE t.submission_id = s.id) AS it_provisioning
          FROM custom_request_submissions s
          JOIN custom_request_types rt ON rt.id = s.request_type_id
         WHERE s.requester_id = $1
@@ -496,7 +556,28 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id,
       userId: req.user!.userId, role: req.user!.role, isOwner, action: "view"
     });
-    return res.json({ ...submission, fields, attachments, can_view_pdf });
+    // Computer Request: where IT Provisioning is up to, so the requester can
+    // see progress and confirm collection from their own request.
+    const it_provisioning = submission.request_type_code === "COMPUTER_REQUEST"
+      ? await getProvisioningStatusForSubmission(submission.id)
+      : null;
+    return res.json({ ...submission, fields, attachments, can_view_pdf, it_provisioning });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /custom-requests/:id/acknowledge-collection - the requester confirms
+// they've collected the computer IT provisioned for them; completes the task.
+customRequestsRouter.post("/:id/acknowledge-collection", async (req: AuthedRequest, res, next) => {
+  try {
+    const submission = (await query<{ requester_id: string }>(
+      `SELECT requester_id FROM custom_request_submissions WHERE id = $1`, [req.params.id]
+    ))[0];
+    if (!submission) throw notFound();
+    if (submission.requester_id !== req.user!.userId) throw forbidden("Only the requester can confirm collection");
+    await acknowledgeCollection(req.params.id, req.user!.userId);
+    return res.json({ ok: true, it_provisioning: await getProvisioningStatusForSubmission(req.params.id) });
   } catch (err) {
     return next(err);
   }
@@ -940,10 +1021,25 @@ export async function performCustomRequestAction(
       requesterName: submission.requester_name,
       decision: "APPROVED",
       decidedBy: actor.fullName ?? null,
-      comment: comment ?? null
+      comment: comment ?? null,
+      nextSteps: submission.request_type_code === "COMPUTER_REQUEST"
+        ? "It has now gone to IT for provisioning. We'll email you as it progresses, and when your computer is ready to collect."
+        : null
     });
   } else {
     const nextStep = chain[newStepOrder];
+    void notifyCustomRequestProgress({
+      submissionId: submission.id,
+      requestTypeName: submission.request_type_name,
+      requesterEmail: submission.requester_email,
+      requesterName: submission.requester_name,
+      event: "STEP_APPROVED",
+      actedBy: actor.fullName ?? null,
+      actedStepLabel: step.position_name,
+      comment: comment ?? null,
+      nextApproverName: nextStep.approver_name,
+      nextStepLabel: nextStep.position_name
+    });
     void notifyCustomRequestStep({
       submissionId: submission.id,
       requestTypeName: submission.request_type_name,
@@ -978,6 +1074,72 @@ customRequestsRouter.post("/:id/action", async (req: AuthedRequest, res, next) =
 
 // POST /custom-requests/:id/cancel — requester withdraws their own request while it's
 // still pending approval. Terminal — cancelled requests cannot be reopened.
+// A manual nudge the requester can fire on demand, rather than waiting for
+// the automatic SLA sweep's threshold to elapse (see sla.service.ts). Shares
+// that same sla_reminder_log dedupe row (doc_type "CUSTOM_REQUEST") so
+// sending one also resets the automatic sweep's clock for this step -
+// covers BRS Approval and Change Request alike, since both ride this same
+// generic engine.
+const MANUAL_REMINDER_COOLDOWN_HOURS = 1;
+customRequestsRouter.post("/:id/remind", async (req: AuthedRequest, res, next) => {
+  try {
+    const submission = (await query<any>(
+      `SELECT s.*, rt.name AS request_type_name, u.full_name AS requester_name
+         FROM custom_request_submissions s
+         JOIN custom_request_types rt ON rt.id = s.request_type_id
+         JOIN users u ON u.id = s.requester_id
+        WHERE s.id = $1`,
+      [req.params.id]
+    ))[0];
+    if (!submission) throw notFound();
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId) {
+      throw forbidden("Only the requester can send a reminder on this request");
+    }
+    if (submission.status !== "IN_PROGRESS") throw badRequest("This request is not awaiting approval");
+
+    const chain = submission.approval_chain as Array<{ approver_id: string; approver_name: string | null; approver_email: string | null; position_name: string }>;
+    const step = chain[submission.current_step_order];
+    if (!step) throw badRequest("This request has no pending approval step");
+
+    const existing = (await query<{ reminded_at: string }>(
+      `SELECT reminded_at FROM sla_reminder_log WHERE doc_type='CUSTOM_REQUEST' AND doc_id=$1 AND step_order=$2`,
+      [submission.id, submission.current_step_order]
+    ))[0];
+    if (existing && new Date(existing.reminded_at).getTime() > Date.now() - MANUAL_REMINDER_COOLDOWN_HOURS * 3_600_000) {
+      throw badRequest("A reminder was already sent recently for this step — please wait before sending another.");
+    }
+
+    let approverEmail = step.approver_email;
+    let approverName = step.approver_name;
+    if (!approverEmail) {
+      const user = (await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = $1`, [step.approver_id]))[0];
+      approverEmail = user?.email ?? null;
+      approverName = approverName ?? user?.full_name ?? null;
+    }
+    if (!approverEmail) throw badRequest("The current approver has no email on file — contact Admin");
+
+    await notifySlaReminder({
+      docType: "CUSTOM_REQUEST",
+      docId: submission.id,
+      itemLabel: "Request",
+      reference: `${submission.request_type_name || "Custom Request"} — ${submission.requester_name || "Unknown"}`,
+      approverEmail,
+      approverName,
+      hoursPending: (Date.now() - new Date(submission.updated_at).getTime()) / 3_600_000
+    });
+
+    await query(
+      `INSERT INTO sla_reminder_log (doc_type, doc_id, step_order, reminded_at) VALUES ('CUSTOM_REQUEST',$1,$2,now())
+       ON CONFLICT (doc_type, doc_id, step_order) DO UPDATE SET reminded_at = now()`,
+      [submission.id, submission.current_step_order]
+    );
+
+    return res.json({ ok: true, approver_name: approverName });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 customRequestsRouter.post("/:id/cancel", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CancelSchema.safeParse(req.body);

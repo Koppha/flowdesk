@@ -1,4 +1,4 @@
-const API = (import.meta.env.VITE_API as string) || window.location.origin;
+export const API = (import.meta.env.VITE_API as string) || window.location.origin;
 
 export function getToken() {
   return localStorage.getItem("token");
@@ -96,6 +96,23 @@ async function fetchBlob(path: string) {
   const headers: any = {};
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${API}${path}`, { headers, cache: "no-store" });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    const error = new Error(formatApiError(json, res.statusText));
+    (error as any).status = res.status;
+    throw error;
+  }
+  return res.blob();
+}
+
+// Like fetchBlob, but POSTs a body (FormData) instead of a plain GET - for
+// endpoints that transform an upload and hand back a file in one round
+// trip (e.g. the PDF text annotator) rather than returning JSON.
+async function postForBlob(path: string, body: FormData) {
+  const token = getToken();
+  const headers: any = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { method: "POST", headers, body, cache: "no-store" });
   if (!res.ok) {
     const json = await res.json().catch(() => ({}));
     const error = new Error(formatApiError(json, res.statusText));
@@ -275,7 +292,11 @@ export const api = {
   reconciliationReport: (from: string, to: string) =>
     req(`/advances/reconciliation-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   clearanceStatusReport: () => req("/advances/clearance-status-report"),
+  myClearanceStatusReport: () => req("/advances/my-clearance-status-report"),
   createAdvance: (data: any) => req("/advances", { method: "POST", body: JSON.stringify(data) }),
+  uploadAdvanceAttachment: (id: string, form: FormData) => req(`/advances/${id}/attachments`, { method: "POST", body: form }),
+  deleteAdvanceAttachment: (id: string, attachmentId: string) => req(`/advances/${id}/attachments/${attachmentId}`, { method: "DELETE" }),
+  advanceAttachmentFileBlob: (id: string, attachmentId: string) => fetchBlob(`/advances/${id}/attachments/${attachmentId}/file`),
   externalPayees: () => req("/advances/external-payees"),
   allExternalPayees: () => req("/advances/external-payees?include_inactive=true"),
   createExternalPayee: (data: any) => req("/advances/external-payees", { method: "POST", body: JSON.stringify(data) }),
@@ -357,16 +378,18 @@ export const api = {
   overtimeReportsSummary: () => req("/overtime/reports/summary"),
   overtimeDashboard: () => req("/overtime/dashboard"),
 
-  overtimeClaimPeriods: () => req("/overtime/claim-periods"),
-  openOvertimeClaimPeriod: (year: number, month: number) => req("/overtime/claim-periods", { method: "POST", body: JSON.stringify({ year, month }) }),
-  closeOvertimeClaimPeriod: (id: string) => req(`/overtime/claim-periods/${id}/close`, { method: "POST" }),
-
   overtimeReport: (report: string, params: Record<string, string> = {}) =>
     req(`/overtime-reports/${report}?${new URLSearchParams(params).toString()}`),
   overtimeReportCsv: (report: string, params: Record<string, string> = {}) =>
     fetchBlob(`/overtime-reports/${report}?${new URLSearchParams({ ...params, format: "csv" }).toString()}`),
   overtimeReportPdf: (report: string, params: Record<string, string> = {}) =>
     fetchBlob(`/overtime-reports/${report}?${new URLSearchParams({ ...params, format: "pdf" }).toString()}`),
+  standbyReport: (params: Record<string, string> = {}) =>
+    req(`/standby-reports?${new URLSearchParams(params).toString()}`),
+  standbyReportCsv: (params: Record<string, string> = {}) =>
+    fetchBlob(`/standby-reports?${new URLSearchParams({ ...params, format: "csv" }).toString()}`),
+  standbyReportPdf: (params: Record<string, string> = {}) =>
+    fetchBlob(`/standby-reports?${new URLSearchParams({ ...params, format: "pdf" }).toString()}`),
   aiAnomalies: () => req("/ai/anomalies"),
   aiNlReport: (prompt: string) => req("/ai/nl-report", { method: "POST", body: JSON.stringify({ prompt }) }),
   aiOcrExtract: (text: string) => req("/ai/ocr-extract", { method: "POST", body: JSON.stringify({ text }) }),
@@ -469,7 +492,24 @@ export const api = {
     salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
     salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
     vendor_contracts_enabled?: boolean; service_contracts_enabled?: boolean;
+    signature_enabled?: boolean;
   }) => req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
+  slaSettings: () => req("/admin/sla-settings"),
+  updateSlaSettings: (data: { enabled: boolean; thresholdHours: number }) =>
+    req("/admin/sla-settings", { method: "PUT", body: JSON.stringify(data) }),
+  mobileAppConfig: () => req("/admin/mobile-config"),
+  updateMobileAppConfig: (modules: Record<string, boolean>, tabs?: { key: string; enabled: boolean }[]) =>
+    req("/admin/mobile-config", { method: "PUT", body: JSON.stringify({ modules, ...(tabs ? { tabs } : {}) }) }),
+  latestMobileAppBuild: (platform = "ANDROID") => req(`/mobile-app/latest?platform=${platform}`),
+  mobileAppDownloadToken: () => req("/mobile-app/download-token") as Promise<{ token: string }>,
+  mobileAppAnalytics: () => req("/mobile-app/analytics"),
+  uploadMobileAppApk: (file: File, version: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("version", version);
+    form.append("platform", "ANDROID");
+    return req("/mobile-app", { method: "POST", body: form });
+  },
   addRequestTypePermission: (id: string, data: any) => req(`/request-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   removeRequestTypePermission: (id: string, permId: string) => req(`/request-types/${id}/permissions/${permId}`, { method: "DELETE" }),
 
@@ -530,8 +570,12 @@ export const api = {
   customRequestAttachmentBlob: (id: string, attachmentId: string) => fetchBlob(`/custom-requests/${id}/attachments/${attachmentId}`),
   actionCustomRequest: (id: string, data: { action: "APPROVE" | "REJECT"; comment?: string }) =>
     req(`/custom-requests/${id}/action`, { method: "POST", body: JSON.stringify(data) }),
+  acknowledgeComputerCollection: (id: string) =>
+    req(`/custom-requests/${id}/acknowledge-collection`, { method: "POST", body: JSON.stringify({}) }),
   cancelCustomRequest: (id: string, comment: string) =>
     req(`/custom-requests/${id}/cancel`, { method: "POST", body: JSON.stringify({ comment }) }),
+  remindCustomRequest: (id: string) =>
+    req(`/custom-requests/${id}/remind`, { method: "POST" }),
   closeCustomRequest: (id: string, data: { implementation_date: string; closure_notes?: string }) =>
     req(`/custom-requests/${id}/close`, { method: "POST", body: JSON.stringify(data) }),
   assignedToMeCustomRequests: () => req("/custom-requests/assigned-to-me"),
@@ -558,6 +602,7 @@ export const api = {
   brsCreate: (data: { brs_type_id: string; title: string; intake_data?: Record<string, any> }) =>
     req("/brs", { method: "POST", body: JSON.stringify(data) }),
   myBrs: () => req("/brs/mine"),
+  deleteBrs: (id: string) => req(`/brs/${id}`, { method: "DELETE" }),
   assignedToMeBrs: () => req("/brs/assigned-to-me"),
   brsDetail: (id: string) => req(`/brs/${id}`),
   updateBrsSection: (id: string, sectionId: string, content_html: string) =>
@@ -568,6 +613,7 @@ export const api = {
   confirmBrsSectionAssignee: (id: string, sectionId: string) =>
     req(`/brs/${id}/sections/${sectionId}/assignees/confirm`, { method: "POST" }),
   advanceBrsPhase: (id: string) => req(`/brs/${id}/advance-phase`, { method: "POST" }),
+  reopenBrs: (id: string, comment?: string) => req(`/brs/${id}/reopen`, { method: "POST", body: JSON.stringify({ comment }) }),
   updateBrsIntake: (id: string, intake_data: Record<string, any>) =>
     req(`/brs/${id}/intake`, { method: "PATCH", body: JSON.stringify({ intake_data }) }),
   brsGateCheck: (id: string) => req(`/brs/${id}/gate-check`),
@@ -603,6 +649,8 @@ export const api = {
 
   travelTypes: () => req("/travel/types"),
   airports: () => req("/travel/airports"),
+  travelSettings: () => req("/travel/settings"),
+  updateTravelSettings: (data: { advance_backdating_grace_days: number }) => req("/travel/settings", { method: "PUT", body: JSON.stringify(data) }),
   createTravelType: (data: any) => req("/travel/types", { method: "POST", body: JSON.stringify(data) }),
   updateTravelType: (id: string, data: any) => req(`/travel/types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteTravelType: (id: string) => req(`/travel/types/${id}`, { method: "DELETE" }),
@@ -618,6 +666,36 @@ export const api = {
   refundable: () => req("/refundable"),
   setRefundableActioned: (id: string, refunded: boolean) =>
     req(`/refundable/${id}/refunded`, { method: "PATCH", body: JSON.stringify({ refunded }) }),
+
+  compensationClaimsAccess: () => req("/compensation-claims/access"),
+  compensationClaims: () => req("/compensation-claims"),
+  compensationClaimDetail: (type: string, id: string) => req(`/compensation-claims/${type}/${id}`),
+  closeCompensationClaim: (type: string, id: string, comment?: string) =>
+    req(`/compensation-claims/${type}/${id}/close`, { method: "POST", body: JSON.stringify({ confirmed: true, comment }) }),
+
+  salariesAccess: () => req("/salaries/access"),
+  salaryRegisters: () => req("/salaries/registers"),
+  salaryRegisterDetail: (division: string, department: string, period: string) =>
+    req(`/salaries/registers/detail?${new URLSearchParams({ division, department, period })}`),
+  salaryRecord: (submissionId: string) => req(`/salaries/records/${submissionId}`),
+  paySalaryRecord: (submissionId: string, data: { payment_reference: string; payment_date: string; comment?: string }) =>
+    req(`/salaries/records/${submissionId}/pay`, { method: "POST", body: JSON.stringify(data) }),
+  paySalaryAdvance: (id: string, data: { payment_reference: string; payment_date: string; comment?: string }) =>
+    req(`/salaries/advances/${id}/pay`, { method: "POST", body: JSON.stringify(data) }),
+  salariesReadyForPayment: () => req("/salaries/ready-for-payment"),
+  salariesHistory: () => req("/salaries/history"),
+
+  attendanceDraft: (period?: string) => req(`/attendance/draft${period ? `?period=${period}` : ""}`),
+  saveAttendanceDraft: (data: { period: string; division?: string; department?: string; cells: Record<string, string> }) =>
+    req("/attendance/draft", { method: "PUT", body: JSON.stringify(data) }),
+  clearAttendanceDraft: (period?: string) => req(`/attendance/draft${period ? `?period=${period}` : ""}`, { method: "DELETE" }),
+  attendancePeriods: () => req("/attendance/periods"),
+  closeAttendancePeriod: (period: string) => req(`/attendance/periods/${period}/close`, { method: "POST" }),
+  reopenAttendancePeriod: (period: string) => req(`/attendance/periods/${period}/reopen`, { method: "POST" }),
+
+  salariesSettings: () => req("/salaries/settings"),
+  updateSalariesSettings: (data: { application_open_day: number }) =>
+    req("/salaries/settings", { method: "PUT", body: JSON.stringify(data) }),
 
   vendorContractsAccess: () => req("/vendor-contracts/access"),
   vendorContractsDashboard: () => req("/vendor-contracts/dashboard"),
@@ -690,6 +768,12 @@ export const api = {
   itProvisioningReadyForCollection: (id: string) => req(`/it-provisioning/${id}/ready-for-collection`, { method: "POST", body: JSON.stringify({}) }),
   itProvisioningHandover: (id: string, data: any) => req(`/it-provisioning/${id}/handover`, { method: "POST", body: JSON.stringify(data) }),
   itProvisioningDevices: () => req("/it-provisioning/devices"),
+  itProvisioningCreateDevice: (data: any) => req("/it-provisioning/devices", { method: "POST", body: JSON.stringify(data) }),
+  itProvisioningUpdateDevice: (deviceId: string, data: any) =>
+    req(`/it-provisioning/devices/${deviceId}`, { method: "PUT", body: JSON.stringify(data) }),
+  itProvisioningApproverDefaults: () => req("/it-provisioning/approver-defaults"),
+  itProvisioningSetApproverDefaults: (defaults: Array<{ index: number; approver_id: string | null }>) =>
+    req("/it-provisioning/approver-defaults", { method: "PUT", body: JSON.stringify({ defaults }) }),
   itProvisioningReportsSummary: () => req("/it-provisioning/reports/summary"),
   itProvisioningChecklistTemplates: () => req("/it-provisioning/checklist-templates"),
   itProvisioningSaveChecklistTemplates: (computer_type: string, items: string[]) =>
@@ -698,8 +782,8 @@ export const api = {
   itProvisioningSaveSoftwareTemplates: (computer_type: string, items: Array<{ name: string; is_standard?: boolean }>) =>
     req("/it-provisioning/software-templates", { method: "PUT", body: JSON.stringify({ computer_type, items }) }),
   itProvisioningDefaultAssignees: () => req("/it-provisioning/default-assignees"),
-  itProvisioningSetDefaultAssignees: (assigned_to_ids: string[]) =>
-    req("/it-provisioning/default-assignees", { method: "PUT", body: JSON.stringify({ assigned_to_ids }) }),
+  itProvisioningSetDefaultAssignees: (assigned_to_ids: string[], team_ids: string[] = []) =>
+    req("/it-provisioning/default-assignees", { method: "PUT", body: JSON.stringify({ assigned_to_ids, team_ids }) }),
   itProvisioningClaim: (id: string) => req(`/it-provisioning/${id}/claim`, { method: "POST", body: JSON.stringify({}) }),
 
   standbyDashboard: () => req("/standby/dashboard"),
@@ -739,6 +823,22 @@ export const api = {
 
   standbyEligibleApprovers: (search: string) => req(`/standby/eligible-approvers?search=${encodeURIComponent(search)}`),
 
+  calloutEligibility: (date: string, start: string, end: string) =>
+    req(`/standby/callouts/eligibility?date=${date}&start=${start}&end=${end}`),
+  callouts: () => req("/standby/callouts"),
+  callout: (id: string) => req(`/standby/callouts/${id}`),
+  createCallout: (data: any) => req("/standby/callouts", { method: "POST", body: JSON.stringify(data) }),
+  updateCallout: (id: string, data: any) => req(`/standby/callouts/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  submitCallout: (id: string) => req(`/standby/callouts/${id}/submit`, { method: "POST" }),
+  withdrawCallout: (id: string) => req(`/standby/callouts/${id}/withdraw`, { method: "POST" }),
+  calloutApprovals: () => req("/standby/callouts-approvals"),
+  approveCallout: (id: string, comments?: string) =>
+    req(`/standby/callouts/${id}/approve`, { method: "POST", body: JSON.stringify({ comments }) }),
+  rejectCallout: (id: string, comments: string) =>
+    req(`/standby/callouts/${id}/reject`, { method: "POST", body: JSON.stringify({ comments }) }),
+  sendBackCallout: (id: string, comments: string) =>
+    req(`/standby/callouts/${id}/send-back`, { method: "POST", body: JSON.stringify({ comments }) }),
+
   standbyRosterView: (scope: string, range: string, date: string) =>
     req(`/standby/roster-view?scope=${scope}&range=${range}&date=${date}`),
 
@@ -757,7 +857,7 @@ export const api = {
   standbyFinancialReport: () => req("/standby/reports/financial"),
 
   standbySettings: () => req("/standby/settings"),
-  updateStandbySettings: (data: { compensable_rate_pct: number; default_hourly_rate: number }) =>
+  updateStandbySettings: (data: { compensable_rate_pct: number; claim_window_before_days: number; claim_window_after_days: number }) =>
     req("/standby/settings", { method: "PUT", body: JSON.stringify(data) }),
   standbyClaimPdf: (id: string) => fetchBlob(`/standby/claims/${id}/pdf`),
 
@@ -767,5 +867,34 @@ export const api = {
     req("/standby/finance-codes", { method: "POST", body: JSON.stringify(data) }),
   updateStandbyFinanceCode: (id: string, data: { name?: string; active?: boolean }) =>
     req(`/standby/finance-codes/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteStandbyFinanceCode: (id: string) => req(`/standby/finance-codes/${id}`, { method: "DELETE" })
+  deleteStandbyFinanceCode: (id: string) => req(`/standby/finance-codes/${id}`, { method: "DELETE" }),
+
+  mySignatures: () => req("/signatures/mine"),
+  signature: (id: string) => req(`/signatures/${id}`),
+  signatureFileBlob: (id: string) => fetchBlob(`/signatures/${id}/file`),
+  uploadAndSignDocument: (form: FormData) => req("/signatures/upload-and-sign", { method: "POST", body: form }),
+  signatureNotationPolicy: () => req("/signatures/settings"),
+  updateSignatureNotationPolicy: (data: { notation: "AI" | "PP"; overridable: boolean }) =>
+    req("/signatures/settings", { method: "PUT", body: JSON.stringify(data) }),
+
+  mySavedSignature: () => req("/signatures/my-saved-signature"),
+  saveMySavedSignature: (data: { signatureType: "type" | "draw"; typedName?: string | null; imageDataUrl?: string | null }) =>
+    req("/signatures/my-saved-signature", { method: "PUT", body: JSON.stringify(data) }),
+  clearMySavedSignature: () => req("/signatures/my-saved-signature", { method: "DELETE" }),
+
+  createSignableDocument: (form: FormData) => req("/signatures/documents", { method: "POST", body: form }),
+  mySignableDocuments: () => req("/signatures/documents/mine"),
+  signableDocument: (id: string) => req(`/signatures/documents/${id}`),
+  signableDocumentFileBlob: (id: string) => fetchBlob(`/signatures/documents/${id}/file`),
+  signPlacement: (id: string, data: {
+    consentStatement: string; pageNumber: number; xPct: number; yPct: number; widthPct: number;
+    typedSignatureText?: string | null; signatureImageDataUrl?: string | null;
+    authorityUserId?: string; requestedNotation?: "AI" | "PP";
+  }) => req(`/signatures/documents/${id}/sign`, { method: "POST", body: JSON.stringify(data) }),
+  rejectSignableDocument: (id: string, comment: string) =>
+    req(`/signatures/documents/${id}/reject`, { method: "POST", body: JSON.stringify({ comment }) }),
+  annotateSignableDocument: (id: string, data: { pageNumber: number; xPct: number; yPct: number; text: string; fontSize: number; color: string }) =>
+    req(`/signatures/documents/${id}/annotate-text`, { method: "POST", body: JSON.stringify(data) }),
+
+  annotatePdf: (form: FormData) => postForBlob("/pdf-edit/annotate", form)
 };

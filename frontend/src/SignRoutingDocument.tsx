@@ -1,0 +1,878 @@
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import * as pdfjsLib from "pdfjs-dist";
+// @ts-ignore - Vite's ?url suffix resolves to the built worker's asset URL
+import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { api, getUserFromToken, downloadBlob } from "./api";
+import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
+import { Field, fieldStyle, labelStyle, SignatureCanvas } from "./SignDocument";
+import { Upload, FilePlus2, FolderOpen, ChevronLeft, ChevronRight, MousePointerClick, Share2, CheckCircle2, Users, Plus, Trash2, ArrowUp, ArrowDown, XCircle, Clock3, Ban, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, PenLine, Type } from "lucide-react";
+
+const TEXT_COLORS = ["#111827", "#dc2626", "#1d4ed8", "#059669", "#ea580c"];
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
+
+// The "click-to-place" counterpart to Quick Sign - one PDF, multiple people
+// each add their own mark at a spot they choose (built for paper-style
+// multi-GM routing sheets). A document is shared purely by its link
+// (?signDoc=<id>); there's no inbox or notification here.
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+type Placement = {
+  id: string;
+  signerName: string;
+  authorityName: string | null;
+  delegationNotation: "AI" | "PP" | null;
+  pageNumber: number;
+  signedAt: string;
+};
+
+type ChainStep = {
+  approverId: string;
+  approverName: string;
+  status: "PENDING" | "SIGNED" | "REJECTED";
+  comment: string | null;
+  actedAt: string | null;
+};
+
+type DocDetail = {
+  id: string;
+  title: string;
+  verificationCode: string;
+  status: "OPEN" | "COMPLETED" | "REJECTED";
+  currentStepOrder: number;
+  approvalChain: ChainStep[];
+  isMyTurn: boolean;
+  placements: Placement[];
+};
+
+type ChainStepDraft = { approverId: string };
+
+export default function SignRoutingDocument() {
+  const me = getUserFromToken();
+  // Company-wide directory, available to any authenticated user (not the
+  // admin-only staff list) - matches how BRS/Custom Requests build their
+  // own requester-defined approval chains, since signing a document is
+  // just as ordinary a thing for a regular employee to do as an admin.
+  const [companyDirectory, setCompanyDirectory] = useState<DirectoryUser[]>([]);
+  useEffect(() => {
+    api.requestDirectory("company").then((rows: any[]) => setCompanyDirectory(Array.isArray(rows) ? rows : [])).catch(() => {});
+  }, []);
+  // "On behalf of" (below) excludes yourself - you can't sign under your
+  // own delegated authority. The approval-route builder needs the opposite:
+  // the creator may well want to include themselves as one of the signers
+  // in their own routing chain, so it gets the full directory.
+  const directory: DirectoryUser[] = companyDirectory.filter((s) => s.id !== me?.userId);
+  const chainDirectory: DirectoryUser[] = companyDirectory;
+
+  const [docId, setDocId] = useState<string | null>(null);
+  const [doc, setDoc] = useState<DocDetail | null>(null);
+  const [docLoading, setDocLoading] = useState(false);
+  const [docError, setDocError] = useState("");
+
+  const [newTitle, setNewTitle] = useState("");
+  const [newFile, setNewFile] = useState<File | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [openInput, setOpenInput] = useState("");
+  const [opening, setOpening] = useState(false);
+
+  // Optional approval route built at creation time - empty means the
+  // original free-for-all behavior (anyone with the link signs, any order).
+  const [chainDraft, setChainDraft] = useState<ChainStepDraft[]>([]);
+
+  const [showReject, setShowReject] = useState(false);
+  const [rejectComment, setRejectComment] = useState("");
+  const [rejecting, setRejecting] = useState(false);
+
+  const [myDocs, setMyDocs] = useState<any[]>([]);
+  const [loadingMyDocs, setLoadingMyDocs] = useState(true);
+
+  const [policy, setPolicy] = useState<{ default: "AI" | "PP"; overridable: boolean } | null>(null);
+
+  // PDF rendering
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pdfDocRef = useRef<any>(null);
+  const [pageNum, setPageNum] = useState(1);
+  const [numPages, setNumPages] = useState(1);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    function onFsChange() {
+      setIsFullscreen(!!document.fullscreenElement);
+      // The container's available width changes once it fills the whole
+      // screen - re-render at that new size instead of leaving the page
+      // stuck at its pre-fullscreen pixel dimensions.
+      if (pdfDocRef.current) void renderPage(pdfDocRef.current, pageNum, zoom);
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageNum, zoom]);
+
+  async function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await containerRef.current?.requestFullscreen();
+    }
+  }
+
+  // Click mode: place a signature, or drop plain text (e.g. filling in a
+  // cell by hand, a note) - same click-to-place mechanics, different form
+  // and a different, non-signing endpoint underneath.
+  const [placeMode, setPlaceMode] = useState<"sign" | "text">("sign");
+  const [textDraft, setTextDraft] = useState("");
+  const [textDraftSize, setTextDraftSize] = useState(14);
+  const [textDraftColor, setTextDraftColor] = useState(TEXT_COLORS[0]);
+  const [placingText, setPlacingText] = useState(false);
+
+  // Placement in progress
+  const [pendingClick, setPendingClick] = useState<{ xPct: number; yPct: number } | null>(null);
+  // Narrower default than before (0.16) - a table cell in a typical
+  // multi-column sign-off sheet is often ~100-150pt wide on an A4 page
+  // (595pt), so the old default spilled into the neighboring column at the
+  // slightest off-center click. Centered on click either way; the visible
+  // anchor dot (see the canvas overlay below) shows exactly that point.
+  const [markWidthPct, setMarkWidthPct] = useState(0.1);
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [signMode, setSignMode] = useState<"type" | "draw">("type");
+  const [typedName, setTypedName] = useState(me?.fullName || "");
+  const [drawnDataUrl, setDrawnDataUrl] = useState<string | null>(null);
+  const [canvasSeed, setCanvasSeed] = useState<string | null>(null);
+  const [rememberSignature, setRememberSignature] = useState(true);
+  const [onBehalfOf, setOnBehalfOf] = useState(false);
+  const [authorityUserId, setAuthorityUserId] = useState("");
+  const [requestedNotation, setRequestedNotation] = useState<"AI" | "PP">("PP");
+  const [placing, setPlacing] = useState(false);
+  const [placeError, setPlaceError] = useState("");
+
+  const loadMyDocs = useCallback(async () => {
+    setLoadingMyDocs(true);
+    try {
+      const resp = await api.mySignableDocuments();
+      setMyDocs(Array.isArray(resp?.items) ? resp.items : []);
+    } catch {
+      // non-critical
+    } finally {
+      setLoadingMyDocs(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadMyDocs();
+    api.signatureNotationPolicy().then((p) => setPolicy(p)).catch(() => {});
+    api.mySavedSignature().then((saved) => {
+      if (!saved) return;
+      setSignMode(saved.signatureType);
+      if (saved.signatureType === "type") setTypedName(saved.typedName || me?.fullName || "");
+      if (saved.signatureType === "draw" && saved.imageDataUrl) {
+        setDrawnDataUrl(saved.imageDataUrl);
+        setCanvasSeed(saved.imageDataUrl);
+      }
+    }).catch(() => {});
+    // Pre-fill from a shared link or an Inbox handoff, but don't open it
+    // automatically - the person should choose to, not have it happen to
+    // them the moment the page loads.
+    const fromLink = new URLSearchParams(window.location.search).get("signDoc");
+    if (fromLink) {
+      setOpenInput(fromLink);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("signDoc");
+      window.history.replaceState(window.history.state, "", url);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadMyDocs]);
+
+  async function loadPdfIntoCanvas(blob: Blob, page: number) {
+    setPdfBusy(true);
+    try {
+      const buf = await blob.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      pdfDocRef.current = pdf;
+      setNumPages(pdf.numPages);
+      await renderPage(pdf, Math.min(page, pdf.numPages));
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
+  // The canvas's CSS box can otherwise be stretched or squeezed away from
+  // its own internal pixel width/height by the surrounding flex/grid layout
+  // (a scrollbar appearing once a tall page overflows, a window resize, a
+  // layout race right after the document opens) - when that happens,
+  // getBoundingClientRect() reports a box that no longer matches what the
+  // canvas was actually rendered at, so xPct/yPct silently stop landing
+  // where they visually appear to. Widening the viewer made this far more
+  // likely to actually trigger (bigger canvases cross the
+  // "now needs a scrollbar" threshold much more often). renderPage below
+  // pins canvas.style.width/height to its own pixel size directly via the
+  // ref, so the browser can never silently rescale it out from under the
+  // click math, and the ResizeObserver further down re-renders at the
+  // correct size if the container's true width ever drifts from that.
+  async function renderPage(pdf: any, page: number, zoomOverride?: number) {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container || !pdf) return;
+    const pdfPage = await pdf.getPage(page);
+    const unscaled = pdfPage.getViewport({ scale: 1 });
+    // Fills the available container width by default (reading a dense,
+    // multi-page document needs real size, not a small fixed preview) -
+    // the zoom control on top lets someone go further still.
+    const targetWidth = Math.min(container.clientWidth || 1000, 1500) * (zoomOverride ?? zoom);
+    const scale = targetWidth / unscaled.width;
+    const viewport = pdfPage.getViewport({ scale });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    canvas.style.width = `${viewport.width}px`;
+    canvas.style.height = `${viewport.height}px`;
+    setCanvasSize({ width: viewport.width, height: viewport.height });
+    const ctx = canvas.getContext("2d")!;
+    await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+    setPageNum(page);
+  }
+
+  async function goToPage(page: number) {
+    if (!pdfDocRef.current || page < 1 || page > numPages) return;
+    setPendingClick(null);
+    await renderPage(pdfDocRef.current, page);
+  }
+
+  async function changeZoom(next: number) {
+    const clamped = Math.min(2.5, Math.max(0.5, Math.round(next * 20) / 20));
+    setZoom(clamped);
+    if (pdfDocRef.current) {
+      setPendingClick(null);
+      await renderPage(pdfDocRef.current, pageNum, clamped);
+    }
+  }
+
+  // Self-corrects for exactly the failure mode described above: if the
+  // container's real width ever drifts from what the canvas was sized for
+  // (a scrollbar appearing, a window resize, any layout settling after the
+  // fact), re-render at the new true size instead of leaving a mismatch
+  // for click math to silently inherit.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let lastWidth = container.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const el = containerRef.current;
+      if (!el || !pdfDocRef.current) return;
+      const width = el.clientWidth;
+      if (Math.abs(width - lastWidth) < 2) return;
+      lastWidth = width;
+      setPendingClick(null);
+      void renderPage(pdfDocRef.current, pageNum, zoom);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId, pageNum, zoom]);
+
+  async function openDocument(idOrLink: string) {
+    const match = UUID_RE.exec(idOrLink);
+    const id = match ? match[0] : idOrLink.trim();
+    if (!id) return;
+    setDocError("");
+    setOpening(true);
+    setDocLoading(true);
+    try {
+      const [detail, blob] = await Promise.all([api.signableDocument(id), api.signableDocumentFileBlob(id)]);
+      setDocId(id);
+      setDoc(detail);
+      setPendingClick(null);
+      setZoom(1);
+      setPlaceMode("sign");
+      await loadPdfIntoCanvas(blob, 1);
+    } catch (e: any) {
+      setDocError(e.message || "Couldn't open that document.");
+      setDocId(null);
+      setDoc(null);
+    } finally {
+      setOpening(false);
+      setDocLoading(false);
+    }
+  }
+
+  async function refreshCurrentDocument() {
+    if (!docId) return;
+    setDocLoading(true);
+    try {
+      const [detail, blob] = await Promise.all([api.signableDocument(docId), api.signableDocumentFileBlob(docId)]);
+      setDoc(detail);
+      await loadPdfIntoCanvas(blob, pageNum);
+    } finally {
+      setDocLoading(false);
+    }
+  }
+
+  function addChainStep() {
+    setChainDraft((c) => [...c, { approverId: "" }]);
+  }
+  function updateChainStep(idx: number, approverId: string) {
+    setChainDraft((c) => c.map((s, i) => (i === idx ? { approverId } : s)));
+  }
+  function removeChainStep(idx: number) {
+    setChainDraft((c) => c.filter((_, i) => i !== idx));
+  }
+  function moveChainStep(idx: number, dir: -1 | 1) {
+    setChainDraft((c) => {
+      const next = [...c];
+      const swap = idx + dir;
+      if (swap < 0 || swap >= next.length) return c;
+      [next[idx], next[swap]] = [next[swap], next[idx]];
+      return next;
+    });
+  }
+
+  async function handleCreate() {
+    setDocError("");
+    if (!newFile) { setDocError("Choose a PDF to start."); return; }
+    if (!newTitle.trim()) { setDocError("Give this document a title."); return; }
+    const chain = chainDraft.filter((s) => s.approverId);
+    if (chainDraft.some((s) => !s.approverId)) { setDocError("Every approval step needs an approver selected (or remove the empty row)."); return; }
+    setCreating(true);
+    try {
+      const form = new FormData();
+      form.append("file", newFile);
+      form.append("title", newTitle.trim());
+      if (chain.length > 0) form.append("approvalChain", JSON.stringify(chain));
+      const resp = await api.createSignableDocument(form);
+      setNewTitle("");
+      setNewFile(null);
+      setChainDraft([]);
+      await openDocument(resp.id);
+      await loadMyDocs();
+    } catch (e: any) {
+      setDocError(e.message || "Failed to start document.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!docId) return;
+    if (!rejectComment.trim()) { setPlaceError("Say why you're rejecting this document."); return; }
+    setRejecting(true);
+    try {
+      await api.rejectSignableDocument(docId, rejectComment.trim());
+      setShowReject(false);
+      setRejectComment("");
+      await refreshCurrentDocument();
+      await loadMyDocs();
+    } catch (e: any) {
+      setPlaceError(e.message || "Failed to reject document.");
+    } finally {
+      setRejecting(false);
+    }
+  }
+
+  function pctFromClientPoint(clientX: number, clientY: number) {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      xPct: Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1),
+      yPct: Math.min(Math.max((clientY - rect.top) / rect.height, 0), 1)
+    };
+  }
+
+  function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (!canAct) return;
+    const pt = pctFromClientPoint(e.clientX, e.clientY);
+    if (!pt) return;
+    setPendingClick(pt);
+    setPlaceError("");
+  }
+
+  // Click gets you close; dragging the marker afterwards gets it exact -
+  // repeated reports that a single click never quite lands where expected
+  // (screen/PDF coordinate conversion has enough moving parts - zoom,
+  // scroll, box size vs. anchor point - that pixel-perfect click precision
+  // alone isn't a reliable bar to hold this to) mean direct, visual
+  // adjustment beats trying to make the click itself flawless.
+  const draggingRef = useRef(false);
+  function startDrag(e: React.PointerEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    draggingRef.current = true;
+    const onMove = (ev: PointerEvent) => {
+      if (!draggingRef.current) return;
+      const pt = pctFromClientPoint(ev.clientX, ev.clientY);
+      if (pt) setPendingClick(pt);
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  async function handlePlace() {
+    setPlaceError("");
+    if (!docId || !pendingClick) return;
+    if (!consentChecked) { setPlaceError("You must confirm consent to sign electronically."); return; }
+    if (signMode === "type" && !typedName.trim()) { setPlaceError("Type your name to sign."); return; }
+    if (signMode === "draw" && !drawnDataUrl) { setPlaceError("Draw your signature."); return; }
+    if (onBehalfOf && !authorityUserId) { setPlaceError("Choose whose authority you're signing under."); return; }
+
+    const consentStatement = `I, ${me?.fullName || "the signer"}, confirm this is my legal signature and I consent to sign this document electronically on ${new Date().toLocaleDateString("en-GB")}.`;
+
+    setPlacing(true);
+    try {
+      await api.signPlacement(docId, {
+        consentStatement,
+        pageNumber: pageNum,
+        xPct: pendingClick.xPct,
+        yPct: pendingClick.yPct,
+        widthPct: markWidthPct,
+        typedSignatureText: signMode === "type" ? typedName.trim() : undefined,
+        signatureImageDataUrl: signMode === "draw" && drawnDataUrl ? drawnDataUrl : undefined,
+        authorityUserId: onBehalfOf ? authorityUserId : undefined,
+        requestedNotation: onBehalfOf && policy?.overridable ? requestedNotation : undefined
+      });
+      if (rememberSignature) {
+        await api.saveMySavedSignature({
+          signatureType: signMode,
+          typedName: signMode === "type" ? typedName.trim() : null,
+          imageDataUrl: signMode === "draw" ? drawnDataUrl : null
+        }).catch(() => {});
+      }
+      setPendingClick(null);
+      setConsentChecked(false);
+      setOnBehalfOf(false);
+      setAuthorityUserId("");
+      await refreshCurrentDocument();
+    } catch (e: any) {
+      setPlaceError(e.message || "Failed to place signature.");
+    } finally {
+      setPlacing(false);
+    }
+  }
+
+  async function handlePlaceText() {
+    setPlaceError("");
+    if (!docId || !pendingClick) return;
+    if (!textDraft.trim()) { setPlaceError("Type some text first."); return; }
+    setPlacingText(true);
+    try {
+      await api.annotateSignableDocument(docId, {
+        pageNumber: pageNum, xPct: pendingClick.xPct, yPct: pendingClick.yPct,
+        text: textDraft.trim(), fontSize: textDraftSize, color: textDraftColor
+      });
+      setPendingClick(null);
+      setTextDraft("");
+      await refreshCurrentDocument();
+    } catch (e: any) {
+      setPlaceError(e.message || "Failed to add text.");
+    } finally {
+      setPlacingText(false);
+    }
+  }
+
+  function shareLink(id: string) {
+    return `${window.location.origin}${window.location.pathname}?signDoc=${id}`;
+  }
+
+  // Available at any stage - not signed yet, partway through the route, or
+  // finished - it always downloads whatever the current copy looks like.
+  async function handleDownload(id: string, title: string) {
+    await downloadBlob(() => api.signableDocumentFileBlob(id), `${title.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "document"}.pdf`);
+  }
+
+  // Sized in exact pixels computed in JS - not CSS width:% + aspect-ratio,
+  // which leaves the actual box dimensions up to the browser's own
+  // percentage/aspect-ratio rounding and interaction with border-box
+  // sizing. Mirroring stampSignatureMarkAtPosition's own arithmetic
+  // (signatureStamp.ts) directly here - boxWidth = widthPct * pageWidth,
+  // boxHeight = boxWidth / 2.6, both converted to canvas pixels via the
+  // same scale already used to render the page - removes any gap between
+  // what this preview shows and what actually gets stamped.
+  const markBoxStyle: React.CSSProperties | null = pendingClick && canvasSize.width && placeMode === "sign"
+    ? (() => {
+        const boxWidthPx = markWidthPct * canvasSize.width;
+        const boxHeightPx = boxWidthPx / 2.6;
+        return {
+          position: "absolute",
+          left: `${pendingClick.xPct * canvasSize.width}px`,
+          top: `${pendingClick.yPct * canvasSize.height}px`,
+          width: `${boxWidthPx}px`,
+          height: `${boxHeightPx}px`,
+          border: "2px solid #3b82f6",
+          background: "rgba(59,130,246,0.15)",
+          cursor: "grab",
+          touchAction: "none",
+          borderRadius: 3
+        };
+      })()
+    : null;
+
+  // A fixed-size dot exactly on the click point - draggable via a larger
+  // invisible hit-area (28px) around the visible 8px dot, present in both
+  // sign and text-add mode.
+  const anchorDotHandleStyle: React.CSSProperties | null = pendingClick && canvasSize.width
+    ? {
+        position: "absolute",
+        // Pixel-based, same basis as markBoxStyle above (both driven off
+        // canvasSize directly) - not percentages, so the two can never
+        // drift apart by a rounding pixel between them.
+        left: `${pendingClick.xPct * canvasSize.width}px`,
+        top: `${pendingClick.yPct * canvasSize.height}px`,
+        width: 28, height: 28, marginLeft: -14, marginTop: -14,
+        cursor: "grab",
+        touchAction: "none",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 2
+      }
+    : null;
+
+  const activeNotation = onBehalfOf ? (policy?.overridable ? requestedNotation : policy?.default) : null;
+  const hasChain = Boolean(doc?.approvalChain?.length);
+  const canAct = Boolean(doc) && (!hasChain || doc!.isMyTurn);
+  const currentApproverName = hasChain && doc!.status === "OPEN" ? doc!.approvalChain[doc!.currentStepOrder]?.approverName : null;
+
+  return (
+    <div>
+      {!docId ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
+              <FilePlus2 size={16} /> Start a routing document
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="Title">
+                <input style={fieldStyle} value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="e.g. GM Sign-off Sheet — April 2026" />
+              </Field>
+              <Field label="PDF file">
+                <label style={{
+                  ...fieldStyle, display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                  border: newFile ? "1px solid #34d399" : "1px dashed var(--border)",
+                  background: newFile ? "#ecfdf5" : "var(--surface-soft)"
+                }}>
+                  {newFile ? <CheckCircle2 size={14} color="#059669" /> : <Upload size={14} />}
+                  <span style={{ flex: 1, color: newFile ? "#065f46" : "inherit", fontWeight: newFile ? 600 : 400 }}>
+                    {newFile ? `${newFile.name} (${(newFile.size / 1024).toFixed(0)} KB) — attached` : "Choose a PDF…"}
+                  </span>
+                  <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setNewFile(e.target.files?.[0] || null)} />
+                </label>
+              </Field>
+
+              <div>
+                <label style={labelStyle}>Approval route (optional)</label>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
+                  Leave empty to let anyone with the link sign, in any order. Add approvers to require them to sign in this order — each one can also reject.
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {chainDraft.map((step, idx) => (
+                    <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <span style={{ fontSize: 11, color: "var(--muted)", width: 16, textAlign: "center" }}>{idx + 1}</span>
+                      <div style={{ flex: 1 }}>
+                        <ApproverCombobox users={chainDirectory} value={step.approverId} onChange={(id) => updateChainStep(idx, id)} />
+                      </div>
+                      <button type="button" onClick={() => moveChainStep(idx, -1)} disabled={idx === 0} style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 4 }}><ArrowUp size={12} /></button>
+                      <button type="button" onClick={() => moveChainStep(idx, 1)} disabled={idx === chainDraft.length - 1} style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 4 }}><ArrowDown size={12} /></button>
+                      <button type="button" onClick={() => removeChainStep(idx)} style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 4, color: "#dc2626" }}><Trash2 size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" onClick={addChainStep} style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                  <Plus size={12} /> Add approval step
+                </button>
+              </div>
+
+              <button onClick={handleCreate} disabled={creating} style={{ padding: "9px 16px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, opacity: creating ? 0.7 : 1 }}>
+                {creating ? "Starting…" : "Start & open"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
+              <FolderOpen size={16} /> Open a shared document
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="Paste the link or document ID someone shared with you">
+                <input style={fieldStyle} value={openInput} onChange={(e) => setOpenInput(e.target.value)} placeholder="https://…/?signDoc=… or the document ID" />
+              </Field>
+              <button onClick={() => void openDocument(openInput)} disabled={opening || !openInput.trim()} style={{ padding: "9px 16px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 13, fontWeight: 600, opacity: opening ? 0.7 : 1 }}>
+                {opening ? "Opening…" : "Open document"}
+              </button>
+            </div>
+          </div>
+
+          {docError && <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "#dc2626" }}>{docError}</div>}
+
+          <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 10 }}>Your routing documents</div>
+            {loadingMyDocs ? (
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>Loading…</div>
+            ) : myDocs.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>None yet.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {myDocs.map((d) => (
+                  <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}>
+                        {d.title}{d.created_by_me ? "" : " (shared with you)"}
+                        {d.is_my_turn && <span style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", background: "#eff6ff", padding: "2px 7px", borderRadius: 10 }}>AWAITING YOU</span>}
+                        {d.status === "REJECTED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#dc2626", background: "#fef2f2", padding: "2px 7px", borderRadius: 10 }}>REJECTED</span>}
+                        {d.status === "COMPLETED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ecfdf5", padding: "2px 7px", borderRadius: 10 }}>COMPLETED</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                        {new Date(d.updated_at).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                    <button onClick={() => void handleDownload(d.id, d.title)} title="Download current copy" style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                      <Download size={12} />
+                    </button>
+                    <button onClick={() => void openDocument(d.id)} style={{ padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                      Open
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}>
+                {doc?.title}
+                {doc?.status === "REJECTED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#dc2626", background: "#fef2f2", padding: "2px 7px", borderRadius: 10 }}>REJECTED</span>}
+                {doc?.status === "COMPLETED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ecfdf5", padding: "2px 7px", borderRadius: 10 }}>COMPLETED</span>}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>Verify code: <code>{doc?.verificationCode}</code></div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => void handleDownload(doc?.id || docId, doc?.title || "document")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                <Download size={13} /> Download
+              </button>
+              <button onClick={() => { navigator.clipboard?.writeText(shareLink(docId)).catch(() => {}); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                <Share2 size={13} /> Copy shareable link
+              </button>
+              <button onClick={() => { setDocId(null); setDoc(null); pdfDocRef.current = null; }} style={{ padding: "7px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                Back
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 3fr) minmax(260px, 320px)", gap: 16, alignItems: "start" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginBottom: 8, flexWrap: "wrap" }}>
+                <MousePointerClick size={13} />
+                {canAct ? `Click on the page to ${placeMode === "sign" ? "place your signature" : "add text"}` : doc?.status === "REJECTED" ? "This document was rejected" : doc?.status === "COMPLETED" ? "Every approver has signed" : `Awaiting ${currentApproverName || "the next approver"}'s signature`}
+                {canAct && (
+                  <span style={{ display: "flex", gap: 4 }}>
+                    <button onClick={() => { setPlaceMode("sign"); setPendingClick(null); }} title="Sign" style={{ border: placeMode === "sign" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "sign" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "sign" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><PenLine size={13} /></button>
+                    <button onClick={() => { setPlaceMode("text"); setPendingClick(null); }} title="Add text" style={{ border: placeMode === "text" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "text" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "text" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><Type size={13} /></button>
+                  </span>
+                )}
+                <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <button onClick={() => void changeZoom(zoom - 0.15)} disabled={zoom <= 0.5} title="Zoom out" style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 3 }}><ZoomOut size={13} /></button>
+                    {Math.round(zoom * 100)}%
+                    <button onClick={() => void changeZoom(zoom + 0.15)} disabled={zoom >= 2.5} title="Zoom in" style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 3 }}><ZoomIn size={13} /></button>
+                    <button onClick={() => void toggleFullscreen()} title={isFullscreen ? "Exit full screen" : "Full screen"} style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 3 }}>
+                      {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                    </button>
+                  </span>
+                  {numPages > 1 && (
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button onClick={() => void goToPage(pageNum - 1)} disabled={pageNum <= 1} style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 3 }}><ChevronLeft size={13} /></button>
+                      Page {pageNum} / {numPages}
+                      <button onClick={() => void goToPage(pageNum + 1)} disabled={pageNum >= numPages} style={{ border: "1px solid var(--border)", borderRadius: 5, background: "var(--surface-soft)", cursor: "pointer", padding: 3 }}><ChevronRight size={13} /></button>
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div ref={containerRef} style={{ position: "relative", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto", maxHeight: isFullscreen ? "100vh" : "80vh", background: "#525659", display: "flex", justifyContent: "center", opacity: pdfBusy || docLoading ? 0.6 : 1 }}>
+                <div style={{ position: "relative" }}>
+                  <canvas ref={canvasRef} onClick={handleCanvasClick} style={{ cursor: canAct ? "crosshair" : "default", display: "block" }} />
+                  {markBoxStyle && <div style={markBoxStyle} onPointerDown={startDrag} title="Drag to fine-tune" />}
+                  {anchorDotHandleStyle && (
+                    <div style={anchorDotHandleStyle} onPointerDown={startDrag} title="Drag to fine-tune">
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", border: "2px solid #fff", boxShadow: "0 0 0 1px #dc2626" }} />
+                    </div>
+                  )}
+                </div>
+              </div>
+              {hasChain ? (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 12, color: "var(--text)", marginBottom: 6 }}>
+                    <Users size={13} /> Approval route
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {doc!.approvalChain.map((s, i) => (
+                      <div key={s.approverId + i} style={{ fontSize: 12, color: i === doc!.currentStepOrder && doc!.status === "OPEN" ? "var(--text)" : "var(--muted)", display: "flex", gap: 8, fontWeight: i === doc!.currentStepOrder && doc!.status === "OPEN" ? 600 : 400 }}>
+                        {s.status === "SIGNED" ? <CheckCircle2 size={13} color="#059669" /> : s.status === "REJECTED" ? <Ban size={13} color="#dc2626" /> : <Clock3 size={13} color={i === doc!.currentStepOrder && doc!.status === "OPEN" ? "#1d4ed8" : "#9ca3af"} />}
+                        <span>
+                          {i + 1}. {s.approverName}
+                          {s.status === "SIGNED" && s.actedAt ? ` — signed ${new Date(s.actedAt).toLocaleDateString("en-GB")}` : ""}
+                          {s.status === "REJECTED" ? ` — rejected${s.comment ? `: "${s.comment}"` : ""}` : ""}
+                          {s.status === "PENDING" && i === doc!.currentStepOrder && doc!.status === "OPEN" ? " — awaiting signature" : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : doc && doc.placements.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 12, color: "var(--text)", marginBottom: 6 }}>
+                    <Users size={13} /> Signed so far
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {doc.placements.map((p) => (
+                      <div key={p.id} style={{ fontSize: 12, color: "var(--muted)", display: "flex", gap: 8 }}>
+                        <CheckCircle2 size={13} color="#059669" />
+                        <span>{p.signerName}{p.authorityName ? ` (${p.delegationNotation === "AI" ? "a.i." : "p.p."} for ${p.authorityName})` : ""} — {new Date(p.signedAt).toLocaleDateString("en-GB")}, page {p.pageNumber}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: 16, position: "sticky", top: 16 }}>
+              {!canAct ? (
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                  {doc?.status === "REJECTED" ? "This document's approval route was rejected — no further action is possible." :
+                   doc?.status === "COMPLETED" ? "Every approver has signed. You can still download a copy at any time." :
+                   `Waiting on ${currentApproverName || "the next approver"} to sign before this reaches you. They've been emailed.`}
+                </div>
+              ) : !pendingClick ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>Click a spot on the page to place your signature there.</div>
+                  {hasChain && (
+                    showReject ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+                        <Field label="Reason for rejecting">
+                          <textarea style={{ ...fieldStyle, minHeight: 60, resize: "vertical" }} value={rejectComment} onChange={(e) => setRejectComment(e.target.value)} placeholder="Explain why you're rejecting this document…" />
+                        </Field>
+                        {placeError && <div style={{ fontSize: 11, color: "#dc2626" }}>{placeError}</div>}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button onClick={handleReject} disabled={rejecting} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: rejecting ? 0.7 : 1 }}>
+                            {rejecting ? "Rejecting…" : "Confirm rejection"}
+                          </button>
+                          <button onClick={() => { setShowReject(false); setRejectComment(""); setPlaceError(""); }} disabled={rejecting} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button onClick={() => setShowReject(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 12px", border: "1px solid #fecaca", borderRadius: 7, background: "#fef2f2", color: "#dc2626", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                        <XCircle size={13} /> Reject this document
+                      </button>
+                    )
+                  )}
+                </div>
+              ) : placeMode === "text" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 13 }}><Type size={14} /> Add text</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>Drag the red dot on the page to fine-tune the exact spot.</div>
+                  <Field label="Text">
+                    <textarea autoFocus style={{ ...fieldStyle, minHeight: 60, resize: "vertical" }} value={textDraft} onChange={(e) => setTextDraft(e.target.value)} placeholder="Type here…" />
+                  </Field>
+                  <Field label="Size">
+                    <input type="range" min={8} max={36} step={1} value={textDraftSize} onChange={(e) => setTextDraftSize(Number(e.target.value))} />
+                  </Field>
+                  <div>
+                    <label style={labelStyle}>Color</label>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {TEXT_COLORS.map((c) => (
+                        <button key={c} onClick={() => setTextDraftColor(c)} style={{ width: 22, height: 22, borderRadius: "50%", background: c, border: textDraftColor === c ? "2px solid var(--text)" : "1px solid var(--border)", cursor: "pointer" }} />
+                      ))}
+                    </div>
+                  </div>
+                  {placeError && <div style={{ fontSize: 11, color: "#dc2626" }}>{placeError}</div>}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={handlePlaceText} disabled={placingText || !textDraft.trim()} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: placingText || !textDraft.trim() ? 0.7 : 1 }}>
+                      {placingText ? "Adding…" : "Add text"}
+                    </button>
+                    <button onClick={() => { setPendingClick(null); setTextDraft(""); setPlaceError(""); }} disabled={placingText} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>Drag the red dot on the page to fine-tune the exact spot before placing.</div>
+                  <Field label="Mark size">
+                    <input type="range" min={0.08} max={0.35} step={0.01} value={markWidthPct} onChange={(e) => setMarkWidthPct(Number(e.target.value))} />
+                  </Field>
+
+                  <div>
+                    <label style={labelStyle}>Your signature</label>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                      {(["type", "draw"] as const).map((m) => (
+                        <button key={m} type="button" onClick={() => setSignMode(m)} style={{ padding: "5px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: signMode === m ? "1px solid #3b82f6" : "1px solid var(--border)", background: signMode === m ? "#eff6ff" : "var(--surface-soft)", color: signMode === m ? "#1d4ed8" : "var(--text)", fontWeight: 600 }}>
+                          {m === "type" ? "Type" : "Draw"}
+                        </button>
+                      ))}
+                    </div>
+                    {signMode === "type" ? (
+                      <input style={{ ...fieldStyle, fontFamily: "'Brush Script MT', cursive", fontSize: 20 }} value={typedName} onChange={(e) => setTypedName(e.target.value)} placeholder="Your full name" />
+                    ) : (
+                      <SignatureCanvas key={canvasSeed ? "seeded" : "blank"} onChange={setDrawnDataUrl} initialDataUrl={canvasSeed} />
+                    )}
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--muted)", marginTop: 6, cursor: "pointer" }}>
+                      <input type="checkbox" checked={rememberSignature} onChange={(e) => setRememberSignature(e.target.checked)} />
+                      Remember for next time
+                    </label>
+                  </div>
+
+                  <div>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11, cursor: "pointer" }}>
+                      <input type="checkbox" checked={onBehalfOf} onChange={(e) => setOnBehalfOf(e.target.checked)} style={{ marginTop: 2 }} />
+                      Signing on behalf of someone else's authority
+                    </label>
+                    {onBehalfOf && (
+                      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                        <ApproverCombobox users={directory} value={authorityUserId} onChange={setAuthorityUserId} />
+                        {policy?.overridable && (
+                          <select style={fieldStyle} value={requestedNotation} onChange={(e) => setRequestedNotation(e.target.value as "AI" | "PP")}>
+                            <option value="AI">a.i. (ad interim)</option>
+                            <option value="PP">p.p. (per procurationem)</option>
+                          </select>
+                        )}
+                        {activeNotation && (
+                          <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                            Reads as: {activeNotation === "AI" ? "a.i." : "p.p."} for {directory.find((u) => u.id === authorityUserId)?.full_name || "…"}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11, cursor: "pointer" }}>
+                    <input type="checkbox" checked={consentChecked} onChange={(e) => setConsentChecked(e.target.checked)} style={{ marginTop: 2 }} />
+                    I confirm this is my legal signature and I consent to sign electronically.
+                  </label>
+
+                  {placeError && <div style={{ fontSize: 11, color: "#dc2626" }}>{placeError}</div>}
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={handlePlace} disabled={placing} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: placing ? 0.7 : 1 }}>
+                      {placing ? "Placing…" : "Place my signature"}
+                    </button>
+                    <button onClick={() => setPendingClick(null)} disabled={placing} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

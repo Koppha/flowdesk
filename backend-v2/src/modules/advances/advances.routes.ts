@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
+import fs from "fs";
+import path from "path";
+import multer from "multer";
 import type { PoolClient } from "pg";
+import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { AuthedRequest, hasFeatureAccess, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
 import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
@@ -10,12 +14,14 @@ import { canCreateAdvanceOnBehalf, getUserAccountState, isPermanentEmployee, isP
 import type { AdvanceStatus } from "./advances.types.js";
 import { notifyAdvanceCancelled, notifyAdvancePaid, notifyAdvancePaymentDeclined, notifyAdvancePaymentRecalled, notifyAdvanceReminder, notifyAdvanceTask } from "../../lib/notifications.js";
 import { getDelegatedManagerIds } from "../../lib/delegations.js";
-import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
+import { assertAdvanceTypeAllowed, assertPaybackMonthsAllowed, assertSalaryMonthWindowAllowed, getTravelRateForCode, getTravelTypeByCode, isReservedAdvanceType, isTravelAdvanceType } from "../../lib/travel.js";
 import { getDepartmentLeadership } from "../../lib/departments.js";
 import { buildAdHocChain, canApproveStep, chainStepToStatus, getPendingGroup, hoursBetween, resolveWorkflowChain, type ChainStep } from "../../lib/workflowEngine.js";
 import { isCaptureActionType } from "../inbox/inbox.routes.js";
 import { getUserGroups } from "../../lib/permissionGroups.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
+import { SYSTEM_SETTING_KEYS, getNumericSystemSetting } from "../../lib/systemSettings.js";
+import { DEFAULT_ADVANCE_BACKDATING_GRACE_DAYS } from "../travel/travel.routes.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
 import { buildAdvanceRequestPdf } from "../../lib/pdf/advanceFormPdf.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
@@ -28,11 +34,12 @@ const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, 
 // Lets an employee file a request for a trip they already took (requested
 // late instead of in advance) without opening the door to arbitrarily old
 // backdating - a trip/departure date is allowed up to this many days in the
-// past, never further back than that.
-const BACKDATE_GRACE_DAYS = 14;
-function earliestAllowedTripDate(): string {
+// past, never further back than that. The allowed number of days is an
+// admin-configurable Travel Setup value (system_state), not a fixed
+// constant - see DEFAULT_ADVANCE_BACKDATING_GRACE_DAYS in travel.routes.ts.
+function earliestAllowedTripDate(graceDays: number): string {
   const d = new Date();
-  d.setDate(d.getDate() - BACKDATE_GRACE_DAYS);
+  d.setDate(d.getDate() - graceDays);
   return d.toISOString().slice(0, 10);
 }
 
@@ -61,6 +68,12 @@ const CreateAdvanceSchema = z.object({
   bank_branch: z.string().optional(),
   requested_total: z.coerce.number().nonnegative(),
   payback_months: z.coerce.number().int().positive().optional(),
+  // SALARY only - which month (YYYY-MM) the advance is needed for. Missing
+  // from this schema until now, so Zod's default unknown-key stripping
+  // silently dropped it from every create request before it ever reached
+  // createAdvance's INSERT - the column-list fix there alone was never
+  // enough, since the value never survived this far.
+  salary_month: z.string().optional(),
   extra_cost_amount: z.coerce.number().nonnegative().optional(),
   extra_cost_description: z.string().trim().optional(),
   beneficiary_user_id: z.string().uuid().optional(),
@@ -106,26 +119,16 @@ const CreateAdvanceSchema = z.object({
     if (data.external_start_date && data.external_end_date && data.external_end_date < data.external_start_date) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_end_date"], message: "Finish date cannot be before the start date" });
     }
-    // Only checked at creation, not on PUT /:id - an in-flight request can
-    // legitimately sit through approval long enough for its own start date
-    // to lapse past the backdating grace window, and re-validating that on
-    // an unrelated edit (e.g. fixing a typo in the purpose) would wrongly
-    // block it. A trip already taken can be requested late - up to
-    // BACKDATE_GRACE_DAYS back, not further.
-    if (data.external_start_date && data.external_start_date < earliestAllowedTripDate()) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_start_date"], message: `Start date cannot be more than ${BACKDATE_GRACE_DAYS} days in the past` });
-    }
   }
   // "Plan Your Trip" (COUNTRY_CITY travel types). Departure date isn't on
   // this payload at all - it's submitted separately via PUT /:id/lines as
   // the synthesized row's own date - so "return can't be before departure"
   // stays a client-side check (also enforced by the date picker's own `min`)
   // rather than reaching across two endpoints' schemas to cross-validate it.
-  // A trip already taken can have a return date in the past too, within the
-  // same backdating grace window as the start/departure date.
-  if (data.travel_return_date && data.travel_return_date < earliestAllowedTripDate()) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["travel_return_date"], message: `Return date cannot be more than ${BACKDATE_GRACE_DAYS} days in the past` });
-  }
+  // Backdating-grace-window checks for external_start_date/travel_return_date
+  // live in the POST /:id handler below, not here - the allowed grace period
+  // is an admin-configurable Travel Setup value (system_state), which a
+  // synchronous zod refinement can't look up.
 });
 
 const UpdateAdvanceSchema = z.object({
@@ -196,6 +199,37 @@ const ActionCommentSchema = z.object({
 
 export const advancesRouter = Router();
 advancesRouter.use(requireAuth);
+
+// Supporting documents (quotations, invoices, medical notes, etc.) — most
+// useful for Salary/Loan advances, which have no travel line items of
+// their own to justify the amount requested, but available for any
+// advance type. One row per uploaded file, same shape as claims' receipts
+// / custom-requests' attachments elsewhere in this codebase.
+const advanceUploadDir = process.env.UPLOAD_DIR || "uploads";
+if (!fs.existsSync(advanceUploadDir)) fs.mkdirSync(advanceUploadDir, { recursive: true });
+const advanceAttachmentStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, advanceUploadDir),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
+});
+const uploadAdvanceAttachment = multer({
+  storage: advanceAttachmentStorage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: fileExtensionFilter(["pdf", "jpg", "jpeg", "png", "doc", "docx"])
+});
+async function ensureAdvanceAttachmentsTable() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS advance_attachments (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      advance_request_id uuid NOT NULL REFERENCES advance_requests(id) ON DELETE CASCADE,
+      file_path text NOT NULL,
+      original_name text NOT NULL,
+      content_type text,
+      size_bytes bigint,
+      uploaded_by_id uuid REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+}
 
 // External payees ("Apply for Other") — a reusable, lightweight directory of
 // non-Econet beneficiaries (contractors, vendors, guests). No login, no
@@ -795,61 +829,78 @@ const CLEARANCE_STATUS_REPORT_DEFAULT_ROLES = [
   "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
   "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
 ];
+async function loadClearanceStatusReport(requesterId?: string) {
+  const rows = await query<any>(
+    `WITH latest_claim AS (
+       SELECT DISTINCT ON (linked_advance_id)
+              linked_advance_id, id, status, claim_total, submitted_at, closed_at, settled_at
+         FROM clearance_claims
+        WHERE linked_advance_id IS NOT NULL
+        ORDER BY linked_advance_id, created_at DESC
+     )
+     SELECT ar.id AS advance_id, ar.type, ar.approved_total, ar.requested_total, ar.paid_at,
+            COALESCE(tt.currency, 'LSL') AS currency,
+            u.id AS requester_id, u.full_name AS requester_name, u.department,
+            lc.id AS claim_id, lc.status AS claim_status, lc.claim_total,
+            lc.submitted_at, lc.closed_at, lc.settled_at,
+            ${OVERDUE_SELECT},
+            ar.not_cleared_confirmed_at
+       FROM advance_requests ar
+       JOIN users u ON u.id = ar.requester_id
+       JOIN travel_types tt ON tt.code = ar.type
+       CROSS JOIN advance_recovery_settings ars
+       LEFT JOIN latest_claim lc ON lc.linked_advance_id = ar.id
+      WHERE ar.status = 'PAID'${requesterId ? " AND ar.requester_id = $1" : ""}
+      ORDER BY ar.paid_at DESC`,
+    requesterId ? [requesterId] : []
+  );
+
+  return rows.map((r) => {
+    let status: "COMPLETE" | "NOT_COMPLETE" | "NOT_CLEARED";
+    const claimDone = r.claim_status && ["SETTLED", "CLOSED"].includes(r.claim_status);
+    const claimInProgress = r.claim_status && !["SETTLED", "CLOSED", "REJECTED"].includes(r.claim_status);
+    if (claimDone) status = "COMPLETE";
+    else if (claimInProgress) status = "NOT_COMPLETE";
+    else if (r.is_overdue || r.not_cleared_confirmed_at) status = "NOT_CLEARED";
+    else status = "NOT_COMPLETE";
+
+    return {
+      advance_id: r.advance_id,
+      type: r.type,
+      requester_id: r.requester_id,
+      requester_name: r.requester_name,
+      department: r.department,
+      approved_total: Number(r.approved_total ?? r.requested_total ?? 0),
+      currency: r.currency,
+      paid_at: r.paid_at,
+      claim_id: r.claim_id,
+      claim_status: r.claim_status,
+      claim_total: r.claim_total != null ? Number(r.claim_total) : null,
+      submitted_at: r.submitted_at,
+      closed_at: r.closed_at,
+      settled_at: r.settled_at,
+      not_cleared_confirmed_at: r.not_cleared_confirmed_at,
+      status
+    };
+  });
+}
+
 advancesRouter.get("/clearance-status-report", requireAuth, requireFeatureAccess("clearance_status_report", CLEARANCE_STATUS_REPORT_DEFAULT_ROLES), async (req: AuthedRequest, res, next) => {
   try {
-    const rows = await query<any>(
-      `WITH latest_claim AS (
-         SELECT DISTINCT ON (linked_advance_id)
-                linked_advance_id, id, status, claim_total, submitted_at, closed_at, settled_at
-           FROM clearance_claims
-          WHERE linked_advance_id IS NOT NULL
-          ORDER BY linked_advance_id, created_at DESC
-       )
-       SELECT ar.id AS advance_id, ar.type, ar.approved_total, ar.requested_total, ar.paid_at,
-              COALESCE(tt.currency, 'LSL') AS currency,
-              u.id AS requester_id, u.full_name AS requester_name, u.department,
-              lc.id AS claim_id, lc.status AS claim_status, lc.claim_total,
-              lc.submitted_at, lc.closed_at, lc.settled_at,
-              ${OVERDUE_SELECT},
-              ar.not_cleared_confirmed_at
-         FROM advance_requests ar
-         JOIN users u ON u.id = ar.requester_id
-         JOIN travel_types tt ON tt.code = ar.type
-         CROSS JOIN advance_recovery_settings ars
-         LEFT JOIN latest_claim lc ON lc.linked_advance_id = ar.id
-        WHERE ar.status = 'PAID'
-        ORDER BY ar.paid_at DESC`
-    );
+    const items = await loadClearanceStatusReport();
+    return res.json({ items });
+  } catch (err) {
+    return next(err);
+  }
+});
 
-    const items = rows.map((r) => {
-      let status: "COMPLETE" | "NOT_COMPLETE" | "NOT_CLEARED";
-      const claimDone = r.claim_status && ["SETTLED", "CLOSED"].includes(r.claim_status);
-      const claimInProgress = r.claim_status && !["SETTLED", "CLOSED", "REJECTED"].includes(r.claim_status);
-      if (claimDone) status = "COMPLETE";
-      else if (claimInProgress) status = "NOT_COMPLETE";
-      else if (r.is_overdue || r.not_cleared_confirmed_at) status = "NOT_CLEARED";
-      else status = "NOT_COMPLETE";
-
-      return {
-        advance_id: r.advance_id,
-        type: r.type,
-        requester_id: r.requester_id,
-        requester_name: r.requester_name,
-        department: r.department,
-        approved_total: Number(r.approved_total ?? r.requested_total ?? 0),
-        currency: r.currency,
-        paid_at: r.paid_at,
-        claim_id: r.claim_id,
-        claim_status: r.claim_status,
-        claim_total: r.claim_total != null ? Number(r.claim_total) : null,
-        submitted_at: r.submitted_at,
-        closed_at: r.closed_at,
-        settled_at: r.settled_at,
-        not_cleared_confirmed_at: r.not_cleared_confirmed_at,
-        status
-      };
-    });
-
+// Personal version of the same report - every employee can see their own
+// paid-advance-to-clearance status without the Finance/HR feature access
+// the company-wide report above requires; scoped to the caller's own
+// requester_id so no gate beyond being logged in is needed.
+advancesRouter.get("/my-clearance-status-report", async (req: AuthedRequest, res, next) => {
+  try {
+    const items = await loadClearanceStatusReport(req.user!.userId);
     return res.json({ items });
   } catch (err) {
     return next(err);
@@ -942,6 +993,7 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
          LEFT JOIN divisions dv ON dv.id = u.division_id
          LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
         WHERE ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
+          AND ar.type <> 'SALARY'
         ORDER BY ar.created_at DESC`
     );
 
@@ -1064,7 +1116,90 @@ advancesRouter.get("/:id", async (req: AuthedRequest, res, next) => {
         ORDER BY acc.created_at DESC`,
       [req.params.id]
     );
-    return res.json({ ...adv, lines, accommodation_requests });
+    await ensureAdvanceAttachmentsTable();
+    const attachments = await query<any>(
+      `SELECT id, original_name, content_type, size_bytes, created_at
+         FROM advance_attachments WHERE advance_request_id=$1 ORDER BY created_at`,
+      [req.params.id]
+    );
+    return res.json({ ...adv, lines, accommodation_requests, attachments });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Supporting documents can be attached any time before the request reaches
+// a terminal state - same editability window PUT /:id already allows,
+// rather than the DRAFT-only window claims' receipts use, since an advance
+// has no separate draft stage of its own (it's live/routing from the
+// moment it's created).
+const ADVANCE_TERMINAL_STATUSES = ["APPROVED", "PAID", "REJECTED", "CANCELLED"];
+
+advancesRouter.post("/:id/attachments", uploadAdvanceAttachment.single("file"), async (req: AuthedRequest, res, next) => {
+  try {
+    const adv = await getAdvanceById(req.params.id);
+    if (!adv) throw notFound();
+    if (adv.created_by_id !== req.user!.userId && adv.requester_id !== req.user!.userId) throw forbidden("Only the requester can attach documents");
+    if (ADVANCE_TERMINAL_STATUSES.includes(adv.status)) throw badRequest("Cannot attach documents once the request has reached a final status");
+    if (!req.file) throw badRequest("Missing file");
+
+    await ensureAdvanceAttachmentsTable();
+    const rows = await query<any>(
+      `INSERT INTO advance_attachments (advance_request_id, file_path, original_name, content_type, size_bytes, uploaded_by_id)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING id, original_name, content_type, size_bytes, created_at`,
+      [req.params.id, req.file.path, req.file.originalname, req.file.mimetype, req.file.size, req.user!.userId]
+    );
+    return res.status(201).json({ ok: true, attachment: rows[0] });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+advancesRouter.get("/:id/attachments/:attachmentId/file", async (req: AuthedRequest, res, next) => {
+  try {
+    const adv = await getAdvanceById(req.params.id);
+    if (!adv) throw notFound();
+    const managerChainIds = await getManagerChainIds(adv.requester_id);
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "ADVANCE_REQUEST");
+    if (!(await canViewAdvance({ role: req.user!.role, requesterId: adv.requester_id, createdById: adv.created_by_id, userId: req.user!.userId, approvalChain: adv.approval_chain, workflowStepOrder: adv.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
+      throw forbidden();
+    }
+
+    await ensureAdvanceAttachmentsTable();
+    const attachment = (await query<any>(
+      `SELECT * FROM advance_attachments WHERE id=$1 AND advance_request_id=$2`,
+      [req.params.attachmentId, req.params.id]
+    ))[0];
+    if (!attachment) throw notFound();
+    if (!fs.existsSync(attachment.file_path)) throw notFound();
+
+    const disposition = req.query.download === "1" ? "attachment" : "inline";
+    res.setHeader("Content-Type", attachment.content_type || "application/octet-stream");
+    res.setHeader("Content-Disposition", `${disposition}; filename="${encodeURIComponent(attachment.original_name)}"`);
+    return res.sendFile(path.resolve(attachment.file_path));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+advancesRouter.delete("/:id/attachments/:attachmentId", async (req: AuthedRequest, res, next) => {
+  try {
+    const adv = await getAdvanceById(req.params.id);
+    if (!adv) throw notFound();
+    if (adv.created_by_id !== req.user!.userId && adv.requester_id !== req.user!.userId) throw forbidden("Only the requester can remove a document");
+    if (ADVANCE_TERMINAL_STATUSES.includes(adv.status)) throw badRequest("Cannot remove documents once the request has reached a final status");
+
+    await ensureAdvanceAttachmentsTable();
+    const rows = await query<{ file_path: string }>(
+      `DELETE FROM advance_attachments WHERE id=$1 AND advance_request_id=$2 RETURNING file_path`,
+      [req.params.attachmentId, req.params.id]
+    );
+    if (!rows[0]) throw notFound();
+    fs.unlink(rows[0].file_path, () => {
+      // best-effort — the DB row is already gone either way
+    });
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }
@@ -1155,8 +1290,25 @@ advancesRouter.post("/", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CreateAdvanceSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+
+    // Backdating grace window is an admin-configurable Travel Setup value,
+    // not a fixed constant - see earliestAllowedTripDate above. Only checked
+    // at creation (not on PUT /:id), same reasoning as the other date checks
+    // this replaced: an in-flight request can legitimately sit through
+    // approval long enough for its own start date to lapse past the grace
+    // window, and an unrelated later edit shouldn't be blocked by that.
+    const graceDays = await getNumericSystemSetting(SYSTEM_SETTING_KEYS.advanceBackdatingGraceDays, DEFAULT_ADVANCE_BACKDATING_GRACE_DAYS);
+    const earliestTripDate = earliestAllowedTripDate(graceDays);
+    if (parsed.data.external_beneficiary_id && parsed.data.external_start_date && parsed.data.external_start_date < earliestTripDate) {
+      throw badRequest(`Start date cannot be more than ${graceDays} days in the past`);
+    }
+    if (parsed.data.travel_return_date && parsed.data.travel_return_date < earliestTripDate) {
+      throw badRequest(`Return date cannot be more than ${graceDays} days in the past`);
+    }
+
     const type = await assertAdvanceTypeAllowed(parsed.data.type);
     await assertPaybackMonthsAllowed(type, parsed.data.payback_months);
+    await assertSalaryMonthWindowAllowed(type, parsed.data.salary_month);
 
     // The cap check (assertSingleOutstandingTravelAdvance, inside
     // resolveAdvanceRequester) and this INSERT run in one transaction,
@@ -1167,6 +1319,13 @@ advancesRouter.post("/", async (req: AuthedRequest, res, next) => {
     const id = await withTransaction(async (client) => {
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [targetUserId]);
       const { requester } = await resolveAdvanceRequester(req.user!.userId, parsed.data.beneficiary_user_id, type, client);
+
+      // Salary Advance recovers from the requester's own future salary -
+      // only makes sense for someone with an ongoing salary, i.e. a
+      // permanent employee (interns/temps/contractors are excluded).
+      if (type === "SALARY" && !isPermanentEmployee(requester)) {
+        throw forbidden("Only permanent employees can request a Salary Advance");
+      }
 
       if (parsed.data.external_beneficiary_id) {
         // "Apply for Other" (an advance for an external, non-Econet
@@ -1240,9 +1399,18 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
       if (adv.requester_id !== adv.created_by_id && isReservedAdvanceType(parsedData.type as string)) {
         throw badRequest("Salary and loan advances can only be requested for yourself, never on behalf of someone else");
       }
+      if (parsedData.type === "SALARY") {
+        const requesterAccount = await getUserAccountState(adv.requester_id);
+        if (!isPermanentEmployee(requesterAccount)) {
+          throw forbidden("Only permanent employees can request a Salary Advance");
+        }
+      }
     }
     if (parsedData.payback_months !== undefined) {
       await assertPaybackMonthsAllowed((parsedData.type as string | undefined) ?? adv.type, parsedData.payback_months as number);
+    }
+    if (parsedData.salary_month !== undefined) {
+      await assertSalaryMonthWindowAllowed((parsedData.type as string | undefined) ?? adv.type, parsedData.salary_month as string);
     }
     if (parsedData.payment_method) {
       parsedData.payment_account = toPaymentAccount(parsed.data as any);
@@ -1266,7 +1434,6 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     delete parsedData.bank_name;
     delete parsedData.bank_account_number;
     delete parsedData.bank_branch;
-    delete parsedData.salary_month;
 
     const allowedEntries = Object.entries(parsedData);
     for (const [key, value] of allowedEntries) {

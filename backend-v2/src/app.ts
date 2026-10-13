@@ -26,17 +26,26 @@ import { emailActionsRouter } from "./modules/email-actions/email-actions.routes
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
 import { refundableRouter } from "./modules/refundable/refundable.routes.js";
+import { salariesRouter } from "./modules/salaries/salaries.routes.js";
+import { attendanceRouter } from "./modules/attendance/attendance.routes.js";
+import { compensationClaimsRouter } from "./modules/compensation-claims/compensation-claims.routes.js";
 import { treasuryRouter } from "./modules/treasury/treasury.routes.js";
 import { treasuryReportsRouter } from "./modules/treasury/treasury-reports.routes.js";
 import { itProvisioningRouter } from "./modules/it-provisioning/it-provisioning.routes.js";
 import { standbyRouter } from "./modules/standby/standby.routes.js";
+import { standbyReportsRouter } from "./modules/standby/standby-reports.routes.js";
 import { dataCleanupRouter } from "./modules/admin/data-cleanup.routes.js";
 import { approvalMaintenanceRouter } from "./modules/admin/approval-maintenance.routes.js";
+import { slaSettingsRouter } from "./modules/admin/sla-settings.routes.js";
+import { mobileConfigRouter } from "./modules/admin/mobile-config.routes.js";
+import { mobileAppRouter } from "./modules/mobile-app/mobile-app.routes.js";
 import { paAssignmentsRouter } from "./modules/admin/pa-assignments.routes.js";
 import { vendorContractsRouter } from "./modules/vendor-contracts/vendor-contracts.routes.js";
 import { serviceContractsRouter } from "./modules/service-contracts/service-contracts.routes.js";
 import { serviceContractsExternalRouter } from "./modules/service-contracts/service-contracts.external.routes.js";
 import { searchRouter } from "./modules/search/search.routes.js";
+import { signaturesRouter, signatureVerifyRouter } from "./modules/signatures/signatures.routes.js";
+import { pdfEditRouter } from "./modules/pdf-edit/pdf-edit.routes.js";
 
 export function createApp() {
   const app = express();
@@ -93,6 +102,7 @@ export function createApp() {
   app.use("/overtime", overtimeRouter);
   app.use("/overtime-reports", overtimeReportsRouter);
   app.use("/standby", standbyRouter);
+  app.use("/standby-reports", standbyReportsRouter);
   app.use("/vendor-contracts", vendorContractsRouter);
   app.use("/service-contracts", serviceContractsRouter);
   // Public path is https://flowdesk.etl.co.ls/api/v1/service-contracts/... -
@@ -113,14 +123,26 @@ export function createApp() {
   app.use("/pdf-templates", pdfTemplatesRouter);
   app.use("/deductions", deductionsRouter);
   app.use("/refundable", refundableRouter);
+  app.use("/salaries", salariesRouter);
+  app.use("/attendance", attendanceRouter);
+  app.use("/compensation-claims", compensationClaimsRouter);
   app.use("/treasury", treasuryRouter);
   app.use("/treasury-reports", treasuryReportsRouter);
   app.use("/it-provisioning", itProvisioningRouter);
   app.use("/admin/data-cleanup", dataCleanupRouter);
   app.use("/admin/approval-maintenance", approvalMaintenanceRouter);
+  app.use("/admin/sla-settings", slaSettingsRouter);
+  app.use("/admin/mobile-config", mobileConfigRouter);
+  app.use("/mobile-app", mobileAppRouter);
   app.use("/pa-assignments", paAssignmentsRouter);
   app.use("/ai", aiRouter);
   app.use("/search", searchRouter);
+  // signatureVerifyRouter (public, no auth) must be registered before
+  // signaturesRouter (requireAuth) — Express matches by prefix in
+  // registration order, and /signatures/verify is a prefix of /signatures.
+  app.use("/signatures/verify", signatureVerifyRouter);
+  app.use("/signatures", signaturesRouter);
+  app.use("/pdf-edit", pdfEditRouter);
 
   app.use(errorHandler);
   return app;

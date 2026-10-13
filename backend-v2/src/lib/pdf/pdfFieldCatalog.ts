@@ -1,6 +1,7 @@
 import { query } from "../db.js";
 import { formatDate, formatDateTime, formatMoney, formatRequestNumber } from "./pdfHelpers.js";
 import { getNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../systemSettings.js";
+import { isReservedAdvanceType } from "../travel.js";
 import type { ChainStep } from "../workflowEngine.js";
 
 export const PDF_REQUEST_TYPES = [
@@ -21,11 +22,28 @@ export interface ApprovalChainDisplayItem {
   decidedAt?: string;
 }
 
+// A "table" field with columnMode DAY_OF_MONTH (e.g. the Attendance
+// Register's day-by-day grid) - one row per employee, one column per
+// calendar day, plus the totals already computed at submit time.
+export interface PdfDayGridData {
+  label: string;
+  daysInMonth: number;
+  cellOptions: { label: string; value: string }[];
+  rows: { employee: string; cells: Record<string, string> }[];
+  summaryColumns: { key: string; label: string }[];
+  totals: Record<string, number>;
+}
+
 export interface ResolvedPdfData {
   scalars: Record<string, string>;
   tables: Record<string, Record<string, string>[]>;
   approvalChain: ApprovalChainDisplayItem[];
   meta: { id: string; requestType: PdfRequestType; generatedAt: string };
+  // Custom-request "table" fields (columnMode DAY_OF_MONTH) - keyed by
+  // field_key, kept separate from `tables` since their shape (day-of-month
+  // columns, per-employee rows, a totals row) doesn't fit the generic flat
+  // row-object table the "table" template section type already renders.
+  dayGridFields?: Record<string, PdfDayGridData>;
 }
 
 export interface PdfFieldCatalogEntry {
@@ -57,6 +75,9 @@ const BUILTIN_CATALOG: Record<Exclude<PdfRequestType, "CUSTOM_REQUEST">, PdfFiel
     { key: "project_number", label: "Project Number", group: "Trip" },
     { key: "extra_cost_amount", label: "Extra Cost Amount", group: "Trip" },
     { key: "extra_cost_description", label: "Justification", group: "Trip" },
+    { key: "salary_month", label: "Salary Month", group: "Trip" },
+    { key: "payback_months", label: "Payback Duration", group: "Trip" },
+    { key: "payback_until", label: "Payback Until", group: "Trip" },
     { key: "requested_total", label: "Requested Amount", group: "Payment" },
     { key: "approved_total", label: "Approved Amount", group: "Payment" },
     { key: "payment_status", label: "Payment Status", group: "Payment" },
@@ -291,6 +312,27 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
   const isBank = adv.payment_method === "BANK";
   const { bankName, accountNumber } = parseBankAccount(adv.payment_account);
   const requestId = formatRequestNumber("ADV", adv.id, adv.created_at);
+  // SALARY/LOAN are reserved advance types, not a travel_types row - every
+  // "Trip" field below computed a fallback/placeholder value regardless
+  // (type_label fell back to the raw "SALARY" code, meals_summary printed
+  // "Breakfast x0 | Lunch x0 | Dinner x0") since none of them knew to stay
+  // blank for a non-travel advance. Left blank here so the renderer's
+  // existing drop-if-empty behavior hides them, the same way it already
+  // hides destination/dates/accommodation for these types.
+  const isReserved = isReservedAdvanceType(adv.type);
+  const salaryMonthDate = adv.salary_month ? new Date(`${adv.salary_month}-01`) : null;
+  const salaryMonth = salaryMonthDate && !Number.isNaN(salaryMonthDate.getTime())
+    ? salaryMonthDate.toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+    : "";
+  const paybackMonths = adv.payback_months ? `${adv.payback_months} Month${Number(adv.payback_months) === 1 ? "" : "s"}` : "";
+  // Payback starts the month AFTER the salary month and runs for
+  // payback_months months - e.g. October + 3 months finishes in January.
+  const paybackUntil = salaryMonthDate && !Number.isNaN(salaryMonthDate.getTime()) && adv.payback_months
+    ? (() => {
+        const endIndex = salaryMonthDate.getFullYear() * 12 + salaryMonthDate.getMonth() + Number(adv.payback_months);
+        return new Date(Math.floor(endIndex / 12), endIndex % 12, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      })()
+    : "";
 
   return {
     scalars: {
@@ -311,20 +353,24 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
       applying_for_name: applyingForOther ? (adv.external_beneficiary_name || "") : "",
       applying_for_organisation: applyingForOther ? (adv.external_beneficiary_organisation || "") : "",
       status: adv.status || "",
-      type_label: adv.travel_type_name || adv.type || "",
-      destination: locations.join(", "),
-      departure_date: formatDateTime(dateFrom),
-      return_date: formatDateTime(dateTo),
-      travel_duration: durationDays ? `${durationDays} day${durationDays === 1 ? "" : "s"}` : "",
-      accommodation_summary: nights != null ? `${nights} night${nights === 1 ? "" : "s"}` : "",
+      type_label: isReserved ? "" : (adv.travel_type_name || adv.type || ""),
+      destination: isReserved ? "" : locations.join(", "),
+      departure_date: isReserved ? "" : formatDateTime(dateFrom),
+      return_date: isReserved ? "" : formatDateTime(dateTo),
+      travel_duration: isReserved || !durationDays ? "" : `${durationDays} day${durationDays === 1 ? "" : "s"}`,
+      accommodation_summary: isReserved || nights == null ? "" : `${nights} night${nights === 1 ? "" : "s"}`,
       // DAILY-rate travel types (per diem, e.g. international travel) pay a
       // flat daily rate, not per-meal amounts, so there's no meal breakdown
       // to show — leave this blank and the renderer drops the row entirely.
-      meals_summary: adv.travel_rate_kind === "DAILY" ? "" : `Breakfast x ${breakfastCount} | Lunch x ${lunchCount} | Dinner x ${dinnerCount}`,
+      // SALARY/LOAN aren't a travel type at all, same treatment.
+      meals_summary: isReserved || adv.travel_rate_kind === "DAILY" ? "" : `Breakfast x ${breakfastCount} | Lunch x ${lunchCount} | Dinner x ${dinnerCount}`,
       purpose: adv.purpose || "",
-      project_number: adv.project_number || "",
+      project_number: isReserved ? "" : (adv.project_number || ""),
       extra_cost_amount: Number(adv.extra_cost_amount || 0) > 0 ? formatMoney(adv.extra_cost_amount, currency) : "",
       extra_cost_description: adv.extra_cost_description || "",
+      salary_month: salaryMonth,
+      payback_months: paybackMonths,
+      payback_until: paybackUntil,
       requested_total: formatMoney(adv.requested_total, currency),
       approved_total: formatMoney(adv.approved_total, currency),
       payment_status: adv.paid_at ? "Paid" : "",
@@ -624,6 +670,8 @@ export async function resolveStandbyClaimPdfData(id: string): Promise<ResolvedPd
   };
 }
 
+const CUSTOM_STEP_DECISION: Record<string, string> = { APPROVED: "Approved", NOTED: "Noted", REJECTED: "Rejected", PENDING: "Pending" };
+
 export async function resolveCustomRequestPdfData(id: string): Promise<ResolvedPdfData> {
   const rows = await query<any>(
     `SELECT s.*, rt.name AS request_type_name, u.full_name AS requester_name
@@ -636,8 +684,8 @@ export async function resolveCustomRequestPdfData(id: string): Promise<ResolvedP
   const sub = rows[0];
   if (!sub) throw new Error("Request not found");
 
-  const fields = await query<{ field_key: string; field_label: string; field_type: string }>(
-    `SELECT field_key, field_label, field_type FROM request_type_fields WHERE request_type_id = $1 AND is_active = true ORDER BY sort_order`,
+  const fields = await query<{ field_key: string; field_label: string; field_type: string; options: any }>(
+    `SELECT field_key, field_label, field_type, options FROM request_type_fields WHERE request_type_id = $1 AND is_active = true ORDER BY sort_order`,
     [sub.request_type_id]
   );
   const data = sub.data || {};
@@ -647,8 +695,29 @@ export async function resolveCustomRequestPdfData(id: string): Promise<ResolvedP
     submitted_at: formatDateTime(sub.created_at),
     status: sub.status || ""
   };
+  const dayGridFields: Record<string, PdfDayGridData> = {};
   for (const f of fields) {
     const value = data[f.field_key];
+    // A day-of-month attendance grid renders as its own dedicated table
+    // (see genericPdfRenderer's day-grid section) rather than a scalar -
+    // left blank here so the generic field_grid, which already drops
+    // fields with nothing to show, skips it instead of dumping its raw
+    // JSON inline as plain text.
+    if (f.field_type === "table" && f.options?.columnMode === "DAY_OF_MONTH" && value && typeof value === "object") {
+      const monthKey = f.options.monthFieldKey && typeof data[f.options.monthFieldKey] === "string" ? data[f.options.monthFieldKey] : null;
+      const monthMatch = monthKey ? /^(\d{4})-(\d{2})/.exec(monthKey) : null;
+      const daysInMonth = monthMatch ? new Date(Number(monthMatch[1]), Number(monthMatch[2]), 0).getDate() : 31;
+      dayGridFields[f.field_key] = {
+        label: f.field_label,
+        daysInMonth,
+        cellOptions: Array.isArray(f.options.cellOptions) ? f.options.cellOptions : [],
+        rows: Array.isArray(value.rows) ? value.rows.map((r: any) => ({ employee: r.employee || "", cells: r.cells || {} })) : [],
+        summaryColumns: Array.isArray(f.options.summaryColumns) ? f.options.summaryColumns : [],
+        totals: value.summary?.totals || {}
+      };
+      scalars[f.field_key] = "";
+      continue;
+    }
     if (value == null) scalars[f.field_key] = "";
     else if (f.field_type === "user" && typeof value === "object") scalars[f.field_key] = value.name || value.full_name || "";
     else if (f.field_type === "user_multi" && Array.isArray(value)) scalars[f.field_key] = value.map((v: any) => v.name || v.full_name || "").join(", ");
@@ -662,8 +731,17 @@ export async function resolveCustomRequestPdfData(id: string): Promise<ResolvedP
   return {
     scalars,
     tables: {},
-    approvalChain: chain.map((s: any) => ({ title: s.title || s.position_name || "", approverName: s.approver_name || "", decision: s.approved ? "Approved" : "Pending" })),
-    meta: { id, requestType: "CUSTOM_REQUEST", generatedAt: new Date().toISOString() }
+    // Custom request steps record `status` (APPROVED / NOTED / REJECTED /
+    // PENDING) and `acted_at` - not an `approved` flag - so every approver
+    // used to print as "Pending" however far the request had got.
+    approvalChain: chain.map((s: any) => ({
+      title: s.title || s.position_name || "",
+      approverName: s.approver_name || "",
+      decision: CUSTOM_STEP_DECISION[String(s.status || "PENDING").toUpperCase()] ?? "Pending",
+      decidedAt: s.acted_at ? formatDateTime(s.acted_at) : undefined
+    })),
+    meta: { id, requestType: "CUSTOM_REQUEST", generatedAt: new Date().toISOString() },
+    dayGridFields
   };
 }
 

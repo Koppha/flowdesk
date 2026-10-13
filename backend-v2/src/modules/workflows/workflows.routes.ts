@@ -348,7 +348,12 @@ workflowsRouter.get("/resolve", async (req: AuthedRequest, res, next) => {
           -- actually on that team.
           AND (team IS NULL OR trim(team) = '' OR lower(trim(team)) = lower(trim($7)))
           AND (
-            advance_sub_type IS NULL OR trim(advance_sub_type) = ''
+            -- Mirrors resolveWorkflowChain's fix: a blank/unrestricted
+            -- sub-type only matches ordinary TRAVEL types, never the
+            -- reserved SALARY/LOAN types, so a department-scoped generic
+            -- travel workflow can't outrank a company-wide SALARY/LOAN
+            -- workflow purely on scope tier.
+            ((advance_sub_type IS NULL OR trim(advance_sub_type) = '') AND upper(trim($4)) NOT IN ('SALARY','LOAN'))
             OR ($4 <> '' AND lower(trim(advance_sub_type)) = lower(trim($4)))
             -- "TRAVEL" sub-type covers all travel advance types (anything other than SALARY/LOAN)
             OR ($4 <> '' AND lower(trim(advance_sub_type)) = 'travel' AND upper(trim($4)) NOT IN ('SALARY','LOAN'))

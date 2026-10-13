@@ -914,56 +914,64 @@ export async function listEligibleLeadershipUsers() {
   };
 }
 
+function emptyDepartmentLeadership(department: string) {
+  return {
+    department,
+    hod_user_id: null, hod_name: null, hod_title: null, hod_email: null, hods: [] as LeadershipPerson[],
+    manager_user_id: null, manager_name: null, manager_title: null, manager_email: null, managers: [] as LeadershipPerson[],
+    exco_user_id: null, exco_name: null, exco_title: null, exco_email: null, excos: [] as LeadershipPerson[]
+  };
+}
+
 export async function getDepartmentLeadership(departmentInput: string) {
   const department = normalizeDepartmentName(departmentInput);
-  if (!department) {
-    return {
-      department: "",
-      hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
-      manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
-      exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
-    };
-  }
+  if (!department) return emptyDepartmentLeadership("");
 
   await ensureDepartmentsTable();
-  const rows = await query<{
-    department: string;
-    hod_user_id: string | null;
-    hod_name: string | null;
-    hod_title: string | null;
-    hod_email: string | null;
-    manager_user_id: string | null;
-    manager_name: string | null;
-    manager_title: string | null;
-    manager_email: string | null;
-    exco_user_id: string | null;
-    exco_name: string | null;
-    exco_title: string | null;
-    exco_email: string | null;
-  }>(
-    `SELECT d.name AS department,
-            CASE WHEN hod.id     IS NOT NULL THEN d.hod_user_id     ELSE NULL END AS hod_user_id,
-            hod.full_name     AS hod_name,     hod.title     AS hod_title,     hod.email     AS hod_email,
-            CASE WHEN manager.id IS NOT NULL THEN d.manager_user_id ELSE NULL END AS manager_user_id,
-            manager.full_name AS manager_name, manager.title AS manager_title, manager.email AS manager_email,
-            CASE WHEN exco.id    IS NOT NULL THEN d.exco_user_id    ELSE NULL END AS exco_user_id,
-            exco.full_name    AS exco_name,
-            exco.title        AS exco_title,
-            exco.email        AS exco_email
-       FROM departments d
-       LEFT JOIN users hod     ON hod.id     = d.hod_user_id     AND hod.is_active     = true
-       LEFT JOIN users manager ON manager.id = d.manager_user_id AND manager.is_active = true
-       LEFT JOIN users exco    ON exco.id    = d.exco_user_id    AND exco.is_active    = true
-      WHERE lower(trim(d.name)) = lower($1)
-      LIMIT 1`,
+  const deptRow = (await query<{ hod_user_id: string | null; manager_user_id: string | null; exco_user_id: string | null }>(
+    `SELECT hod_user_id, manager_user_id, exco_user_id FROM departments WHERE lower(trim(name))=lower($1) LIMIT 1`,
+    [department]
+  ))[0];
+
+  // Whoever holds the role for this department - ALL of them, not just one
+  // (a department can genuinely have more than one active EXCO/Manager at
+  // once, and every one of them needs to actually receive a step routed
+  // here). An explicit assignment on the department row (rare in practice,
+  // but a deliberate admin override when it exists) still wins outright as
+  // a single pick - "pick all of them, unless assigned otherwise."
+  const roleRows = await query<{ id: string; full_name: string | null; title: string | null; email: string | null; role: string }>(
+    `SELECT id, full_name, title, email, role::text AS role FROM users
+      WHERE department=$1 AND role IN ('HOD','MANAGER','EXCO') AND is_active=true
+      ORDER BY full_name`,
     [department]
   );
+  const byRole = (role: string) => roleRows.filter((r) => r.role === role);
 
-  return rows[0] ?? {
+  async function resolveGroup(explicitId: string | null | undefined, roleMatches: typeof roleRows): Promise<typeof roleRows> {
+    if (explicitId) {
+      const explicitUser = (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+        `SELECT id, full_name, title, email FROM users WHERE id=$1 AND is_active=true`,
+        [explicitId]
+      ))[0];
+      if (explicitUser) return [{ ...explicitUser, role: "" }];
+    }
+    return roleMatches;
+  }
+
+  const hods = await resolveGroup(deptRow?.hod_user_id, byRole("HOD"));
+  const managers = await resolveGroup(deptRow?.manager_user_id, byRole("MANAGER"));
+  const excos = await resolveGroup(deptRow?.exco_user_id, byRole("EXCO"));
+  const toPerson = (r: { id: string; full_name: string | null; title: string | null; email: string | null }): LeadershipPerson =>
+    ({ id: r.id, full_name: r.full_name, title: r.title, email: r.email });
+
+  return {
     department,
-    hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
-    manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
-    exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
+    hod_user_id: hods[0]?.id ?? null, hod_name: hods[0]?.full_name ?? null, hod_title: hods[0]?.title ?? null, hod_email: hods[0]?.email ?? null,
+    hods: hods.map(toPerson),
+    manager_user_id: managers[0]?.id ?? null, manager_name: managers[0]?.full_name ?? null, manager_title: managers[0]?.title ?? null, manager_email: managers[0]?.email ?? null,
+    managers: managers.map(toPerson),
+    exco_user_id: excos[0]?.id ?? null, exco_name: excos[0]?.full_name ?? null, exco_title: excos[0]?.title ?? null, exco_email: excos[0]?.email ?? null,
+    excos: excos.map(toPerson)
   };
 }
 
@@ -977,43 +985,49 @@ export async function getDepartmentLeadership(departmentInput: string) {
 // above), while a real person holding the role is reliably findable this
 // way - e.g. Technical's four sections each have a real HOD by role, even
 // though sections.hod_user_id is blank for all of them.
+type LeadershipPerson = { id: string; full_name: string | null; title: string | null; email: string | null };
+
+function emptySectionLeadership(sectionId: string | null) {
+  return {
+    section_id: sectionId,
+    hod_user_id: null, hod_name: null, hod_title: null, hod_email: null, hods: [] as LeadershipPerson[],
+    manager_user_id: null, manager_name: null, manager_title: null, manager_email: null, managers: [] as LeadershipPerson[],
+    exco_user_id: null, exco_name: null, exco_title: null, exco_email: null, excos: [] as LeadershipPerson[]
+  };
+}
+
 export async function getSectionLeadership(sectionId: string) {
-  if (!sectionId) {
-    return {
-      section_id: null,
-      hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
-      manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
-      exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
-    };
-  }
-  const rows = await query<{
-    hod_user_id: string | null; hod_name: string | null; hod_title: string | null; hod_email: string | null;
-    manager_user_id: string | null; manager_name: string | null; manager_title: string | null; manager_email: string | null;
-    exco_user_id: string | null; exco_name: string | null; exco_title: string | null; exco_email: string | null;
-  }>(
-    `SELECT hod.id AS hod_user_id, hod.full_name AS hod_name, hod.title AS hod_title, hod.email AS hod_email,
-            mgr.id AS manager_user_id, mgr.full_name AS manager_name, mgr.title AS manager_title, mgr.email AS manager_email,
-            exco.id AS exco_user_id, exco.full_name AS exco_name, exco.title AS exco_title, exco.email AS exco_email
-       FROM (SELECT 1) placeholder
-       LEFT JOIN LATERAL (
-         SELECT id, full_name, title, email FROM users WHERE section_id=$1 AND role='HOD' AND is_active=true ORDER BY full_name LIMIT 1
-       ) hod ON true
-       LEFT JOIN LATERAL (
-         SELECT id, full_name, title, email FROM users WHERE section_id=$1 AND role='MANAGER' AND is_active=true ORDER BY full_name LIMIT 1
-       ) mgr ON true
-       LEFT JOIN LATERAL (
-         SELECT id, full_name, title, email FROM users WHERE section_id=$1 AND role='EXCO' AND is_active=true ORDER BY full_name LIMIT 1
-       ) exco ON true`,
+  if (!sectionId) return emptySectionLeadership(null);
+  // Whoever holds the role for this section - ALL of them, not just one.
+  // A section can genuinely have more than one active MANAGER (or HOD/EXCO)
+  // at once (e.g. two people both carrying the Manager role for the same
+  // section) - every one of them needs to actually receive/be able to act
+  // on a step routed here, not just whichever sorts first alphabetically.
+  const rows = await query<{ id: string; full_name: string | null; title: string | null; email: string | null; role: string }>(
+    `SELECT id, full_name, title, email, role::text AS role FROM users
+      WHERE section_id=$1 AND role IN ('HOD','MANAGER','EXCO') AND is_active=true
+      ORDER BY full_name`,
     [sectionId]
   );
-  return rows[0]
-    ? { section_id: sectionId, ...rows[0] }
-    : {
-        section_id: sectionId,
-        hod_user_id: null, hod_name: null, hod_title: null, hod_email: null,
-        manager_user_id: null, manager_name: null, manager_title: null, manager_email: null,
-        exco_user_id: null, exco_name: null, exco_title: null, exco_email: null
-      };
+  const hods = rows.filter((r) => r.role === "HOD");
+  // Many sections are headed directly by an HOD with no separate Manager
+  // role underneath them at all (e.g. Human Resources Operations) - "the
+  // manager(s) of this section" falls back to its HOD(s) when nobody holds
+  // the literal Manager role, same authority, closest real title available.
+  const managersByRole = rows.filter((r) => r.role === "MANAGER");
+  const managers = managersByRole.length ? managersByRole : hods;
+  const excos = rows.filter((r) => r.role === "EXCO");
+  const toPerson = (r: { id: string; full_name: string | null; title: string | null; email: string | null }): LeadershipPerson =>
+    ({ id: r.id, full_name: r.full_name, title: r.title, email: r.email });
+  return {
+    section_id: sectionId,
+    hod_user_id: hods[0]?.id ?? null, hod_name: hods[0]?.full_name ?? null, hod_title: hods[0]?.title ?? null, hod_email: hods[0]?.email ?? null,
+    hods: hods.map(toPerson),
+    manager_user_id: managers[0]?.id ?? null, manager_name: managers[0]?.full_name ?? null, manager_title: managers[0]?.title ?? null, manager_email: managers[0]?.email ?? null,
+    managers: managers.map(toPerson),
+    exco_user_id: excos[0]?.id ?? null, exco_name: excos[0]?.full_name ?? null, exco_title: excos[0]?.title ?? null, exco_email: excos[0]?.email ?? null,
+    excos: excos.map(toPerson)
+  };
 }
 
 // Team-level leadership - a team (the UI's "Section" field, users.team_id) is

@@ -9,6 +9,16 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
+/* SweetAlert2's default z-index (1060) sits below several of this app's own
+   full-screen modals (e.g. .tracking-modal-backdrop at 1200) - a confirm()
+   fired from inside one of those (e.g. "Cancel this request?" from Advance
+   Tracking) rendered visually behind the modal that triggered it, only
+   visible after closing it. Every Swal dialog must always be able to sit
+   above any app modal, whatever that modal's own z-index is. */
+.swal2-container {
+  z-index: 10000 !important;
+}
+
 /* Same fix as checkboxes above, for the same reason: the global
    "input, select, textarea { width: 100%; min-height: 40-42px; ... }"
    reset further down also applies to radio inputs, rendering them as a
@@ -1841,6 +1851,14 @@ html[data-theme="dark"] .inbox-review-button:hover {
   display: grid;
   grid-template-columns: 1fr;
   gap: 14px;
+}
+
+/* Only inset the grid when it sits inside an actual modal shell - the
+   shell's own border supplies the "card" edge there. Reused directly
+   inside .review-page (a plain full-page layout with no shell), the grid's
+   cards must instead sit flush with .review-info-row/.review-page-header
+   above them, which have no side padding of their own. */
+.review-modal-shell .review-modal-grid {
   padding: 16px;
 }
 
@@ -1882,6 +1900,22 @@ html[data-theme="dark"] .inbox-review-button:hover {
 
 .review-table-wrap {
   max-height: 280px;
+}
+
+/* The Lines panel sits in a two-column grid next to the (usually taller)
+   Summary card; grid's default align-items:stretch already fills this card
+   to match that row height, but the fixed 280px table cap left the extra
+   height as dead white space below the table instead of the table growing
+   into it. */
+.review-card-fill {
+  display: flex;
+  flex-direction: column;
+}
+
+.review-table-wrap-fill {
+  flex: 1;
+  max-height: none;
+  overflow-y: auto;
 }
 
 .review-field-grid {
@@ -6031,6 +6065,29 @@ html[data-theme="dark"] .summary-note {
   height: 22px;
 }
 
+.login-lockout-warning {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: clamp(48px, 5.3vh, 54px);
+  margin-top: 14px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 7px;
+  box-sizing: border-box;
+  background: #fff4e5;
+  color: #92400e;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.login-lockout-warning svg {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+}
+
 /* ── Dark mode: the login/profile-completion card was hardcoded to a
    light palette regardless of theme — make it theme-aware. The dark
    navy showcase panel on the left is a fixed brand accent, not a
@@ -6097,6 +6154,11 @@ html[data-theme="dark"] .login-security-note {
 html[data-theme="dark"] .login-security-banner {
   background: rgba(59, 130, 246, 0.16);
   color: #8fc2ff;
+}
+
+html[data-theme="dark"] .login-lockout-warning {
+  background: rgba(217, 119, 6, 0.18);
+  color: #fbbf24;
 }
 
 @media (max-width: 1200px) {
@@ -11316,9 +11378,10 @@ html[data-theme="dark"] .tracking-empty {
 }
 
 .review-card-subtitle {
-  margin-top: 6px;
+  margin-top: 10px;
   font-size: 0.82rem;
-  border-radius: 6px;
+  border-radius: 0;
+  border-top: 1px solid var(--border);
 }
 
 .recon-summary {
@@ -11882,6 +11945,29 @@ html[data-theme="dark"] .workflow-tone-ceo {
   padding: 7px 14px;
 }
 
+.custom-request-autosave-status {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.custom-request-notice {
+  font-size: 13px;
+  border-radius: 7px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.custom-request-notice-warning {
+  background: #fff4e5;
+  color: #92400e;
+}
+
+html[data-theme="dark"] .custom-request-notice-warning {
+  background: rgba(217, 119, 6, 0.18);
+  color: #fbbf24;
+}
+
 .custom-request-type-picker {
   max-width: 360px;
   margin-bottom: 0;
@@ -12193,6 +12279,12 @@ html[data-theme="dark"] .workflow-tone-ceo {
   --status-border: #d8e2f2;
 }
 
+.custom-status-waiting {
+  --status-bg: #f8fafc;
+  --status-fg: #94a3b8;
+  --status-border: #e2e8f0;
+}
+
 .custom-request-note {
   margin-top: 12px;
   padding: 10px 12px;
@@ -12291,6 +12383,12 @@ html[data-theme="dark"] .custom-status-default {
   --status-bg: rgba(148, 163, 184, 0.13);
   --status-fg: #cbd5e1;
   --status-border: rgba(148, 163, 184, 0.24);
+}
+
+html[data-theme="dark"] .custom-status-waiting {
+  --status-bg: rgba(148, 163, 184, 0.08);
+  --status-fg: #94a3b8;
+  --status-border: rgba(148, 163, 184, 0.16);
 }
 
 html[data-theme="dark"] .custom-request-note-success {
@@ -12408,6 +12506,43 @@ html[data-theme="dark"] .holiday-cal-cell-holiday {
 .custom-status-dept-input,
 .custom-status-draft    { --status-bg: #ede9fe; --status-fg: #6d28d9; --status-border: #ddd6fe; }
 .custom-status-intake   { --status-bg: #f1f5f9; --status-fg: #475569; --status-border: #d8e2f2; }
+
+.brs-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px;
+  margin-bottom: 22px;
+}
+@media (max-width: 1100px) { .brs-kpi-row { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 640px)  { .brs-kpi-row { grid-template-columns: repeat(2, 1fr); } }
+
+.brs-kpi {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.brs-kpi-tint-amber { background: #fffbeb; border-color: #fde68a; }
+.brs-kpi-tint-green { background: #f0fdf4; border-color: #bbf7d0; }
+html[data-theme="dark"] .brs-kpi-tint-amber { background: rgba(217, 119, 6, 0.14); border-color: rgba(253, 230, 138, 0.25); }
+html[data-theme="dark"] .brs-kpi-tint-green { background: rgba(21, 128, 61, 0.14); border-color: rgba(187, 247, 208, 0.25); }
+
+.brs-kpi-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.brs-kpi-value { font-size: 1.5rem; font-weight: 800; line-height: 1.1; color: var(--text); }
+.brs-kpi-label { font-size: 0.85rem; font-weight: 700; color: var(--text); margin-top: 2px; }
+.brs-kpi-sub { font-size: 0.76rem; color: var(--muted); margin-top: 1px; }
 
 .brs-stepper {
   display: grid;
@@ -12552,23 +12687,77 @@ html[data-theme="dark"] .holiday-cal-cell-holiday {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
+  min-width: 26px;
   height: 26px;
+  padding: 0 6px;
   border: none;
   border-radius: 5px;
   background: transparent;
   color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
 }
 .brs-richtext-toolbar button:hover { background: var(--border); }
 .brs-richtext-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+
+.brs-richtext-color {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.brs-richtext-color:hover { background: var(--border); }
+.brs-richtext-color span {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--text);
+  border-bottom: 2px solid;
+  padding-bottom: 1px;
+  pointer-events: none;
+}
+/* The native color input is stretched to fill and hidden (opacity 0) so its
+   whole box is clickable - only the letter+underline span above is ever
+   visible, clipped to the 26px button by the parent's overflow:hidden
+   (browsers otherwise enforce their own, much larger, minimum swatch size). */
+.brs-richtext-color input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.brs-richtext-table-toolbar {
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface-soft) 93%);
+  border-bottom: 1px solid var(--border);
+}
+.brs-richtext-table-label { font-size: 0.76rem; font-weight: 700; color: var(--muted); margin-right: 2px; }
+.brs-richtext-table-delete { color: #dc2626; gap: 4px; }
+.brs-richtext-table-delete:hover { background: rgba(220, 38, 38, 0.12); }
 .brs-richtext-style {
+  width: auto;
+  min-height: 0;
+  height: 26px;
   font-size: 0.78rem;
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 3px 5px;
   background: var(--surface);
   color: var(--text);
+  box-shadow: none;
 }
 .brs-richtext-editable {
   min-height: 90px;
@@ -12583,10 +12772,27 @@ html[data-theme="dark"] .holiday-cal-cell-holiday {
   color: var(--muted);
 }
 .brs-richtext-editable p { margin: 0 0 8px; }
+.brs-richtext-editable h1 { font-size: 1.5rem; margin: 12px 0 8px; }
+.brs-richtext-editable h2 { font-size: 1.25rem; margin: 10px 0 8px; }
+.brs-richtext-editable h3 { font-size: 1.1rem; margin: 10px 0 6px; }
+.brs-richtext-editable h4 { font-size: 0.98rem; margin: 8px 0 6px; }
 .brs-richtext-editable ul, .brs-richtext-editable ol { margin: 0 0 8px 20px; padding: 0; }
 .brs-richtext-editable blockquote { margin: 0 0 8px; padding-left: 12px; border-left: 3px solid var(--border); color: var(--muted); }
+.brs-richtext-editable pre {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, "Courier New", monospace;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .brs-richtext-editable table { border-collapse: collapse; margin: 0 0 8px; width: 100%; }
 .brs-richtext-editable table td, .brs-richtext-editable table th { border: 1px solid var(--border); padding: 6px 8px; font-size: 0.85rem; }
+.brs-richtext-editable img { max-width: 100%; border-radius: 4px; margin: 0 0 8px; }
+.brs-richtext-editable hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 
 .brs-landing-row {
   display: flex;
@@ -12621,4 +12827,45 @@ html[data-theme="dark"] .holiday-cal-cell-holiday {
   color: #15803d;
   font-size: 0.83rem;
   margin-bottom: 14px;
+}
+
+/* Global header search (was a decorative placeholder before) - real input,
+   wired to the same Quick Search state/results the Dashboard card uses, so
+   it works identically from any page. */
+.header-search {
+  position: relative;
+}
+.header-search input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  min-height: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  box-shadow: none;
+}
+.header-search input::placeholder { color: var(--muted); }
+.header-search input:focus { outline: none; box-shadow: none; }
+.header-search-results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(15, 23, 42, 0.14));
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* Approval Inbox: submitted date/time column */
+.inbox-when {
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--muted);
 }

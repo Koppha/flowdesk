@@ -36,6 +36,44 @@ export interface ReassignmentWarning {
 
 type ResolvedApprover = { id: string; full_name: string | null; title: string | null; email: string | null };
 
+// Mirrors the same rule in workflowEngine.ts's resolveWorkflowChain: a
+// requester who already sits at HOD tier or above (HOD/EXCO/CEO/ADMIN)
+// structurally has no "Manager" above them, and above EXCO tier has no
+// "HOD" either - resolveDynamicApprover coming back empty for them is
+// expected, not a data gap. The live chain already has whatever approver
+// was resolved at submission/last-reassignment time (still perfectly
+// usable) - there's nothing to flag here, unlike the same empty result
+// for a plain EMPLOYEE/MANAGER-role requester, which almost always means
+// their reporting line genuinely hasn't been set up.
+function approverExemptFromRequirement(positionCode: "MANAGER" | "HOD" | "EXCO", requesterRole: string | null): boolean {
+  if (positionCode === "MANAGER") return ["HOD", "EXCO", "CEO", "ADMIN"].includes(requesterRole || "");
+  if (positionCode === "HOD") return ["EXCO", "CEO", "ADMIN"].includes(requesterRole || "");
+  return false;
+}
+
+// The generic "No MANAGER found for the employee's current placement"
+// message gave an admin nothing to act on - not which employee, not which
+// request, not where they actually sit in the org (the very thing that's
+// missing a manager/HOD/EXCO to resolve against). Name the employee and
+// their full org placement so this reads as an actionable ticket instead
+// of a puzzle.
+function missingApproverReason(
+  positionCode: string,
+  employeeName: string | null,
+  employeeNo: string | null,
+  division: string | null,
+  department: string | null,
+  section: string | null,
+  team: string | null
+): string {
+  const who = employeeName ? `${employeeName}${employeeNo ? ` (${employeeNo})` : ""}` : "this employee";
+  const placement = [division, department, section, team].filter((v) => v && v.trim()).join(" › ");
+  const roleLabel = positionCode === "MANAGER" ? "Manager" : positionCode === "HOD" ? "Head of Department" : "EXCO member";
+  return placement
+    ? `No ${roleLabel} is set up for ${who}'s placement (${placement}) - assign one in Organizational Structure or Reporting Lines.`
+    : `No ${roleLabel} is set up for ${who}, who has no division/department/section/team assigned - complete their org placement first.`;
+}
+
 // Only MANAGER/HOD/EXCO steps that resolved dynamically (no fixed assignee,
 // not an ANY_ONE org-unit group) are eligible for reassignment — everything
 // else (fixed picks, Team:/Section:/Department: group steps) is left alone.
@@ -107,6 +145,20 @@ async function resolveDynamicApprover(
   return candidate;
 }
 
+// The sweep previously only patched a step when the resolved APPROVER
+// changed (a different person) - if the same person is still correctly
+// resolved but their own profile changed since this step was last written
+// (e.g. a title update), nothing ever refreshed it, since approver_name/
+// title/email are frozen into the chain at resolution time and never
+// re-read live afterward. That left stale personal details (like an old
+// job title) permanently stuck on any already-submitted, still-pending
+// request - not fixable by reassignment at all, since there was nothing to
+// "reassign." Compared here so a same-person match still counts as
+// "changed" whenever any of these three drifted.
+function approverAttributesStale(step: ChainStep, resolved: ResolvedApprover): boolean {
+  return step.approver_name !== resolved.full_name || step.approver_title !== resolved.title || step.approver_email !== resolved.email;
+}
+
 function patchStep(step: ChainStep, resolved: ResolvedApprover) {
   step.approver_id = resolved.id;
   step.approver_ids = [resolved.id];
@@ -147,10 +199,12 @@ async function reassignAdvances(
     requester_team: string | null;
     division: string | null;
     role: string;
+    requester_name: string | null;
+    requester_employee_no: string | null;
   }>(
     `SELECT ar.id, ar.requester_id, ar.type, ar.workflow_id, ar.workflow_step_order, ar.approval_chain,
             u.department AS requester_department, s.name AS requester_section, tm.name AS requester_team,
-            d.name AS division, u.role
+            d.name AS division, u.role, u.full_name AS requester_name, u.employee_no AS requester_employee_no
        FROM advance_requests ar
        JOIN users u ON u.id = ar.requester_id
        LEFT JOIN sections s ON s.id = u.section_id
@@ -185,11 +239,17 @@ async function reassignAdvances(
 
       const resolved = await resolveDynamicApprover(positionCode, row.requester_id, row.requester_department, chain, idx, row.workflow_id);
       if (!resolved) {
-        warnings.push({ module: "advance", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
+        if (!approverExemptFromRequirement(positionCode, row.role)) {
+          warnings.push({
+            module: "advance",
+            requestId: row.id,
+            reason: missingApproverReason(positionCode, row.requester_name, row.requester_employee_no, row.division, row.requester_department, row.requester_section, row.requester_team)
+          });
+        }
         continue;
       }
       const routeChanged = step.position_type_code !== positionCode || step.position_name !== definition.positionName;
-      if (resolved.id === step.approver_id && !routeChanged) continue;
+      if (resolved.id === step.approver_id && !routeChanged && !approverAttributesStale(step, resolved)) continue;
 
       const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: step.position_type_code };
       reassignments.push({
@@ -277,12 +337,15 @@ async function reassignClaims(
     claimant_team: string | null;
     claimant_role: string | null;
     linked_advance_type: string | null;
+    claimant_name: string | null;
+    claimant_employee_no: string | null;
   }>(
     `SELECT c.id, c.claimant_id, c.workflow_id, c.workflow_step_order, c.approval_chain,
             u.department AS claimant_department, dv.name AS claimant_division,
             s.name AS claimant_section, tm.name AS claimant_team,
             u.role AS claimant_role,
-            ar.type AS linked_advance_type
+            ar.type AS linked_advance_type,
+            u.full_name AS claimant_name, u.employee_no AS claimant_employee_no
        FROM clearance_claims c
        JOIN users u ON u.id = c.claimant_id
        LEFT JOIN divisions dv ON dv.id = u.division_id
@@ -314,11 +377,17 @@ async function reassignClaims(
 
       const resolved = await resolveDynamicApprover(positionCode, row.claimant_id, row.claimant_department, chain, idx, row.workflow_id);
       if (!resolved) {
-        warnings.push({ module: "claim", requestId: row.id, reason: `No ${positionCode} found for the employee's current placement` });
+        if (!approverExemptFromRequirement(positionCode, row.claimant_role)) {
+          warnings.push({
+            module: "claim",
+            requestId: row.id,
+            reason: missingApproverReason(positionCode, row.claimant_name, row.claimant_employee_no, row.claimant_division, row.claimant_department, row.claimant_section, row.claimant_team)
+          });
+        }
         continue;
       }
       const routeChanged = step.position_type_code !== positionCode || step.position_name !== definition.positionName;
-      if (resolved.id === step.approver_id && !routeChanged) continue;
+      if (resolved.id === step.approver_id && !routeChanged && !approverAttributesStale(step, resolved)) continue;
 
       const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: step.position_type_code };
       reassignments.push({

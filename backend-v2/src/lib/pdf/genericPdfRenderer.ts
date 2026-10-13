@@ -1,6 +1,6 @@
 import PDFDocument from "pdfkit";
 import fs from "fs";
-import type { ResolvedPdfData } from "./pdfFieldCatalog.js";
+import type { ResolvedPdfData, PdfDayGridData } from "./pdfFieldCatalog.js";
 
 export interface PdfLetterhead {
   logo_path?: string | null;
@@ -197,6 +197,82 @@ function renderFieldCell(doc: PDFKit.PDFDocument, label: string, value: string, 
   doc.fillColor("#000").font("Helvetica").fontSize(9.5);
 }
 
+// A day-of-month attendance grid (e.g. the Attendance Register's
+// day-by-day table) - one narrow column per calendar day, so it was
+// previously dumped as raw JSON text by the generic field_grid (which only
+// knows how to show a field as a single label/value pair). Rendered here
+// as an actual table instead: a legend for the single-letter codes, the
+// grid itself, and the pre-computed per-category totals underneath.
+function renderDayGrid(doc: PDFKit.PDFDocument, grid: PdfDayGridData, contentWidth: number) {
+  const marginLeft = doc.page.margins.left;
+  const marginBottom = doc.page.height - doc.page.margins.bottom;
+
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#111").text(grid.label, marginLeft, doc.y, { width: contentWidth });
+  doc.moveDown(0.2);
+
+  if (grid.cellOptions.length) {
+    const legend = grid.cellOptions.map((c) => `${c.value} = ${c.label}`).join("   ·   ");
+    doc.font("Helvetica").fontSize(6.5).fillColor(LABEL_COLOR).text(legend, marginLeft, doc.y, { width: contentWidth });
+    doc.moveDown(0.3);
+  }
+
+  const empColWidth = 90;
+  const dayColWidth = (contentWidth - empColWidth) / grid.daysInMonth;
+  const rowHeight = 14;
+
+  if (doc.y + rowHeight * 2 > marginBottom) doc.addPage();
+
+  let x = marginLeft;
+  let y = doc.y;
+  doc.rect(marginLeft, y, contentWidth, rowHeight).fill("#f1f5f9");
+  doc.fillColor("#111").font("Helvetica-Bold").fontSize(6.5);
+  doc.text("Employee", x + 3, y + 4, { width: empColWidth - 6, lineBreak: false });
+  x += empColWidth;
+  for (let d = 1; d <= grid.daysInMonth; d++) {
+    doc.text(String(d), x, y + 4, { width: dayColWidth, align: "center", lineBreak: false });
+    x += dayColWidth;
+  }
+  y += rowHeight;
+
+  for (const row of grid.rows) {
+    if (y + rowHeight > marginBottom) { doc.addPage(); y = doc.page.margins.top; }
+    x = marginLeft;
+    doc.font("Helvetica-Bold").fontSize(7).fillColor("#111").text(row.employee, x + 3, y + 4, { width: empColWidth - 6, lineBreak: false });
+    x += empColWidth;
+    doc.font("Helvetica").fontSize(6.5).fillColor("#222");
+    for (let d = 1; d <= grid.daysInMonth; d++) {
+      const code = row.cells[String(d)];
+      if (code) doc.text(code, x, y + 4, { width: dayColWidth, align: "center", lineBreak: false });
+      x += dayColWidth;
+    }
+    doc.moveTo(marginLeft, y + rowHeight).lineTo(marginLeft + contentWidth, y + rowHeight).strokeColor(RULE_COLOR).lineWidth(0.5).stroke();
+    y += rowHeight;
+  }
+  doc.moveTo(marginLeft, y).lineTo(marginLeft, y - rowHeight * (grid.rows.length + 1)).strokeColor(RULE_COLOR).lineWidth(0.5).stroke();
+  doc.moveTo(marginLeft + empColWidth, y).lineTo(marginLeft + empColWidth, y - rowHeight * (grid.rows.length + 1)).strokeColor(RULE_COLOR).lineWidth(0.5).stroke();
+  doc.moveTo(marginLeft + contentWidth, y).lineTo(marginLeft + contentWidth, y - rowHeight * (grid.rows.length + 1)).strokeColor(RULE_COLOR).lineWidth(0.5).stroke();
+
+  doc.x = marginLeft;
+  doc.y = y + 8;
+
+  if (grid.summaryColumns.length) {
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(LABEL_COLOR).text("SUMMARY", marginLeft, doc.y, { characterSpacing: 0.3 });
+    doc.moveDown(0.2);
+    const sumColWidth = contentWidth / grid.summaryColumns.length;
+    let sx = marginLeft;
+    const sy = doc.y;
+    for (const col of grid.summaryColumns) {
+      doc.font("Helvetica").fontSize(7).fillColor(LABEL_COLOR).text(col.label, sx, sy, { width: sumColWidth - 6 });
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111").text(String(grid.totals[col.key] ?? 0), sx, sy + 10, { width: sumColWidth - 6 });
+      sx += sumColWidth;
+    }
+    doc.y = sy + 26;
+  }
+  doc.x = marginLeft;
+  doc.fillColor("#000").font("Helvetica").fontSize(9.5);
+  doc.moveDown(0.3);
+}
+
 function renderSection(
   doc: PDFKit.PDFDocument,
   section: PdfTemplateSection,
@@ -224,14 +300,19 @@ function renderSection(
           .filter((k) => !CUSTOM_REQUEST_META_KEYS.has(k))
           .map((fieldKey) => ({ fieldKey }));
       }
+      // Day-of-month attendance grids render as their own dedicated table
+      // below, not as a field_grid cell - pulled out before the "nothing to
+      // show" filter drops them (their scalar is deliberately left blank).
+      const dayGridKeys = fields.map((f) => f.fieldKey).filter((k) => data.dayGridFields?.[k]);
       // Fields with nothing to show (common for optional fields like Duty
       // Station / Vehicle Reg on a given claim) are dropped rather than
       // rendered as an empty labelled row — the remaining fields re-pack
       // into the grid instead of leaving blank cells and wasted rows.
       fields = fields.filter((f) => (data.scalars[f.fieldKey] || "").trim() !== "");
       // Nothing left to show at all — skip the section (and its number)
-      // entirely rather than printing a heading over an empty grid.
-      if (fields.length === 0) return;
+      // entirely rather than printing a heading over an empty grid, unless
+      // a day grid still needs to render under this section's heading.
+      if (fields.length === 0 && dayGridKeys.length === 0) return;
       sectionTitle(doc, section.title, section.numbered, nextNumber);
       const columns = section.columns && section.columns >= 1 && section.columns <= 4 ? section.columns : 3;
       const colWidth = contentWidth / columns;
@@ -253,6 +334,7 @@ function renderSection(
         doc.moveDown(0.35);
       }
       doc.moveDown(0.15);
+      for (const key of dayGridKeys) renderDayGrid(doc, data.dayGridFields![key], contentWidth);
       return;
     }
 

@@ -4,13 +4,17 @@ import { type AuthedRequest, hasFeatureAccess, requireAuth } from "../../lib/aut
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { setStringSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
-import { getDefaultAssigneeIds } from "./it-provisioning.service.js";
+import { applyOldDeviceDisposition, getDefaultAssigneeIds, getProvisioningPoolSetting, getTaskRequester, isInProvisioningPool } from "./it-provisioning.service.js";
+import { notifyItProvisioningOfficers, notifyItProvisioningRequester } from "../../lib/notifications.js";
 
 export const itProvisioningRouter = Router();
 itProvisioningRouter.use(requireAuth);
 
+// Anyone the IT Manager put in the provisioning pool gets in automatically -
+// requests go to them, so they must be able to open them.
 async function canAccessItProvisioning(req: AuthedRequest) {
-  return hasFeatureAccess(req.user!.userId, req.user!.role, "it_provisioning", ["ADMIN"]);
+  if (await hasFeatureAccess(req.user!.userId, req.user!.role, "it_provisioning", ["ADMIN"])) return true;
+  return isInProvisioningPool(req.user!.userId);
 }
 
 // Every route below requires module access (ADMIN or an admin-granted role/group).
@@ -29,6 +33,7 @@ const TASK_SELECT = `
          t.replacement_details, t.upgrade_details, t.handover,
          t.provisioned_by_id, pb.full_name AS provisioned_by_name, t.provisioned_at,
          t.ready_for_collection_at, t.handed_over_at, t.completed_at,
+         t.collection_acknowledged_at, ack.full_name AS collection_acknowledged_by_name,
          t.created_at, t.updated_at,
          s.id AS submission_id, s.data, s.approval_chain, s.status AS submission_status, s.created_at AS submitted_at,
          u.id AS requester_id, u.full_name AS requester_name, u.email AS requester_email,
@@ -40,6 +45,7 @@ const TASK_SELECT = `
     JOIN users u ON u.id = s.requester_id
     LEFT JOIN users ito ON ito.id = t.assigned_to_id
     LEFT JOIN users pb ON pb.id = t.provisioned_by_id
+    LEFT JOIN users ack ON ack.id = t.collection_acknowledged_by_id
     LEFT JOIN it_devices d ON d.id = t.device_id
 `;
 
@@ -61,6 +67,8 @@ function shapeTaskRow(r: any) {
     ready_for_collection_at: r.ready_for_collection_at,
     handed_over_at: r.handed_over_at,
     completed_at: r.completed_at,
+    collection_acknowledged_at: r.collection_acknowledged_at,
+    collection_acknowledged_by_name: r.collection_acknowledged_by_name,
     created_at: r.created_at,
     updated_at: r.updated_at,
     submission_id: r.submission_id,
@@ -106,7 +114,7 @@ itProvisioningRouter.get("/access", async (req: AuthedRequest, res, next) => {
       allowed,
       awaitingProvisioning: byStatus.AWAITING_PROVISIONING || 0,
       inProgress: byStatus.IN_PROGRESS || 0,
-      readyForCollection: byStatus.READY_FOR_COLLECTION || 0,
+      readyForCollection: (byStatus.READY_FOR_COLLECTION || 0) + (byStatus.HANDED_OVER || 0),
       completed: byStatus.COMPLETED || 0
     });
   } catch (err) {
@@ -164,6 +172,136 @@ itProvisioningRouter.get("/devices", async (_req: AuthedRequest, res, next) => {
         ORDER BY d.created_at DESC`
     );
     return res.json({ items: rows });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Inventory ──────────────────────────────────────────────────────────────
+const DEVICE_STATUSES = ["IN_STOCK", "ASSIGNED", "IN_REPAIR", "DISPOSED"] as const;
+
+const InventoryDeviceSchema = z.object({
+  asset_number: z.string().trim().min(1, "Asset number is required"),
+  serial_number: z.string().trim().nullish(),
+  manufacturer: z.string().trim().nullish(),
+  model: z.string().trim().nullish(),
+  computer_type: z.enum(["LAPTOP", "DESKTOP"]).nullish(),
+  operating_system: z.string().trim().nullish(),
+  hostname: z.string().trim().nullish(),
+  warranty_expiry: z.string().nullish(),
+  location: z.string().trim().nullish(),
+  notes: z.string().trim().nullish(),
+  status: z.enum(DEVICE_STATUSES),
+  assigned_user_id: z.string().uuid().nullish()
+}).refine((d) => d.status !== "ASSIGNED" || Boolean(d.assigned_user_id), { message: "Choose who the device is assigned to", path: ["assigned_user_id"] });
+
+function deviceParams(d: z.infer<typeof InventoryDeviceSchema>) {
+  return [
+    d.asset_number, d.serial_number || null, d.manufacturer || null, d.model || null, d.computer_type || null,
+    d.operating_system || null, d.hostname || null, d.warranty_expiry || null, d.location || null, d.notes || null,
+    d.status, d.status === "ASSIGNED" ? d.assigned_user_id : null
+  ];
+}
+
+// POST /devices — add a device to the inventory (e.g. new stock).
+itProvisioningRouter.post("/devices", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = InventoryDeviceSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid device", parsed.error.flatten());
+    const row = (await query<{ id: string }>(
+      `INSERT INTO it_devices (asset_number, serial_number, manufacturer, model, computer_type, operating_system, hostname, warranty_expiry, location, notes, status, assigned_user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      deviceParams(parsed.data)
+    ))[0];
+    return res.status(201).json({ id: row.id });
+  } catch (err) {
+    if ((err as any)?.code === "23505") return next(badRequest("Asset number is already in the inventory"));
+    return next(err);
+  }
+});
+
+itProvisioningRouter.put("/devices/:deviceId", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = InventoryDeviceSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid device", parsed.error.flatten());
+    const params = [...deviceParams(parsed.data), req.params.deviceId];
+    const rows = await query(
+      `UPDATE it_devices SET asset_number=$1, serial_number=$2, manufacturer=$3, model=$4, computer_type=$5, operating_system=$6,
+              hostname=$7, warranty_expiry=$8, location=$9, notes=$10, status=$11, assigned_user_id=$12, updated_at=now()
+        WHERE id=$13 RETURNING id`,
+      params
+    );
+    if (!rows[0]) throw notFound("Device not found");
+    return res.json({ ok: true });
+  } catch (err) {
+    if ((err as any)?.code === "23505") return next(badRequest("Asset number is already in the inventory"));
+    return next(err);
+  }
+});
+
+// ── Computer Request default approvers ──────────────────────────────────────
+// The "pick from a role" steps of the Computer Request (IT Manager, IS HOD/CIO,
+// CTO) are pre-filled with these people; a requester can still change them.
+async function getComputerRequestType() {
+  return (await query<{ id: string; fixed_approval_chain: any[] | null }>(
+    `SELECT id, fixed_approval_chain FROM custom_request_types
+      WHERE code = 'COMPUTER_REQUEST' AND jsonb_typeof(fixed_approval_chain) = 'array'
+      ORDER BY created_at LIMIT 1`
+  ))[0] ?? null;
+}
+
+function stepRoles(step: any): string[] {
+  return (Array.isArray(step.roles) && step.roles.length ? step.roles : step.role ? [step.role] : []).map((r: string) => String(r).toUpperCase());
+}
+
+itProvisioningRouter.get("/approver-defaults", async (_req: AuthedRequest, res, next) => {
+  try {
+    const type = await getComputerRequestType();
+    if (!type) return res.json({ steps: [] });
+    const steps = [];
+    for (const [index, step] of (type.fixed_approval_chain || []).entries()) {
+      if (step.source !== "ROLE_PICKER") continue;
+      const roles = stepRoles(step);
+      const candidates = await query<{ id: string; full_name: string | null; title: string | null; role: string }>(
+        `SELECT id, full_name, title, role::text AS role FROM users
+          WHERE is_active = true AND ($1::text[] = '{}' OR upper(role::text) = ANY($1::text[]))
+          ORDER BY full_name`,
+        [roles]
+      );
+      steps.push({ index, title: step.title, roles, default_approver_id: step.default_approver_id ?? null, candidates });
+    }
+    return res.json({ steps });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const ApproverDefaultsSchema = z.object({
+  defaults: z.array(z.object({ index: z.number().int().min(0), approver_id: z.string().uuid().nullable() }))
+});
+
+itProvisioningRouter.put("/approver-defaults", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = ApproverDefaultsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    const type = await getComputerRequestType();
+    if (!type) throw notFound("Computer Request type not found");
+    const chain = [...(type.fixed_approval_chain || [])];
+    for (const d of parsed.data.defaults) {
+      const step = chain[d.index];
+      if (!step || step.source !== "ROLE_PICKER") throw badRequest("Only role-picked steps can have a default approver");
+      if (d.approver_id) {
+        const user = (await query<{ role: string }>(`SELECT role::text AS role FROM users WHERE id = $1 AND is_active = true`, [d.approver_id]))[0];
+        if (!user) throw badRequest(`The default for "${step.title}" is not an active user`);
+        const roles = stepRoles(step);
+        if (roles.length && !roles.includes(user.role.toUpperCase())) {
+          throw badRequest(`The default for "${step.title}" must have the role ${roles.join(" or ")}`);
+        }
+      }
+      chain[d.index] = { ...step, default_approver_id: d.approver_id };
+    }
+    await query(`UPDATE custom_request_types SET fixed_approval_chain = $1 WHERE id = $2`, [JSON.stringify(chain), type.id]);
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }
@@ -290,27 +428,36 @@ itProvisioningRouter.get("/it-staff", async (_req: AuthedRequest, res, next) => 
   }
 });
 
-// GET/PUT /it-provisioning/default-assignees — the IT Manager's preset pool
-// of IT Officers. Exactly one preset officer auto-assigns every new
-// Computer Request directly, same as before; more than one leaves new tasks
-// unassigned but claimable by any of them (POST /:id/claim) - first to
-// claim it gets it. Optional - leave the pool empty and tasks fall back to
-// landing unassigned in AWAITING_PROVISIONING as always.
+// GET/PUT /it-provisioning/default-assignees — the IT Manager's one-time
+// setting for who provisions Computer Requests: whole teams and/or people.
+// One person in the pool → every new request is assigned to them directly;
+// more → new requests go to all of them, first to claim (POST /:id/claim)
+// gets it. Empty → requests land unassigned, as before.
 itProvisioningRouter.get("/default-assignees", async (_req: AuthedRequest, res, next) => {
   try {
-    const ids = await getDefaultAssigneeIds();
-    if (!ids.length) return res.json({ assignees: [] });
-    const users = await query<{ id: string; full_name: string | null }>(
-      `SELECT id, full_name FROM users WHERE id = ANY($1::uuid[])`,
-      [ids]
-    );
-    return res.json({ assignees: users });
+    const pool = await getProvisioningPoolSetting();
+    const memberIds = await getDefaultAssigneeIds();
+    const [users, teams, members, allTeams] = await Promise.all([
+      query<{ id: string; full_name: string | null }>(`SELECT id, full_name FROM users WHERE id = ANY($1::uuid[]) ORDER BY full_name`, [pool.user_ids]),
+      query<{ id: string; name: string }>(`SELECT id, name FROM teams WHERE id = ANY($1::uuid[]) ORDER BY name`, [pool.team_ids]),
+      query<{ id: string; full_name: string | null }>(`SELECT id, full_name FROM users WHERE id = ANY($1::uuid[]) ORDER BY full_name`, [memberIds]),
+      query<{ id: string; name: string; members: number }>(
+        `SELECT t.id, t.name, count(u.id)::int AS members
+           FROM teams t LEFT JOIN users u ON u.team_id = t.id AND u.is_active = true
+          GROUP BY t.id, t.name ORDER BY t.name`
+      )
+    ]);
+    // `assignees` = everyone currently in the pool (kept for older clients).
+    return res.json({ users, teams, assignees: members, team_options: allTeams });
   } catch (err) {
     return next(err);
   }
 });
 
-const DefaultAssigneesSchema = z.object({ assigned_to_ids: z.array(z.string().uuid()) });
+const DefaultAssigneesSchema = z.object({
+  assigned_to_ids: z.array(z.string().uuid()),
+  team_ids: z.array(z.string().uuid()).optional().default([])
+});
 
 itProvisioningRouter.put("/default-assignees", async (req: AuthedRequest, res, next) => {
   try {
@@ -320,7 +467,14 @@ itProvisioningRouter.put("/default-assignees", async (req: AuthedRequest, res, n
       const active = await query<{ id: string }>(`SELECT id FROM users WHERE id = ANY($1::uuid[]) AND is_active = true`, [parsed.data.assigned_to_ids]);
       if (active.length !== parsed.data.assigned_to_ids.length) throw badRequest("One or more selected users are not active accounts");
     }
-    await setStringSystemSetting(SYSTEM_SETTING_KEYS.defaultItProvisioningAssigneeIds, JSON.stringify(parsed.data.assigned_to_ids));
+    if (parsed.data.team_ids.length) {
+      const teams = await query<{ id: string }>(`SELECT id FROM teams WHERE id = ANY($1::uuid[])`, [parsed.data.team_ids]);
+      if (teams.length !== parsed.data.team_ids.length) throw badRequest("One or more selected teams no longer exist");
+    }
+    await setStringSystemSetting(
+      SYSTEM_SETTING_KEYS.defaultItProvisioningAssigneeIds,
+      JSON.stringify({ user_ids: parsed.data.assigned_to_ids, team_ids: parsed.data.team_ids })
+    );
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
@@ -372,6 +526,9 @@ itProvisioningRouter.patch("/:id", async (req: AuthedRequest, res, next) => {
 
     params.push(req.params.id);
     await query(`UPDATE it_provisioning_tasks SET ${updates.join(",")}, updated_at = now() WHERE id = $${params.length}`, params);
+    if (parsed.data.assigned_to_id && parsed.data.assigned_to_id !== task.assigned_to_id) {
+      await notifyOfficerAssigned(req.params.id, parsed.data.assigned_to_id, req.user!.userId);
+    }
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
@@ -403,11 +560,35 @@ itProvisioningRouter.post("/:id/claim", async (req: AuthedRequest, res, next) =>
       [req.user!.userId, req.params.id]
     );
     if (!claimed[0]) throw badRequest("This request has already been claimed by someone else");
+    await notifyOfficerAssigned(req.params.id, req.user!.userId, req.user!.userId);
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }
 });
+
+// The officer hears about it unless they assigned it to themselves; the
+// requester always learns who is preparing their computer.
+async function notifyOfficerAssigned(taskId: string, officerId: string, actorId: string) {
+  const officer = (await query<{ email: string | null; name: string | null }>(`SELECT email, full_name AS name FROM users WHERE id = $1`, [officerId]))[0];
+  const requester = await getTaskRequester(taskId);
+  if (officer && officerId !== actorId) {
+    void notifyItProvisioningOfficers({ taskId, recipients: [officer], requesterName: requester?.full_name ?? null, event: "ASSIGNED" });
+  }
+  if (requester) {
+    void notifyItProvisioningRequester({
+      taskId, requesterEmail: requester.email, requesterName: requester.full_name, stage: "ASSIGNED", officerName: officer?.name ?? null
+    });
+  }
+}
+
+async function notifyReadyForCollection(taskId: string) {
+  const task = await getTaskOr404(taskId);
+  void notifyItProvisioningRequester({
+    taskId, requesterEmail: task.requester_email, requesterName: task.requester_name,
+    stage: "READY_FOR_COLLECTION", officerName: task.assigned_to_name, assetNumber: task.asset_number
+  });
+}
 
 const DeviceSchema = z.object({
   asset_number: z.string().trim().min(1),
@@ -492,15 +673,27 @@ const ReplacementDetailsSchema = z.object({
   reason: z.string().trim().nullish(),
   old_device_returned: z.boolean().optional().default(false),
   old_device_condition: z.string().trim().nullish(),
-  old_device_disposition: z.string().trim().nullish()
+  old_device_disposition: z.enum(["Repair", "Store", "Dispose", "Transfer"]).nullish(),
+  transfer_to_user_id: z.string().uuid().nullish()
 });
 
 itProvisioningRouter.put("/:id/replacement-details", async (req: AuthedRequest, res, next) => {
   try {
-    await getTaskOr404(req.params.id);
+    const task = await getTaskOr404(req.params.id);
     const parsed = ReplacementDetailsSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
-    await query(`UPDATE it_provisioning_tasks SET replacement_details=$1, updated_at=now() WHERE id=$2`, [JSON.stringify(parsed.data), req.params.id]);
+    const details: Record<string, unknown> = { ...parsed.data };
+    if (parsed.data.old_device_disposition !== "Transfer") details.transfer_to_user_id = null;
+    if (details.transfer_to_user_id) {
+      details.transfer_to_name = (await query<{ full_name: string | null }>(`SELECT full_name FROM users WHERE id = $1`, [details.transfer_to_user_id]))[0]?.full_name ?? null;
+    }
+    await applyOldDeviceDisposition({
+      previousAssetNumber: parsed.data.previous_asset_number,
+      disposition: parsed.data.old_device_disposition,
+      transferToUserId: parsed.data.transfer_to_user_id,
+      computerType: task.data?.computer_type ?? null
+    });
+    await query(`UPDATE it_provisioning_tasks SET replacement_details=$1, updated_at=now() WHERE id=$2`, [JSON.stringify(details), req.params.id]);
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
@@ -544,13 +737,17 @@ itProvisioningRouter.post("/:id/mark-provisioned", async (req: AuthedRequest, re
     const incomplete = checklist.filter((c) => !c.checked);
     if (incomplete.length) throw badRequest(`Complete the provisioning checklist first (${incomplete.length} item${incomplete.length === 1 ? "" : "s"} outstanding)`);
 
+    // Provisioned means ready: the requester is told to collect straight away.
     await query(
-      `UPDATE it_provisioning_tasks SET status='PROVISIONED', provisioned_by_id=$1, provisioned_at=now(), updated_at=now() WHERE id=$2`,
+      `UPDATE it_provisioning_tasks
+          SET status='READY_FOR_COLLECTION', provisioned_by_id=$1, provisioned_at=now(), ready_for_collection_at=now(), updated_at=now()
+        WHERE id=$2`,
       [req.user!.userId, req.params.id]
     );
     if (task.asset_number) {
-      await query(`UPDATE it_devices SET status='ASSIGNED', updated_at=now() WHERE id=$1`, [task.device_id]);
+      await query(`UPDATE it_devices SET status='ASSIGNED', assigned_user_id=$1, updated_at=now() WHERE id=$2`, [task.requester_id, task.device_id]);
     }
+    await notifyReadyForCollection(req.params.id);
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
@@ -565,6 +762,7 @@ itProvisioningRouter.post("/:id/ready-for-collection", async (req: AuthedRequest
       `UPDATE it_provisioning_tasks SET status='READY_FOR_COLLECTION', ready_for_collection_at=now(), updated_at=now() WHERE id=$1`,
       [req.params.id]
     );
+    await notifyReadyForCollection(req.params.id);
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
@@ -593,12 +791,18 @@ itProvisioningRouter.post("/:id/handover", async (req: AuthedRequest, res, next)
     const parsed = HandoverSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
 
+    // IT's record of the handover (accessories etc.). The task only
+    // completes once the requester confirms collection themselves.
     await query(
       `UPDATE it_provisioning_tasks
-          SET status='COMPLETED', handover=$1, handed_over_at=now(), completed_at=now(), updated_at=now()
+          SET status='HANDED_OVER', handover=$1, handed_over_at=now(), updated_at=now()
         WHERE id=$2`,
       [JSON.stringify(parsed.data), req.params.id]
     );
+    void notifyItProvisioningRequester({
+      taskId: task.id, requesterEmail: task.requester_email, requesterName: task.requester_name,
+      stage: "HANDED_OVER", assetNumber: task.asset_number
+    });
     return res.json({ ok: true });
   } catch (err) {
     return next(err);

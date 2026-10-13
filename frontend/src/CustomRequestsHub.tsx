@@ -53,7 +53,26 @@ type FixedApprovalStep = {
   title: string;
   source: "AUTO_MANAGER" | "ROLE_PICKER";
   role?: string;
+  // A step any of several roles may sign (e.g. "IS HOD/CIO" = HOD or EXCO).
+  roles?: string[];
+  // Pre-filled approver for a ROLE_PICKER step (set by IT); the requester can change it.
+  default_approver_id?: string | null;
 };
+
+// What the requester sees of their Computer Request once it reaches IT.
+const IT_STAGE_TEXT: Record<string, string> = {
+  AWAITING_PROVISIONING: "Waiting for an IT officer",
+  IN_PROGRESS: "Being prepared",
+  PROVISIONED: "Prepared",
+  READY_FOR_COLLECTION: "Ready for collection",
+  HANDED_OVER: "Handed over — please confirm collection",
+  COMPLETED: "Collected"
+};
+
+function initialStepApprover(step: FixedApprovalStep, managerId: string | undefined) {
+  if (step.source === "AUTO_MANAGER") return managerId || "";
+  return step.default_approver_id || "";
+}
 
 type RequestTypeSummary = {
   id: string;
@@ -93,6 +112,8 @@ type Submission = {
   closed_at: string | null;
   cancel_comment?: string | null;
   cancelled_at?: string | null;
+  // Computer Request only: where IT Provisioning is up to.
+  it_provisioning?: { status: string; assigned_to_name: string | null; asset_number: string | null; ready_for_collection_at: string | null; collection_acknowledged_at: string | null } | null;
   attachments?: Attachment[];
 };
 
@@ -103,6 +124,11 @@ type CustomRequestsHubProps = {
   // e.g. Attendance Register.
   requestDirectory: DirectoryUser[];
   onBack: () => void;
+  // Set by BRS Studio's "Raise a Change Request" button — pre-selects the
+  // Change Request type and pre-fills its "Related BRS" field with this
+  // reference, consumed once on mount (see the type/field-loading effects).
+  deepLink?: { brsReferenceNo: string } | null;
+  onDeepLinkConsumed?: () => void;
 };
 
 function statusBadge(status: string) {
@@ -565,7 +591,7 @@ function computeTableSummary(cfg: TableFieldConfig | null | undefined, rows: Tab
   return { perRow, totals };
 }
 
-export default function CustomRequestsHub({ profile, requestDirectory, onBack }: CustomRequestsHubProps) {
+export default function CustomRequestsHub({ profile, requestDirectory, onBack, deepLink, onDeepLinkConsumed }: CustomRequestsHubProps) {
   const [tab, setTab] = useState<"NEW" | "MINE" | "ASSIGNED">("NEW");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -606,9 +632,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   const [wizardStep, setWizardStep] = useState(1);
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [acknowledgingId, setAcknowledgingId] = useState<string | null>(null);
   const [cancelComment, setCancelComment] = useState("");
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [remindingId, setRemindingId] = useState<string | null>(null);
+  // Attendance Register only - day-by-day autosave (see attendance.routes.ts)
+  // lets the grid be built up over several sessions instead of only ever
+  // reaching the database on final Submit.
+  const [attendanceSaveStatus, setAttendanceSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [attendancePeriodLocked, setAttendancePeriodLocked] = useState(false);
 
   const selectedType = types.find((t) => t.id === selectedTypeId) || null;
   const isChangeRequestType = selectedType?.code === "CHANGE_REQUEST";
@@ -675,13 +708,18 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
           setError("No processes have been configured yet.");
           return;
         }
-        setSelectedTypeId(active[0].id);
+        // A BRS-originated deep link pre-selects Change Request instead of
+        // the first type in the list — read once at mount, same as the
+        // field pre-fill below.
+        const preselect = deepLink ? active.find((t) => t.code === "CHANGE_REQUEST") : null;
+        setSelectedTypeId((preselect || active[0]).id);
       } catch {
         setError("Failed to load processes.");
       } finally {
         setLoading(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -701,13 +739,18 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
         // job title; non-permanent staff (interns, temps, contractors) often
         // don't, so fall back to their employment type instead.
         const isPermanent = String(profile?.employment_type || "").toUpperCase() === "PERMANENT";
+        const isChangeRequestDetail = (detail as RequestTypeSummary).code === "CHANGE_REQUEST";
         const knownByFieldKey: Record<string, string> = {
           division: profile?.division_name || "",
           department: profile?.department || "",
           position: isPermanent ? (profile?.title || "") : (profile?.employment_type || ""),
           emp_no: profile?.employee_no || ""
         };
+        if (isChangeRequestDetail && deepLink?.brsReferenceNo) {
+          knownByFieldKey.related_brs_document_id = deepLink.brsReferenceNo;
+        }
         const today = new Date().toISOString().slice(0, 10);
+        const isAttendanceRegister = (detail as RequestTypeSummary).code === "ATTENDANCE_REGISTER";
         for (const f of sorted) {
           if (f.field_type === "table" && (f.options as TableFieldConfig | null)?.rowSource === "SELF") {
             initialValues[f.field_key] = { rows: [{ employee: myName, cells: {} }] };
@@ -715,13 +758,33 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
             initialValues[f.field_key] = knownByFieldKey[f.field_key];
           } else if (f.field_type === "date" && f.field_key === "date_requested") {
             initialValues[f.field_key] = today;
+          } else if (f.field_type === "date" && f.field_key === "month" && isAttendanceRegister) {
+            // Defaults to the current month so day-by-day logging can start
+            // immediately, without first asking the employee to pick one.
+            initialValues[f.field_key] = today;
+          }
+        }
+        setAttendanceSaveStatus("idle");
+        setAttendancePeriodLocked(false);
+        if (isAttendanceRegister) {
+          try {
+            const period = today.slice(0, 7);
+            const draft = await api.attendanceDraft(period);
+            if (draft?.cells && Object.keys(draft.cells).length) {
+              initialValues.attendance_grid = { rows: [{ employee: myName, cells: draft.cells }] };
+            }
+            setAttendancePeriodLocked(Boolean(draft?.locked));
+          } catch {
+            // No draft yet, or the lookup failed - the form still works,
+            // it just starts blank exactly as it always has.
           }
         }
         setValues(initialValues);
+        if (isChangeRequestDetail && deepLink?.brsReferenceNo) onDeepLinkConsumed?.();
         const fixedChain = (detail as RequestTypeSummary).fixed_approval_chain;
         if (fixedChain?.length) {
           setChain(fixedChain.map((step) => ({
-            approver_id: step.source === "AUTO_MANAGER" ? (myManager?.id || "") : "",
+            approver_id: initialStepApprover(step, myManager?.id),
             position_name: step.title,
             decision_type: "APPROVE"
           })));
@@ -735,6 +798,26 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
       }
     })();
   }, [selectedTypeId, myManager, profile?.title, profile?.employment_type, profile?.department, profile?.division_name, profile?.employee_no]);
+
+  // Attendance Register only - autosaves the day-grid to a DRAFT submission
+  // (attendance.routes.ts) a second or so after the employee stops editing,
+  // so progress survives closing the browser instead of only ever being
+  // written to the database on final Submit.
+  const isAttendanceRegisterSelected = selectedType?.code === "ATTENDANCE_REGISTER";
+  useEffect(() => {
+    if (!isAttendanceRegisterSelected || attendancePeriodLocked) return;
+    const cells = values.attendance_grid?.rows?.[0]?.cells;
+    const period = String(values.month || "").slice(0, 7);
+    if (!cells || !period) return;
+    setAttendanceSaveStatus("saving");
+    const handle = setTimeout(() => {
+      api.saveAttendanceDraft({ period, division: values.division, department: values.department, cells })
+        .then(() => setAttendanceSaveStatus("saved"))
+        .catch(() => setAttendanceSaveStatus("error"));
+    }, 1000);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAttendanceRegisterSelected, attendancePeriodLocked, values.attendance_grid, values.month, values.division, values.department]);
 
   async function loadMine() {
     if (!selectedType) return;
@@ -791,18 +874,24 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
   );
 
   // For fixed approval chains (e.g. Computer Request), each ROLE_PICKER step
-  // is scoped to company-wide users holding that exact role (e.g. only
-  // Managers for "IT Manager", only Exco members for "IS HOD/CIO"/"CTO").
-  function directoryForRole(role: string | undefined) {
-    if (!role) return companyDirectory;
+  // is scoped to company-wide users holding one of the step's roles (e.g.
+  // only Managers for "IT Manager", HODs or Exco members for "IS HOD/CIO").
+  function directoryForStep(step: FixedApprovalStep) {
+    const roles = (step.roles?.length ? step.roles : step.role ? [step.role] : []).map((r) => r.toUpperCase());
+    if (!roles.length) return companyDirectory;
     return [...companyDirectory]
-      .filter((u) => String(u.role || "").toUpperCase() === role.toUpperCase())
+      .filter((u) => roles.includes(String(u.role || "").toUpperCase()))
       .sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
   }
 
   async function handleSubmit() {
     if (!selectedTypeId) return;
     setError(null);
+
+    if (isAttendanceRegisterSelected && attendancePeriodLocked) {
+      setError("This attendance period has been closed for submissions — contact HR/Admin.");
+      return;
+    }
 
     for (const f of fields) {
       if (f.is_required) {
@@ -868,7 +957,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
       setValues({});
       setChain(
         fixedChain?.length
-          ? fixedChain.map((step) => ({ approver_id: step.source === "AUTO_MANAGER" ? (myManager?.id || "") : "", position_name: step.title, decision_type: "APPROVE" as const }))
+          ? fixedChain.map((step) => ({ approver_id: initialStepApprover(step, myManager?.id), position_name: step.title, decision_type: "APPROVE" as const }))
           : [{ approver_id: "", position_name: "", decision_type: "APPROVE" }]
       );
       setAttachmentFiles([]);
@@ -914,6 +1003,31 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
       setCancelError(e?.message || "Failed to cancel the request.");
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function handleAcknowledgeCollection(id: string) {
+    setAcknowledgingId(id);
+    try {
+      await api.acknowledgeComputerCollection(id);
+      void showNotice("Thanks — you've confirmed collecting your computer. Your request is complete.");
+      await loadMine();
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to confirm collection.");
+    } finally {
+      setAcknowledgingId(null);
+    }
+  }
+
+  async function handleSendReminder(id: string) {
+    setRemindingId(id);
+    try {
+      const result = await api.remindCustomRequest(id);
+      void showNotice(`Reminder sent to ${result.approver_name || "the current approver"}.`);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to send reminder.");
+    } finally {
+      setRemindingId(null);
     }
   }
 
@@ -1553,6 +1667,19 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                           {f.field_type !== "checkbox" && (
                             <label>{f.field_label}{f.is_required && <span className="ep-required"> *</span>}</label>
                           )}
+                          {f.field_key === "attendance_grid" && isAttendanceRegisterSelected && (
+                            attendancePeriodLocked ? (
+                              <div className="custom-request-notice custom-request-notice-warning">
+                                This month has been closed by HR/Admin — you can no longer edit or submit it.
+                              </div>
+                            ) : (
+                              <div className="custom-request-autosave-status">
+                                {attendanceSaveStatus === "saving" && "Saving…"}
+                                {attendanceSaveStatus === "saved" && "All changes saved — come back any time to keep logging."}
+                                {attendanceSaveStatus === "error" && "Couldn't save just now — check your connection."}
+                              </div>
+                            )
+                          )}
                           {renderField(f)}
                         </div>
                       );
@@ -1627,7 +1754,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                           <div style={{ fontWeight: 700, color: "var(--muted)", textAlign: "center" }}>{idx + 1}</div>
                           <div style={{ fontSize: 13, fontWeight: 600 }}>{stepDef.title}</div>
                           <ApproverCombobox
-                            users={stepDef.source === "AUTO_MANAGER" ? directorySorted : directoryForRole(stepDef.role)}
+                            users={stepDef.source === "AUTO_MANAGER" ? directorySorted : directoryForStep(stepDef)}
                             value={chain[idx]?.approver_id || ""}
                             onChange={(id) => updateChainStep(idx, { approver_id: id })}
                           />
@@ -1754,6 +1881,17 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                         )}
                         {s.status === "IN_PROGRESS" && cancellingId !== s.id && (
                           <button
+                            className="ep-btn-outline"
+                            style={{ fontSize: 12, padding: "4px 10px" }}
+                            disabled={remindingId === s.id}
+                            onClick={(e) => { e.stopPropagation(); void handleSendReminder(s.id); }}
+                            title="Nudge the current approver by email now, instead of waiting for the automatic reminder"
+                          >
+                            {remindingId === s.id ? "Sending…" : "Send Reminder"}
+                          </button>
+                        )}
+                        {s.status === "IN_PROGRESS" && cancellingId !== s.id && (
+                          <button
                             className="ep-btn-danger"
                             style={{ fontSize: 12, padding: "4px 10px" }}
                             onClick={(e) => { e.stopPropagation(); setCancellingId(s.id); setCancelComment(""); setCancelError(null); }}
@@ -1764,6 +1902,25 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                         {statusBadge(s.status)}
                       </div>
                     </div>
+
+                    {s.it_provisioning && (
+                      <div
+                        style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ fontSize: 13 }}>
+                          <span style={{ fontWeight: 700 }}>IT Provisioning: </span>
+                          {IT_STAGE_TEXT[s.it_provisioning.status] || s.it_provisioning.status}
+                          {s.it_provisioning.assigned_to_name && !["COMPLETED"].includes(s.it_provisioning.status) ? ` — ${s.it_provisioning.assigned_to_name}` : ""}
+                          {s.it_provisioning.asset_number ? ` (asset ${s.it_provisioning.asset_number})` : ""}
+                        </div>
+                        {["READY_FOR_COLLECTION", "HANDED_OVER"].includes(s.it_provisioning.status) && (
+                          <button className="ep-btn" style={{ fontSize: 12, padding: "6px 12px" }} disabled={acknowledgingId === s.id} onClick={() => void handleAcknowledgeCollection(s.id)}>
+                            {acknowledgingId === s.id ? "Confirming…" : "I've collected my computer"}
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {cancellingId === s.id && (
                       <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }} onClick={(e) => e.stopPropagation()}>
@@ -1842,16 +1999,31 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack }:
                         })}
                         <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Approval Chain</div>
                         <div style={{ display: "grid", gap: 6 }}>
-                          {s.approval_chain.map((step, i) => (
-                            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
-                              <div>
-                                <strong>{i + 1}. {step.position_name}</strong> — {step.approver_name || "—"}
-                                {step.decision_type === "NOTE" && <span style={{ color: "var(--muted)", fontSize: 12 }}> (noting)</span>}
-                                {step.comment && <div style={{ color: "var(--muted)", fontSize: 12 }}>"{step.comment}"</div>}
+                          {s.approval_chain.map((step, i) => {
+                            // A step that hasn't been acted on yet only ever
+                            // shows "Pending" while it's actually this step's
+                            // turn (i === current_step_order) - any step
+                            // further down the chain hasn't started yet, so
+                            // it reads as "Waiting" instead of a misleading
+                            // "Pending" that makes every approver look like
+                            // they're up right now regardless of turn order.
+                            const displayStatus = step.acted_at
+                              ? step.status
+                              : i === s.current_step_order && s.status === "IN_PROGRESS"
+                                ? "PENDING"
+                                : "WAITING";
+                            return (
+                              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
+                                <div>
+                                  <strong>{i + 1}. {step.position_name}</strong> — {step.approver_name || "—"}
+                                  {step.decision_type === "NOTE" && <span style={{ color: "var(--muted)", fontSize: 12 }}> (noting)</span>}
+                                  {step.comment && <div style={{ color: "var(--muted)", fontSize: 12 }}>"{step.comment}"</div>}
+                                  {step.acted_at && <div style={{ color: "var(--muted)", fontSize: 11.5 }}>{new Date(step.acted_at).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>}
+                                </div>
+                                {statusBadge(displayStatus)}
                               </div>
-                              {statusBadge(i === s.current_step_order && s.status === "IN_PROGRESS" ? "PENDING" : step.status)}
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                         {s.status === "CLOSED" && (
                           <div className="custom-request-note custom-request-note-success">

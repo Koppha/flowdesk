@@ -14,6 +14,8 @@ import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, not
 import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
 import { generateDelegationReference, getDelegationRequestTypes, setDelegationRequestTypes, writeDelegationAudit } from "../../lib/delegations.js";
 import { reassignPendingRequestsForMovedEmployee, syncApproverTitleForPendingSteps } from "../../lib/approvalReassignment.js";
+import { ensurePushTokensSchema, getNotificationPrefs, saveMobilePushToken, setNotificationPrefs } from "../../lib/pushTokens.js";
+import { ensureMobileAppEventsSchema, recordMobileAppEvent } from "../../lib/mobileAppEvents.js";
 
 const LoginSchema = z
   .object({
@@ -25,6 +27,22 @@ const LoginSchema = z
     message: "email or userName is required",
     path: ["email"]
   });
+
+// FlowDesk Mobile sends this header on every request (see mobile/src/lib/
+// api.ts) so this one route can tell a mobile login apart from a web login
+// without a separate endpoint - logged for the admin Analytics tab
+// (MobileAppConfig.tsx's "app logins and usage").
+function trackMobileLoginIfNeeded(req: { headers: Record<string, unknown> }, userId: string) {
+  if (req.headers["x-flowdesk-client"] !== "mobile") return;
+  void (async () => {
+    try {
+      await ensureMobileAppEventsSchema();
+      await recordMobileAppEvent("LOGIN", userId);
+    } catch {
+      // Best-effort - never let analytics logging affect a real login.
+    }
+  })();
+}
 
 export const authRouter = Router();
 
@@ -430,6 +448,7 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
           }
 
           logger.info("auth_login_success_ad", { login: loginUser, email: maskEmail(user.email), user_id: user.id, role: user.role });
+          trackMobileLoginIfNeeded(req, user.id);
           return res.json(toAuthResponse(user, loginDisplay));
         }
         logger.warn("auth_login_failed_ad_false", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
@@ -452,6 +471,7 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
     }
 
     logger.info("auth_login_success_local", { login: loginUser, email: maskEmail(user.email), user_id: user.id, role: user.role });
+    trackMobileLoginIfNeeded(req, user.id);
     return res.json(toAuthResponse(user, loginDisplay));
   } catch (err) {
     return next(err);
@@ -474,6 +494,47 @@ authRouter.get("/roles", async (_req: AuthedRequest, res, next) => {
         ORDER BY e.enumsortorder`
     );
     return res.json({ roles: roles.map((role) => role.code) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// FlowDesk Mobile registers its Expo push token here right after login/
+// unlock - see mobile/src/lib/push.ts. Storage only for now; nothing sends
+// through these tokens yet.
+const PushTokenSchema = z.object({ expoPushToken: z.string().trim().min(1) });
+authRouter.post("/push-token", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = PushTokenSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    await ensurePushTokensSchema();
+    await saveMobilePushToken(req.user!.userId, parsed.data.expoPushToken);
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// FlowDesk Mobile > Profile > Notifications: email / push on or off for the
+// signed-in user (see lib/pushTokens.ts's preference helpers).
+const NotificationPrefsSchema = z.object({ email: z.boolean().optional(), push: z.boolean().optional() });
+authRouter.get("/me/notifications", async (req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await getNotificationPrefs(req.user!.userId));
+  } catch (err) {
+    return next(err);
+  }
+});
+authRouter.put("/me/notifications", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = NotificationPrefsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    // At least one channel must stay on, or approvals would go unnoticed.
+    const current = await getNotificationPrefs(req.user!.userId);
+    if (!(parsed.data.email ?? current.email) && !(parsed.data.push ?? current.push)) {
+      throw badRequest("Keep at least one of email or push notifications on");
+    }
+    return res.json(await setNotificationPrefs(req.user!.userId, parsed.data));
   } catch (err) {
     return next(err);
   }

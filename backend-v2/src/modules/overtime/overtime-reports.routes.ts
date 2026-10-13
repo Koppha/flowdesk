@@ -72,55 +72,6 @@ function respondReport(
   return res.json({ items: rows });
 }
 
-// Everything sitting in PAYMENT_PENDING — the worklist Finance runs before
-// releasing a payment/days-in-lieu batch.
-overtimeReportsRouter.get("/payment-queue", async (req: AuthedRequest, res, next) => {
-  try {
-    const f = { ...(req.query as Filters), status: "PAYMENT_PENDING" };
-    const { whereSql, params } = buildWhere(f);
-    const rows = await query<any>(
-      `SELECT c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, dv.name AS division_name, u.department,
-              ${RATE_BUCKET_SELECT},
-              c.converted_hours, c.equivalent_days, c.hourly_rate, c.total_amount, c.compensation_preference, c.payroll_period, c.status
-         FROM overtime_claims c
-         JOIN users u ON u.id = c.employee_id
-         LEFT JOIN divisions dv ON dv.id = u.division_id
-        WHERE ${whereSql}
-        ORDER BY c.submitted_at`,
-      params
-    );
-    const totals = {
-      total_to_pay: rows.filter((r) => r.compensation_preference === "PAY").reduce((s, r) => s + Number(r.total_amount || 0), 0),
-      claims_pending: rows.length,
-      converted_hours: rows.reduce((s, r) => s + Number(r.converted_hours || 0), 0),
-      days_in_lieu_claims: rows.filter((r) => r.compensation_preference === "DAYS").length
-    };
-    if (req.query.format === "csv" || req.query.format === "pdf") {
-      return respondReport(req, res, rows, {
-        filenamePrefix: "overtime-payment-queue",
-        pdfTitle: "Overtime — Payment Processing Queue",
-        pdfSubtitle: "Everything ready to pay this cycle.",
-        columns: [
-          { key: "claim_no", label: "Claim No." },
-          { key: "employee_name", label: "Employee" },
-          { key: "employee_no", label: "E/N" },
-          { key: "division_name", label: "Division" },
-          { key: "hours_125", label: "125%" },
-          { key: "hours_150", label: "150%" },
-          { key: "hours_200", label: "200%" },
-          { key: "converted_hours", label: "Converted" },
-          { key: "hourly_rate", label: "Rate" },
-          { key: "total_amount", label: "Amount" },
-          { key: "compensation_preference", label: "Compensation" }
-        ]
-      });
-    }
-    return res.json({ items: rows, totals });
-  } catch (err) {
-    return next(err);
-  }
-});
-
 // Every claim, any (non-draft) status — the direct replacement for the old
 // fixed /overtime/reports/summary allowance dump, now filterable by
 // year/month/division/department/status/compensation.
@@ -130,7 +81,7 @@ overtimeReportsRouter.get("/allowance", async (req: AuthedRequest, res, next) =>
     const rows = await query<any>(
       `SELECT c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, u.title AS job_title, dv.name AS division_name, u.department,
               ${RATE_BUCKET_SELECT},
-              c.converted_hours, c.total_amount, c.compensation_preference, c.status, c.year, c.month
+              c.converted_hours, c.equivalent_days, c.status, c.year, c.month
          FROM overtime_claims c
          JOIN users u ON u.id = c.employee_id
          LEFT JOIN divisions dv ON dv.id = u.division_id
@@ -139,8 +90,8 @@ overtimeReportsRouter.get("/allowance", async (req: AuthedRequest, res, next) =>
       params
     );
     return respondReport(req, res, rows, {
-      filenamePrefix: "overtime-allowance-report",
-      pdfTitle: "Overtime Allowance Report",
+      filenamePrefix: "overtime-hours-report",
+      pdfTitle: "Overtime Hours Report",
       pdfSubtitle: "Every claim, any status.",
       columns: [
         { key: "claim_no", label: "Claim No." },
@@ -151,8 +102,7 @@ overtimeReportsRouter.get("/allowance", async (req: AuthedRequest, res, next) =>
         { key: "hours_150", label: "150%" },
         { key: "hours_200", label: "200%" },
         { key: "converted_hours", label: "Converted" },
-        { key: "compensation_preference", label: "Compensation" },
-        { key: "total_amount", label: "Amount" },
+        { key: "equivalent_days", label: "Equivalent Days" },
         { key: "status", label: "Status" }
       ]
     });
@@ -161,37 +111,33 @@ overtimeReportsRouter.get("/allowance", async (req: AuthedRequest, res, next) =>
   }
 });
 
-// Everything CLOSED (paid or settled-as-days) — for audit/reconciliation.
+// Everything CLOSED — completed-claims log for audit/reconciliation.
 overtimeReportsRouter.get("/paid-history", async (req: AuthedRequest, res, next) => {
   try {
     const f = { ...(req.query as Filters), status: "CLOSED" };
     const { whereSql, params } = buildWhere(f);
     const rows = await query<any>(
       `SELECT c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, dv.name AS division_name, u.department,
-              c.converted_hours, c.hourly_rate, c.total_amount, c.compensation_preference,
-              c.finance_reference, c.payroll_period, c.paid_at
+              c.converted_hours, c.equivalent_days, c.closed_at
          FROM overtime_claims c
          JOIN users u ON u.id = c.employee_id
          LEFT JOIN divisions dv ON dv.id = u.division_id
         WHERE ${whereSql}
-        ORDER BY c.paid_at DESC`,
+        ORDER BY c.closed_at DESC`,
       params
     );
     return respondReport(req, res, rows, {
-      filenamePrefix: "overtime-paid-history",
-      pdfTitle: "Overtime — Paid History & Reconciliation",
-      pdfSubtitle: "Every settled claim.",
+      filenamePrefix: "overtime-completed-claims",
+      pdfTitle: "Overtime — Completed Claims",
+      pdfSubtitle: "Every closed claim.",
       columns: [
         { key: "claim_no", label: "Claim No." },
         { key: "employee_name", label: "Employee" },
         { key: "employee_no", label: "E/N" },
         { key: "division_name", label: "Division" },
         { key: "converted_hours", label: "Converted" },
-        { key: "hourly_rate", label: "Rate" },
-        { key: "total_amount", label: "Amount" },
-        { key: "compensation_preference", label: "Compensation" },
-        { key: "finance_reference", label: "Finance Ref." },
-        { key: "paid_at", label: "Paid At" }
+        { key: "equivalent_days", label: "Equivalent Days" },
+        { key: "closed_at", label: "Closed At" }
       ]
     });
   } catch (err) {

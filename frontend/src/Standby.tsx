@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, openBlobInNewTab } from "./api";
 import Swal from "sweetalert2";
-import { Briefcase, Calendar, CheckCircle2, ChevronLeft, ClipboardList, Clock3, Eye, FileBarChart, FileText, Plus, Trash2, UserPlus, Wallet } from "lucide-react";
+import { Briefcase, Calendar, CheckCircle2, ChevronLeft, ClipboardList, Clock3, Eye, FileBarChart, FileText, PhoneCall, Plus, Trash2, UserPlus, UsersRound, Wallet } from "lucide-react";
 import { ApprovalRouteBuilder, useApprovalTitleOptions } from "./components/ApprovalRoute";
 import { ClaimTrackingTimeline } from "./components/ClaimTrackingTimeline";
 import { useDelegationScope, DelegationScopeBar, DelegatedTag } from "./components/DelegationScope";
@@ -12,6 +12,10 @@ type StandbyProps = {
   onBack: () => void;
   deepLink?: { kind: "REQUEST" | "CLAIM"; id: string } | null;
   onDeepLinkConsumed?: () => void;
+  // Lets the top-level "Compensation > Call-Out" nav entry open this same
+  // component straight on the Call-Out screens instead of the Dashboard —
+  // Call-Out's screens/state still live here, only its entry point moved.
+  initialView?: "CALLOUTS";
 };
 
 type View =
@@ -23,8 +27,9 @@ type View =
   | "CLAIMS"
   | "APPROVALS"
   | "CLAIM_REVIEW"
-  | "FINANCE_QUEUE"
-  | "FINANCE_PROCESS"
+  | "CALLOUTS"
+  | "NEW_CALLOUT"
+  | "CALLOUT_DETAIL"
   | "DELEGATIONS"
   | "WHOS_ON_STANDBY"
   | "REPORTS";
@@ -48,6 +53,7 @@ function StatusBadge({ status }: { status: string }) {
     SUBMITTED: { bg: "#dbeafe", color: "#1d4ed8" },
     FINANCE_PROCESSING: { bg: "#fef3c7", color: "#b45309" },
     PAYMENT_PENDING: { bg: "#fef3c7", color: "#b45309" },
+    AWAITING_TREASURY: { bg: "#fef3c7", color: "#b45309" },
     PAID: { bg: "#dcfce7", color: "#15803d" },
     CLOSED: { bg: "#e0e7ff", color: "#4338ca" },
     REJECTED: { bg: "#fee2e2", color: "#b91c1c" },
@@ -61,8 +67,8 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export default function Standby({ profile, role, onBack, deepLink, onDeepLinkConsumed }: StandbyProps) {
-  const [view, setView] = useState<View>("DASHBOARD");
+export default function Standby({ profile, role, onBack, deepLink, onDeepLinkConsumed, initialView }: StandbyProps) {
+  const [view, setView] = useState<View>(initialView || "DASHBOARD");
   const [loading, setLoading] = useState(false);
 
   const [dashboard, setDashboard] = useState<any>(null);
@@ -80,15 +86,21 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
   const [claims, setClaims] = useState<any[]>([]);
 
   const [approvals, setApprovals] = useState<any[]>([]);
-  const [financeQueue, setFinanceQueue] = useState<any[]>([]);
+
+  const [callouts, setCallouts] = useState<any[]>([]);
+  const [calloutId, setCalloutId] = useState("");
+  const [callout, setCallout] = useState<any>(null);
+  const [calloutApprovals, setCalloutApprovals] = useState<any[]>([]);
 
   const isManager = role === "MANAGER" || role === "ADMIN" || teams.some((t) => t.leader_user_id === profile?.id);
   const isFinance = Boolean(dashboard?.is_finance) || role === "ADMIN";
+  const isHr = Boolean(dashboard?.is_hr) || role === "ADMIN";
 
   useEffect(() => {
     void loadDashboard();
     void loadTeams();
     if (role === "ADMIN") void loadOrgStructure();
+    if (initialView === "CALLOUTS") void loadCallouts();
   }, []);
 
   // Keeps the active tab's data current without a manual click — the
@@ -99,8 +111,7 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
   useEffect(() => {
     const interval = setInterval(() => {
       if (view === "DASHBOARD") void loadDashboard();
-      if (view === "APPROVALS") void loadApprovals(true);
-      if (view === "FINANCE_QUEUE") void loadFinanceQueue(true);
+      if (view === "APPROVALS") { void loadApprovals(true); void loadCalloutApprovals(true); }
     }, 30000);
     return () => clearInterval(interval);
   }, [view]);
@@ -219,16 +230,42 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
     }
   }
 
-  async function loadFinanceQueue(silent = false) {
+  async function loadCallouts() {
+    setLoading(true);
+    try {
+      setCallouts(await api.callouts());
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadCalloutApprovals(silent = false) {
     if (!silent) setLoading(true);
     try {
-      setFinanceQueue(await api.standbyFinanceQueue());
+      setCalloutApprovals(await api.calloutApprovals());
     } catch (err) {
       if (silent) return;
       throw err;
     } finally {
       if (!silent) setLoading(false);
     }
+  }
+
+  async function openCallout(id: string) {
+    setLoading(true);
+    try {
+      setCalloutId(id);
+      setCallout(await api.callout(id));
+      setView("CALLOUT_DETAIL");
+    } catch (e: any) {
+      void Swal.fire({ icon: "error", title: "Failed to load call-out", text: e.message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshCallout() {
+    setCallout(await api.callout(calloutId));
   }
 
   function TabBar() {
@@ -240,8 +277,7 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
       { key: "MY_STANDBY", label: "My Standby", icon: Clock3, show: true },
       { key: "CLAIMS", label: "My Claims", icon: ClipboardList, show: true },
       { key: "APPROVALS", label: "Approvals", icon: CheckCircle2, show: true },
-      { key: "FINANCE_QUEUE", label: "Finance Queue", icon: Wallet, show: isFinance },
-      { key: "REPORTS", label: "Reports", icon: FileBarChart, show: role === "ADMIN" || isFinance }
+      { key: "REPORTS", label: "Reports", icon: FileBarChart, show: role === "ADMIN" || isFinance || isHr }
     ];
     return (
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 18, flexWrap: "wrap" }}>
@@ -254,8 +290,8 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
               if (t.key === "ROSTERS") void loadRosters();
               if (t.key === "MY_STANDBY") void loadMyStandby(myMonth);
               if (t.key === "CLAIMS") void loadClaims();
-              if (t.key === "APPROVALS") void loadApprovals();
-              if (t.key === "FINANCE_QUEUE") void loadFinanceQueue();
+              if (t.key === "CALLOUTS") void loadCallouts();
+              if (t.key === "APPROVALS") { void loadApprovals(); void loadCalloutApprovals(); }
               if (t.key === "DASHBOARD") void loadDashboard();
             }}
             style={{
@@ -294,7 +330,7 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
             <div className="ep-kpi ep-kpi-blue"><Calendar size={22} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.active_rosters}</div><div className="ep-kpi-label">Active Rosters</div></div></div>
             <div className="ep-kpi ep-kpi-gold"><ClipboardList size={22} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.awaiting_claims}</div><div className="ep-kpi-label">Awaiting Claims</div></div></div>
             <div className="ep-kpi ep-kpi-purple"><CheckCircle2 size={22} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.in_approval}</div><div className="ep-kpi-label">In Approval</div></div></div>
-            <div className="ep-kpi ep-kpi-cyan"><Wallet size={22} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.finance_processing}</div><div className="ep-kpi-label">Finance Processing</div></div></div>
+            <div className="ep-kpi ep-kpi-cyan"><Wallet size={22} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.closed_this_month}</div><div className="ep-kpi-label">Closed This Month</div></div></div>
           </div>
 
           <section className="ep-panel" style={{ marginTop: 18 }}>
@@ -358,6 +394,7 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
             }
           }}
           onOpenClaim={(id) => void openClaim(id)}
+          onNewCallout={() => setView("NEW_CALLOUT")}
         />
       )}
 
@@ -374,17 +411,31 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
         />
       )}
 
-      {view === "APPROVALS" && (
-        <ApprovalsScreen
-          approvals={approvals}
-          onOpen={(id) => void openClaim(id)}
+      {view === "CALLOUTS" && (
+        <CalloutsListScreen callouts={callouts} onOpen={(id) => void openCallout(id)} onNew={() => setView("NEW_CALLOUT")} />
+      )}
+
+      {view === "NEW_CALLOUT" && (
+        <NewCalloutScreen
+          onCreated={(id) => { void loadCallouts(); void openCallout(id); }}
+          onCancel={() => setView("CALLOUTS")}
         />
       )}
 
-      {view === "FINANCE_QUEUE" && (
-        <FinanceQueueScreen
-          queue={financeQueue}
+      {view === "CALLOUT_DETAIL" && callout && (
+        <CalloutDetailScreen
+          callout={callout}
+          onBack={() => setView("CALLOUTS")}
+          onRefresh={refreshCallout}
+        />
+      )}
+
+      {view === "APPROVALS" && (
+        <ApprovalsScreen
+          approvals={approvals}
+          calloutApprovals={calloutApprovals}
           onOpen={(id) => void openClaim(id)}
+          onOpenCallout={(id) => void openCallout(id)}
         />
       )}
 
@@ -394,7 +445,7 @@ export default function Standby({ profile, role, onBack, deepLink, onDeepLinkCon
 
       {view === "WHOS_ON_STANDBY" && <WhosOnStandbyScreen />}
 
-      {view === "REPORTS" && <ReportsScreen role={role} />}
+      {view === "REPORTS" && <ReportsScreen role={role} isFinance={isFinance} isHr={isHr} />}
     </div>
   );
 }
@@ -788,12 +839,15 @@ function RosterDetailScreen({ role, roster, onBack, onChanged, onCancelled }: { 
 // My Standby
 // ---------------------------------------------------------------------------
 
-function MyStandbyScreen({ month, data, onMonthChange, onGenerateClaim, onOpenClaim }: { month: string; data: any; onMonthChange: (m: string) => void; onGenerateClaim: () => void; onOpenClaim: (id: string) => void }) {
+function MyStandbyScreen({ month, data, onMonthChange, onGenerateClaim, onOpenClaim, onNewCallout }: { month: string; data: any; onMonthChange: (m: string) => void; onGenerateClaim: () => void; onOpenClaim: (id: string) => void; onNewCallout: () => void }) {
   return (
     <section className="ep-panel">
       <div className="ep-panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div className="ep-panel-title">My Standby — {monthLabel(month)}</div>
-        <input type="month" value={month} onChange={(e) => onMonthChange(e.target.value)} className="review-control" style={{ maxWidth: 180 }} />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="button button-subtle" type="button" onClick={onNewCallout}><PhoneCall size={14} aria-hidden /> Log a Call-Out</button>
+          <input type="month" value={month} onChange={(e) => onMonthChange(e.target.value)} className="review-control" style={{ maxWidth: 180 }} />
+        </div>
       </div>
       <div className="ep-panel-body">
         {data ? (
@@ -840,15 +894,14 @@ function ClaimsListScreen({ claims, onOpen }: { claims: any[]; onOpen: (id: stri
       <div className="ep-panel-head"><div className="ep-panel-title">My Standby Claims</div></div>
       <div className="ep-table-wrap">
         <table className="ep-table">
-          <thead><tr><th>Claim No.</th><th>Month</th><th>Compensable Hrs</th><th>Amount</th><th>Status</th></tr></thead>
+          <thead><tr><th>Claim No.</th><th>Month</th><th>Compensable Hrs</th><th>Status</th></tr></thead>
           <tbody>
-            {claims.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>No claims yet.</td></tr>}
+            {claims.length === 0 && <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)" }}>No claims yet.</td></tr>}
             {claims.map((c) => (
               <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpen(c.id)}>
                 <td>{c.claim_no}</td>
                 <td>{monthLabel(String(c.claim_month).slice(0, 7))}</td>
                 <td>{c.compensable_hours}</td>
-                <td>{c.calculated_amount ? `M ${Number(c.calculated_amount).toFixed(2)}` : "—"}</td>
                 <td><StatusBadge status={c.status} /></td>
               </tr>
             ))}
@@ -856,6 +909,221 @@ function ClaimsListScreen({ claims, onOpen }: { claims: any[]; onOpen: (id: stri
         </table>
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Call-Outs — a separate, event-based claim type: time actually worked
+// inside an active standby window (as opposed to Overtime, worked outside
+// one). No Finance stage, same as the monthly Standby Claim above — closes
+// straight off the last approval with Converted Hours as the final figure.
+// ---------------------------------------------------------------------------
+
+function CalloutsListScreen({ callouts, onOpen, onNew }: { callouts: any[]; onOpen: (id: string) => void; onNew: () => void }) {
+  return (
+    <section className="ep-panel">
+      <div className="ep-panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div className="ep-panel-title">My Call-Outs</div>
+        <button className="button button-primary" type="button" onClick={onNew}><PhoneCall size={14} aria-hidden /> Log a Call-Out</button>
+      </div>
+      <div className="ep-table-wrap">
+        <table className="ep-table">
+          <thead><tr><th>Claim No.</th><th>Date</th><th>Time</th><th>Duration</th><th>Rate</th><th>Converted Hours</th><th>Status</th></tr></thead>
+          <tbody>
+            {callouts.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--muted)" }}>No call-outs logged yet.</td></tr>}
+            {callouts.map((c) => (
+              <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpen(c.id)}>
+                <td>{c.claim_no}</td>
+                <td>{c.call_date}</td>
+                <td>{c.start_time}–{c.end_time}</td>
+                <td>{c.hours}h</td>
+                <td>{c.rate_pct}%</td>
+                <td>{c.converted_hours}</td>
+                <td><StatusBadge status={c.status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function NewCalloutScreen({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
+  const [callDate, setCallDate] = useState(new Date().toISOString().slice(0, 10));
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [reason, setReason] = useState("");
+  const [route, setRoute] = useState<{ approver_user_id: string; title: string; approver_name?: string }[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [eligibility, setEligibility] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+  const titleOptions = useApprovalTitleOptions();
+
+  useEffect(() => {
+    if (!callDate || !startTime || !endTime) { setEligibility(null); return; }
+    setChecking(true);
+    const timer = setTimeout(() => {
+      api.calloutEligibility(callDate, startTime, endTime)
+        .then(setEligibility)
+        .catch((e: any) => setEligibility({ insideStandbyAssignment: false, message: e.message }))
+        .finally(() => setChecking(false));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [callDate, startTime, endTime]);
+
+  async function submit() {
+    // Call-Out, Standby and Overtime aren't gated against each other any
+    // more - whether or not this time falls inside a published standby
+    // assignment is shown above only as a note, never a block.
+    if (!reason.trim()) return void Swal.fire({ icon: "warning", title: "A reason is required" });
+    if (route.some((s) => !s.approver_user_id) || route.length === 0) return void Swal.fire({ icon: "warning", title: "Complete the Approval Route before submitting" });
+    setSaving(true);
+    try {
+      const created: any = await api.createCallout({ call_date: callDate, start_time: startTime, end_time: endTime, reason: reason.trim(), approval_route: route });
+      await api.submitCallout(created.id);
+      void Swal.fire({ icon: "success", title: "Call-out submitted" });
+      onCreated(created.id);
+    } catch (e: any) {
+      void Swal.fire({ icon: "error", title: "Could not submit call-out", text: e.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <button className="button button-subtle" type="button" onClick={onCancel} style={{ marginBottom: 14 }}><ChevronLeft size={14} aria-hidden /> Back</button>
+
+      <section className="ep-panel" style={{ marginBottom: 18 }}>
+        <div className="ep-panel-head"><div className="ep-panel-title">Log a Call-Out</div></div>
+        <div className="ep-panel-body">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+            <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Date</div><input type="date" className="review-control" value={callDate} onChange={(e) => setCallDate(e.target.value)} /></label>
+            <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Start Time</div><input type="time" className="review-control" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></label>
+            <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>End Time</div><input type="time" className="review-control" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></label>
+          </div>
+          <label style={{ display: "block", marginBottom: 14, fontSize: 13 }}>
+            <div style={{ marginBottom: 4, fontWeight: 600 }}>Reason</div>
+            <textarea className="review-control" style={{ width: "100%", boxSizing: "border-box" }} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What happened and what you did" />
+          </label>
+
+          {checking && <p style={{ fontSize: 12, color: "var(--muted)" }}>Checking against your standby assignments…</p>}
+          {!checking && eligibility && (
+            <div
+              style={{
+                borderRadius: 8, padding: "12px 14px", marginBottom: 14, fontSize: 13,
+                background: eligibility.insideStandbyAssignment ? "#e7f7ee" : "#eef2fb",
+                border: `1px solid ${eligibility.insideStandbyAssignment ? "#a9e2c3" : "#c9d6f2"}`,
+                color: eligibility.insideStandbyAssignment ? "#0f7a45" : "#3454a8"
+              }}
+            >
+              {eligibility.insideStandbyAssignment ? (
+                <>
+                  <strong>✓ Falls inside your standby period.</strong>
+                  <div style={{ marginTop: 6, color: "var(--text)" }}>
+                    Rate <strong>{eligibility.ratePct}%</strong> · Duration <strong>{eligibility.hours}h</strong> · Converted Hours <strong>{eligibility.convertedHours}</strong>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <strong>ℹ {eligibility.message || "This time is outside any published standby assignment."}</strong>
+                  {eligibility.ratePct != null && (
+                    <div style={{ marginTop: 6, color: "var(--text)" }}>
+                      Rate <strong>{eligibility.ratePct}%</strong> · Duration <strong>{eligibility.hours}h</strong> · Converted Hours <strong>{eligibility.convertedHours}</strong>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          <ApprovalRouteBuilder steps={route} onChange={setRoute} disabled={false} eligibleApproversFn={api.standbyEligibleApprovers} titleOptions={titleOptions} defaultTitle="Manager" />
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button className="ep-btn" type="button" disabled={saving} onClick={() => void submit()}>Submit Call-Out Claim</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CalloutDetailScreen({ callout, onBack, onRefresh }: { callout: any; onBack: () => void; onRefresh: () => void }) {
+  const isDraft = callout.status === "DRAFT";
+  const isSubmitted = callout.status === "SUBMITTED";
+
+  async function decide(action: "approve" | "reject" | "send-back") {
+    if (action !== "approve") {
+      const result = await Swal.fire({ title: action === "reject" ? "Reject call-out" : "Send back for correction", input: "textarea", inputLabel: "Comments (required)", showCancelButton: true, confirmButtonText: action === "reject" ? "Reject" : "Send Back" });
+      if (!result.isConfirmed || !result.value?.trim()) return;
+      try {
+        if (action === "reject") await api.rejectCallout(callout.id, result.value.trim());
+        else await api.sendBackCallout(callout.id, result.value.trim());
+        await onRefresh();
+      } catch (e: any) {
+        void Swal.fire({ icon: "error", title: "Action failed", text: e.message });
+      }
+      return;
+    }
+    try {
+      await api.approveCallout(callout.id, "");
+      await onRefresh();
+      void Swal.fire({ icon: "success", title: "Approved" });
+    } catch (e: any) {
+      void Swal.fire({ icon: "error", title: "Could not approve", text: e.message });
+    }
+  }
+
+  async function withdraw() {
+    const confirm = await Swal.fire({ title: "Withdraw this call-out?", icon: "warning", showCancelButton: true, confirmButtonText: "Withdraw", confirmButtonColor: "#b91c1c" });
+    if (!confirm.isConfirmed) return;
+    try {
+      await api.withdrawCallout(callout.id);
+      await onRefresh();
+    } catch (e: any) {
+      void Swal.fire({ icon: "error", title: "Could not withdraw", text: e.message });
+    }
+  }
+
+  return (
+    <div>
+      <button className="button button-subtle" type="button" onClick={onBack} style={{ marginBottom: 14 }}><ChevronLeft size={14} aria-hidden /> Back</button>
+
+      <section className="ep-panel" style={{ marginBottom: 18 }}>
+        <div className="ep-panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div className="ep-panel-title">Call-Out — {callout.call_date}</div>
+            <div className="ep-panel-sub">{callout.claim_no}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {["DRAFT", "SUBMITTED"].includes(callout.status) && callout.is_owner && <button className="button button-subtle" type="button" onClick={() => void withdraw()}>Withdraw</button>}
+            <StatusBadge status={callout.status} />
+          </div>
+        </div>
+        <div className="ep-panel-body">
+          <div style={{ fontSize: 13, lineHeight: 2 }}>
+            <div><strong>Employee:</strong> {callout.employee_name}</div>
+            <div><strong>Time:</strong> {callout.start_time} – {callout.end_time} ({callout.hours}h)</div>
+            <div><strong>Rate:</strong> {callout.rate_pct}%</div>
+            <div><strong>Converted Hours:</strong> {callout.converted_hours}</div>
+            <div><strong>Reason:</strong> {callout.reason}</div>
+            <div><strong>Submitted On:</strong> {callout.submitted_at ? new Date(callout.submitted_at).toLocaleString() : "—"}</div>
+          </div>
+
+          <div style={{ marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            <ClaimTrackingTimeline
+              claim={callout}
+              showFinanceStages={false}
+              awaitingTreasuryLabel="Awaiting Treasury"
+              closedLabel="Call-Out Closed"
+              closedDetail={(c) => `${c.converted_hours} converted hours`}
+            />
+          </div>
+        </div>
+      </section>
+
+      {isSubmitted && callout.is_current_approver && <ApproverActions claim={callout} onDecide={decide} />}
+    </div>
   );
 }
 
@@ -873,25 +1141,8 @@ function ClaimScreen({ claim, onBack, onRefresh, onOpenClaim }: { claim: any; on
   const [saving, setSaving] = useState(false);
   const titleOptions = useApprovalTitleOptions();
 
-  // Finance processing form state
-  const [hourlyRate, setHourlyRate] = useState("");
-  const [costCentre, setCostCentre] = useState(claim.cost_centre || "");
-  const [accountProject, setAccountProject] = useState(claim.account_project || "");
-  const [payrollPeriod, setPayrollPeriod] = useState(claim.payroll_period || "");
-  const [financeReference, setFinanceReference] = useState(claim.finance_reference || "");
-  const [financeComments, setFinanceComments] = useState("");
-
   const isDraft = claim.status === "DRAFT";
   const isSubmitted = claim.status === "SUBMITTED";
-  const isFinanceStage = ["FINANCE_PROCESSING", "PAYMENT_PENDING"].includes(claim.status);
-
-  const [costCentreOptions, setCostCentreOptions] = useState<{ name: string }[]>([]);
-  const [accountProjectOptions, setAccountProjectOptions] = useState<{ name: string }[]>([]);
-  useEffect(() => {
-    if (claim.status !== "FINANCE_PROCESSING") return;
-    api.standbyFinanceCodes("COST_CENTRE").then(setCostCentreOptions).catch(() => setCostCentreOptions([]));
-    api.standbyFinanceCodes("ACCOUNT_PROJECT").then(setAccountProjectOptions).catch(() => setAccountProjectOptions([]));
-  }, [claim.status]);
 
   async function downloadPdf() {
     try {
@@ -949,47 +1200,6 @@ function ClaimScreen({ claim, onBack, onRefresh, onOpenClaim }: { claim: any; on
       void Swal.fire({ icon: "success", title: "Approved" });
     } catch (e: any) {
       void Swal.fire({ icon: "error", title: "Could not approve", text: e.message });
-    }
-  }
-
-  async function processFinance() {
-    if (!hourlyRate) return void Swal.fire({ icon: "warning", title: "Enter the hourly rate" });
-    try {
-      await api.processStandbyFinance(claim.id, {
-        hourly_rate: Number(hourlyRate),
-        cost_centre: costCentre,
-        account_project: accountProject,
-        payroll_period: payrollPeriod,
-        finance_reference: financeReference,
-        finance_comments: financeComments
-      });
-      await onRefresh();
-      void Swal.fire({ icon: "success", title: "Sent for payment" });
-    } catch (e: any) {
-      void Swal.fire({ icon: "error", title: "Could not process", text: e.message });
-    }
-  }
-
-  async function returnFromFinance() {
-    const result = await Swal.fire({ title: "Return claim", input: "textarea", inputLabel: "Reason (required)", showCancelButton: true, confirmButtonText: "Return" });
-    if (!result.isConfirmed || !result.value?.trim()) return;
-    try {
-      await api.returnStandbyFinance(claim.id, result.value.trim());
-      await onRefresh();
-    } catch (e: any) {
-      void Swal.fire({ icon: "error", title: "Could not return", text: e.message });
-    }
-  }
-
-  async function markPaid() {
-    const confirm = await Swal.fire({ title: "Mark as paid?", icon: "question", showCancelButton: true, confirmButtonText: "Mark Paid" });
-    if (!confirm.isConfirmed) return;
-    try {
-      await api.markStandbyClaimPaid(claim.id);
-      await onRefresh();
-      void Swal.fire({ icon: "success", title: "Claim closed" });
-    } catch (e: any) {
-      void Swal.fire({ icon: "error", title: "Could not mark paid", text: e.message });
     }
   }
 
@@ -1069,7 +1279,13 @@ function ClaimScreen({ claim, onBack, onRefresh, onOpenClaim }: { claim: any; on
       <section className="ep-panel" style={{ marginBottom: 18 }}>
         <div className="ep-panel-head"><div className="ep-panel-title">Claim Tracking</div></div>
         <div className="ep-panel-body">
-          <ClaimTrackingTimeline claim={claim} financeStageLabel="Standby Compensation Processing" />
+          <ClaimTrackingTimeline
+            claim={claim}
+            showFinanceStages={false}
+            awaitingTreasuryLabel="Awaiting Treasury"
+            closedLabel="Claim Closed"
+            closedDetail={(c) => `${c.compensable_hours} compensable hours`}
+          />
         </div>
       </section>
 
@@ -1077,67 +1293,12 @@ function ClaimScreen({ claim, onBack, onRefresh, onOpenClaim }: { claim: any; on
         <ApproverActions claim={claim} onDecide={decide} />
       )}
 
-      {isFinanceStage && (
-        <section className="ep-panel">
-          <div className="ep-panel-head"><div className="ep-panel-title">Standby Compensation Processing</div></div>
-          <div className="ep-panel-body">
-            {claim.status === "FINANCE_PROCESSING" ? (
-              <>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-                  <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Hourly Rate (M)</div><input className="review-control" type="number" value={hourlyRate} onChange={(e) => setHourlyRate(e.target.value)} /></label>
-                  <label style={{ fontSize: 13 }}>
-                    <div style={{ marginBottom: 4, fontWeight: 600 }}>Cost Centre</div>
-                    {costCentreOptions.length > 0 ? (
-                      <select className="review-control" value={costCentre} onChange={(e) => setCostCentre(e.target.value)}>
-                        <option value="">Select…</option>
-                        {costCentreOptions.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                      </select>
-                    ) : (
-                      <input className="review-control" value={costCentre} onChange={(e) => setCostCentre(e.target.value)} />
-                    )}
-                  </label>
-                  <label style={{ fontSize: 13 }}>
-                    <div style={{ marginBottom: 4, fontWeight: 600 }}>Account / Project</div>
-                    {accountProjectOptions.length > 0 ? (
-                      <select className="review-control" value={accountProject} onChange={(e) => setAccountProject(e.target.value)}>
-                        <option value="">Select…</option>
-                        {accountProjectOptions.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                      </select>
-                    ) : (
-                      <input className="review-control" value={accountProject} onChange={(e) => setAccountProject(e.target.value)} />
-                    )}
-                  </label>
-                  <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Payroll Period</div><input className="review-control" value={payrollPeriod} onChange={(e) => setPayrollPeriod(e.target.value)} /></label>
-                  <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Finance Reference</div><input className="review-control" value={financeReference} onChange={(e) => setFinanceReference(e.target.value)} /></label>
-                </div>
-                <label style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
-                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Finance Comments</div>
-                  <textarea className="review-control" style={{ width: "100%", boxSizing: "border-box" }} rows={2} value={financeComments} onChange={(e) => setFinanceComments(e.target.value)} />
-                </label>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <button className="ep-btn-outline" type="button" onClick={() => void returnFromFinance()}>Return</button>
-                  <button className="ep-btn" type="button" onClick={() => void processFinance()}>Process</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 13, marginBottom: 12 }}>
-                  <div><strong>Calculated Amount:</strong> M {Number(claim.calculated_amount || 0).toFixed(2)}</div>
-                  <div><strong>Cost Centre:</strong> {claim.cost_centre || "—"}</div>
-                  <div><strong>Payroll Period:</strong> {claim.payroll_period || "—"}</div>
-                  <div><strong>Finance Reference:</strong> {claim.finance_reference || "—"}</div>
-                </div>
-                <button className="ep-btn" type="button" onClick={() => void markPaid()}>Mark Paid</button>
-              </>
-            )}
-          </div>
-        </section>
-      )}
-
-      {["PAID", "CLOSED"].includes(claim.status) && (
+      {claim.status === "CLOSED" && (
         <section className="ep-panel" style={{ marginBottom: 18 }}>
           <div className="ep-panel-body" style={{ fontSize: 13 }}>
-            <strong>Paid:</strong> {claim.paid_at ? new Date(claim.paid_at).toLocaleString() : "—"} · Amount M {Number(claim.calculated_amount || 0).toFixed(2)}
+            <strong>Closed:</strong> {claim.closed_at ? new Date(claim.closed_at).toLocaleString() : "—"}
+            {" · "}<strong>Compensable Hours:</strong> {claim.compensable_hours}
+            {claim.calculated_amount != null && <> · Amount M {Number(claim.calculated_amount).toFixed(2)}</>}
           </div>
         </section>
       )}
@@ -1174,60 +1335,89 @@ function ApproverActions({ claim, onDecide }: { claim: any; onDecide: (action: "
 // Approvals inbox + Finance queue
 // ---------------------------------------------------------------------------
 
-function ApprovalsScreen({ approvals, onOpen }: { approvals: any[]; onOpen: (id: string) => void }) {
-  const { scope, setScope, scopedItems, hasAnyDelegated, delegatingManagers } = useDelegationScope(approvals);
-  return (
-    <section className="ep-panel">
-      <div className="ep-panel-head"><div className="ep-panel-title">Claims Awaiting Your Approval</div></div>
-      <div className="ep-panel-body" style={{ paddingBottom: 0 }}>
-        <DelegationScopeBar items={approvals} scope={scope} setScope={setScope} hasAnyDelegated={hasAnyDelegated} delegatingManagers={delegatingManagers} />
-      </div>
-      <div className="ep-table-wrap">
-        <table className="ep-table">
-          <thead><tr><th>Claim No.</th><th>Employee</th><th>Month</th><th>Your Title</th><th>Submitted</th></tr></thead>
-          <tbody>
-            {scopedItems.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>Nothing awaiting your approval.</td></tr>}
-            {scopedItems.map((c) => (
-              <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpen(c.id)}>
-                <td>
-                  {c.claim_no}
-                  <DelegatedTag item={c} />
-                </td>
-                <td>{c.employee_name}</td>
-                <td>{monthLabel(String(c.claim_month).slice(0, 7))}</td>
-                <td>{c.my_title}</td>
-                <td>{c.submitted_at ? new Date(c.submitted_at).toLocaleDateString() : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
+function ApprovalsScreen({
+  approvals, calloutApprovals, onOpen, onOpenCallout
+}: {
+  approvals: any[]; calloutApprovals: any[];
+  onOpen: (id: string) => void; onOpenCallout: (id: string) => void;
+}) {
+  const [tab, setTab] = useState<"CLAIMS" | "CALLOUTS">(calloutApprovals.length > 0 && approvals.length === 0 ? "CALLOUTS" : "CLAIMS");
+  const claimScope = useDelegationScope(approvals);
+  const calloutScope = useDelegationScope(calloutApprovals);
 
-function FinanceQueueScreen({ queue, onOpen }: { queue: any[]; onOpen: (id: string) => void }) {
   return (
     <section className="ep-panel">
-      <div className="ep-panel-head"><div className="ep-panel-title">Treasury &amp; Financial Accounting Queue</div></div>
-      <div className="ep-table-wrap">
-        <table className="ep-table">
-          <thead><tr><th>Claim No.</th><th>Employee</th><th>Section</th><th>Comp. Hrs</th><th>Amount</th><th>Status</th></tr></thead>
-          <tbody>
-            {queue.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--muted)" }}>Nothing in the Finance queue.</td></tr>}
-            {queue.map((c) => (
-              <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpen(c.id)}>
-                <td>{c.claim_no}</td>
-                <td>{c.employee_name}</td>
-                <td>{c.team_name}</td>
-                <td>{c.compensable_hours}</td>
-                <td>{c.calculated_amount ? `M ${Number(c.calculated_amount).toFixed(2)}` : "—"}</td>
-                <td><StatusBadge status={c.status} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div style={{ display: "flex", gap: 4, padding: "0 16px", borderBottom: "1px solid var(--border)" }}>
+        {(["CLAIMS", "CALLOUTS"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            style={{
+              padding: "10px 14px", fontSize: 13, fontWeight: 600, border: "none", background: "none", cursor: "pointer",
+              color: tab === t ? "#1d4ed8" : "var(--muted)", borderBottom: tab === t ? "2px solid #1d4ed8" : "2px solid transparent"
+            }}
+          >
+            {t === "CLAIMS" ? `Claims (${approvals.length})` : `Call-Outs (${calloutApprovals.length})`}
+          </button>
+        ))}
       </div>
+
+      {tab === "CLAIMS" ? (
+        <>
+          <div className="ep-panel-body" style={{ paddingBottom: 0 }}>
+            <DelegationScopeBar items={approvals} scope={claimScope.scope} setScope={claimScope.setScope} hasAnyDelegated={claimScope.hasAnyDelegated} delegatingManagers={claimScope.delegatingManagers} />
+          </div>
+          <div className="ep-table-wrap">
+            <table className="ep-table">
+              <thead><tr><th>Claim No.</th><th>Employee</th><th>Month</th><th>Your Title</th><th>Submitted</th></tr></thead>
+              <tbody>
+                {claimScope.scopedItems.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>Nothing awaiting your approval.</td></tr>}
+                {claimScope.scopedItems.map((c) => (
+                  <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpen(c.id)}>
+                    <td>
+                      {c.claim_no}
+                      <DelegatedTag item={c} />
+                    </td>
+                    <td>{c.employee_name}</td>
+                    <td>{monthLabel(String(c.claim_month).slice(0, 7))}</td>
+                    <td>{c.my_title}</td>
+                    <td>{c.submitted_at ? new Date(c.submitted_at).toLocaleDateString() : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="ep-panel-body" style={{ paddingBottom: 0 }}>
+            <DelegationScopeBar items={calloutApprovals} scope={calloutScope.scope} setScope={calloutScope.setScope} hasAnyDelegated={calloutScope.hasAnyDelegated} delegatingManagers={calloutScope.delegatingManagers} />
+          </div>
+          <div className="ep-table-wrap">
+            <table className="ep-table">
+              <thead><tr><th>Claim No.</th><th>Employee</th><th>Date</th><th>Time</th><th>Rate</th><th>Your Title</th><th>Submitted</th></tr></thead>
+              <tbody>
+                {calloutScope.scopedItems.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--muted)" }}>Nothing awaiting your approval.</td></tr>}
+                {calloutScope.scopedItems.map((c) => (
+                  <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpenCallout(c.id)}>
+                    <td>
+                      {c.claim_no}
+                      <DelegatedTag item={c} />
+                    </td>
+                    <td>{c.employee_name}</td>
+                    <td>{c.call_date}</td>
+                    <td>{c.start_time}–{c.end_time}</td>
+                    <td>{c.rate_pct}%</td>
+                    <td>{c.my_title}</td>
+                    <td>{c.submitted_at ? new Date(c.submitted_at).toLocaleDateString() : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -1439,12 +1629,14 @@ function WhosOnStandbyScreen() {
 // Reporting (13. Reporting, Audit and Controls)
 // ---------------------------------------------------------------------------
 
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
 function StandbySettingsPanel() {
-  const [settings, setSettings] = useState<{ compensable_rate_pct: number; default_hourly_rate: number } | null>(null);
+  const [settings, setSettings] = useState<{ compensable_rate_pct: number; claim_window_before_days: number; claim_window_after_days: number } | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.standbySettings().then(setSettings).catch(() => setSettings({ compensable_rate_pct: 10, default_hourly_rate: 0 }));
+    api.standbySettings().then(setSettings).catch(() => setSettings({ compensable_rate_pct: 10, claim_window_before_days: 0, claim_window_after_days: 0 }));
   }, []);
 
   async function save() {
@@ -1475,10 +1667,18 @@ function StandbySettingsPanel() {
           />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-          Default Hourly Rate (M)
+          Window opens N days before month-end
           <input
-            type="number" min={0} step="0.01" value={settings.default_hourly_rate}
-            onChange={(e) => setSettings({ ...settings, default_hourly_rate: Number(e.target.value) })}
+            type="number" min={0} max={31} step="1" value={settings.claim_window_before_days}
+            onChange={(e) => setSettings({ ...settings, claim_window_before_days: Number(e.target.value) })}
+            style={{ width: 140 }}
+          />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+          ...and stays open N days into next month
+          <input
+            type="number" min={0} max={31} step="1" value={settings.claim_window_after_days}
+            onChange={(e) => setSettings({ ...settings, claim_window_after_days: Number(e.target.value) })}
             style={{ width: 140 }}
           />
         </label>
@@ -1487,7 +1687,9 @@ function StandbySettingsPanel() {
         </button>
       </div>
       <p style={{ fontSize: 12, color: "var(--muted)", padding: "0 16px 12px" }}>
-        Compensable hours = total standby hours × this rate. Used to generate claims each month; the default hourly rate seeds new claim lines and can still be overridden per line.
+        Compensable hours = total standby hours × this rate. This is the figure a claim is closed with once fully approved — there's no separate payment step.
+        <br />
+        A month's claim window is computed from these two numbers automatically every month — e.g. 2 and 0 means "only the last 2 days of the month"; 0 and 5 means "the first 5 days of the following month"; 2 and 3 means both combined. No month needs to be opened manually.
       </p>
     </section>
   );
@@ -1620,128 +1822,149 @@ export function FinanceSectionsPanel() {
   );
 }
 
-function ReportsScreen({ role }: { role: string }) {
+const REPORT_TABS = [
+  { key: "stage", label: "Claims by Stage", icon: ClipboardList },
+  { key: "roster", label: "Roster Coverage", icon: UsersRound },
+  { key: "not_submitted", label: "Claims Not Yet Submitted", icon: FileText },
+  { key: "by_month", label: "Compensable Hours by Month", icon: Clock3 },
+  { key: "by_section", label: "Compensable Hours by Section", icon: Briefcase },
+  { key: "adjustments", label: "Adjustment Report", icon: FileBarChart }
+] as const;
+type ReportTabKey = typeof REPORT_TABS[number]["key"];
+
+function ReportsScreen({ role, isFinance, isHr }: { role: string; isFinance: boolean; isHr: boolean }) {
   const [operational, setOperational] = useState<any>(null);
   const [financial, setFinancial] = useState<any>(null);
+  const [reportTab, setReportTab] = useState<ReportTabKey>("stage");
 
   useEffect(() => {
     api.standbyOperationalReport().then(setOperational).catch(() => setOperational({ roster_coverage: [], not_submitted: [], by_stage: [] }));
-    api.standbyFinancialReport().then(setFinancial).catch(() => setFinancial({ by_month: [], by_section: [], paid_vs_outstanding: { paid: 0, outstanding: 0 }, adjustments: [] }));
+    api.standbyFinancialReport().then(setFinancial).catch(() => setFinancial({ by_month: [], by_section: [], total_compensable_hours: 0, adjustments: [] }));
   }, []);
 
   if (!operational || !financial) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {role === "ADMIN" && (
-        <>
-          <StandbySettingsPanel />
-          <FinanceSectionsPanel />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-            <FinanceCodesPanel kind="COST_CENTRE" title="Cost Centres" />
-            <FinanceCodesPanel kind="ACCOUNT_PROJECT" title="Accounts / Projects" />
-          </div>
-        </>
-      )}
+      {(role === "ADMIN" || isHr) && <StandbySettingsPanel />}
 
-      <div className="ep-kpi-row ep-kpi-row-3">
-        <div className="ep-kpi ep-kpi-green"><Wallet size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">M {Number(financial.paid_vs_outstanding.paid).toFixed(2)}</div><div className="ep-kpi-label">Paid</div></div></div>
-        <div className="ep-kpi ep-kpi-amber"><Wallet size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">M {Number(financial.paid_vs_outstanding.outstanding).toFixed(2)}</div><div className="ep-kpi-label">Outstanding</div></div></div>
+      <div className="ep-kpi-row">
+        <div className="ep-kpi ep-kpi-green"><Clock3 size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{Number(financial.total_compensable_hours).toFixed(2)}</div><div className="ep-kpi-label">Compensable Hours (Closed)</div></div></div>
         <div className="ep-kpi ep-kpi-indigo"><ClipboardList size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{financial.adjustments.length}</div><div className="ep-kpi-label">Adjustments</div></div></div>
       </div>
 
-      <section className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Claims by Stage</div></div>
-        <div className="ep-panel-body" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {operational.by_stage.length === 0 && <span style={{ color: "var(--muted)", fontSize: 13 }}>No claims yet.</span>}
-          {operational.by_stage.map((s: any) => (
-            <div key={s.status} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <StatusBadge status={s.status} /><span style={{ fontSize: 13 }}>{s.count}</span>
-            </div>
-          ))}
-        </div>
-      </section>
+      <div className="ep-tabs" style={{ marginBottom: 0 }}>
+        {REPORT_TABS.map((t) => (
+          <button key={t.key} type="button" className={`ep-tab${reportTab === t.key ? " active" : ""}`} onClick={() => setReportTab(t.key)}>
+            <t.icon size={14} aria-hidden /> {t.label}
+          </button>
+        ))}
+      </div>
 
-      <section className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Roster Coverage</div></div>
-        <div className="ep-table-wrap">
-          <table className="ep-table">
-            <thead><tr><th>Section</th><th>Month</th><th>Employees Covered</th></tr></thead>
-            <tbody>
-              {operational.roster_coverage.length === 0 && <tr><td colSpan={3} style={{ textAlign: "center", color: "var(--muted)" }}>No published rosters yet.</td></tr>}
-              {operational.roster_coverage.map((r: any, idx: number) => (
-                <tr key={idx}><td>{r.section}</td><td>{monthLabel(String(r.month).slice(0, 7))}</td><td>{r.employees_covered}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {reportTab === "stage" && (
+        <section className="ep-panel">
+          <div className="ep-panel-head"><div className="ep-panel-title">Claims by Stage</div></div>
+          <div className="ep-panel-body" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {operational.by_stage.length === 0 && <span style={{ color: "var(--muted)", fontSize: 13 }}>No claims yet.</span>}
+            {operational.by_stage.map((s: any) => (
+              <div key={s.status} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <StatusBadge status={s.status} /><span style={{ fontSize: 13 }}>{s.count}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
-      <section className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Claims Not Yet Submitted</div></div>
-        <div className="ep-table-wrap">
-          <table className="ep-table">
-            <thead><tr><th>Employee</th><th>Employee No.</th><th>Section</th><th>Month</th></tr></thead>
-            <tbody>
-              {operational.not_submitted.length === 0 && <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)" }}>Everyone with published standby has claimed.</td></tr>}
-              {operational.not_submitted.map((r: any, idx: number) => (
-                <tr key={idx}><td>{r.full_name}</td><td>{r.employee_no}</td><td>{r.section}</td><td>{monthLabel(String(r.month).slice(0, 7))}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {reportTab === "roster" && (
+        <section className="ep-panel">
+          <div className="ep-panel-head"><div className="ep-panel-title">Roster Coverage</div></div>
+          <div className="ep-table-wrap">
+            <table className="ep-table">
+              <thead><tr><th>Section</th><th>Month</th><th>Employees Covered</th></tr></thead>
+              <tbody>
+                {operational.roster_coverage.length === 0 && <tr><td colSpan={3} style={{ textAlign: "center", color: "var(--muted)" }}>No published rosters yet.</td></tr>}
+                {operational.roster_coverage.map((r: any, idx: number) => (
+                  <tr key={idx}><td>{r.section}</td><td>{monthLabel(String(r.month).slice(0, 7))}</td><td>{r.employees_covered}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
-      <section className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Standby Compensation by Month</div></div>
-        <div className="ep-table-wrap">
-          <table className="ep-table">
-            <thead><tr><th>Month</th><th>Total Paid</th></tr></thead>
-            <tbody>
-              {financial.by_month.length === 0 && <tr><td colSpan={2} style={{ textAlign: "center", color: "var(--muted)" }}>No paid claims yet.</td></tr>}
-              {financial.by_month.map((r: any, idx: number) => (
-                <tr key={idx}><td>{monthLabel(String(r.month).slice(0, 7))}</td><td>M {Number(r.total).toFixed(2)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {reportTab === "not_submitted" && (
+        <section className="ep-panel">
+          <div className="ep-panel-head"><div className="ep-panel-title">Claims Not Yet Submitted</div></div>
+          <div className="ep-table-wrap">
+            <table className="ep-table">
+              <thead><tr><th>Employee</th><th>Employee No.</th><th>Section</th><th>Month</th></tr></thead>
+              <tbody>
+                {operational.not_submitted.length === 0 && <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)" }}>Everyone with published standby has claimed.</td></tr>}
+                {operational.not_submitted.map((r: any, idx: number) => (
+                  <tr key={idx}><td>{r.full_name}</td><td>{r.employee_no}</td><td>{r.section}</td><td>{monthLabel(String(r.month).slice(0, 7))}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
-      <section className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Standby Amount by Section</div></div>
-        <div className="ep-table-wrap">
-          <table className="ep-table">
-            <thead><tr><th>Section</th><th>Total Paid</th></tr></thead>
-            <tbody>
-              {financial.by_section.length === 0 && <tr><td colSpan={2} style={{ textAlign: "center", color: "var(--muted)" }}>No paid claims yet.</td></tr>}
-              {financial.by_section.map((r: any, idx: number) => (
-                <tr key={idx}><td>{r.section}</td><td>M {Number(r.total).toFixed(2)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {reportTab === "by_month" && (
+        <section className="ep-panel">
+          <div className="ep-panel-head"><div className="ep-panel-title">Compensable Hours by Month</div></div>
+          <div className="ep-table-wrap">
+            <table className="ep-table">
+              <thead><tr><th>Month</th><th>Compensable Hours</th></tr></thead>
+              <tbody>
+                {financial.by_month.length === 0 && <tr><td colSpan={2} style={{ textAlign: "center", color: "var(--muted)" }}>No closed claims yet.</td></tr>}
+                {financial.by_month.map((r: any, idx: number) => (
+                  <tr key={idx}><td>{monthLabel(String(r.month).slice(0, 7))}</td><td>{Number(r.total).toFixed(2)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
-      <section className="ep-panel">
-        <div className="ep-panel-head"><div className="ep-panel-title">Adjustment Report</div></div>
-        <div className="ep-table-wrap">
-          <table className="ep-table">
-            <thead><tr><th>Adjustment Claim</th><th>Original Claim</th><th>Reason</th><th>Amount</th><th>Status</th></tr></thead>
-            <tbody>
-              {financial.adjustments.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>No adjustments raised yet.</td></tr>}
-              {financial.adjustments.map((r: any, idx: number) => (
-                <tr key={idx}>
-                  <td>{r.claim_no}</td>
-                  <td>{r.original_claim_no}</td>
-                  <td>{r.comments}</td>
-                  <td>{r.calculated_amount ? `M ${Number(r.calculated_amount).toFixed(2)}` : "—"}</td>
-                  <td><StatusBadge status={r.status} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {reportTab === "by_section" && (
+        <section className="ep-panel">
+          <div className="ep-panel-head"><div className="ep-panel-title">Compensable Hours by Section</div></div>
+          <div className="ep-table-wrap">
+            <table className="ep-table">
+              <thead><tr><th>Section</th><th>Compensable Hours</th></tr></thead>
+              <tbody>
+                {financial.by_section.length === 0 && <tr><td colSpan={2} style={{ textAlign: "center", color: "var(--muted)" }}>No closed claims yet.</td></tr>}
+                {financial.by_section.map((r: any, idx: number) => (
+                  <tr key={idx}><td>{r.section}</td><td>{Number(r.total).toFixed(2)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {reportTab === "adjustments" && (
+        <section className="ep-panel">
+          <div className="ep-panel-head"><div className="ep-panel-title">Adjustment Report</div></div>
+          <div className="ep-table-wrap">
+            <table className="ep-table">
+              <thead><tr><th>Adjustment Claim</th><th>Original Claim</th><th>Reason</th><th>Compensable Hours</th><th>Status</th></tr></thead>
+              <tbody>
+                {financial.adjustments.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>No adjustments raised yet.</td></tr>}
+                {financial.adjustments.map((r: any, idx: number) => (
+                  <tr key={idx}>
+                    <td>{r.claim_no}</td>
+                    <td>{r.original_claim_no}</td>
+                    <td>{r.comments}</td>
+                    <td>{r.compensable_hours ?? "—"}</td>
+                    <td><StatusBadge status={r.status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

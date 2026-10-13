@@ -5,6 +5,15 @@ import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getTravelTypeByCode, isReservedAdvanceType, listTravelTypes, normalizeTravelCode } from "../../lib/travel.js";
 import { searchAirports } from "../../lib/airports.js";
+import { SYSTEM_SETTING_KEYS, getNumericSystemSetting, setNumericSystemSetting } from "../../lib/systemSettings.js";
+
+// Default used until an admin sets this from Travel Setup - keeps today's
+// behaviour unchanged for every existing environment.
+export const DEFAULT_ADVANCE_BACKDATING_GRACE_DAYS = 14;
+
+const TravelSettingsSchema = z.object({
+  advance_backdating_grace_days: z.coerce.number().int().min(0).max(365)
+});
 
 const TravelTypeSchema = z.object({
   code: z.string().trim().optional(),
@@ -36,6 +45,17 @@ const TravelLocationSchema = z.object({
 export const travelRouter = Router();
 travelRouter.use(requireAuth);
 
+// Travel type create/update/delete previously wrote nothing to audit_log at
+// all - a deleted travel type (and whoever deleted it) left no trace once
+// the row itself was gone, since created_by_id lived only on that row.
+async function writeTravelTypeAudit(action: string, actorId: string, entityId: string, before: unknown, after: unknown) {
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
+     VALUES ($1,$2,'travel_types',$3,$4,$5)`,
+    [actorId, action, entityId, JSON.stringify(before ?? null), JSON.stringify(after ?? null)]
+  );
+}
+
 // GET /travel/airports?q=... - backs the "Where From"/"Where To" picker on
 // the international ("Plan Your Trip") advance flow. Registered before the
 // "/types" handler is irrelevant here (no :id-shaped route to collide with),
@@ -44,6 +64,31 @@ travelRouter.get("/airports", async (req: AuthedRequest, res, next) => {
   try {
     const q = String(req.query.q || "");
     return res.json(await searchAirports(q));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Read by any authenticated user - the advance-request form needs this to
+// set its date pickers' earliest allowed date, same as GET /types.
+travelRouter.get("/settings", async (req: AuthedRequest, res, next) => {
+  try {
+    const advanceBackdatingGraceDays = await getNumericSystemSetting(
+      SYSTEM_SETTING_KEYS.advanceBackdatingGraceDays,
+      DEFAULT_ADVANCE_BACKDATING_GRACE_DAYS
+    );
+    return res.json({ advance_backdating_grace_days: advanceBackdatingGraceDays });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+travelRouter.put("/settings", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = TravelSettingsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid travel settings payload", parsed.error.flatten());
+    await setNumericSystemSetting(SYSTEM_SETTING_KEYS.advanceBackdatingGraceDays, parsed.data.advance_backdating_grace_days);
+    return res.json({ advance_backdating_grace_days: parsed.data.advance_backdating_grace_days });
   } catch (err) {
     return next(err);
   }
@@ -104,6 +149,8 @@ travelRouter.post("/types", requireRole(["MANAGER", "ADMIN"]), async (req: Authe
       )
     )[0];
 
+    await writeTravelTypeAudit("TRAVEL_TYPE_CREATE", req.user!.userId, row.id, null, { code, ...parsed.data });
+
     return res.status(201).json({ id: row.id, code });
   } catch (err) {
     return next(err);
@@ -114,6 +161,9 @@ travelRouter.put("/types/:id", requireRole(["MANAGER", "ADMIN"]), async (req: Au
   try {
     const parsed = TravelTypeUpdateSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid travel type payload", parsed.error.flatten());
+
+    const before = (await query<any>(`SELECT * FROM travel_types WHERE id=$1`, [req.params.id]))[0];
+    if (!before) throw notFound();
 
     const updates: string[] = [];
     const params: unknown[] = [];
@@ -138,6 +188,9 @@ travelRouter.put("/types/:id", requireRole(["MANAGER", "ADMIN"]), async (req: Au
       params
     );
     if (!rows[0]) throw notFound();
+
+    await writeTravelTypeAudit("TRAVEL_TYPE_UPDATE", req.user!.userId, req.params.id, before, payload);
+
     return res.json({ ok: true });
   } catch (err) {
     return next(err);
@@ -146,11 +199,17 @@ travelRouter.put("/types/:id", requireRole(["MANAGER", "ADMIN"]), async (req: Au
 
 travelRouter.delete("/types/:id", requireRole(["MANAGER", "ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
-    const rows = await query(
-      `DELETE FROM travel_types WHERE id=$1 RETURNING id`,
+    // RETURNING * rather than just id - once the row is gone, this deleted
+    // record is the only place "what it was" (and now, via the audit
+    // entry below, "who deleted it and when") survives at all.
+    const rows = await query<any>(
+      `DELETE FROM travel_types WHERE id=$1 RETURNING *`,
       [req.params.id]
     );
     if (!rows[0]) throw notFound();
+
+    await writeTravelTypeAudit("TRAVEL_TYPE_DELETE", req.user!.userId, req.params.id, rows[0], null);
+
     return res.json({ ok: true });
   } catch (err) {
     return next(err);

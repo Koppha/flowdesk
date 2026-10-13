@@ -2,21 +2,62 @@ import { query } from "./db.js";
 
 export const SYSTEM_SETTING_KEYS = {
   mealValue: "meal_value",
+  // JSON-encoded { advances, clearances, overtime, standby, customProcesses,
+  // signADocument } (all boolean) - which module tiles FlowDesk Mobile's
+  // Home screen shows. See the "Mobile App Configuration" admin panel
+  // (frontend/src/MobileAppConfig.tsx) and mobile/src/app/(tabs)/index.tsx.
+  mobileAppModules: "mobile_app_modules",
+  // JSON-encoded ordered array of { key: "home"|"inbox"|"profile", enabled }
+  // - which tabs FlowDesk Mobile's bottom tab bar shows, and in what order.
+  mobileAppTabs: "mobile_app_tabs",
   standbyCompensableRatePct: "standby_compensable_rate_pct",
   standbyDefaultHourlyRate: "standby_default_hourly_rate",
+  standbyCalloutRateWeekdayPct: "standby_callout_rate_weekday_pct",
+  standbyCalloutRateWeekendHolidayPct: "standby_callout_rate_weekend_holiday_pct",
   overtimeRateWeekdayPct: "overtime_rate_weekday_pct",
   overtimeRateSaturdayPct: "overtime_rate_saturday_pct",
   overtimeRateSundayHolidayPct: "overtime_rate_sunday_holiday_pct",
   workingHoursPerDay: "working_hours_per_day",
   overtimeModuleEnabled: "overtime_module_enabled",
   standbyModuleEnabled: "standby_module_enabled",
+  overtimeClaimWindowBeforeDays: "overtime_claim_window_before_days",
+  overtimeClaimWindowAfterDays: "overtime_claim_window_after_days",
+  standbyClaimWindowBeforeDays: "standby_claim_window_before_days",
+  standbyClaimWindowAfterDays: "standby_claim_window_after_days",
   vendorContractsModuleEnabled: "vendor_contracts_module_enabled",
   serviceContractsModuleEnabled: "service_contracts_module_enabled",
+  signatureModuleEnabled: "signature_module_enabled",
   salaryAdvanceEnabled: "salary_advance_enabled",
   loanAdvanceEnabled: "loan_advance_enabled",
   salaryAdvanceMaxPaybackMonths: "salary_advance_max_payback_months",
   loanAdvanceMaxPaybackMonths: "loan_advance_max_payback_months",
-  defaultItProvisioningAssigneeIds: "default_it_provisioning_assignee_ids"
+  // The day of the month a Salary Advance FOR that same calendar month
+  // opens for applications (e.g. 5 - "you can apply for September after
+  // the 5th of September"). Applying for a past or future month is never
+  // restricted by this - only a request whose own Salary Month is the
+  // current calendar month.
+  salaryAdvanceApplicationOpenDay: "salary_advance_application_open_day",
+  defaultItProvisioningAssigneeIds: "default_it_provisioning_assignee_ids",
+  // Delegated-signature notation ("AI" = a.i./ad interim, "PP" = p.p./per
+  // procurationem) shown when someone signs a document under another
+  // person's authority rather than their own - see signatures.routes.ts.
+  signatureDelegationNotation: "signature_delegation_notation",
+  // When true, the signer can override the org default per signature;
+  // when false, every delegated signature uses the admin's chosen notation
+  // with no per-signature choice offered.
+  signatureDelegationNotationOverridable: "signature_delegation_notation_overridable",
+  // Hours a step can sit with no action before the current approver gets a
+  // reminder email (SLA reminder worker - see lib/slaReminders.ts). Purely
+  // a nudge, never a reassignment.
+  slaReminderThresholdHours: "sla_reminder_threshold_hours",
+  slaRemindersEnabled: "sla_reminders_enabled",
+  // How many days in the past a trip/departure date on a new advance
+  // request is allowed to be - lets an employee file for a trip they
+  // already took instead of only ones planned ahead, without opening the
+  // door to arbitrarily old backdating. Configured from Travel Setup
+  // (travel.routes.ts), not a code constant, so an admin can change it
+  // without a deploy.
+  advanceBackdatingGraceDays: "advance_backdating_grace_days"
 } as const;
 
 export async function getStringSystemSetting(key: string, fallback: string | null = null) {

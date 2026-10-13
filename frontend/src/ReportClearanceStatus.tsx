@@ -5,6 +5,7 @@ import { CheckCircle2, Clock3, AlertTriangle, ClipboardList, Search, Download, C
 
 interface Props {
   onBack: () => void;
+  scope?: "all" | "mine";
 }
 
 type ClearanceStatus = "COMPLETE" | "NOT_COMPLETE" | "NOT_CLEARED";
@@ -51,7 +52,8 @@ function claimStageLabel(status: string | null) {
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
-export default function ReportClearanceStatus({ onBack }: Props) {
+export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) {
+  const isMine = scope === "mine";
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +68,7 @@ export default function ReportClearanceStatus({ onBack }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const resp = await api.clearanceStatusReport();
+      const resp = isMine ? await api.myClearanceStatusReport() : await api.clearanceStatusReport();
       setRows(Array.isArray(resp?.items) ? resp.items : []);
     } catch (e: any) {
       setError(e?.message || "Failed to load clearance status report.");
@@ -77,7 +79,7 @@ export default function ReportClearanceStatus({ onBack }: Props) {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [isMine]);
 
   const departments = useMemo(
     () => Array.from(new Set(rows.map((r) => r.department).filter(Boolean))).sort() as string[],
@@ -148,10 +150,12 @@ export default function ReportClearanceStatus({ onBack }: Props) {
   const paged = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
 
   function exportCsv() {
-    const h = ["Employee", "Department", "Advance Type", "Amount", "Paid Date", "Clearance Status", "Claim Stage", "Submitted", "Closed/Settled"];
+    const h = [
+      ...(isMine ? [] : ["Employee", "Department"]),
+      "Advance Type", "Amount", "Paid Date", "Clearance Status", "Claim Stage", "Submitted", "Closed/Settled"
+    ];
     const csvRows = filtered.map((r) => [
-      r.requester_name || "—",
-      r.department || "—",
+      ...(isMine ? [] : [r.requester_name || "—", r.department || "—"]),
       r.type,
       formatMoney(r.approved_total, r.currency),
       fmtDate(r.paid_at),
@@ -163,21 +167,25 @@ export default function ReportClearanceStatus({ onBack }: Props) {
     const csv = [h, ...csvRows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const el = document.createElement("a");
     el.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    el.download = `clearance-status-${new Date().toISOString().slice(0, 10)}.csv`;
+    el.download = `${isMine ? "my-" : ""}clearance-status-${new Date().toISOString().slice(0, 10)}.csv`;
     el.click();
   }
 
   return (
     <div className="ep-page">
-      <div className="ep-breadcrumb">
-        <span style={{ cursor: "pointer", color: "var(--muted)" }} onClick={onBack}>Reports</span>
-        <span className="ep-breadcrumb-sep">›</span>
-        <span className="ep-breadcrumb-active">Clearance Status</span>
-      </div>
+      {!isMine && (
+        <div className="ep-breadcrumb">
+          <span style={{ cursor: "pointer", color: "var(--muted)" }} onClick={onBack}>Reports</span>
+          <span className="ep-breadcrumb-sep">›</span>
+          <span className="ep-breadcrumb-active">Clearance Status</span>
+        </div>
+      )}
       <div className="ep-header">
         <div className="ep-header-text">
-          <h1 className="ep-title">Clearance Status</h1>
-          <p className="ep-subtitle">Every paid travel advance, tracked through to a complete clearance.</p>
+          <h1 className="ep-title">{isMine ? "My Clearance Status" : "Clearance Status"}</h1>
+          <p className="ep-subtitle">
+            {isMine ? "Your paid travel advances, tracked through to a complete clearance." : "Every paid travel advance, tracked through to a complete clearance."}
+          </p>
         </div>
         <div className="ep-actions">
           <button className="ep-btn-outline" onClick={() => void load()} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
@@ -214,7 +222,7 @@ export default function ReportClearanceStatus({ onBack }: Props) {
         </div>
       </div>
 
-      {topDepartmentsByVolume.length > 0 && (
+      {!isMine && topDepartmentsByVolume.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 14, alignItems: "start" }}>
           <div className="ep-panel" style={{ padding: "16px 20px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -315,14 +323,18 @@ export default function ReportClearanceStatus({ onBack }: Props) {
 
       <div className="ep-panel" style={{ marginBottom: 14 }}>
         <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
-          <div className="ep-search" style={{ flex: "1 1 220px" }}>
-            <Search size={14} />
-            <input placeholder="Search employee or department…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <select className="ep-form-select" value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ minWidth: 180 }}>
-            <option value="">All Departments</option>
-            {departments.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
+          {!isMine && (
+            <div className="ep-search" style={{ flex: "1 1 220px" }}>
+              <Search size={14} />
+              <input placeholder="Search employee or department…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+          )}
+          {!isMine && (
+            <select className="ep-form-select" value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ minWidth: 180 }}>
+              <option value="">All Departments</option>
+              {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
           <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted)" }}>{filtered.length} of {rows.length}</span>
         </div>
       </div>
@@ -337,8 +349,8 @@ export default function ReportClearanceStatus({ onBack }: Props) {
             <table className="ep-table">
               <thead>
                 <tr>
-                  <th>Employee</th>
-                  <th>Department</th>
+                  {!isMine && <th>Employee</th>}
+                  {!isMine && <th>Department</th>}
                   <th>Advance Type</th>
                   <th>Amount</th>
                   <th>Paid Date</th>
@@ -351,8 +363,8 @@ export default function ReportClearanceStatus({ onBack }: Props) {
                   const cfg = STATUS_CONFIG[r.status];
                   return (
                     <tr key={r.advance_id}>
-                      <td style={{ fontWeight: 600 }}>{r.requester_name || "—"}</td>
-                      <td style={{ color: "var(--muted)" }}>{r.department || "—"}</td>
+                      {!isMine && <td style={{ fontWeight: 600 }}>{r.requester_name || "—"}</td>}
+                      {!isMine && <td style={{ color: "var(--muted)" }}>{r.department || "—"}</td>}
                       <td>{r.type}</td>
                       <td style={{ fontWeight: 600 }}>{formatMoney(r.approved_total, r.currency)}</td>
                       <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(r.paid_at)}</td>

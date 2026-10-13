@@ -9,6 +9,7 @@ import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 import { canViewAdvance } from "../advances/advances.routes.js";
 import { canViewClaim } from "../claims/claims.routes.js";
 import { getManagerChainIds } from "../reporting-lines/reporting-lines.routes.js";
+import { listSignableDocumentsForUser, listOpenSignableDocumentsForAdmin } from "../signatures/signatures.service.js";
 
 // "CAPTURE" was this system's original built-in capture action code;
 // "DEPT_CAPTURE" is the custom one actually registered and used by every
@@ -94,6 +95,45 @@ function allowedInboxForRole(role: Role): InboxRule | null {
 }
 
 export const inboxRouter = Router();
+
+// Newest first, with each item's submitted/created time - the inbox is
+// otherwise grouped by load order, and most item types carried no date.
+// Lookups are by id per document table; any failure (missing table/column)
+// leaves that type undated rather than breaking the inbox.
+const INBOX_DATE_TABLES: Record<string, string> = {
+  ADVANCE: "advance_requests",
+  CLAIM: "clearance_claims",
+  ACCOMMODATION: "accommodation_requests",
+  CUSTOM_REQUEST: "custom_request_submissions",
+  OVERTIME_REQUEST: "overtime_requests",
+  OVERTIME_CLAIM: "overtime_claims",
+  STANDBY_CLAIM: "standby_claims"
+};
+async function withDatesNewestFirst<T extends { doc_type?: string; id?: unknown; created_at?: unknown; submitted_at?: unknown }>(items: T[]): Promise<T[]> {
+  for (const [docType, table] of Object.entries(INBOX_DATE_TABLES)) {
+    const ids = items.filter((i) => i.doc_type === docType && i.id != null).map((i) => String(i.id));
+    if (!ids.length) continue;
+    try {
+      const rows = await query<{ id: string; created_at: string | null; submitted_at: string | null }>(
+        `SELECT id::text AS id, created_at, to_jsonb(t)->>'submitted_at' AS submitted_at FROM ${table} t WHERE id::text = ANY($1::text[])`,
+        [ids]
+      );
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      for (const it of items) {
+        if (it.doc_type !== docType) continue;
+        const r = byId.get(String(it.id));
+        if (!r) continue;
+        it.created_at = it.created_at ?? r.created_at;
+        it.submitted_at = it.submitted_at ?? r.submitted_at;
+      }
+    } catch {
+      // Leave this type undated.
+    }
+  }
+  const ts = (i: T) => Date.parse(String(i.submitted_at || i.created_at || "")) || 0;
+  return [...items].sort((a, b) => ts(b) - ts(a));
+}
+
 inboxRouter.use(requireAuth);
 
 inboxRouter.get("/my-actions", async (req: AuthedRequest, res, next) => {
@@ -499,6 +539,94 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           requester_name: a.requester_name,
           currency: a.currency,
           is_final_step_approver: true
+        });
+      }
+    };
+
+    // DEPT_REPORTS ("View") steps are a read-only FYI, never a pending
+    // action (see the stillPending exclusion in advances.service.ts /
+    // claims.service.ts) - so once the request has actually reached final
+    // approval, whoever holds that step should still be able to open it and
+    // look, even though the two loaders above already stopped surfacing it
+    // (they only track requests still in progress). Matches the same
+    // SINGLE-approver / ANY_ONE-group pattern used throughout this file.
+    const loadViewOnlyCompletedItemsForUser = async () => {
+      const userGroups = await getUserGroups(req.user!.userId);
+      const groupsParam = userGroups.length ? userGroups : [""];
+
+      const advRows = await query<any>(
+        `SELECT ar.id, ar.status, ar.type, ar.requested_total, ar.approved_total, ar.purpose,
+                u.full_name AS requester_name, tt.currency, dv.name AS division
+           FROM advance_requests ar
+           JOIN users u ON u.id = ar.requester_id
+           LEFT JOIN travel_types tt ON tt.code = ar.type
+           LEFT JOIN divisions dv ON dv.id = u.division_id
+          WHERE ar.status IN ('APPROVED','PAID','CLOSED')
+            AND ar.approval_chain IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements(ar.approval_chain) s
+              WHERE s->>'action_type' = 'DEPT_REPORTS'
+                AND (
+                  (s->>'approver_id') = $1
+                  OR (s->'approver_ids') ? $1
+                  OR ((s->>'approval_mode') = 'ANY_ONE' AND (s->>'approval_group_name') = ANY($2::text[]))
+                )
+            )
+          ORDER BY ar.created_at DESC`,
+        [req.user!.userId, groupsParam]
+      );
+      for (const a of advRows) {
+        if (items.some((i: any) => i.id === a.id)) continue;
+        items.push({
+          doc_type: "ADVANCE",
+          id: a.id,
+          status: a.status,
+          advance_type: a.type,
+          requested_total: Number(a.requested_total),
+          approved_total: Number(a.approved_total),
+          purpose: a.purpose,
+          requester_name: a.requester_name,
+          currency: a.currency,
+          division: a.division ?? null,
+          current_step_action_type: "DEPT_REPORTS",
+          current_step_actionable_by_me: false,
+          is_view_only: true
+        });
+      }
+
+      const claimRows = await query<any>(
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency,
+                u.full_name AS claimant_name
+           FROM clearance_claims c
+           JOIN users u ON u.id = c.claimant_id
+          WHERE c.status IN ('CLOSED','COMPLETED')
+            AND c.approval_chain IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements(c.approval_chain) s
+              WHERE s->>'action_type' = 'DEPT_REPORTS'
+                AND (
+                  (s->>'approver_id') = $1
+                  OR (s->'approver_ids') ? $1
+                  OR ((s->>'approval_mode') = 'ANY_ONE' AND (s->>'approval_group_name') = ANY($2::text[]))
+                )
+            )
+          ORDER BY c.created_at DESC`,
+        [req.user!.userId, groupsParam]
+      );
+      for (const c of claimRows) {
+        if (items.some((i: any) => i.id === c.id)) continue;
+        items.push({
+          doc_type: "CLAIM",
+          id: c.id,
+          status: c.status,
+          claim_total: Number(c.claim_total),
+          advance_amount: Number(c.advance_amount),
+          balance_amount: Number(c.balance_amount),
+          currency: c.currency,
+          claimant_name: c.claimant_name,
+          current_step_action_type: "DEPT_REPORTS",
+          current_step_actionable_by_me: false,
+          is_view_only: true
         });
       }
     };
@@ -966,6 +1094,51 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     };
 
+    // Electronic Signature routing documents with an approval route -
+    // surfaces to whoever is the approver for the current step, same
+    // is_my_turn logic as the document's own list in signatures.service.ts.
+    // A routing document with no approval route (free-for-all, anyone with
+    // the link can sign) never shows up here - there's no single "current
+    // approver" to notify in that mode, matching how it works everywhere
+    // else in that feature.
+    const loadSignableDocumentsForUser = async () => {
+      // ADMIN gets the same company-wide oversight every other request type
+      // already gives it - every open routing document, not just ones
+      // where it's literally their turn (see listOpenSignableDocumentsForAdmin's
+      // own comment: this is visibility only, signing itself still enforces
+      // strict turn order with no admin bypass).
+      if (rule === "ALL") {
+        const rows = await listOpenSignableDocumentsForAdmin();
+        for (const r of rows) {
+          const chain = r.approval_chain as Array<{ approver_id: string; approver_name: string | null }>;
+          const isMyTurn = chain[r.current_step_order]?.approver_id === req.user!.userId;
+          items.push({
+            doc_type: "SIGNABLE_DOCUMENT",
+            id: r.id,
+            status: r.status,
+            title: r.title,
+            created_by_name: r.created_by_name,
+            current_step_actionable_by_me: isMyTurn,
+            created_at: r.created_at
+          });
+        }
+        return;
+      }
+      const rows = await listSignableDocumentsForUser(req.user!.userId);
+      for (const r of rows) {
+        if (!r.is_my_turn) continue;
+        items.push({
+          doc_type: "SIGNABLE_DOCUMENT",
+          id: r.id,
+          status: r.status,
+          title: r.title,
+          created_by_name: r.created_by_name,
+          current_step_actionable_by_me: true,
+          created_at: r.created_at
+        });
+      }
+    };
+
     // Overtime and Standby have their own employee-defined, delegation-scoped
     // approval routes (route_version + step_order on a dedicated steps table,
     // not the inline approval_chain JSONB the workflow engine uses) — same
@@ -1092,15 +1265,17 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       await loadWorkflowAdvancesForUser();
       await loadFinalStepApprovedAdvancesForUser(req.user!.userId);
       await loadWorkflowClaimsForUser();
+      await loadViewOnlyCompletedItemsForUser();
     }
     await loadCaptureHistoryItems();
     await loadAccommodationItems();
     await loadCustomRequestsForUser();
+    await loadSignableDocumentsForUser();
     await loadOvertimeRequestItems();
     await loadOvertimeClaimItems();
     await loadStandbyClaimItems();
 
-    if (!rule) return res.json({ items: await stripUnviewableItems(items) });
+    if (!rule) return res.json({ items: await withDatesNewestFirst(await stripUnviewableItems(items)) });
 
     // Load legacy (non-workflow) advances by status.
     // The ownership filter still applies so each role only sees their own dept advances.
@@ -1215,7 +1390,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       await loadClaimByStatus("FINANCE_VERIFIED");
       await loadClaimByStatus("PAYMENT_PROCESSING");
 
-      return res.json({ items });
+      return res.json({ items: await withDatesNewestFirst(items) });
     }
 
     const rules = Array.isArray(rule) ? rule : [rule];
@@ -1227,7 +1402,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
     }
 
-    return res.json({ items: await stripUnviewableItems(items) });
+    return res.json({ items: await withDatesNewestFirst(await stripUnviewableItems(items)) });
   } catch (err) {
     return next(err);
   }

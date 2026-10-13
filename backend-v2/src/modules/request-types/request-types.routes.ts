@@ -119,7 +119,7 @@ requestTypesRouter.get("/", async (req: AuthedRequest, res, next) => {
 // path, must precede /:id so it isn't swallowed by the :id param.
 requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) => {
   try {
-    const [overtime_enabled, standby_enabled, salary_advance_enabled, loan_advance_enabled, salary_advance_max_payback_months, loan_advance_max_payback_months, vendor_contracts_enabled, service_contracts_enabled] = await Promise.all([
+    const [overtime_enabled, standby_enabled, salary_advance_enabled, loan_advance_enabled, salary_advance_max_payback_months, loan_advance_max_payback_months, vendor_contracts_enabled, service_contracts_enabled, signature_enabled] = await Promise.all([
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.overtimeModuleEnabled, true),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, true),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, true),
@@ -127,13 +127,15 @@ requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) =
       getNumericSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceMaxPaybackMonths, 6),
       getNumericSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths, 6),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.vendorContractsModuleEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled, true)
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled, true),
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, true)
     ]);
     return res.json({
       overtime_enabled, standby_enabled,
       salary_advance_enabled, loan_advance_enabled,
       salary_advance_max_payback_months, loan_advance_max_payback_months,
-      vendor_contracts_enabled, service_contracts_enabled
+      vendor_contracts_enabled, service_contracts_enabled,
+      signature_enabled
     });
   } catch (err) {
     return next(err);
@@ -151,7 +153,8 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
       salary_advance_max_payback_months: z.number().int().positive().max(360).optional(),
       loan_advance_max_payback_months: z.number().int().positive().max(360).optional(),
       vendor_contracts_enabled: z.boolean().optional(),
-      service_contracts_enabled: z.boolean().optional()
+      service_contracts_enabled: z.boolean().optional(),
+      signature_enabled: z.boolean().optional()
     }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
     if (parsed.data.overtime_enabled !== undefined) {
@@ -177,6 +180,9 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
     }
     if (parsed.data.service_contracts_enabled !== undefined) {
       await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled, parsed.data.service_contracts_enabled);
+    }
+    if (parsed.data.signature_enabled !== undefined) {
+      await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, parsed.data.signature_enabled);
     }
     return res.json({ ok: true });
   } catch (err) {

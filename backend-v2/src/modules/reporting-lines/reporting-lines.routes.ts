@@ -82,17 +82,25 @@ export async function getManagerChainIds(employeeId: string): Promise<string[]> 
   return chain;
 }
 
+// The user's direct manager: their explicit reporting line, else the
+// org-structure leadership fallback. Shared by /my-manager (what the form
+// shows) and fixed-chain submission (who actually gets the step), so the
+// two can never disagree.
+export async function resolveDirectManagerId(userId: string): Promise<string | null> {
+  let managerId: string | null = (await getManagerChainIds(userId))[0] ?? null;
+  if (!managerId || managerId === userId) {
+    managerId = await getFallbackManagerId(userId);
+  }
+  return managerId && managerId !== userId ? managerId : null;
+}
+
 // GET /reporting-lines/my-manager — the current user's direct manager (any
 // authenticated user), used to auto-resolve "Requester's Manager" steps in
 // fixed approval chains (e.g. Computer Request) without exposing the org chart.
 reportingLinesRouter.get("/my-manager", async (req: AuthedRequest, res, next) => {
   try {
-    const userId = req.user!.userId;
-    let managerId: string | null = (await getManagerChainIds(userId))[0] ?? null;
-    if (!managerId || managerId === userId) {
-      managerId = await getFallbackManagerId(userId);
-    }
-    if (!managerId || managerId === userId) return res.json(null);
+    const managerId = await resolveDirectManagerId(req.user!.userId);
+    if (!managerId) return res.json(null);
     const manager = (await query<{ id: string; full_name: string | null; email: string; title: string | null }>(
       `SELECT id, full_name, email, title FROM users WHERE id = $1 AND is_active = true`,
       [managerId]

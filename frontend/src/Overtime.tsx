@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api, openBlobInNewTab } from "./api";
 import Swal from "sweetalert2";
 import {
@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { ApprovalRouteBuilder, type ApprovalRouteStep } from "./components/ApprovalRoute";
 import { ClaimTrackingTimeline } from "./components/ClaimTrackingTimeline";
-import { FinanceCodesPanel, FinanceSectionsPanel } from "./Standby";
 import { useDelegationScope, DelegationScopeBar, DelegatedTag } from "./components/DelegationScope";
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -27,6 +26,7 @@ function StatusBadge({ status }: { status: string }) {
     SUBMITTED: { bg: "#dbeafe", color: "#1d4ed8" },
     FINANCE_PROCESSING: { bg: "#fef3c7", color: "#b45309" },
     PAYMENT_PENDING: { bg: "#fef3c7", color: "#b45309" },
+    AWAITING_TREASURY: { bg: "#fef3c7", color: "#b45309" },
     CLOSED: { bg: "#e0e7ff", color: "#4338ca" },
     APPROVED: { bg: "#dcfce7", color: "#15803d" },
     REJECTED: { bg: "#fee2e2", color: "#b91c1c" },
@@ -40,7 +40,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-type View = "DASHBOARD" | "MY_REQUESTS" | "NEW_REQUEST" | "REQUEST_DETAIL" | "CLAIM_DETAIL" | "APPROVALS" | "FINANCE_QUEUE" | "REPORTS";
+type View = "DASHBOARD" | "MY_REQUESTS" | "NEW_REQUEST" | "REQUEST_DETAIL" | "CLAIM_DETAIL" | "APPROVALS" | "REPORTS";
 
 export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkConsumed }: {
   profile: any; role: string; onBack: () => void;
@@ -58,9 +58,9 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
   const [claimDetail, setClaimDetail] = useState<any>(null);
   const [requestApprovals, setRequestApprovals] = useState<any[]>([]);
   const [claimApprovals, setClaimApprovals] = useState<any[]>([]);
-  const [financeQueue, setFinanceQueue] = useState<any[]>([]);
 
   const isFinance = Boolean(dashboard?.is_finance) || role === "ADMIN";
+  const isHr = Boolean(dashboard?.is_hr) || role === "ADMIN";
 
   useEffect(() => {
     void loadDashboard();
@@ -76,7 +76,6 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
     const interval = setInterval(() => {
       if (view === "DASHBOARD") void loadDashboard();
       if (view === "APPROVALS") void loadApprovals(true);
-      if (view === "FINANCE_QUEUE") void loadFinanceQueue(true);
     }, 30000);
     return () => clearInterval(interval);
   }, [view]);
@@ -129,22 +128,13 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
     setClaimDetail(await api.overtimeClaimDetail(claimId));
     void loadRequests();
   }
-  async function loadFinanceQueue(silent = false) {
-    if (!silent) setLoading(true);
-    try { setFinanceQueue(await api.overtimeFinanceQueue()); } catch (err) {
-      if (silent) return;
-      throw err;
-    } finally { if (!silent) setLoading(false); }
-  }
-
   function TabBar() {
     const tabs: { key: View; label: string; icon: any; show: boolean }[] = [
       { key: "DASHBOARD", label: "Dashboard", icon: Briefcase, show: true },
       { key: "MY_REQUESTS", label: "My Requests", icon: Calendar, show: true },
       { key: "NEW_REQUEST", label: "New Request", icon: Plus, show: true },
       { key: "APPROVALS", label: "Approvals", icon: CheckCircle2, show: true },
-      { key: "FINANCE_QUEUE", label: "Finance Queue", icon: Wallet, show: isFinance },
-      { key: "REPORTS", label: "Reports", icon: FileBarChart, show: role === "ADMIN" || isFinance }
+      { key: "REPORTS", label: "Reports", icon: FileBarChart, show: role === "ADMIN" || isFinance || isHr }
     ];
     return (
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 18, flexWrap: "wrap" }}>
@@ -156,7 +146,6 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
               setView(t.key);
               if (t.key === "MY_REQUESTS") void loadRequests();
               if (t.key === "APPROVALS") void loadApprovals();
-              if (t.key === "FINANCE_QUEUE") void loadFinanceQueue();
               if (t.key === "DASHBOARD") void loadDashboard();
             }}
             style={{
@@ -221,8 +210,7 @@ export default function Overtime({ profile, role, onBack, deepLink, onDeepLinkCo
           onRefresh={loadApprovals}
         />
       )}
-      {view === "FINANCE_QUEUE" && <FinanceQueueScreen queue={financeQueue} onOpen={openClaim} />}
-      {view === "REPORTS" && <ReportsScreen role={role} isFinance={isFinance} />}
+      {view === "REPORTS" && <ReportsScreen role={role} isFinance={isFinance} isHr={isHr} />}
     </div>
   );
 }
@@ -239,7 +227,7 @@ function DashboardScreen({ dashboard, onOpenClaim, onViewAll }: { dashboard: any
         <div className="ep-kpi ep-kpi-indigo"><Clock3 size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.converted_hours_this_month}</div><div className="ep-kpi-label">This Month Converted Hours</div></div></div>
         <div className="ep-kpi ep-kpi-amber"><ClipboardList size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.pending_approvals}</div><div className="ep-kpi-label">Pending Approvals</div></div></div>
         <div className="ep-kpi ep-kpi-green"><CheckCircle2 size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.approved_ytd_converted_hours}</div><div className="ep-kpi-label">Approved (YTD) Converted Hours</div></div></div>
-        <div className="ep-kpi ep-kpi-green"><Wallet size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">M {Number(dashboard.paid_ytd_amount || 0).toFixed(2)}</div><div className="ep-kpi-label">Paid (YTD) Amount</div></div></div>
+        <div className="ep-kpi ep-kpi-green"><Wallet size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{dashboard.closed_ytd_claims}</div><div className="ep-kpi-label">Closed (YTD) Claims</div></div></div>
       </div>
 
       <section className="ep-panel">
@@ -433,17 +421,24 @@ function NewRequestScreen({ profile, onCreated, onCancel }: { profile: any; onCr
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Overtime Details</div>
           <div className="ep-table-wrap">
             <table className="ep-table">
-              <thead><tr><th>Date</th><th>Day</th><th>Estimated From</th><th>Estimated To</th><th>Reason for Overtime</th><th></th></tr></thead>
+              <thead><tr><th>Date</th><th>Day</th><th>Estimated From</th><th>Estimated To</th><th></th></tr></thead>
               <tbody>
                 {lines.map((l, i) => (
-                  <tr key={i}>
-                    <td><input type="date" className="review-control" value={l.date} onChange={(e) => updateLine(i, { date: e.target.value })} /></td>
-                    <td>{l.day || dayFromDate(l.date)}</td>
-                    <td><input type="time" className="review-control" value={l.estimated_start} onChange={(e) => updateLine(i, { estimated_start: e.target.value })} /></td>
-                    <td><input type="time" className="review-control" value={l.estimated_end} onChange={(e) => updateLine(i, { estimated_end: e.target.value })} /></td>
-                    <td><input className="review-control" value={l.reason} onChange={(e) => updateLine(i, { reason: e.target.value })} /></td>
-                    <td>{lines.length > 1 && <button type="button" className="ep-icon-btn danger" onClick={() => removeRow(i)}><Trash2 size={13} aria-hidden /></button>}</td>
-                  </tr>
+                  <Fragment key={i}>
+                    <tr>
+                      <td><input type="date" className="review-control" value={l.date} onChange={(e) => updateLine(i, { date: e.target.value })} /></td>
+                      <td>{l.day || dayFromDate(l.date)}</td>
+                      <td><input type="time" className="review-control" value={l.estimated_start} onChange={(e) => updateLine(i, { estimated_start: e.target.value })} /></td>
+                      <td><input type="time" className="review-control" value={l.estimated_end} onChange={(e) => updateLine(i, { estimated_end: e.target.value })} /></td>
+                      <td>{lines.length > 1 && <button type="button" className="ep-icon-btn danger" onClick={() => removeRow(i)}><Trash2 size={13} aria-hidden /></button>}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={5} style={{ paddingTop: 0 }}>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--muted)", marginBottom: 4 }}>Reason for Overtime</label>
+                        <textarea className="review-control" style={{ width: "100%", boxSizing: "border-box" }} rows={2} value={l.reason} onChange={(e) => updateLine(i, { reason: e.target.value })} />
+                      </td>
+                    </tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -688,7 +683,6 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
   const [route, setRoute] = useState<ApprovalRouteStep[]>(
     (claim.approval_steps || []).map((s: any) => ({ approver_user_id: s.approver_user_id, title: s.title, approver_name: s.approver_name }))
   );
-  const [preference, setPreference] = useState(claim.compensation_preference || "");
   const [saving, setSaving] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const titleOptions = OVERTIME_TITLE_OPTIONS;
@@ -701,24 +695,8 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
     setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
 
-  const [hourlyRate, setHourlyRate] = useState("");
-  const [costCentre, setCostCentre] = useState(claim.cost_centre || "");
-  const [accountProject, setAccountProject] = useState(claim.account_project || "");
-  const [payrollPeriod, setPayrollPeriod] = useState(claim.payroll_period || "");
-  const [financeReference, setFinanceReference] = useState(claim.finance_reference || "");
-  const [financeComments, setFinanceComments] = useState("");
-  const [costCentreOptions, setCostCentreOptions] = useState<{ name: string }[]>([]);
-  const [accountProjectOptions, setAccountProjectOptions] = useState<{ name: string }[]>([]);
-
   const isDraft = claim.status === "DRAFT";
   const isSubmitted = claim.status === "SUBMITTED";
-  const isFinanceStage = ["FINANCE_PROCESSING", "PAYMENT_PENDING"].includes(claim.status);
-
-  useEffect(() => {
-    if (claim.status !== "FINANCE_PROCESSING") return;
-    api.standbyFinanceCodes("COST_CENTRE").then(setCostCentreOptions).catch(() => setCostCentreOptions([]));
-    api.standbyFinanceCodes("ACCOUNT_PROJECT").then(setAccountProjectOptions).catch(() => setAccountProjectOptions([]));
-  }, [claim.status]);
 
   async function downloadPdf() {
     try {
@@ -731,7 +709,7 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
   async function saveDraft() {
     setSaving(true);
     try {
-      await api.updateOvertimeClaim(claim.id, { lines, compensation_preference: preference || undefined, approval_route: route.filter((s) => s.approver_user_id) });
+      await api.updateOvertimeClaim(claim.id, { lines, approval_route: route.filter((s) => s.approver_user_id) });
       await onRefresh();
       void Swal.fire({ icon: "success", title: "Saved", timer: 1200, showConfirmButton: false });
     } catch (e: any) {
@@ -742,11 +720,10 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
   }
 
   async function submit() {
-    if (!preference) return void Swal.fire({ icon: "warning", title: "Choose a Compensation Preference (Pay or Days)" });
     if (route.some((s) => !s.approver_user_id) || route.length === 0) return void Swal.fire({ icon: "warning", title: "Complete the Approval Route before submitting" });
     setSaving(true);
     try {
-      await api.updateOvertimeClaim(claim.id, { lines, compensation_preference: preference, approval_route: route });
+      await api.updateOvertimeClaim(claim.id, { lines, approval_route: route });
       await api.submitOvertimeClaim(claim.id);
       await onRefresh();
       void Swal.fire({ icon: "success", title: "Claim submitted" });
@@ -790,43 +767,6 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
     }
   }
 
-  async function processFinance() {
-    if (!hourlyRate) return void Swal.fire({ icon: "warning", title: "Enter the hourly rate" });
-    try {
-      await api.processOvertimeClaimFinance(claim.id, {
-        hourly_rate: Number(hourlyRate), cost_centre: costCentre, account_project: accountProject,
-        payroll_period: payrollPeriod, finance_reference: financeReference, finance_comments: financeComments
-      });
-      await onRefresh();
-      void Swal.fire({ icon: "success", title: "Sent for settlement" });
-    } catch (e: any) {
-      void Swal.fire({ icon: "error", title: "Could not process", text: e.message });
-    }
-  }
-
-  async function returnFromFinance() {
-    const result = await Swal.fire({ title: "Return claim", input: "textarea", inputLabel: "Reason (required)", showCancelButton: true, confirmButtonText: "Return" });
-    if (!result.isConfirmed || !result.value?.trim()) return;
-    try {
-      await api.returnOvertimeClaimFinance(claim.id, result.value.trim());
-      await onRefresh();
-    } catch (e: any) {
-      void Swal.fire({ icon: "error", title: "Could not return", text: e.message });
-    }
-  }
-
-  async function markSettled() {
-    const confirm = await Swal.fire({ title: "Mark as settled?", icon: "question", showCancelButton: true, confirmButtonText: "Mark Settled" });
-    if (!confirm.isConfirmed) return;
-    try {
-      await api.markOvertimeClaimSettled(claim.id);
-      await onRefresh();
-      void Swal.fire({ icon: "success", title: "Claim closed" });
-    } catch (e: any) {
-      void Swal.fire({ icon: "error", title: "Could not mark settled", text: e.message });
-    }
-  }
-
   return (
     <div>
       <button className="button button-subtle" type="button" onClick={onBack} style={{ marginBottom: 14 }}><ChevronLeft size={14} aria-hidden /> Back</button>
@@ -861,23 +801,15 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
               <div><strong>Total Overtime:</strong> {claim.total_overtime} Hours</div>
               <div><strong>Converted to Number of Hours:</strong> {claim.converted_hours} Hours</div>
               <div><strong>Equivalent Days:</strong> {claim.equivalent_days}</div>
-              <div><strong>Hourly Rate:</strong> {claim.hourly_rate != null ? `M ${Number(claim.hourly_rate).toFixed(2)}` : "—"}</div>
-              <div><strong>Total Amount:</strong> {claim.total_amount != null ? `M ${Number(claim.total_amount).toFixed(2)}` : "—"}</div>
+              {claim.total_amount != null && (
+                <>
+                  <div><strong>Hourly Rate:</strong> M {Number(claim.hourly_rate || 0).toFixed(2)}</div>
+                  <div><strong>Total Amount:</strong> M {Number(claim.total_amount).toFixed(2)}</div>
+                </>
+              )}
               <div><strong>Submitted On:</strong> {claim.submitted_at ? new Date(claim.submitted_at).toLocaleString() : "—"}</div>
             </div>
           </div>
-
-          {isDraft ? (
-            <label style={{ display: "block", marginBottom: 16, fontSize: 13 }}>
-              <div style={{ marginBottom: 4, fontWeight: 600 }}>Compensation Method</div>
-              <div style={{ display: "flex", gap: 16 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="radio" checked={preference === "PAY"} onChange={() => setPreference("PAY")} /> Pay</label>
-                <label style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="radio" checked={preference === "DAYS"} onChange={() => setPreference("DAYS")} /> Days</label>
-              </div>
-            </label>
-          ) : (
-            <div style={{ fontSize: 13, marginBottom: 16 }}><strong>Compensation Method:</strong> {claim.compensation_preference || "—"}</div>
-          )}
 
           <div className="ep-table-wrap">
             <table className="ep-table">
@@ -934,7 +866,13 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
 
           {showHistory && (
             <div style={{ marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-              <ClaimTrackingTimeline claim={claim} financeStageLabel="Overtime Compensation Processing" />
+              <ClaimTrackingTimeline
+                claim={claim}
+                showFinanceStages={false}
+                awaitingTreasuryLabel="Awaiting Treasury"
+                closedLabel="Claim Closed"
+                closedDetail={(c) => `${c.converted_hours} converted hours (${c.equivalent_days} days)`}
+              />
             </div>
           )}
         </div>
@@ -954,67 +892,12 @@ function ClaimDetailScreen({ claim, onBack, onRefresh }: { claim: any; onBack: (
 
       {isSubmitted && claim.is_current_approver && <ApproverActions onDecide={decide} />}
 
-      {isFinanceStage && (
-        <section className="ep-panel">
-          <div className="ep-panel-head"><div className="ep-panel-title">Overtime Compensation Processing</div></div>
-          <div className="ep-panel-body">
-            {claim.status === "FINANCE_PROCESSING" ? (
-              <>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-                  <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Hourly Rate (M)</div><input className="review-control" type="number" value={hourlyRate} onChange={(e) => setHourlyRate(e.target.value)} /></label>
-                  <label style={{ fontSize: 13 }}>
-                    <div style={{ marginBottom: 4, fontWeight: 600 }}>Cost Centre</div>
-                    {costCentreOptions.length > 0 ? (
-                      <select className="review-control" value={costCentre} onChange={(e) => setCostCentre(e.target.value)}>
-                        <option value="">Select…</option>
-                        {costCentreOptions.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                      </select>
-                    ) : (
-                      <input className="review-control" value={costCentre} onChange={(e) => setCostCentre(e.target.value)} />
-                    )}
-                  </label>
-                  <label style={{ fontSize: 13 }}>
-                    <div style={{ marginBottom: 4, fontWeight: 600 }}>Account / Project</div>
-                    {accountProjectOptions.length > 0 ? (
-                      <select className="review-control" value={accountProject} onChange={(e) => setAccountProject(e.target.value)}>
-                        <option value="">Select…</option>
-                        {accountProjectOptions.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                      </select>
-                    ) : (
-                      <input className="review-control" value={accountProject} onChange={(e) => setAccountProject(e.target.value)} />
-                    )}
-                  </label>
-                  <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Payroll Period</div><input className="review-control" value={payrollPeriod} onChange={(e) => setPayrollPeriod(e.target.value)} /></label>
-                  <label style={{ fontSize: 13 }}><div style={{ marginBottom: 4, fontWeight: 600 }}>Finance Reference</div><input className="review-control" value={financeReference} onChange={(e) => setFinanceReference(e.target.value)} /></label>
-                </div>
-                <label style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
-                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Finance Comments</div>
-                  <textarea className="review-control" style={{ width: "100%", boxSizing: "border-box" }} rows={2} value={financeComments} onChange={(e) => setFinanceComments(e.target.value)} />
-                </label>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <button className="ep-btn-outline" type="button" onClick={() => void returnFromFinance()}>Return for Correction</button>
-                  <button className="ep-btn" type="button" onClick={() => void processFinance()}>Process Claim</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 13, marginBottom: 12 }}>
-                  <div><strong>Cost Centre:</strong> {claim.cost_centre || "—"}</div>
-                  <div><strong>Payroll Period:</strong> {claim.payroll_period || "—"}</div>
-                  <div><strong>Finance Reference:</strong> {claim.finance_reference || "—"}</div>
-                </div>
-                <button className="ep-btn" type="button" onClick={() => void markSettled()}>Mark {claim.compensation_preference === "DAYS" ? "Time Credited" : "Paid"}</button>
-              </>
-            )}
-          </div>
-        </section>
-      )}
-
       {claim.status === "CLOSED" && (
         <section className="ep-panel" style={{ marginBottom: 18 }}>
           <div className="ep-panel-body" style={{ fontSize: 13 }}>
-            <strong>Settled:</strong> {claim.paid_at ? new Date(claim.paid_at).toLocaleString() : "—"}
-            {claim.compensation_preference !== "DAYS" && <> · Amount M {Number(claim.total_amount || 0).toFixed(2)}</>}
+            <strong>Closed:</strong> {claim.closed_at ? new Date(claim.closed_at).toLocaleString() : "—"}
+            {" · "}<strong>Converted Hours:</strong> {claim.converted_hours} ({claim.equivalent_days} days)
+            {claim.total_amount != null && <> · Amount M {Number(claim.total_amount).toFixed(2)}</>}
           </div>
         </section>
       )}
@@ -1126,37 +1009,8 @@ function ApprovalsScreen({
   );
 }
 
-function FinanceQueueScreen({ queue, onOpen }: { queue: any[]; onOpen: (id: string) => void }) {
-  return (
-    <section className="ep-panel">
-      <div className="ep-panel-head"><div className="ep-panel-title">Treasury &amp; Financial Accounting Queue</div></div>
-      <div className="ep-table-wrap">
-        <table className="ep-table">
-          <thead><tr><th>Claim No.</th><th>Employee</th><th>Section</th><th>Converted Hours</th><th>Preference</th><th>Amount</th><th>Status</th></tr></thead>
-          <tbody>
-            {queue.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--muted)" }}>Nothing in the Finance queue.</td></tr>}
-            {queue.map((c) => (
-              <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpen(c.id)}>
-                <td>{c.claim_no}</td>
-                <td>{c.employee_name}</td>
-                <td>{c.team_name || "—"}</td>
-                <td>{c.converted_hours}</td>
-                <td>{c.compensation_preference || "—"}</td>
-                <td>{c.total_amount != null ? `M ${Number(c.total_amount).toFixed(2)}` : "—"}</td>
-                <td><StatusBadge status={c.status} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Reports — Overtime Allowance Report + (ADMIN) rate/holiday configuration.
-// Reuses Standby's FinanceCodesPanel / FinanceSectionsPanel since Finance
-// authority and the cost-centre/account list are shared between modules.
+// Reports — Overtime Hours Report + (ADMIN) rate/holiday configuration.
 // ---------------------------------------------------------------------------
 
 function OvertimeRateSettingsPanel() {
@@ -1164,7 +1018,7 @@ function OvertimeRateSettingsPanel() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.overtimeSettings().then(setSettings).catch(() => setSettings({ rate_weekday_pct: 125, rate_saturday_pct: 150, rate_sunday_holiday_pct: 200, working_hours_per_day: 8 }));
+    api.overtimeSettings().then(setSettings).catch(() => setSettings({ rate_weekday_pct: 125, rate_saturday_pct: 150, rate_sunday_holiday_pct: 200, working_hours_per_day: 8, claim_window_before_days: 0, claim_window_after_days: 0 }));
   }, []);
 
   async function save() {
@@ -1197,10 +1051,18 @@ function OvertimeRateSettingsPanel() {
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>Working Hours / Day
           <input type="number" min={1} max={24} value={settings.working_hours_per_day} onChange={(e) => setSettings({ ...settings, working_hours_per_day: Number(e.target.value) })} style={{ width: 120 }} />
         </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>Window opens N days before month-end
+          <input type="number" min={0} max={31} value={settings.claim_window_before_days} onChange={(e) => setSettings({ ...settings, claim_window_before_days: Number(e.target.value) })} style={{ width: 120 }} />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>...and stays open N days into next month
+          <input type="number" min={0} max={31} value={settings.claim_window_after_days} onChange={(e) => setSettings({ ...settings, claim_window_after_days: Number(e.target.value) })} style={{ width: 120 }} />
+        </label>
         <button className="button button-primary" type="button" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save Settings"}</button>
       </div>
       <p style={{ fontSize: 12, color: "var(--muted)", padding: "0 16px 12px" }}>
         Drives the 125%/150%/200% rate classification and the Equivalent Days shown on Standby and Overtime claims. Never hardcoded — every overtime line is reclassified against these settings and the Public Holiday calendar at submit time.
+        <br />
+        A month's claim window is computed from the two window fields automatically — e.g. 2 and 0 means "only the last 2 days of the month"; 0 and 5 means "the first 5 days of the following month"; 2 and 3 means both combined. No month needs to be opened manually.
       </p>
     </section>
   );
@@ -1426,79 +1288,9 @@ function PublicHolidaysPanel() {
   );
 }
 
-function ClaimPeriodsPanel() {
-  const [periods, setPeriods] = useState<any[]>([]);
-  const [year, setYear] = useState(new Date().getFullYear());
-  const [month, setMonth] = useState(new Date().getMonth() + 1);
-  const [saving, setSaving] = useState(false);
-
-  async function load() {
-    setPeriods(await api.overtimeClaimPeriods().catch(() => []));
-  }
-  useEffect(() => { void load(); }, []);
-
-  async function open() {
-    setSaving(true);
-    try {
-      await api.openOvertimeClaimPeriod(year, month);
-      await load();
-    } catch (e: any) {
-      void Swal.fire({ icon: "error", title: "Could not open period", text: e.message });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function close(id: string) {
-    const confirm = await Swal.fire({ title: "Close this claim period?", text: "Employees will no longer be able to submit claims for this month.", icon: "warning", showCancelButton: true, confirmButtonText: "Close Period" });
-    if (!confirm.isConfirmed) return;
-    await api.closeOvertimeClaimPeriod(id);
-    await load();
-  }
-
-  return (
-    <section className="ep-panel">
-      <div className="ep-panel-head"><div className="ep-panel-title">Claim Periods</div></div>
-      <div className="ep-panel-body">
-        <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 0 }}>A month must be opened here before employees can submit an Overtime Claim for it. Admin and Finance manage this.</p>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <label style={{ fontSize: 12 }}>
-            <div style={{ marginBottom: 4, fontWeight: 600 }}>Year</div>
-            <input type="number" className="review-control" style={{ width: 100 }} value={year} onChange={(e) => setYear(Number(e.target.value))} />
-          </label>
-          <label style={{ fontSize: 12 }}>
-            <div style={{ marginBottom: 4, fontWeight: 600 }}>Month</div>
-            <select className="review-control" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
-              {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-            </select>
-          </label>
-          <button className="button button-primary" type="button" disabled={saving} onClick={() => void open()}>Open Period</button>
-        </div>
-        <div className="ep-table-wrap">
-          <table className="ep-table">
-            <thead><tr><th>Period</th><th>Status</th><th>Opened By</th><th>Closed By</th><th></th></tr></thead>
-            <tbody>
-              {periods.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>No claim periods yet.</td></tr>}
-              {periods.map((p) => (
-                <tr key={p.id}>
-                  <td>{monthLabel(p.year, p.month)}</td>
-                  <td><span className={`status-pill ${p.status === "OPEN" ? "status-pill-success" : "status-pill-danger"}`}>{p.status}</span></td>
-                  <td>{p.opened_by_name || "—"}</td>
-                  <td>{p.closed_by_name || "—"}</td>
-                  <td>{p.status === "OPEN" && <button className="button small-button button-subtle" type="button" onClick={() => void close(p.id)}>Close</button>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ReportsScreen({ role, isFinance }: { role: string; isFinance: boolean }) {
+function ReportsScreen({ role, isFinance, isHr }: { role: string; isFinance: boolean; isHr: boolean }) {
   const [summary, setSummary] = useState<any>(null);
-  const canManage = role === "ADMIN" || isFinance;
+  const canManage = role === "ADMIN" || isFinance || isHr;
 
   useEffect(() => {
     api.overtimeReportsSummary().then(setSummary).catch(() => setSummary({ by_status: [], by_preference: [], by_rate_category: { hours_125: 0, hours_150: 0, hours_200: 0 }, allowance_rows: [] }));
@@ -1508,18 +1300,8 @@ function ReportsScreen({ role, isFinance }: { role: string; isFinance: boolean }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {canManage && <ClaimPeriodsPanel />}
       {canManage && <PublicHolidaysPanel />}
-      {role === "ADMIN" && (
-        <>
-          <OvertimeRateSettingsPanel />
-          <FinanceSectionsPanel />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-            <FinanceCodesPanel kind="COST_CENTRE" title="Cost Centres" />
-            <FinanceCodesPanel kind="ACCOUNT_PROJECT" title="Accounts / Projects" />
-          </div>
-        </>
-      )}
+      {(role === "ADMIN" || isHr) && <OvertimeRateSettingsPanel />}
 
       <div className="ep-kpi-row ep-kpi-row-3">
         <div className="ep-kpi ep-kpi-indigo"><Clock3 size={20} className="ep-kpi-icon" aria-hidden /><div><div className="ep-kpi-value">{Number(summary.by_rate_category.hours_125 || 0).toFixed(1)}</div><div className="ep-kpi-label">125% Hours</div></div></div>
@@ -1541,19 +1323,17 @@ function ReportsScreen({ role, isFinance }: { role: string; isFinance: boolean }
 
       <section className="ep-panel">
         <div className="ep-panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div className="ep-panel-title">Overtime Allowance Report</div>
+          <div className="ep-panel-title">Overtime Hours Report</div>
         </div>
         <div className="ep-table-wrap">
           <table className="ep-table">
-            <thead><tr><th>Claim No.</th><th>Employee</th><th>E/N</th><th>Job Title</th><th>Num of Hours</th><th>Converted Hours</th><th>Total Amount</th><th>Compensation Type</th><th>Status</th></tr></thead>
+            <thead><tr><th>Claim No.</th><th>Employee</th><th>E/N</th><th>Job Title</th><th>Num of Hours</th><th>Converted Hours</th><th>Status</th></tr></thead>
             <tbody>
-              {summary.allowance_rows.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)" }}>No claims yet.</td></tr>}
+              {summary.allowance_rows.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--muted)" }}>No claims yet.</td></tr>}
               {summary.allowance_rows.map((r: any) => (
                 <tr key={r.claim_no}>
                   <td>{r.claim_no}</td><td>{r.employee_name}</td><td>{r.employee_no}</td><td>{r.job_title || "—"}</td>
                   <td>{r.total_overtime}</td><td>{r.converted_hours}</td>
-                  <td>{r.total_amount != null ? `M ${Number(r.total_amount).toFixed(2)}` : "—"}</td>
-                  <td>{r.compensation_preference || "—"}</td>
                   <td><StatusBadge status={r.status} /></td>
                 </tr>
               ))}

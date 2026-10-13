@@ -224,7 +224,11 @@ export async function advanceClaimWorkflowStep(args: {
     const actedAt = new Date().toISOString();
     const newChain = chain.map((s, i) => (i === actedIdx ? { ...s, approved: true, approved_at: actedAt } : s));
 
-    const stillPending = group.indices.some((idx) => !newChain[idx].approved);
+    // DEPT_REPORTS ("View") never blocks the chain - a read-only FYI step
+    // (see inbox.routes.ts's loadClaimsForUser), not a decision anyone needs
+    // to make. It just stays unapproved forever, same treatment as
+    // DEPT_ACCOMODATION gets in advances.service.ts's own advanceWorkflowStep.
+    const stillPending = group.indices.some((idx) => chain[idx].action_type !== "DEPT_REPORTS" && !newChain[idx].approved);
     let nextStatus: ClaimStatus;
     let newStepOrder: number;
     let hasMore: boolean;

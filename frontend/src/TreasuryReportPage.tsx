@@ -30,6 +30,18 @@ export default function TreasuryReportPage(props: {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [exporting, setExporting] = useState(false);
+  const [divisions, setDivisions] = useState<string[]>([]);
+  const [departments, setDepartments] = useState<string[]>([]);
+
+  // Free-text Division/Department filters let a typo (or a name that
+  // doesn't match the real org structure string exactly) silently return
+  // zero rows with no indication why - real dropdowns, sourced from the
+  // same org data every other admin screen uses, make every option always
+  // a name that can actually match.
+  useEffect(() => {
+    api.divisions().then((rows: any[]) => setDivisions(rows.map((d) => d.name))).catch(() => {});
+    api.departments().then((rows: string[]) => setDepartments(rows)).catch(() => {});
+  }, []);
 
   function load() {
     setLoading(true);
@@ -86,11 +98,17 @@ export default function TreasuryReportPage(props: {
           </div>
           <div className="treasury-filter-field">
             <label>Division</label>
-            <input className="ep-form-input" placeholder="Any division" value={filters.division || ""} onChange={(e) => setFilters((f) => ({ ...f, division: e.target.value }))} />
+            <select className="ep-select" value={filters.division || ""} onChange={(e) => setFilters((f) => ({ ...f, division: e.target.value }))}>
+              <option value="">Any division</option>
+              {divisions.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
           </div>
           <div className="treasury-filter-field">
             <label>Department</label>
-            <input className="ep-form-input" placeholder="Any department" value={filters.department || ""} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))} />
+            <select className="ep-select" value={filters.department || ""} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))}>
+              <option value="">Any department</option>
+              {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
           </div>
           <div className="treasury-filter-field">
             <label>Outcome</label>

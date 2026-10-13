@@ -4,7 +4,7 @@ import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { notifyBrsSectionAssigned, notifyCustomRequestStep } from "../../lib/notifications.js";
-import { checkConsistencyGate, nextBrsReferenceNo } from "./brs.service.js";
+import { checkConsistencyGate, nextBrsReferenceNo, reopenBrsDocumentForEditing } from "./brs.service.js";
 import { renderBrsPdf } from "../../lib/pdf/brsDocumentPdfRenderer.js";
 import type { PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 
@@ -135,9 +135,10 @@ brsRouter.post("/", async (req: AuthedRequest, res, next) => {
 brsRouter.get("/mine", async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query(
-      `SELECT d.*, bt.name AS brs_type_name
+      `SELECT d.*, bt.name AS brs_type_name, u.full_name AS requester_name
          FROM brs_documents d
          JOIN brs_types bt ON bt.id = d.brs_type_id
+         JOIN users u ON u.id = d.requester_id
         WHERE d.requester_id = $1
         ORDER BY d.created_at DESC`,
       [req.user!.userId]
@@ -153,9 +154,10 @@ brsRouter.get("/mine", async (req: AuthedRequest, res, next) => {
 brsRouter.get("/assigned-to-me", async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query(
-      `SELECT DISTINCT d.*, bt.name AS brs_type_name
+      `SELECT DISTINCT d.*, bt.name AS brs_type_name, u.full_name AS requester_name
          FROM brs_documents d
          JOIN brs_types bt ON bt.id = d.brs_type_id
+         JOIN users u ON u.id = d.requester_id
          JOIN brs_document_sections s ON s.document_id = d.id
          JOIN brs_document_section_assignees a ON a.section_id = s.id
         WHERE a.user_id = $1 OR (a.section_ref_id IS NOT NULL AND a.section_ref_id = $2)
@@ -199,6 +201,29 @@ brsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       })),
       gate
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// DELETE /brs/:id — only the requester (or ADMIN) may delete, and only
+// while still in Draft: once it's reached Department Input a contributor may
+// already be relying on it, and once routed for Approval or baselined it has
+// real approval history that must never just vanish - "Reopen for editing"
+// (back to Draft) plus this delete covers every legitimate cleanup case
+// without ever discarding a decision that was actually made. Cascades
+// through sections/assignees/versions via the FKs' own ON DELETE CASCADE.
+brsRouter.delete("/:id", async (req: AuthedRequest, res, next) => {
+  try {
+    const doc = await loadDocumentOr404(req.params.id);
+    if (req.user!.role !== "ADMIN" && doc.requester_id !== req.user!.userId) {
+      throw forbidden("Only the requester can delete this BRS");
+    }
+    if (doc.phase !== "DRAFT") {
+      throw badRequest("Only a BRS still in Draft can be deleted - reopen it for editing first if it's past that.");
+    }
+    await query(`DELETE FROM brs_documents WHERE id = $1`, [doc.id]);
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }
@@ -431,6 +456,30 @@ brsRouter.post("/:id/advance-phase", async (req: AuthedRequest, res, next) => {
   }
 });
 
+// POST /brs/:id/reopen — the requester decides, on their own initiative, to
+// go back and fix content or the approval chain rather than waiting for an
+// approver to reject it. Only makes sense past Draft, and a Baselined
+// document is final (a Change Request is the real path to amend it).
+// Discards any approval routing in flight - every approval already given
+// is cleared along with it, matching the same reset a rejection triggers.
+const ReopenSchema = z.object({ comment: z.string().trim().max(2000).optional() });
+brsRouter.post("/:id/reopen", async (req: AuthedRequest, res, next) => {
+  try {
+    const doc = await loadDocumentOr404(req.params.id);
+    if (req.user!.role !== "ADMIN" && doc.requester_id !== req.user!.userId) {
+      throw forbidden("Only the requester can reopen this BRS");
+    }
+    if (doc.phase === "DRAFT") throw badRequest("This BRS is already open for editing");
+    if (doc.phase === "BASELINE") throw badRequest("A baselined BRS can't be reopened this way - raise a Change Request instead");
+    const parsed = ReopenSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    await reopenBrsDocumentForEditing(doc.id, parsed.data.comment ?? null, req.user!.fullName ?? null);
+    return res.json({ ok: true, phase: "DRAFT" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // GET /brs/:id/gate-check — read-only, also used internally by route-approval.
 brsRouter.get("/:id/gate-check", async (req: AuthedRequest, res, next) => {
   try {
@@ -564,13 +613,50 @@ brsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
       `SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`
     ))[0] || { logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null };
 
+    // Every department that actually contributed a Department Input section -
+    // a direct department assignment (section_ref_id) or a person assignment
+    // resolved to their own department, deduplicated. Distinct from the
+    // single "Requesting Department" captured at Intake.
+    const departmentRows = await query<{ department: string | null }>(
+      `SELECT DISTINCT COALESCE(sec.name, usec.name) AS department
+         FROM brs_document_section_assignees a
+         JOIN brs_document_sections s ON s.id = a.section_id
+         LEFT JOIN sections sec ON sec.id = a.section_ref_id
+         LEFT JOIN users u ON u.id = a.user_id
+         LEFT JOIN sections usec ON usec.id = u.section_id
+        WHERE s.document_id = $1`,
+      [doc.id]
+    );
+    const departmentsIncluded = departmentRows.map((r) => r.department).filter((d): d is string => Boolean(d)).sort();
+
+    // The approval chain, once this BRS has actually been routed - not
+    // reflected until then, same as the Approval Routing panel in BRS Studio.
+    let approvers: Array<{ position_name: string | null; approver_name: string | null; status: string | null; acted_at: string | null }> = [];
+    if (doc.brs_approval_submission_id) {
+      const submission = (await query<{ approval_chain: any }>(
+        `SELECT approval_chain FROM custom_request_submissions WHERE id = $1`, [doc.brs_approval_submission_id]
+      ))[0];
+      approvers = (submission?.approval_chain || []).map((step: any) => ({
+        position_name: step.position_name ?? null,
+        approver_name: step.approver_name ?? null,
+        status: step.status ?? null,
+        acted_at: step.acted_at ?? null
+      }));
+    }
+
     const pdfDoc = renderBrsPdf(letterhead, {
       title: doc.title,
       reference_no: doc.reference_no,
       requester_name: requester?.full_name ?? null,
       phase: doc.phase,
       baselined_at: baselinedAt,
-      sections
+      sections,
+      brs_type_name: doc.brs_type_name ?? null,
+      department: doc.intake_data?.department ?? null,
+      product_owner: doc.intake_data?.product_owner ?? null,
+      target_quarter: doc.intake_data?.target_quarter ?? null,
+      departments_included: departmentsIncluded,
+      approvers
     });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="brs-${doc.reference_no || doc.id}.pdf"`);

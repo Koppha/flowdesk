@@ -38,16 +38,30 @@ export function ClaimTrackingTimeline({
   finalStageLabel = "Paid / Closed",
   finalAmount,
   showFinanceStages = true,
-  approvedLabel
+  approvedLabel,
+  awaitingTreasuryLabel,
+  closedLabel,
+  closedDetail
 }: {
   claim: any;
   financeStageLabel?: string;
   finalStageLabel?: string;
   finalAmount?: (claim: any) => string | undefined;
   // false for a pre-claim Request (e.g. Overtime's request stage) whose
-  // pipeline ends at Approved/Rejected — it never goes to Finance/Payment.
+  // pipeline ends at Approved/Rejected — it never goes to Finance/Payment —
+  // and also for Overtime/Standby claims now that neither has a Finance
+  // stage: they go straight from the last approval to AWAITING_TREASURY,
+  // then CLOSED once Treasury closes it.
   showFinanceStages?: boolean;
   approvedLabel?: string;
+  // Shown when the claim has reached AWAITING_TREASURY — "done" once it's
+  // actually CLOSED, "current" while still awaiting Treasury.
+  awaitingTreasuryLabel?: string;
+  // Shown instead of the Finance/Paid stages when showFinanceStages is false
+  // and the claim has reached CLOSED — e.g. "Claim Closed" with the
+  // converted/compensable hours as the detail line.
+  closedLabel?: string;
+  closedDetail?: (claim: any) => string | undefined;
 }) {
   const stages: TimelineStage[] = [];
 
@@ -83,8 +97,27 @@ export function ClaimTrackingTimeline({
   }
 
   if (!showFinanceStages) {
-    // No-op — pipeline ends at the approval steps above (plus the approved
-    // marker just added), e.g. an Overtime Request's tracking.
+    // Pipeline ends at the approval steps above (plus the approved marker
+    // just added), e.g. an Overtime Request's tracking — unless the caller
+    // also wants an "awaiting Treasury" / "closed" stage once the claim
+    // itself has finished its approval route.
+    if (awaitingTreasuryLabel && ["AWAITING_TREASURY", "CLOSED"].includes(claim.status)) {
+      stages.push({
+        key: "awaiting-treasury",
+        label: awaitingTreasuryLabel,
+        state: claim.status === "CLOSED" ? "done" : "current",
+        timestamp: claim.status === "CLOSED" ? undefined : claim.updated_at
+      });
+    }
+    if (closedLabel && claim.status === "CLOSED") {
+      stages.push({
+        key: "closed",
+        label: closedLabel,
+        state: "done",
+        timestamp: claim.closed_at,
+        detail: closedDetail ? closedDetail(claim) : undefined
+      });
+    }
   } else if (claim.status === "REJECTED") {
     // Terminal — nothing further in the pipeline runs.
   } else if (claim.submitted_at || ["FINANCE_PROCESSING", "PAYMENT_PENDING", "CLOSED"].includes(claim.status)) {

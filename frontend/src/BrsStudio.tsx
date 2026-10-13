@@ -1,11 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Swal from "sweetalert2";
 import { api, openBlobInNewTab } from "./api";
-import { showNotice } from "./alerts";
+import { showNotice, confirmAction } from "./alerts";
 import { RichTextField } from "./shared/RichTextField";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
-import { ArrowLeft, ClipboardList, Download, FileText, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, MoreVertical, Pencil, Plus, Send, Trash2 } from "lucide-react";
+// Generic filter-bar/empty-state/page-header pieces built for the Finance
+// queue redesign - nothing about their implementation is Finance-specific,
+// so BRS Studio's landing page reuses them too rather than duplicating them.
+import { FinancePageHeader, FinanceFilterBar, FilterField, SearchField, SelectField, FinanceEmptyState } from "./components/FinanceQueueKit";
 
-type BrsStudioProps = { profile: any; onBack: () => void };
+type BrsStudioProps = {
+  profile: any;
+  onBack: () => void;
+  // Jumps straight to Custom Processes with "Change Request" pre-selected
+  // and its "Related BRS" field pre-filled with this document's reference —
+  // no more copy-to-clipboard-then-go-paste-it-yourself round trip.
+  onCreateChangeRequest?: (doc: { id: string; reference_no: string }) => void;
+};
 
 const STAGES = [
   { key: "INTAKE", label: "Intake" },
@@ -24,6 +36,13 @@ function phaseIndex(phase: string) {
 function phaseBadge(phase: string) {
   const slug = phase.toLowerCase().replace(/_/g, "-");
   return <span className={`custom-status-badge custom-status-${slug}`}>{phase.replace(/_/g, " ")}</span>;
+}
+
+function fmtDateTime(s: string | null | undefined) {
+  if (!s) return "—";
+  const d = new Date(s);
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) +
+    " " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
 function Stepper({ phase, viewing, onSelect }: { phase: string; viewing: number; onSelect: (i: number) => void }) {
@@ -53,12 +72,20 @@ function Stepper({ phase, viewing, onSelect }: { phase: string; viewing: number;
 
 type ChainDraft = { approver_id: string; position_name: string; decision_type: "APPROVE" | "NOTE" };
 
-export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
+export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: BrsStudioProps) {
   const [view, setView] = useState<"landing" | "workspace">("landing");
   const [landingTab, setLandingTab] = useState<"MINE" | "ASSIGNED">("MINE");
   const [mine, setMine] = useState<any[]>([]);
   const [assigned, setAssigned] = useState<any[]>([]);
   const [loadingList, setLoadingList] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [landingDeptFilter, setLandingDeptFilter] = useState("ALL");
+  const [createdByFilter, setCreatedByFilter] = useState("ALL");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   // The single BRS structure everyone opens a new document against — there's
   // no "types" concept exposed to the user, so this is fetched once (and
   // auto-created server-side the first time anyone asks) rather than shown
@@ -79,6 +106,7 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
   const [docLoading, setDocLoading] = useState(false);
   const [docError, setDocError] = useState<string | null>(null);
   const [approvalSubmission, setApprovalSubmission] = useState<any>(null);
+  const [sendingReminder, setSendingReminder] = useState(false);
   // Which stepper step's content is currently on screen — defaults to the
   // document's real, live phase. Clicking an earlier, already-completed step
   // switches this to a read-only recap of that stage without touching the
@@ -101,6 +129,64 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
   const [assignPicker, setAssignPicker] = useState<{ sectionId: string; mode: "person" | "section"; value: string } | null>(null);
   const [chain, setChain] = useState<ChainDraft[]>([{ approver_id: "", position_name: "", decision_type: "APPROVE" }]);
   const [routing, setRouting] = useState(false);
+
+  // Landing-page KPI/filter/table data - computed unconditionally (hooks
+  // can't sit after the "landing" vs "workspace" early return below), even
+  // though only the landing view ever reads them; cheap over these lists.
+  const rows = landingTab === "MINE" ? mine : assigned;
+
+  const kpiCounts = useMemo(() => {
+    const counts = { total: rows.length, draft: 0, deptInput: 0, inApproval: 0, baseline: 0 };
+    for (const d of rows) {
+      if (d.phase === "DRAFT") counts.draft++;
+      else if (d.phase === "DEPT_INPUT") counts.deptInput++;
+      else if (d.phase === "APPROVAL" || d.phase === "GATE") counts.inApproval++;
+      else if (d.phase === "BASELINE") counts.baseline++;
+    }
+    return counts;
+  }, [rows]);
+
+  const landingDeptOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of rows) { const dep = d.intake_data?.department; if (dep) set.add(dep); }
+    return [{ value: "ALL", label: "All Departments" }, ...Array.from(set).sort().map((d) => ({ value: d, label: d }))];
+  }, [rows]);
+
+  const createdByOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of rows) { if (d.requester_name) set.add(d.requester_name); }
+    return [{ value: "ALL", label: "All Users" }, ...Array.from(set).sort().map((n) => ({ value: n, label: n }))];
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((d: any) => {
+      if (statusFilter !== "ALL" && d.phase !== statusFilter) return false;
+      if (landingDeptFilter !== "ALL" && (d.intake_data?.department || "") !== landingDeptFilter) return false;
+      if (createdByFilter !== "ALL" && (d.requester_name || "") !== createdByFilter) return false;
+      if (dateFrom && (!d.created_at || d.created_at < dateFrom)) return false;
+      if (dateTo && (!d.created_at || d.created_at > dateTo)) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        return (
+          (d.title || "").toLowerCase().includes(q) ||
+          (d.reference_no || "").toLowerCase().includes(q) ||
+          (d.intake_data?.department || "").toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [rows, statusFilter, landingDeptFilter, createdByFilter, dateFrom, dateTo, search]);
+
+  const landingTotalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const landingCurrentPage = Math.min(page, landingTotalPages);
+  const pagedRows = filteredRows.slice((landingCurrentPage - 1) * pageSize, landingCurrentPage * pageSize);
+  const landingShowReset = Boolean(search || statusFilter !== "ALL" || landingDeptFilter !== "ALL" || createdByFilter !== "ALL" || dateFrom || dateTo);
+  function landingResetFilters() {
+    setSearch(""); setStatusFilter("ALL"); setLandingDeptFilter("ALL"); setCreatedByFilter("ALL");
+    setDateFrom(""); setDateTo(""); setPage(1);
+  }
+
+  useEffect(() => { setPage(1); }, [landingTab]);
 
   useEffect(() => {
     api.companyDirectory().then((rows: any) => setCompanyDirectory(Array.isArray(rows) ? rows : [])).catch(() => setCompanyDirectory([]));
@@ -128,6 +214,25 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
     Promise.all([api.myBrs().catch(() => []), api.assignedToMeBrs().catch(() => [])])
       .then(([m, a]) => { setMine(Array.isArray(m) ? m : []); setAssigned(Array.isArray(a) ? a : []); })
       .finally(() => setLoadingList(false));
+  }
+
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  async function handleDeleteBrs(d: any) {
+    const ok = await confirmAction({
+      title: `Delete "${d.title}"?`,
+      text: "This permanently deletes this draft BRS and everything in it. This can't be undone.",
+      confirmButtonText: "Delete"
+    });
+    if (!ok) return;
+    setDeletingId(d.id);
+    try {
+      await api.deleteBrs(d.id);
+      loadLanding();
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to delete this BRS.");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   useEffect(() => {
@@ -256,6 +361,51 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
     }
   }
 
+  // Requester-initiated "go back and actually fix it" - as opposed to
+  // viewingIndex, which only ever changes what's on screen. This discards
+  // any approval routing in flight and clears every approval already given,
+  // so it's confirmed up front.
+  async function reopenDoc() {
+    if (!doc) return;
+    const result = await Swal.fire({
+      icon: "warning",
+      title: "Reopen this BRS for editing?",
+      html: doc.phase === "APPROVAL" || doc.brs_approval_submission_id
+        ? "This will withdraw the approval routing in progress and discard any approvals already given. The BRS goes back to Draft and will need to be routed again once you're done."
+        : "This will move the BRS back to Draft so you can fix its content.",
+      input: "text",
+      inputPlaceholder: "What are you fixing? (optional)",
+      showCancelButton: true,
+      confirmButtonText: "Reopen for editing",
+      confirmButtonColor: "#c22b3f"
+    });
+    if (!result.isConfirmed) return;
+    try {
+      await api.reopenBrs(doc.id, result.value || undefined);
+      setViewingIndex(null);
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to reopen this BRS");
+    }
+  }
+
+  // Manual nudge for whoever is holding up the current approval step - the
+  // same generic reminder used by Change Requests, since BRS Approval rides
+  // the same custom-requests engine (see submitRouteApproval's insert into
+  // custom_request_submissions).
+  async function sendReminder() {
+    if (!approvalSubmission?.id) return;
+    setSendingReminder(true);
+    try {
+      const result = await api.remindCustomRequest(approvalSubmission.id);
+      void showNotice(`Reminder sent to ${result.approver_name || "the current approver"}.`);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to send reminder");
+    } finally {
+      setSendingReminder(false);
+    }
+  }
+
   async function saveIntake() {
     if (!doc) return;
     setSavingIntake(true);
@@ -304,24 +454,19 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
 
   // ── Landing ────────────────────────────────────────────────────────────────
   if (view === "landing") {
-    const rows = landingTab === "MINE" ? mine : assigned;
     return (
       <div className="custom-requests-page">
-        <div className="custom-requests-header">
-          <div>
-            <div className="custom-requests-title-row">
-              <span className="custom-requests-title-icon"><FileText size={18} /></span>
-              <h2>BRS Studio</h2>
-            </div>
-            <p className="custom-requests-subtitle">
-              Business Requirement Specifications — draft, route for department input, and baseline before approval.
-            </p>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="ep-btn" onClick={() => setShowNewForm((v) => !v)}><Plus size={14} /> New BRS</button>
-            <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
-          </div>
-        </div>
+        <FinancePageHeader
+          icon={FileText}
+          title="BRS Studio"
+          subtitle="Business Requirement Specifications — draft, route for department input, and baseline before approval."
+          actions={
+            <>
+              <button className="ep-btn" onClick={() => setShowNewForm((v) => !v)}><Plus size={14} /> New BRS</button>
+              <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
+            </>
+          }
+        />
 
         {showNewForm && (
           <div className="ep-panel" style={{ marginBottom: 16 }}>
@@ -390,28 +535,123 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
           </div>
         )}
 
+        <div className="brs-kpi-row">
+          <div className="brs-kpi">
+            <span className="brs-kpi-icon" style={{ background: "var(--primary-soft)", color: "var(--primary)" }}><FileText size={20} /></span>
+            <div><div className="brs-kpi-value">{kpiCounts.total}</div><div className="brs-kpi-label">Total BRS</div><div className="brs-kpi-sub">All records</div></div>
+          </div>
+          <div className="brs-kpi">
+            <span className="brs-kpi-icon" style={{ background: "var(--primary-soft)", color: "var(--primary)" }}><Pencil size={20} /></span>
+            <div><div className="brs-kpi-value">{kpiCounts.draft}</div><div className="brs-kpi-label">Draft</div><div className="brs-kpi-sub">In progress</div></div>
+          </div>
+          <div className="brs-kpi brs-kpi-tint-amber">
+            <span className="brs-kpi-icon" style={{ background: "rgba(255,255,255,0.55)", color: "#92400e" }}><Send size={20} /></span>
+            <div><div className="brs-kpi-value">{kpiCounts.deptInput}</div><div className="brs-kpi-label">Department Input</div><div className="brs-kpi-sub">Awaiting input</div></div>
+          </div>
+          <div className="brs-kpi">
+            <span className="brs-kpi-icon" style={{ background: "var(--primary-soft)", color: "var(--primary)" }}><Clock size={20} /></span>
+            <div><div className="brs-kpi-value">{kpiCounts.inApproval}</div><div className="brs-kpi-label">In Approval</div><div className="brs-kpi-sub">Under review</div></div>
+          </div>
+          <div className="brs-kpi brs-kpi-tint-green">
+            <span className="brs-kpi-icon" style={{ background: "rgba(255,255,255,0.55)", color: "#065f46" }}><CheckCircle2 size={20} /></span>
+            <div><div className="brs-kpi-value">{kpiCounts.baseline}</div><div className="brs-kpi-label">Baseline</div><div className="brs-kpi-sub">Approved</div></div>
+          </div>
+        </div>
+
         <div className="ep-tabs custom-request-tabs">
           <a href="#" className={`ep-tab ${landingTab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("MINE"); }}>My BRS</a>
           <a href="#" className={`ep-tab ${landingTab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("ASSIGNED"); }}>Assigned to Me</a>
         </div>
 
-        {loadingList ? (
-          <div className="ep-loading"><p>Loading…</p></div>
-        ) : !rows.length ? (
-          <div className="ep-empty"><p>{landingTab === "MINE" ? "You haven't opened a BRS yet." : "No BRS sections have been assigned to you yet."}</p></div>
-        ) : (
-          <div>
-            {rows.map((d: any) => (
-              <div key={d.id} className="brs-landing-row" onClick={() => openDoc(d.id)}>
-                <div>
-                  <div className="brs-landing-row-title">{d.title}</div>
-                  <div className="brs-landing-row-meta">{d.reference_no}</div>
-                </div>
-                {phaseBadge(d.phase)}
-              </div>
-            ))}
+        <FinanceFilterBar showReset={landingShowReset} onReset={landingResetFilters} onApply={() => setPage(1)}>
+          <SearchField label="Search" placeholder="Search by BRS title, number or department…" value={search} onChange={(v) => { setSearch(v); setPage(1); }} />
+          <SelectField
+            label="Status" value={statusFilter} onChange={(v) => { setStatusFilter(v); setPage(1); }}
+            options={[{ value: "ALL", label: "All Statuses" }, ...STAGES.map((s) => ({ value: s.key, label: s.label }))]}
+          />
+          <SelectField label="Department" value={landingDeptFilter} onChange={(v) => { setLandingDeptFilter(v); setPage(1); }} options={landingDeptOptions} />
+          <SelectField label="Created By" value={createdByFilter} onChange={(v) => { setCreatedByFilter(v); setPage(1); }} options={createdByOptions} />
+          <FilterField label="From Date">
+            <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
+          </FilterField>
+          <FilterField label="To Date">
+            <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
+          </FilterField>
+        </FinanceFilterBar>
+
+        <div className="ep-panel">
+          <div className="ep-table-wrap">
+            {loadingList ? (
+              <div className="ep-loading"><p>Loading…</p></div>
+            ) : !filteredRows.length ? (
+              <FinanceEmptyState
+                icon={FileText}
+                title={rows.length ? "No BRS match your filters." : landingTab === "MINE" ? "You haven't opened a BRS yet." : "No BRS sections have been assigned to you yet."}
+                hint={rows.length ? "Try adjusting your search criteria or filters." : undefined}
+              />
+            ) : (
+              <table className="ep-table">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>BRS No.</th>
+                    <th>Department</th>
+                    <th>Created By</th>
+                    <th>Last Updated</th>
+                    <th>Status</th>
+                    <th style={{ width: 80 }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedRows.map((d: any) => (
+                    <tr key={d.id} style={{ cursor: "pointer" }} onClick={() => openDoc(d.id)}>
+                      <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{d.title}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.reference_no}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.intake_data?.department || "—"}</td>
+                      <td style={{ fontSize: 13 }}>{d.requester_name || "—"}</td>
+                      <td style={{ fontSize: 13 }}>{fmtDateTime(d.updated_at)}</td>
+                      <td>{phaseBadge(d.phase)}</td>
+                      <td style={{ display: "flex", gap: 4 }}>
+                        <button className="ep-icon-btn" aria-label="Open BRS" onClick={(e) => { e.stopPropagation(); openDoc(d.id); }}>
+                          <MoreVertical size={16} />
+                        </button>
+                        {landingTab === "MINE" && d.phase === "DRAFT" && (
+                          <button
+                            className="ep-icon-btn"
+                            aria-label="Delete BRS"
+                            title="Delete this draft"
+                            disabled={deletingId === d.id}
+                            onClick={(e) => { e.stopPropagation(); void handleDeleteBrs(d); }}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
+
+          {filteredRows.length > 0 && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderTop: "1px solid var(--border)", flexWrap: "wrap", gap: 10 }}>
+              <span style={{ fontSize: 13, color: "var(--muted)" }}>
+                Showing {(landingCurrentPage - 1) * pageSize + 1} to {Math.min(landingCurrentPage * pageSize, filteredRows.length)} of {filteredRows.length} entries
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <select className="ep-form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+                  {[10, 25, 50].map((n) => <option key={n} value={n}>{n} per page</option>)}
+                </select>
+                <button className="ep-btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={landingCurrentPage === 1}><ChevronLeft size={14} /></button>
+                {Array.from({ length: landingTotalPages }, (_, i) => i + 1).slice(0, 7).map((n) => (
+                  <button key={n} className={`button small-button ${landingCurrentPage === n ? "button-primary" : "button-subtle"}`} onClick={() => setPage(n)}>{n}</button>
+                ))}
+                <button className="ep-btn-outline" onClick={() => setPage((p) => Math.min(landingTotalPages, p + 1))} disabled={landingCurrentPage === landingTotalPages}><ChevronRight size={14} /></button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -453,9 +693,16 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
                 {!isLive && (
                   <div className="brs-notify-banner" style={{ background: "var(--surface-soft)", color: "var(--muted)" }}>
                     Viewing {STAGES[activeIdx].label} (read-only) — this BRS is actually at {STAGES[currentIdx].label}.
-                    <button className="ep-btn-outline" style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }} onClick={() => setViewingIndex(null)}>
-                      ← Back to current stage
-                    </button>
+                    <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                      {isRequester && doc.phase !== "BASELINE" && (
+                        <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => void reopenDoc()}>
+                          Reopen for editing
+                        </button>
+                      )}
+                      <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => setViewingIndex(null)}>
+                        ← Back to current stage
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -658,6 +905,11 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
               <div className="ep-panel-head">
                 <div className="ep-panel-title">Consistency Gate</div>
                 <div className="ep-panel-sub">No blanks, no gaps — every required section must be filled before this can be routed for approval.</div>
+                {isLive && isRequester && (
+                  <button className="ep-btn-outline" style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }} onClick={() => void reopenDoc()}>
+                    Back to Department Input
+                  </button>
+                )}
               </div>
               <div className="ep-panel-body">
                 {!doc.gate.passed ? (
@@ -668,12 +920,44 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
                 ) : (
                   <>
                     <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>All required sections are filled. Build the approval chain and route it on.</p>
+                    {!isLive && !!approvalSubmission?.approval_chain?.length && (
+                      // This BRS has already moved past Gate - the live
+                      // builder below only ever holds transient, in-progress
+                      // input (already consumed once routed), so re-showing
+                      // it here would just look empty/reset. Show what was
+                      // actually submitted instead, so revisiting this step
+                      // doesn't look like the approval chain got lost.
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {approvalSubmission.approval_chain.map((c: any, idx: number) => (
+                          <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                            <div>
+                              <strong>{idx + 1}. {c.approver_name || "—"}</strong>
+                              <span style={{ color: "var(--muted)", marginLeft: 8 }}>{c.position_name}</span>
+                            </div>
+                            {c.decision_type === "NOTE" && <span style={{ color: "var(--muted)", fontSize: 12 }}>Noting</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {isLive && isRequester && (
                       <>
                         {chain.map((c, idx) => (
                           <div key={idx} className="brs-chain-row">
                             <span style={{ fontSize: 12, color: "var(--muted)" }}>{idx + 1}</span>
-                            <ApproverCombobox users={directorySorted} value={c.approver_id} onChange={(id) => setChain((prev) => prev.map((p, i) => i === idx ? { ...p, approver_id: id } : p))} />
+                            <ApproverCombobox
+                              users={directorySorted}
+                              value={c.approver_id}
+                              onChange={(id) => {
+                                // Auto-fill the position field from the
+                                // picked person's own directory title, when
+                                // they have one on file - still free text
+                                // otherwise (and still editable afterward
+                                // either way, this is just the starting
+                                // value for whoever's newly picked).
+                                const picked = directorySorted.find((u) => u.id === id);
+                                setChain((prev) => prev.map((p, i) => i === idx ? { ...p, approver_id: id, position_name: picked?.title || p.position_name } : p));
+                              }}
+                            />
                             <input
                               className="ep-form-input"
                               placeholder="Position / title (e.g. GM Marketing)"
@@ -715,17 +999,50 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
               <div className="ep-panel-head">
                 <div className="ep-panel-title">Approval Routing</div>
                 <div className="ep-panel-sub">Approvers act from their Approval Inbox — this is a read-only view of progress.</div>
+                {isLive && isRequester && approvalSubmission?.status === "IN_PROGRESS" && (
+                  <button
+                    className="ep-btn-outline"
+                    style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}
+                    disabled={sendingReminder}
+                    onClick={() => void sendReminder()}
+                    title="Nudge the current approver by email now, instead of waiting for the automatic reminder"
+                  >
+                    {sendingReminder ? "Sending…" : "Send Reminder"}
+                  </button>
+                )}
+                {isLive && isRequester && (
+                  <button className="ep-btn-outline" style={{ marginLeft: approvalSubmission?.status === "IN_PROGRESS" ? 8 : "auto", fontSize: 12, padding: "4px 10px" }} onClick={() => void reopenDoc()}>
+                    Reopen for editing
+                  </button>
+                )}
               </div>
               <div className="ep-panel-body">
-                {(approvalSubmission?.approval_chain || []).map((step: any, idx: number) => (
-                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{step.position_name}</div>
-                      <div style={{ fontSize: 12, color: "var(--muted)" }}>{step.approver_name}</div>
+                {(approvalSubmission?.approval_chain || []).map((step: any, idx: number) => {
+                  // Same fix as CustomRequestsHub's chain view: a step only
+                  // reads "Pending" while it's actually its turn - anything
+                  // further down the chain shows "Waiting" instead, so it's
+                  // clear approval is sequential rather than every approver
+                  // appearing pending at once.
+                  const displayStatus = step.acted_at
+                    ? step.status
+                    : idx === approvalSubmission.current_step_order && approvalSubmission.status === "IN_PROGRESS"
+                      ? "PENDING"
+                      : "WAITING";
+                  return (
+                    <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{step.position_name}</div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>{step.approver_name}</div>
+                        {step.acted_at && (
+                          <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+                            {new Date(step.acted_at).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                          </div>
+                        )}
+                      </div>
+                      <span className={`custom-status-badge custom-status-${displayStatus.toLowerCase()}`}>{displayStatus}</span>
                     </div>
-                    <span className={`custom-status-badge custom-status-${step.status.toLowerCase()}`}>{step.status}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -734,7 +1051,7 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
             <div className="ep-panel" style={{ marginBottom: 16 }}>
               <div className="ep-panel-head">
                 <div className="ep-panel-title">Baseline</div>
-                <div className="ep-panel-sub">Locked and published. Raise a Change Request from Custom Processes to amend it.</div>
+                <div className="ep-panel-sub">Locked and published. Raise a Change Request to amend it.</div>
               </div>
               <div className="ep-panel-body">
                 <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -743,9 +1060,9 @@ export default function BrsStudio({ profile, onBack }: BrsStudioProps) {
                   </button>
                   <button
                     className="ep-btn-outline"
-                    onClick={() => { navigator.clipboard?.writeText(doc.reference_no || doc.id); void showNotice("Reference copied — paste it into \"Related BRS\" when raising a Change Request from Custom Processes."); }}
+                    onClick={() => onCreateChangeRequest?.({ id: doc.id, reference_no: doc.reference_no || doc.id })}
                   >
-                    <ClipboardList size={14} /> Copy reference for a Change Request
+                    <ClipboardList size={14} /> Raise a Change Request
                   </button>
                 </div>
                 {doc.sections.map((s: any) => (

@@ -27,13 +27,17 @@ import LeadershipAssignments from "./LeadershipAssignments";
 import ManagersOnboarding from "./ManagersOnboarding";
 import WorkflowBuilder from "./WorkflowBuilder";
 import Standby from "./Standby";
+import Salaries from "./Salaries";
 import ReportingLines from "./ReportingLines";
 import PdfDesigner from "./PdfDesigner";
+import MobileAppConfig from "./MobileAppConfig";
+import GetTheApp from "./GetTheApp";
 import DataCleanup from "./DataCleanup";
 import RequestTypes from "./RequestTypes";
 import CustomRequestsHub from "./CustomRequestsHub";
 import BrsStudio from "./BrsStudio";
 import BrsAdmin from "./BrsAdmin";
+import SignDocument from "./SignDocument";
 import EmailActionConfirm from "./EmailActionConfirm";
 import GuidedTour, { type TourStep } from "./GuidedTour";
 import CeoManagement from "./CeoManagement";
@@ -49,6 +53,7 @@ import MyClearances from "./MyClearances";
 import ReportApprovalPerformance from "./ReportApprovalPerformance";
 import ReportWorkflowAnalytics from "./ReportWorkflowAnalytics";
 import OvertimeReportsHub from "./OvertimeReportsHub";
+import StandbyReportsHub from "./StandbyReportsHub";
 import ReportAuditTrail from "./ReportAuditTrail";
 import ReportReconciliation from "./ReportReconciliation";
 import ReportTourEngagement from "./ReportTourEngagement";
@@ -57,17 +62,20 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { BACKDATE_GRACE_DAYS, CURRENCIES, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, earliestAllowedTripDate, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeCurrency, travelTypeLabel } from "./constants";
+import { CMA_COUNTRIES, CURRENCIES, DEFAULT_BACKDATE_GRACE_DAYS, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, earliestAllowedTripDate, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeCurrency, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
 import { AirportPicker, airportLabel, type AirportRow } from "./shared/AirportPicker";
 import {
+  AlertTriangle,
   ArrowRightLeft,
   BarChart3,
+  Banknote,
   Bell,
   BriefcaseBusiness,
   Building2,
+  CalendarCheck,
   Camera,
   CheckCircle2,
   ChevronDown,
@@ -81,11 +89,14 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  FileSignature,
   FileText,
   GitBranch,
+  History as HistoryIcon,
   Home,
   Hotel,
   Info,
+  LayoutDashboard,
   Lock,
   LogOut,
   Mail,
@@ -112,6 +123,7 @@ import {
   Landmark,
   Wallet,
   PhoneCall,
+  Smartphone,
   Wifi,
   X,
   Zap
@@ -439,12 +451,19 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "GET_THE_APP";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
 // dropdowns instead, composing the same "YYYY-MM" string the backend expects.
 const CLEARANCE_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+// Every page under the "Salaries" sidebar group - Overtime/Standby/Call-Out
+// included, since that group now covers both (renamed from "Compensation").
+const SALARIES_GROUP_PAGES: AppPage[] = [
+  "SALARIES_DASHBOARD", "SALARY_REGISTERS", "SALARIES_ATTENDANCE", "SALARIES_READY_FOR_PAYMENT", "SALARIES_HISTORY",
+  "OVERTIME", "STANDBY", "CALL_OUT"
+];
 function clearanceMonthYearRange(): number[] {
   const current = new Date().getFullYear();
   const years: number[] = [];
@@ -488,6 +507,11 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Shown alongside a failed login's error message — the account lockout
+  // itself is enforced by Active Directory (or the local fallback), not
+  // tracked here, so this is a standing reminder rather than a live
+  // attempts-remaining count this app has no way to know accurately.
+  const [showLoginLockoutWarning, setShowLoginLockoutWarning] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [profile, setProfile] = useState<any>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -527,6 +551,7 @@ export default function App() {
   const [hasActiveBrsTypes, setHasActiveBrsTypes] = useState(false);
   const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(true);
   const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(true);
+  const [signatureModuleEnabled, setSignatureModuleEnabled] = useState(true);
   const [salaryAdvanceEnabled, setSalaryAdvanceEnabled] = useState(true);
   const [loanAdvanceEnabled, setLoanAdvanceEnabled] = useState(true);
   const [salaryAdvanceMaxMonths, setSalaryAdvanceMaxMonths] = useState(6);
@@ -543,14 +568,23 @@ export default function App() {
   const [hasPaymentsAccess, setHasPaymentsAccess] = useState(false);
   const [hasVendorContractsAccess, setHasVendorContractsAccess] = useState(false);
   const [hasServiceContractsAccess, setHasServiceContractsAccess] = useState(false);
+  const [hasSalariesAccess, setHasSalariesAccess] = useState(false);
+  const [salariesCount, setSalariesCount] = useState(0);
   const [favoritePages, setFavoritePages] = useState<string[]>([]);
   const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
+  const [compensationMenuOpen, setCompensationMenuOpen] = useState(false);
   const [contractsMenuOpen, setContractsMenuOpen] = useState(false);
   const [shortcutPickerOpen, setShortcutPickerOpen] = useState(false);
   const favoritePagesInitialized = useRef(false);
   const shortcutPickerRef = useRef<HTMLDivElement>(null);
   const [travelTypes, setTravelTypes] = useState<TravelType[]>([]);
   const [travelTypesLoading, setTravelTypesLoading] = useState(false);
+  // Admin-configurable from Travel Setup - how far back a trip/departure
+  // date is allowed to be on a new advance request. Falls back to the same
+  // default the backend uses until this loads.
+  const [backdatingGraceDays, setBackdatingGraceDays] = useState(DEFAULT_BACKDATE_GRACE_DAYS);
+  const [backdatingGraceDaysDraft, setBackdatingGraceDaysDraft] = useState(String(DEFAULT_BACKDATE_GRACE_DAYS));
+  const [savingBackdatingGraceDays, setSavingBackdatingGraceDays] = useState(false);
   const [newTravelTypeName, setNewTravelTypeName] = useState("");
   const [newTravelTypeLocationMode, setNewTravelTypeLocationMode] = useState<"DISTRICT" | "COUNTRY_CITY">("COUNTRY_CITY");
   const [newTravelTypeRateKind, setNewTravelTypeRateKind] = useState<"MEAL" | "DAILY">("DAILY");
@@ -693,16 +727,31 @@ export default function App() {
   const [dashboardSearchLive, setDashboardSearchLive] = useState<{ advances: any[]; claims: any[] }>({ advances: [], claims: [] });
   const [dashboardSearchLoading, setDashboardSearchLoading] = useState(false);
   const [dashboardSearchSyncedAt, setDashboardSearchSyncedAt] = useState<Date | null>(null);
+  // Same search state/results feed both the header's global search (every
+  // page) and the Dashboard's own Quick Search card - one query, one
+  // in-flight fetch, never two boxes drifting out of sync with each other.
+  const headerSearchInputRef = useRef<HTMLInputElement>(null);
   const [inboxCount, setInboxCount] = useState(0);
   const [inboxItems, setInboxItems] = useState<any[]>([]);
   const [captureCount, setCaptureCount] = useState(0);
   const [paymentsCount, setPaymentsCount] = useState(0);
-  const [page, setRawPage] = useState<AppPage>("HOME");
+  // A shared "sign this routing document" link lands here with ?signDoc=<id>
+  // in the URL — land straight on the Signatures page instead of Home so
+  // SignDocument.tsx's own mount effect (which reads the same param) can
+  // pick it up immediately.
+  const [page, setRawPage] = useState<AppPage>(() => (
+    new URLSearchParams(window.location.search).get("signDoc") ? "SIGNATURES" : "HOME"
+  ));
   // Set when the Inbox hands off an Overtime/Standby item to that module's
   // own detail screen (see Inbox.tsx's onNavigateToModule) — consumed once by
   // Overtime/Standby on mount, then cleared so re-visiting the page later
   // doesn't keep re-opening the same item.
   const [moduleDeepLink, setModuleDeepLink] = useState<{ kind: "REQUEST" | "CLAIM"; id: string } | null>(null);
+  // Set when BRS Studio's "Raise a Change Request" button hands off a
+  // baselined BRS's reference number — consumed once by CustomRequestsHub
+  // on mount (pre-selects the Change Request type and pre-fills its
+  // "Related BRS" field), then cleared the same way moduleDeepLink is.
+  const [changeRequestDeepLink, setChangeRequestDeepLink] = useState<{ brsReferenceNo: string } | null>(null);
 
   // The app is a single-page client that switches "pages" via state only, with
   // no URL changes. Without pushing history entries, the browser back button
@@ -717,6 +766,18 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // Signable documents don't have their own deep-link prop the way
+  // Overtime/Standby do (see moduleDeepLink) - Sign a Document already reads
+  // a specific document straight from the URL's ?signDoc= param, the exact
+  // same mechanism a shared link uses, so an Inbox click just needs to set
+  // that param before navigating there.
+  const openSignableDocumentFromInbox = useCallback((id: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("signDoc", id);
+    window.history.replaceState(window.history.state, "", url);
+    setPage("SIGNATURES");
+  }, [setPage]);
 
   useEffect(() => {
     window.history.replaceState({ appPage: "HOME" }, "");
@@ -914,6 +975,11 @@ export default function App() {
   const [monthField, setMonthField] = useState("");
   const [salaryPaybackDuration, setSalaryPaybackDuration] = useState("");
   const [salaryAmount, setSalaryAmount] = useState("0");
+  // Salary Advance has no travel line items to justify the amount
+  // requested, unlike a travel advance's day-by-day breakdown - held
+  // locally until the advance itself exists, then uploaded right after
+  // creation succeeds (see handleSubmit's post-create upload loop).
+  const [salaryAttachmentFiles, setSalaryAttachmentFiles] = useState<File[]>([]);
   const [loanPaybackDuration, setLoanPaybackDuration] = useState("");
   const [loanAmount, setLoanAmount] = useState("");
   // "Apply for Other" - an advance for an external, non-Econet beneficiary.
@@ -1065,6 +1131,10 @@ export default function App() {
   };
   const mealValueNumber = Number.isFinite(Number(mealValue)) ? Number(mealValue) : 0;
   const selectedTravelType = travelTypes.find((type) => type.code === advanceType && type.active !== false) || null;
+  // UAT and PROD have historically diverged on the exact code for this
+  // travel type ("CMA" vs "COMMON_MONETARY_AREA_CMA") - match loosely
+  // rather than hardcoding one, so this works in either environment.
+  const isCmaTravelType = String(selectedTravelType?.code || "").toUpperCase().includes("CMA");
   // The advance is billed at the traveller's own rate (whoever it's
   // actually for, not necessarily the person filling in the form on their
   // behalf) — EXCO/CEO have their own configured rates precisely so this
@@ -1348,6 +1418,7 @@ export default function App() {
     { key: "REPORTS", label: "Reports", icon: BarChart3, available: true },
     { key: "TRAVEL_SETUP", label: "Travel Setup", icon: BriefcaseBusiness, available: canManageTravelSettings },
     { key: "REQUEST_TYPES", label: "Process", icon: ClipboardList, available: canAccessFeature("request_types") },
+    { key: "SIGNATURES", label: "Sign a Document", icon: FileSignature, available: signatureModuleEnabled },
     { key: "USER_MANAGEMENT", label: "User Management", icon: Users, available: canAccessFeature("user_management") },
     { key: "ORG_STRUCTURE", label: "Org Structure", icon: Network, available: canAccessFeature("org_structure") },
     { key: "SETTINGS", label: "Settings", icon: SettingsIcon, available: true }
@@ -1585,7 +1656,8 @@ export default function App() {
         overtime_enabled?: boolean; standby_enabled?: boolean;
         salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
         salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
-      }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true }, "Module flags"),
+        signature_enabled?: boolean;
+      }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true, signature_enabled: true }, "Module flags"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.vendorContractsAccess(), { allowed: false }, "Vendor Contracts access"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.serviceContractsAccess(), { allowed: false }, "Service Contracts access"),
       optionalStartupData<{ is_finance?: boolean }>(api.overtimeDashboard(), { is_finance: false }, "Overtime dashboard"),
@@ -1648,8 +1720,12 @@ export default function App() {
     // the rest of startup. ~6000 rows loaded once, filtered client-side by
     // AirportPicker rather than round-tripping per keystroke.
     api.airports().then((rows: any) => setAirports(Array.isArray(rows) ? rows : [])).catch(() => setAirports([]));
+    // Same reasoning as BRS/airports above - Salaries is its own optional
+    // module, so a failure here should just leave the nav item hidden.
+    api.salariesAccess().then((r: any) => { setHasSalariesAccess(Boolean(r?.allowed)); setSalariesCount(r?.pendingCount || 0); }).catch(() => setHasSalariesAccess(false));
     setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
     setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
+    setSignatureModuleEnabled(moduleFlagsResp?.signature_enabled !== false);
     setSalaryAdvanceEnabled(moduleFlagsResp?.salary_advance_enabled !== false);
     setLoanAdvanceEnabled(moduleFlagsResp?.loan_advance_enabled !== false);
     setSalaryAdvanceMaxMonths(Number(moduleFlagsResp?.salary_advance_max_payback_months) || 6);
@@ -1855,6 +1931,14 @@ export default function App() {
       .catch(() => setMyPaPrincipals([]));
   }, [token]);
 
+  // Needed by every requester's advance form (the date pickers' earliest
+  // allowed date), not just admins visiting Travel Setup - loaded once per
+  // login here rather than gated behind a specific page the way loadTravelTypes
+  // is, so the default isn't stale for everyone else.
+  useEffect(() => {
+    if (token) void loadTravelSettings();
+  }, [token]);
+
   useEffect(() => {
     if (token && ["SETTINGS", "REPORTS", "USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS"].includes(page)) {
       if (role === "ADMIN" || role === "MANAGER") {
@@ -1872,7 +1956,7 @@ export default function App() {
     }
   }, [token, page, role]);
 
-  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "TEAM_ROSTER", "PDF_DESIGNER"] as const;
+  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "TEAM_ROSTER", "PDF_DESIGNER", "MOBILE_APP_CONFIG"] as const;
 
   useEffect(() => {
     if (ORG_PAGES.includes(page as any)) setOrgNavOpen(true);
@@ -2041,6 +2125,37 @@ export default function App() {
       alert("Error loading travel types: " + e.message);
     } finally {
       setTravelTypesLoading(false);
+    }
+  }
+
+  async function loadTravelSettings() {
+    try {
+      const settings = await api.travelSettings();
+      const days = Number(settings?.advance_backdating_grace_days);
+      if (Number.isFinite(days)) {
+        setBackdatingGraceDays(days);
+        setBackdatingGraceDaysDraft(String(days));
+      }
+    } catch {
+      // Keep the default - this is a minor UX setting, not worth surfacing an error for.
+    }
+  }
+
+  async function saveTravelSettings() {
+    const days = Number(backdatingGraceDaysDraft);
+    if (!Number.isFinite(days) || days < 0 || days > 365) {
+      return alert("Enter a whole number of days between 0 and 365");
+    }
+    setSavingBackdatingGraceDays(true);
+    try {
+      await api.updateTravelSettings({ advance_backdating_grace_days: days });
+      setBackdatingGraceDays(days);
+      setBackdatingGraceDaysDraft(String(days));
+      void Swal.fire({ icon: "success", title: "Saved", timer: 1200, showConfirmButton: false });
+    } catch (e: any) {
+      alert("Error saving travel settings: " + e.message);
+    } finally {
+      setSavingBackdatingGraceDays(false);
     }
   }
 
@@ -2220,6 +2335,7 @@ export default function App() {
   async function doLogin() {
     if (loginLoading) return;
     setError(null);
+    setShowLoginLockoutWarning(false);
     setLoginLoading(true);
     try {
       console.log("Attempting login with:", email);
@@ -2238,6 +2354,11 @@ export default function App() {
       console.error("Login error:", e);
       const errorMsg = e?.message || "Login failed. Please try again.";
       setError(errorMsg);
+      // Only for a genuine wrong-password/unknown-account failure - a
+      // network error or the "too many attempts" rate-limit message doesn't
+      // mean a wrong password was just entered, so the lockout reminder
+      // wouldn't make sense attached to those.
+      setShowLoginLockoutWarning(/invalid credentials/i.test(errorMsg));
     } finally {
       setLoginLoading(false);
     }
@@ -2945,6 +3066,7 @@ export default function App() {
     setBankBranch("");
     setPurpose("");
     setRequestDate(new Date().toISOString().slice(0, 10));
+    setSalaryAttachmentFiles([]);
     setRows([]);
     setAccommodationHotelChoices({});
     setMonthField("");
@@ -3710,6 +3832,19 @@ export default function App() {
     }, 300);
     return () => clearTimeout(handle);
   }, [dashboardSearch]);
+
+  // Ctrl/Cmd+K jumps to the global search from anywhere in the app, matching
+  // the shortcut hint shown in the header search box itself.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        headerSearchInputRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const dashboardSearchResults = useMemo(() => {
     if (!dashboardSearch.trim()) return [];
@@ -4493,6 +4628,12 @@ export default function App() {
             </form>
 
             {error && <pre className="error-text">{error}</pre>}
+            {showLoginLockoutWarning && (
+              <div className="login-security-note login-lockout-warning">
+                <AlertTriangle size={18} aria-hidden />
+                <span>Warning: entering the wrong password 3 times will lock your account. Contact IT if you're unsure of your password.</span>
+              </div>
+            )}
 
             <div className="login-security-note login-security-banner">
               <ShieldCheck size={18} aria-hidden />
@@ -4594,9 +4735,39 @@ export default function App() {
             <div className="header-user-meta">{userDepartment}</div>
           </div>
         </div>
-        <div className="header-search" aria-hidden="true">
-          <span>Search employees, requests, modules...</span>
-          <kbd>Ctrl + K</kbd>
+        <div className="header-search">
+          <input
+            ref={headerSearchInputRef}
+            type="text"
+            value={dashboardSearch}
+            onChange={(e) => setDashboardSearch(e.target.value)}
+            placeholder="Search employees, requests, modules..."
+          />
+          {!dashboardSearch && <kbd>Ctrl + K</kbd>}
+          {dashboardSearch.trim() && (
+            <div className="header-search-results">
+              {dashboardSearchLoading ? (
+                <div className="dashboard-search-result-empty">Searching…</div>
+              ) : dashboardSearchResults.length === 0 ? (
+                <div className="dashboard-search-result-empty">No matches found.</div>
+              ) : (
+                dashboardSearchResults.map((r) => (
+                  <div
+                    key={`${r.kind}-${r.id}`}
+                    className="dashboard-search-result"
+                    onClick={() => {
+                      setDashboardSearch("");
+                      if (r.kind === "advance") setPage(r.mine ? "MY_ADVANCES" : "REPORT_ADVANCES");
+                      else setPage(r.mine ? "MY_CLEARANCES" : "REPORT_CLEARANCE_STATUS");
+                    }}
+                  >
+                    <span className="dashboard-search-result-title">{r.title}</span>
+                    <span className="dashboard-search-result-subtitle">{r.subtitle}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
         <div className="header-actions">
           <button
@@ -4683,20 +4854,45 @@ export default function App() {
             <h2>FlowDesk</h2>
           </div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
-          <div className={`sidebar-group ${["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES"].includes(page) ? "open" : ""}`}>
+          <div className={`sidebar-group ${["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page) ? "open" : ""}`}>
             <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advance Requests <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><CheckCircle2 size={14} aria-hidden />Clearances</a>
+              <a href="#" className={navItemClass(page === "MY_CLEARANCE_STATUS")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCE_STATUS"); }}><BarChart3 size={14} aria-hidden />My Clearance Status</a>
             </div>
           </div>
-          {(canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled && (
-            <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Overtime</a>
-          )}
-          {standbyModuleEnabled && (
-            <a href="#" className={navItemClass(page === "STANDBY")} onClick={(e) => { e.preventDefault(); setPage("STANDBY"); }}><span className="sidebar-nav-icon"><Clock3 size={18} aria-hidden /></span>Standby</a>
+          {(hasSalariesAccess || ((canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled) || standbyModuleEnabled) && (
+            <div className={`sidebar-group ${(compensationMenuOpen || SALARIES_GROUP_PAGES.includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(SALARIES_GROUP_PAGES.includes(page))} onClick={(e) => { e.preventDefault(); setCompensationMenuOpen((v) => !v); }}>
+                <span className="sidebar-nav-icon"><Banknote size={18} aria-hidden /></span>Salaries
+                {salariesCount > 0 && <b>{salariesCount}</b>}
+                <strong><ChevronDown size={14} aria-hidden /></strong>
+              </a>
+              <div className="sidebar-subnav">
+                {hasSalariesAccess && (
+                  <>
+                    <a href="#" className={navItemClass(page === "SALARIES_DASHBOARD")} onClick={(e) => { e.preventDefault(); setPage("SALARIES_DASHBOARD"); }}><LayoutDashboard size={14} aria-hidden />Dashboard</a>
+                    <a href="#" className={navItemClass(page === "SALARY_REGISTERS")} onClick={(e) => { e.preventDefault(); setPage("SALARY_REGISTERS"); }}><ClipboardList size={14} aria-hidden />Salary Registers</a>
+                    <a href="#" className={navItemClass(page === "SALARIES_ATTENDANCE")} onClick={(e) => { e.preventDefault(); setPage("SALARIES_ATTENDANCE"); }}><CalendarCheck size={14} aria-hidden />Attendance</a>
+                    <a href="#" className={navItemClass(page === "SALARIES_READY_FOR_PAYMENT")} onClick={(e) => { e.preventDefault(); setPage("SALARIES_READY_FOR_PAYMENT"); }}><CheckCircle2 size={14} aria-hidden />Ready for Payment</a>
+                    <a href="#" className={navItemClass(page === "SALARIES_HISTORY")} onClick={(e) => { e.preventDefault(); setPage("SALARIES_HISTORY"); }}><HistoryIcon size={14} aria-hidden />History</a>
+                  </>
+                )}
+                {(canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled && (
+                  <a href="#" className={navItemClass(page === "OVERTIME")} onClick={(e) => { e.preventDefault(); setPage("OVERTIME"); }}><Clock3 size={14} aria-hidden />Overtime</a>
+                )}
+                {standbyModuleEnabled && (
+                  <a href="#" className={navItemClass(page === "STANDBY")} onClick={(e) => { e.preventDefault(); setPage("STANDBY"); }}><Clock3 size={14} aria-hidden />Standby</a>
+                )}
+                {standbyModuleEnabled && (
+                  <a href="#" className={navItemClass(page === "CALL_OUT")} onClick={(e) => { e.preventDefault(); setPage("CALL_OUT"); }}><PhoneCall size={14} aria-hidden />Call-Out</a>
+                )}
+              </div>
+            </div>
           )}
           {hasActiveCustomRequestTypes && <a href="#" className={navItemClass(page === "CHANGE_REQUEST")} onClick={(e) => { e.preventDefault(); setPage("CHANGE_REQUEST"); }}><span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Processes</a>}
           {hasActiveBrsTypes && <a href="#" className={navItemClass(page === "BRS")} onClick={(e) => { e.preventDefault(); setPage("BRS"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>BRS Studio</a>}
+          {signatureModuleEnabled && <a href="#" className={navItemClass(page === "SIGNATURES")} onClick={(e) => { e.preventDefault(); setPage("SIGNATURES"); }}><span className="sidebar-nav-icon"><FileSignature size={18} aria-hidden /></span>Sign a Document</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasRefundableAccess) && (
             <div className={`sidebar-group ${(financeMenuOpen || ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
@@ -4731,7 +4927,7 @@ export default function App() {
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
                 )}
-                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
+                <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><BarChart3 size={14} aria-hidden />Reports</a>
               </div>
             </div>
           )}
@@ -4754,8 +4950,8 @@ export default function App() {
               </div>
             </div>
           )}
-          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"].includes(page))} onClick={(e) => { e.preventDefault(); setPage("REPORTS"); }}><span className="sidebar-nav-icon"><BarChart3 size={18} aria-hidden /></span>Reports <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               {canAccessFeature("report_advances") && (
                 <a href="#" className={navItemClass(page === "REPORT_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("REPORT_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
@@ -4815,6 +5011,7 @@ export default function App() {
                 {canAccessFeature("workflow_builder") && <a href="#" className={navItemClass(page === "WORKFLOW_BUILDER")} onClick={(e) => { e.preventDefault(); setPage("WORKFLOW_BUILDER"); }}><ShieldCheck size={14} aria-hidden />Approval Workflow Builder</a>}
                 {canAccessFeature("reporting_lines") && <a href="#" className={navItemClass(page === "REPORTING_LINES")} onClick={(e) => { e.preventDefault(); setPage("REPORTING_LINES"); }}><GitBranch size={14} aria-hidden />Reporting Lines</a>}
                 {canAccessFeature("pdf_designer") && <a href="#" className={navItemClass(page === "PDF_DESIGNER")} onClick={(e) => { e.preventDefault(); setPage("PDF_DESIGNER"); }}><FileText size={14} aria-hidden />PDF Designer</a>}
+                {canAccessFeature("mobile_app_config") && <a href="#" className={navItemClass(page === "MOBILE_APP_CONFIG")} onClick={(e) => { e.preventDefault(); setPage("MOBILE_APP_CONFIG"); }}><Smartphone size={14} aria-hidden />Mobile App</a>}
               </div>
             </div>
           )}
@@ -4841,12 +5038,14 @@ export default function App() {
             <Inbox
               onBack={() => setPage("HOME")}
               onNavigateToModule={(target, deepLink) => { setModuleDeepLink(deepLink); setPage(target); }}
+              onOpenSignableDocument={openSignableDocumentFromInbox}
             />
           ) : page === "CAPTURE" ? (
             <Inbox
               mode="capture"
               onBack={() => setPage("HOME")}
               onNavigateToModule={(target, deepLink) => { setModuleDeepLink(deepLink); setPage(target); }}
+              onOpenSignableDocument={openSignableDocumentFromInbox}
             />
           ) : page === "PAYMENTS" ? (
             <Payments onBack={() => setPage("HOME")} />
@@ -4880,6 +5079,8 @@ export default function App() {
             <ReportDeptDivisionClearance onBack={() => setPage("REPORTS")} />
           ) : page === "REPORT_OVERTIME" ? (
             <OvertimeReportsHub onBack={() => setPage("REPORTS")} />
+          ) : page === "REPORT_STANDBY" ? (
+            <StandbyReportsHub onBack={() => setPage("REPORTS")} />
           ) : page === "IT_PROVISIONING" ? (
             <ITProvisioning />
           ) : page === "OVERTIME" ? (
@@ -4898,10 +5099,39 @@ export default function App() {
               deepLink={moduleDeepLink}
               onDeepLinkConsumed={() => setModuleDeepLink(null)}
             />
+          ) : page === "CALL_OUT" ? (
+            <Standby
+              profile={profile}
+              role={role}
+              onBack={() => setPage("HOME")}
+              deepLink={moduleDeepLink}
+              onDeepLinkConsumed={() => setModuleDeepLink(null)}
+              initialView="CALLOUTS"
+            />
+          ) : page === "SALARIES_DASHBOARD" ? (
+            <Salaries key="dashboard" initialView="dashboard" />
+          ) : page === "SALARY_REGISTERS" ? (
+            <Salaries key="registers" initialView="registers" />
+          ) : page === "SALARIES_ATTENDANCE" ? (
+            <Salaries key="attendance" initialView="attendance" />
+          ) : page === "SALARIES_READY_FOR_PAYMENT" ? (
+            <Salaries key="ready" initialView="ready" />
+          ) : page === "SALARIES_HISTORY" ? (
+            <Salaries key="history" initialView="history" />
           ) : page === "CHANGE_REQUEST" ? (
-            <CustomRequestsHub profile={profile} requestDirectory={requestDirectory} onBack={() => setPage("HOME")} />
+            <CustomRequestsHub
+              profile={profile}
+              requestDirectory={requestDirectory}
+              onBack={() => setPage("HOME")}
+              deepLink={changeRequestDeepLink}
+              onDeepLinkConsumed={() => setChangeRequestDeepLink(null)}
+            />
           ) : page === "BRS" ? (
-            <BrsStudio profile={profile} onBack={() => setPage("HOME")} />
+            <BrsStudio
+              profile={profile}
+              onBack={() => setPage("HOME")}
+              onCreateChangeRequest={(doc) => { setChangeRequestDeepLink({ brsReferenceNo: doc.reference_no }); setPage("CHANGE_REQUEST"); }}
+            />
           ) : page === "BRS_ADMIN" ? (
             <BrsAdmin onBack={() => setPage("HOME")} />
           ) : page === "CEO_MANAGEMENT" ? (
@@ -4920,8 +5150,14 @@ export default function App() {
             <ReportingLines />
           ) : page === "PDF_DESIGNER" ? (
             <PdfDesigner />
+          ) : page === "MOBILE_APP_CONFIG" ? (
+            <MobileAppConfig isAdmin={role === "ADMIN"} />
+          ) : page === "GET_THE_APP" ? (
+            <GetTheApp isAdmin={role === "ADMIN"} />
           ) : page === "DATA_CLEANUP" ? (
             <DataCleanup onBack={() => setPage("SETTINGS")} />
+          ) : page === "SIGNATURES" ? (
+            <SignDocument />
           ) : page === "VENDOR_CONTRACTS" ? (
             <VendorContracts />
           ) : page === "SERVICE_CONTRACTS" ? (
@@ -5397,6 +5633,7 @@ export default function App() {
                       { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
                       { key: "deductions",             label: "Deductions",               group: "Finance Operations" },
                       { key: "refundable",             label: "Refundable",               group: "Finance Operations" },
+                      { key: "salaries",               label: "Salaries",                 group: "Finance Operations" },
                       { key: "it_provisioning",        label: "IT Provisioning",          group: "IT" },
                       { key: "payments",               label: "Payments",                 group: "Finance Operations" },
                       { key: "capture",                label: "Capture Inbox",            group: "Finance Operations" },
@@ -5435,6 +5672,7 @@ export default function App() {
                       manager_delegations:    ["ADMIN"],
                       deductions:             ["ADMIN"],
                       refundable:             ["ADMIN"],
+                      salaries:               ["ADMIN"],
     it_provisioning:        ["ADMIN"],
                       payments:               ["ADMIN","Department: Finance"],
                       capture:                ["ADMIN","Section: Treasury & Financial Accounting"],
@@ -6012,6 +6250,44 @@ export default function App() {
                 <div className="ep-actions">
                   <button className="ep-btn-outline" onClick={() => void Promise.all([loadTravelTypes(), loadHotels()])} disabled={travelTypesLoading || hotelsLoading}>Refresh</button>
                 </div>
+              </div>
+
+              {/* ── General Settings panel ── */}
+              <div className="ep-panel">
+                <div className="ep-panel-head" style={{ cursor: "pointer" }} onClick={() => setTravelSettingsOpen((v) => !v)}>
+                  <div>
+                    <div className="ep-panel-title">General Settings</div>
+                    <div className="ep-panel-sub">Company-wide rules that apply across every travel type.</div>
+                  </div>
+                  <ChevronDown size={16} style={{ transform: travelSettingsOpen ? undefined : "rotate(-90deg)" }} />
+                </div>
+                {travelSettingsOpen && (
+                  <div style={{ padding: "0 16px 16px" }}>
+                    <div className="form-field" style={{ maxWidth: 360 }}>
+                      <label>Backdating grace period (days)</label>
+                      <p style={{ fontSize: 13, color: "var(--muted, #667)", margin: "2px 0 8px" }}>
+                        How many days in the past a trip/departure date can be when an employee files a request for a trip they already took.
+                      </p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input
+                          type="number"
+                          min={0}
+                          max={365}
+                          value={backdatingGraceDaysDraft}
+                          onChange={(e) => setBackdatingGraceDaysDraft(e.target.value)}
+                          style={{ maxWidth: 120 }}
+                        />
+                        <button
+                          className="ep-btn"
+                          onClick={() => void saveTravelSettings()}
+                          disabled={savingBackdatingGraceDays || Number(backdatingGraceDaysDraft) === backdatingGraceDays}
+                        >
+                          {savingBackdatingGraceDays ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* ── Travel Types panel ── */}
@@ -6614,6 +6890,7 @@ export default function App() {
                   ] : []),
                   ...(role === "ADMIN" || hasOvertimeFinanceAccess ? [
                     { icon: <Clock3 size={26} />, color: "#b45309", bg: "#fef3c7", title: "Overtime Reports", desc: "Hours report and completed-claims history — filtered and exportable.", action: () => setPage("REPORT_OVERTIME"), live: true },
+                    { icon: <Users size={26} />, color: "#0369a1", bg: "#e0f2fe", title: "Standby Reports", desc: "Standby compensation records — filtered and exportable, by division, department and employee.", action: () => setPage("REPORT_STANDBY"), live: true },
                   ] : []),
                 ]).map(({ icon, color, bg, title, desc, action }) => (
                   <div key={title}
@@ -7053,11 +7330,11 @@ export default function App() {
                   <div className="form-grid-2">
                     <div className="form-field">
                       <label>Start Date</label>
-                      <input type="date" value={otherStartDate} min={earliestAllowedTripDate()} onChange={(e) => setOtherStartDate(e.target.value)} />
+                      <input type="date" value={otherStartDate} min={earliestAllowedTripDate(backdatingGraceDays)} onChange={(e) => setOtherStartDate(e.target.value)} />
                     </div>
                     <div className="form-field">
                       <label>Finish Date</label>
-                      <input type="date" value={otherFinishDate} min={otherStartDate || earliestAllowedTripDate()} onChange={(e) => setOtherFinishDate(e.target.value)} />
+                      <input type="date" value={otherFinishDate} min={otherStartDate || earliestAllowedTripDate(backdatingGraceDays)} onChange={(e) => setOtherFinishDate(e.target.value)} />
                     </div>
                   </div>
                   {showNewExternalPayeeForm && (
@@ -7220,7 +7497,7 @@ export default function App() {
                         ))}
                       </optgroup>
                       <optgroup label="Other advances">
-                        {salaryAdvanceEnabled && <option value="SALARY">Salary</option>}
+                        {salaryAdvanceEnabled && String(employmentType).toUpperCase() === "PERMANENT" && <option value="SALARY">Salary</option>}
                         {loanAdvanceEnabled && <option value="LOAN">Loan</option>}
                       </optgroup>
                     </>
@@ -7240,8 +7517,44 @@ export default function App() {
                     <input type="number" value={salaryAmount} onChange={e => setSalaryAmount(e.target.value)} placeholder="0" />
                   </div>
                   <div className="form-field">
-                    <label>Salary Month</label>
-                    <input type="month" value={monthField} onChange={e => setMonthField(e.target.value)} />
+                    <label>
+                      Salary Month
+                      <span
+                        className="info-tooltip"
+                        title="This is the month you need the advance for, not the month you're applying in."
+                        style={{ marginLeft: 4 }}
+                      >
+                        <Info size={13} aria-hidden />
+                      </span>
+                    </label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <select
+                        value={monthField ? monthField.split("-")[1] || "" : ""}
+                        onChange={(e) => {
+                          const mm = e.target.value;
+                          const yyyy = monthField ? monthField.split("-")[0] : String(new Date().getFullYear());
+                          setMonthField(mm ? `${yyyy}-${mm}` : "");
+                        }}
+                      >
+                        <option value="">Month</option>
+                        {CLEARANCE_MONTH_NAMES.map((name, idx) => (
+                          <option key={name} value={String(idx + 1).padStart(2, "0")}>{name}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={monthField ? monthField.split("-")[0] || "" : ""}
+                        onChange={(e) => {
+                          const yyyy = e.target.value;
+                          const mm = monthField ? monthField.split("-")[1] : String(new Date().getMonth() + 1).padStart(2, "0");
+                          setMonthField(yyyy ? `${yyyy}-${mm}` : "");
+                        }}
+                      >
+                        <option value="">Year</option>
+                        {clearanceMonthYearRange().map((y) => (
+                          <option key={y} value={String(y)}>{y}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
               )}
@@ -7273,6 +7586,47 @@ export default function App() {
                       <option key={n} value={String(n)}>{n} Month{n === 1 ? "" : "s"}</option>
                     ))}
                   </select>
+                </div>
+              )}
+
+              {advanceType === "SALARY" && (
+                <div className="form-field">
+                  <label>Supporting Documents</label>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                      Quotations, invoices or anything else that supports this request (optional).
+                    </div>
+                    <label className="clearance-upload-button">
+                      <Upload size={15} aria-hidden /> Add Document
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const files = Array.from(e.currentTarget.files || []);
+                          if (files.length > 0) setSalaryAttachmentFiles((prev) => [...prev, ...files]);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {salaryAttachmentFiles.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      {salaryAttachmentFiles.map((file, idx) => (
+                        <div key={`${file.name}-${idx}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 8 }}>
+                          <FileText size={18} style={{ color: "#dc2626", flexShrink: 0 }} aria-hidden />
+                          <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {file.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)" }}>{(file.size / 1024).toFixed(0)} KB</div>
+                          <button type="button" className="ep-icon-btn danger" title="Remove" onClick={() => setSalaryAttachmentFiles((prev) => prev.filter((_, i) => i !== idx))}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -7430,7 +7784,7 @@ export default function App() {
                       <tr>
                         <td colSpan={6} style={{ textAlign: "center", padding: "10px 0" }}>
                           <button className="ep-btn" onClick={addRow} type="button" style={{ padding: "7px 20px", fontSize: "0.85rem" }}>
-                            <Plus size={14} /> Add row
+                            <Plus size={14} /> Add trip
                           </button>
                         </td>
                       </tr>
@@ -7524,18 +7878,33 @@ export default function App() {
                         {destinationManualEntry ? (
                           <div style={{ display: "flex", gap: 8 }}>
                             <input value={tripDestinationCity} onChange={(e) => setTripDestinationCity(e.target.value)} placeholder="Town / city" style={{ flex: 1 }} />
-                            <input
-                              list="plan-trip-destination-country-options"
-                              value={tripDestinationCountry}
-                              onChange={(e) => setTripDestinationCountry(e.target.value)}
-                              placeholder="Country"
-                              style={{ flex: 1 }}
-                            />
-                            <datalist id="plan-trip-destination-country-options">
-                              {selectedTravelCountries.map((country) => (
-                                <option key={country} value={country} />
-                              ))}
-                            </datalist>
+                            {isCmaTravelType ? (
+                              <select
+                                value={tripDestinationCountry}
+                                onChange={(e) => setTripDestinationCountry(e.target.value)}
+                                style={{ flex: 1 }}
+                              >
+                                <option value="">Select country</option>
+                                {CMA_COUNTRIES.map((country) => (
+                                  <option key={country} value={country}>{country}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <>
+                                <input
+                                  list="plan-trip-destination-country-options"
+                                  value={tripDestinationCountry}
+                                  onChange={(e) => setTripDestinationCountry(e.target.value)}
+                                  placeholder="Country"
+                                  style={{ flex: 1 }}
+                                />
+                                <datalist id="plan-trip-destination-country-options">
+                                  {selectedTravelCountries.map((country) => (
+                                    <option key={country} value={country} />
+                                  ))}
+                                </datalist>
+                              </>
+                            )}
                           </div>
                         ) : (
                           <AirportPicker airports={airports} value={tripDestinationIata} onChange={setTripDestinationIata} placeholder="Destination city or airport code" />
@@ -7543,17 +7912,6 @@ export default function App() {
                         <button type="button" className="link-button" style={{ fontSize: 12, marginTop: 6 }} onClick={() => { setDestinationManualEntry((v) => !v); setTripDestinationIata(""); setTripDestinationCity(""); setTripDestinationCountry(""); }}>
                           {destinationManualEntry ? "Search airports instead" : "Traveling by road? Enter manually"}
                         </button>
-                      </div>
-                    </div>
-
-                    <div className="form-grid-2">
-                      <div className="form-field">
-                        <label>Departure</label>
-                        <input type="date" value={tripDeparture} min={earliestAllowedTripDate()} onChange={(e) => setTripDeparture(e.target.value)} />
-                      </div>
-                      <div className="form-field">
-                        <label>Return</label>
-                        <input type="date" value={tripReturn} min={tripDeparture || earliestAllowedTripDate()} onChange={(e) => setTripReturn(e.target.value)} />
                       </div>
                     </div>
 
@@ -7568,6 +7926,17 @@ export default function App() {
                         </select>
                       </div>
                     )}
+
+                    <div className="form-grid-2">
+                      <div className="form-field">
+                        <label>Departure</label>
+                        <input type="date" value={tripDeparture} min={earliestAllowedTripDate(backdatingGraceDays)} onChange={(e) => setTripDeparture(e.target.value)} />
+                      </div>
+                      <div className="form-field">
+                        <label>Return</label>
+                        <input type="date" value={tripReturn} min={tripDeparture || earliestAllowedTripDate(backdatingGraceDays)} onChange={(e) => setTripReturn(e.target.value)} />
+                      </div>
+                    </div>
 
                     {rows.length > 0 && (
                       <div className="plan-trip-summary">
@@ -7969,8 +8338,8 @@ export default function App() {
                       // Create-only, matching the mirrored backend check: an in-flight
                       // request can outlive its own start date while sitting in
                       // approval, and an unrelated later edit shouldn't be blocked by that.
-                      if (isApplyForOther && !editingAdvanceId && otherStartDate < earliestAllowedTripDate()) {
-                        alert(`Start date cannot be more than ${BACKDATE_GRACE_DAYS} days in the past.`);
+                      if (isApplyForOther && !editingAdvanceId && otherStartDate < earliestAllowedTripDate(backdatingGraceDays)) {
+                        alert(`Start date cannot be more than ${backdatingGraceDays} days in the past.`);
                         return;
                       }
                       if (showTravelBreakdown && extraCost > 0 && !extraCostDescription.trim()) {
@@ -8145,6 +8514,11 @@ export default function App() {
                         // create new request, then send any additional details
                         const resp: any = await api.createAdvance(base);
                         const newId = resp.id;
+                        for (const file of salaryAttachmentFiles) {
+                          const form = new FormData();
+                          form.append("file", file);
+                          await api.uploadAdvanceAttachment(newId, form);
+                        }
                         if (showTravelBreakdown && selectedTravelType) {
                           const mappedRows = rows.map(r => ({
                             line_date: r.date,
@@ -8644,6 +9018,8 @@ export default function App() {
             />
           ) : page === "MY_CLEARANCES" ? (
             <MyClearances claims={claims} onNew={startNewClearance} onEdit={editClearance} onTrack={showClearanceTracking} />
+          ) : page === "MY_CLEARANCE_STATUS" ? (
+            <ReportClearanceStatus scope="mine" onBack={() => setPage("MY_ADVANCES")} />
           ) : page === "MY_TEAM" ? (
             <MyTeam onDelegate={() => setPage("MANAGER_DELEGATIONS")} />
           ) : page === "SETTINGS" ? (
@@ -8872,6 +9248,28 @@ export default function App() {
                     <div className="stat-label">Monthly Spend</div>
                   </div>
                 </div>
+              </div>
+
+              <div
+                className="card"
+                style={{ marginTop: 20, padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, cursor: "pointer" }}
+                onClick={() => setPage("GET_THE_APP")}
+              >
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg,#c8102e,#8f0c1f)", display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
+                  <Smartphone size={20} color="#fff" aria-hidden />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14.5 }}>Get the FlowDesk mobile app</div>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)" }}>Approve, review, and check status on the go — direct install, no store needed.</div>
+                </div>
+                <button
+                  type="button"
+                  className="ep-btn-outline"
+                  style={{ fontSize: 12, padding: "6px 14px", flex: "none" }}
+                  onClick={(e) => { e.stopPropagation(); setPage("GET_THE_APP"); }}
+                >
+                  Get the app
+                </button>
               </div>
 
               <div className="card" style={{ marginTop: 20, marginBottom: 4, padding: "14px 20px" }}>

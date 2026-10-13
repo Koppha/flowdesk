@@ -8,6 +8,7 @@ import { query } from "../../lib/db.js";
 import { pickRoundRobinAssignee } from "../../lib/workflowEngine.js";
 import { notifyClaimTask } from "../../lib/notifications.js";
 import { writeClaimAudit, getClaimNotificationContext } from "../claims/claims.routes.js";
+import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 
 // Every HR-Operations-reviewed clearance (regardless of outcome - balanced,
 // refund, or a verified payback) continues here before the workflow is
@@ -112,6 +113,13 @@ treasuryRouter.get("/", async (req: AuthedRequest, res, next) => {
     if (f.treasury_status) where.push(`c.treasury_settlement_status = ${p(f.treasury_status)}`);
     if (f.assigned_officer) where.push(`c.treasury_officer_id = ${p(f.assigned_officer)}`);
     if (f.destination) where.push(`c.duty_station ILIKE ${p(`%${f.destination}%`)}`);
+    // Same company-scoping rule as the Capture Inbox and the Treasury
+    // Reports (see getReportDivisionScope in treasury-reports.routes.ts) - a
+    // non-admin viewer only ever sees their own company's clearances here,
+    // not every division's, even when treasury_processing is granted to
+    // more than one company's team at once.
+    const allowedDivisions = await getViewerDivisionScope(req.user!.userId, req.user!.role === "ADMIN");
+    if (allowedDivisions) where.push(`dv.name = ANY(${p(allowedDivisions)}::text[])`);
 
     const rows = await query<any>(
       `SELECT c.id, c.claimant_id, u.full_name AS employee_name, u.employee_no,

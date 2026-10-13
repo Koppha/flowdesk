@@ -91,12 +91,15 @@ export async function createAdvance(
     travel_origin_iata?: string | null;
     travel_destination_iata?: string | null;
     travel_return_date?: string | null;
+    // Salary advance - which month (YYYY-MM) the advance is needed for, as
+    // distinct from when it's applied for.
+    salary_month?: string | null;
   },
   client?: PoolClient
 ) {
   const sql = `INSERT INTO advance_requests
-      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, extra_cost_amount, extra_cost_description, external_beneficiary_id, external_start_date, external_end_date, travel_origin_iata, travel_destination_iata, travel_return_date, sequence_no)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, nextval('advance_request_seq'))
+      (requester_id, created_by_id, type, purpose, project_number, payment_method, payment_account, requested_total, payback_months, override_chain, extra_cost_amount, extra_cost_description, external_beneficiary_id, external_start_date, external_end_date, travel_origin_iata, travel_destination_iata, travel_return_date, salary_month, sequence_no)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, nextval('advance_request_seq'))
      RETURNING id`;
   const params = [
     args.requesterId,
@@ -116,7 +119,8 @@ export async function createAdvance(
     args.external_end_date ?? null,
     args.travel_origin_iata ?? null,
     args.travel_destination_iata ?? null,
-    args.travel_return_date ?? null
+    args.travel_return_date ?? null,
+    args.salary_month ?? null
   ];
   const rows = client ? (await client.query<{ id: string }>(sql, params)).rows : await query<{ id: string }>(sql, params);
 
@@ -219,7 +223,12 @@ export async function advanceWorkflowStep(args: {
     // whatever else is in this stage) is the real gate. A still-unapproved
     // DEPT_ACCOMODATION step is picked up later via the lateAccommodationIdx
     // path above once HR actually books it, whenever that happens.
-    const stillPending = group.indices.some((idx) => chain[idx].action_type !== "DEPT_ACCOMODATION" && !newChain[idx].approved);
+    // DEPT_REPORTS ("View") never blocks either - it's a read-only FYI step
+    // (see inbox.routes.ts's loadAdvancesForUser), not a decision anyone
+    // needs to make, so it has no equivalent "come back and complete it
+    // later" path at all - it just stays unapproved forever, same as a
+    // skipped accommodation step that never got booked.
+    const stillPending = group.indices.some((idx) => chain[idx].action_type !== "DEPT_ACCOMODATION" && chain[idx].action_type !== "DEPT_REPORTS" && !newChain[idx].approved);
     let nextStatus: AdvanceStatus;
     let newStepOrder: number;
     let hasMore: boolean;

@@ -5,7 +5,7 @@ import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { roleLabel } from "./roles";
-import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Hourglass, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users } from "lucide-react";
+import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Hourglass, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users, Wallet } from "lucide-react";
 import { BusinessUnitTabs, IconTabRow, FinanceEmptyState, type BusinessUnit } from "./components/FinanceQueueKit";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
@@ -119,6 +119,15 @@ type InboxItem =
       current_step_actionable_by_me?: boolean;
       is_delegated?: boolean;
       delegated_from_manager_name?: string | null;
+    }
+  | {
+      doc_type: "SIGNABLE_DOCUMENT";
+      id: string;
+      status: string;
+      title: string;
+      created_by_name: string | null;
+      current_step_actionable_by_me?: boolean;
+      created_at?: string;
     };
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -286,15 +295,28 @@ function statusTone(value: string | null | undefined) {
   return "status-pill-info";
 }
 
+// An item's own type name: a custom request shows its request type (e.g.
+// "Computer Request"), never the generic doc_type label.
+function itemTypeLabel(item: { doc_type?: string | null; request_type_name?: string | null } | null | undefined) {
+  if (item?.doc_type === "CUSTOM_REQUEST" && item.request_type_name) return item.request_type_name;
+  return docTypeLabel(item?.doc_type);
+}
+
 function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) {
   switch (value) {
     case "ADVANCE":          return "Advance";
+    // Synthetic tab (not a real doc_type) - Salary Advances split out of
+    // the generic Advance group, see the `grouped` useMemo below.
+    case "SALARY_ADVANCE":   return "Salary Advance";
     case "ACCOMMODATION":    return "Travel Accommodation";
     case "CLAIM":            return "Clearance";
-    case "CUSTOM_REQUEST":   return "Change Request";
+    case "CUSTOM_REQUEST":   return "Custom Request";
+    case "CHANGE_REQUEST":   return "Change Request";
+    case "BRS_APPROVAL":     return "BRS Approval";
     case "OVERTIME_REQUEST": return "Overtime Request";
     case "OVERTIME_CLAIM":   return "Overtime Claim";
     case "STANDBY_CLAIM":    return "Standby Claim";
+    case "SIGNABLE_DOCUMENT": return "Signature";
     default:                 return statusLabel(String(value || "Document"));
   }
 }
@@ -326,9 +348,12 @@ const CLEARANCE_OUTCOME_LABELS: Record<string, string> = {
 function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
   switch (value) {
     case "ADVANCE":          return Plane;
+    case "SALARY_ADVANCE":   return Wallet;
     case "ACCOMMODATION":    return Briefcase;
     case "CLAIM":            return ShieldCheck;
-    case "CUSTOM_REQUEST":   return ClipboardList;
+    case "CUSTOM_REQUEST":
+    case "CHANGE_REQUEST":   return ClipboardList;
+    case "BRS_APPROVAL":     return FileText;
     case "OVERTIME_REQUEST":
     case "OVERTIME_CLAIM":   return Clock3;
     case "STANDBY_CLAIM":    return CircleDot;
@@ -339,9 +364,12 @@ function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
 function docTypeTone(value: InboxItem["doc_type"] | string | null | undefined) {
   switch (value) {
     case "ADVANCE":          return "doc-tone-blue";
+    case "SALARY_ADVANCE":   return "doc-tone-green";
     case "ACCOMMODATION":    return "doc-tone-purple";
     case "CLAIM":            return "doc-tone-green";
-    case "CUSTOM_REQUEST":   return "doc-tone-blue";
+    case "CUSTOM_REQUEST":
+    case "CHANGE_REQUEST":   return "doc-tone-blue";
+    case "BRS_APPROVAL":     return "doc-tone-purple";
     case "OVERTIME_REQUEST":
     case "OVERTIME_CLAIM":
     case "STANDBY_CLAIM":    return "doc-tone-purple";
@@ -351,6 +379,7 @@ function docTypeTone(value: InboxItem["doc_type"] | string | null | undefined) {
 
 function itemStageProgress(item: InboxItem) {
   const status = String(item.status || "").toUpperCase();
+  if (item.doc_type === "SIGNABLE_DOCUMENT") return item.current_step_actionable_by_me ? "Awaiting your signature" : "Awaiting another approver";
   if (item.doc_type === "CUSTOM_REQUEST") return (item.current_step_position_name && displayOrgGroupName(item.current_step_position_name)) || statusLabel(status);
   if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return item.my_title || "Pending";
   // A claim/advance not yet at a terminal/outcome status is still
@@ -377,6 +406,7 @@ function itemStageProgress(item: InboxItem) {
 
 function itemStatusLabel(item: InboxItem) {
   const status = String(item.status || "").toUpperCase();
+  if (item.doc_type === "SIGNABLE_DOCUMENT") return item.current_step_actionable_by_me ? "Awaiting Your Signature" : "In Progress";
   if ((item.doc_type === "CLAIM" || item.doc_type === "ADVANCE") && CLEARANCE_OUTCOME_STATUSES.has(status)) {
     return CLEARANCE_OUTCOME_LABELS[status] || statusLabel(status);
   }
@@ -416,6 +446,7 @@ function itemStatusLabel(item: InboxItem) {
 }
 
 function itemOwner(item: InboxItem) {
+  if (item.doc_type === "SIGNABLE_DOCUMENT") return item.created_by_name || "Unknown";
   if (item.doc_type === "CLAIM") return item.claimant_name || "Unknown";
   if (item.doc_type === "CUSTOM_REQUEST") return item.requester_name || "Unknown";
   if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return item.employee_name || "Unknown";
@@ -425,18 +456,19 @@ function itemOwner(item: InboxItem) {
 function itemAmountValue(item: InboxItem) {
   if (item.doc_type === "ADVANCE") return Number(item.requested_total || 0);
   if (item.doc_type === "ACCOMMODATION") return Number(item.amount || 0);
-  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST") return 0;
+  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "SIGNABLE_DOCUMENT") return 0;
   if (item.doc_type === "OVERTIME_CLAIM") return Number(item.total_amount || 0);
   if (item.doc_type === "STANDBY_CLAIM") return Number(item.calculated_amount || 0);
   return Number(item.claim_total || 0);
 }
 
 function itemAmount(item: InboxItem) {
-  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST") return "—";
+  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "SIGNABLE_DOCUMENT") return "—";
   return fmt(itemAmountValue(item), (item as any).currency);
 }
 
 function itemContext(item: InboxItem) {
+  if (item.doc_type === "SIGNABLE_DOCUMENT") return item.title;
   if (item.doc_type === "ADVANCE") return item.purpose || "Advance request";
   if (item.doc_type === "ACCOMMODATION") return `${item.location || "Location pending"}${item.provider ? ` - ${item.provider}` : ""}`;
   if (item.doc_type === "CUSTOM_REQUEST") return item.request_type_name;
@@ -558,6 +590,11 @@ export default function Inbox(props: {
   // Decision" panel) — rather than re-implement that UI a second time inside
   // this generic inbox, these items hand off to that module's own page.
   onNavigateToModule?: (target: "OVERTIME" | "STANDBY", deepLink: { kind: "REQUEST" | "CLAIM"; id: string }) => void;
+  // Signable documents hand off the same way, to the Sign a Document page -
+  // no deepLink object, since that page reads the id from the URL's
+  // ?signDoc= param (the same mechanism a shared link already uses) rather
+  // than a prop.
+  onOpenSignableDocument?: (id: string) => void;
 }) {
   const me = getUserFromToken();
   const role = me?.role || "UNKNOWN";
@@ -572,6 +609,7 @@ export default function Inbox(props: {
     if (it.doc_type === "OVERTIME_REQUEST") return props.onNavigateToModule?.("OVERTIME", { kind: "REQUEST", id: it.id });
     if (it.doc_type === "OVERTIME_CLAIM") return props.onNavigateToModule?.("OVERTIME", { kind: "CLAIM", id: it.id });
     if (it.doc_type === "STANDBY_CLAIM") return props.onNavigateToModule?.("STANDBY", { kind: "CLAIM", id: it.id });
+    if (it.doc_type === "SIGNABLE_DOCUMENT") return props.onOpenSignableDocument?.(it.id);
     setSelected(it);
   }
 
@@ -678,8 +716,21 @@ export default function Inbox(props: {
   const grouped = useMemo(() => {
     const g: Record<string, InboxItem[]> = {};
     for (const it of scopedItems) {
-      g[it.doc_type] = g[it.doc_type] || [];
-      g[it.doc_type].push(it);
+      // Salary Advances get their own tab, split out of the generic
+      // Advance group - a synthetic key (the item's real doc_type stays
+      // "ADVANCE" everywhere else, e.g. when opening/acting on it) that
+      // only exists, and so only shows a tab, when there's at least one.
+      // Every custom request type (Change Request, BRS Approval, any future
+      // one) shared a single generic "CUSTOM_REQUEST" tab, all mislabeled
+      // "Change Request" regardless of what they actually were - a BRS
+      // approval sitting there looked identical to (and indistinguishable
+      // from) an actual Change Request, easy to miss entirely. Split by the
+      // request type's own code instead, same synthetic-key approach.
+      const key = it.doc_type === "ADVANCE" && (it as any).advance_type === "SALARY" ? "SALARY_ADVANCE"
+        : it.doc_type === "CUSTOM_REQUEST" && (it as any).request_type_code ? (it as any).request_type_code
+        : it.doc_type;
+      g[key] = g[key] || [];
+      g[key].push(it);
     }
     return g;
   }, [scopedItems]);
@@ -875,7 +926,7 @@ export default function Inbox(props: {
                       onClick={() => setActiveGroupTab(docType)}
                     >
                       <Icon size={15} aria-hidden />
-                      {docTypeLabel(docType)}
+                      {grouped[docType][0]?.doc_type === "CUSTOM_REQUEST" ? itemTypeLabel(grouped[docType][0] as any) : docTypeLabel(docType)}
                       <span className="inbox-count-chip">{grouped[docType].length}</span>
                     </button>
                   );
@@ -894,14 +945,17 @@ export default function Inbox(props: {
                       itemStatusLabel(it).toLowerCase().includes(q)
                     )
                   : groupItems;
+                // Newest first by submission time (created time if never submitted).
+                const itemTime = (it: any) => Date.parse(it.submitted_at || it.created_at || "") || 0;
+                const sorted = [...searched].sort((a, b) => itemTime(b) - itemTime(a));
                 const totalPages = Math.max(1, Math.ceil(searched.length / queuePageSize));
                 const currentPage = Math.min(queuePage, totalPages);
-                const pagedItems = searched.slice((currentPage - 1) * queuePageSize, currentPage * queuePageSize);
+                const pagedItems = sorted.slice((currentPage - 1) * queuePageSize, currentPage * queuePageSize);
                 return (
                   <article className={`inbox-group-card ${docTypeTone(activeGroupTab)}`}>
                     <div className="inbox-group-header">
                       <div className="inbox-group-title">
-                        <h4>{docTypeLabel(activeGroupTab)}</h4>
+                        <h4>{groupItems[0]?.doc_type === "CUSTOM_REQUEST" ? itemTypeLabel(groupItems[0] as any) : docTypeLabel(activeGroupTab)}</h4>
                       </div>
                       <div className="inbox-group-badges">
                         <span className="inbox-badge inbox-badge-info">Awaiting: {groupItems.length}</span>
@@ -926,6 +980,7 @@ export default function Inbox(props: {
                             <th>Owner</th>
                             <th>Status / Stage</th>
                             <th>Amount</th>
+                            <th>Submitted</th>
                             <th>Context</th>
                             <th className="inbox-actions-header">Actions</th>
                           </tr>
@@ -938,7 +993,7 @@ export default function Inbox(props: {
                                   <span className="inbox-avatar-mini">{initials(itemOwner(it))}</span>
                                   <span>
                                     <strong>{itemOwner(it)}</strong>
-                                    <small>{docTypeLabel(it.doc_type)}</small>
+                                    <small>{itemTypeLabel(it as any)}</small>
                                     {(it as any).is_delegated && (
                                       <small className="inbox-delegated-tag">On behalf of {(it as any).delegated_from_manager_name || "your manager"}</small>
                                     )}
@@ -960,13 +1015,16 @@ export default function Inbox(props: {
                                 </div>
                               </td>
                               <td className="inbox-money">{itemAmount(it)}</td>
+                              <td className="inbox-when">
+                                {(it as any).submitted_at || (it as any).created_at ? fmtWhen((it as any).submitted_at || (it as any).created_at) : "—"}
+                              </td>
                               <td className="inbox-context">{itemContext(it)}</td>
                               <td className="inbox-actions-cell">
                                 <button
                                   type="button"
                                   className="inbox-review-button"
                                   onClick={() => openItem(it)}
-                                  aria-label={`Review ${docTypeLabel(it.doc_type)} for ${itemOwner(it)}`}
+                                  aria-label={`Review ${itemTypeLabel(it as any)} for ${itemOwner(it)}`}
                                   title="Review"
                                 >
                                   <Eye size={15} aria-hidden="true" />
@@ -1023,7 +1081,7 @@ export default function Inbox(props: {
                   <span className={`status-pill ${statusTone(a.current_status)}`}>{statusLabel(a.current_status)}</span>
                 </div>
                 <div className="inbox-action-meta">
-                  {docTypeLabel(a.doc_type)} for {a.requester_name || "Unknown"}
+                  {itemTypeLabel(a as any)} for {a.requester_name || "Unknown"}
                 </div>
                 <time>{fmtWhen(a.created_at)}</time>
               </div>
@@ -1071,6 +1129,58 @@ function ReceiptRow(props: { claimId: string; receipt: any }) {
       <div className="review-receipt-info">
         <strong>{receipt.file_name || "Receipt"}</strong>
         <small>{fmtFileSize(receipt.size_bytes)}</small>
+      </div>
+      <div className="review-receipt-actions">
+        <button type="button" className="button small-button button-subtle" onClick={handleView} title="View">
+          <Eye size={14} aria-hidden />
+        </button>
+        <button type="button" className="button small-button button-subtle" onClick={handleDownload} disabled={busy} title="Download">
+          <Download size={14} aria-hidden />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Advance requests' supporting documents (quotations, invoices, etc.) -
+// most useful for Salary/Loan advances, which have no travel line items
+// of their own to justify the amount. Same view/download shape as
+// ReceiptRow above.
+function AdvanceAttachmentRow(props: { advanceId: string; attachment: any }) {
+  const { advanceId, attachment } = props;
+  const [busy, setBusy] = useState(false);
+
+  async function handleView() {
+    try {
+      await openBlobInNewTab(() => api.advanceAttachmentFileBlob(advanceId, attachment.id));
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to open document.");
+    }
+  }
+
+  async function handleDownload() {
+    setBusy(true);
+    try {
+      const blob = await api.advanceAttachmentFileBlob(advanceId, attachment.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = attachment.original_name || "document";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to download document.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="review-receipt-row">
+      <span className="review-info-icon"><FileText size={16} aria-hidden /></span>
+      <div className="review-receipt-info">
+        <strong>{attachment.original_name || "Document"}</strong>
+        <small>{fmtFileSize(attachment.size_bytes)}</small>
       </div>
       <div className="review-receipt-actions">
         <button type="button" className="button small-button button-subtle" onClick={handleView} title="View">
@@ -1234,6 +1344,20 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
       travelDuration: durationDays ? `${durationDays} day${durationDays === 1 ? "" : "s"}` : "—",
       purpose: detail.purpose || "—",
       projectNumber: detail.project_number || "—",
+      salaryMonth: detail.salary_month && /^\d{4}-\d{2}$/.test(detail.salary_month)
+        ? monthLabel(Number(detail.salary_month.slice(0, 4)), Number(detail.salary_month.slice(5, 7)))
+        : (detail.salary_month || "—"),
+      paybackDuration: detail.payback_months ? `${detail.payback_months} Month${Number(detail.payback_months) === 1 ? "" : "s"}` : "—",
+      // Payback starts the month AFTER the salary month and runs for
+      // payback_months months - e.g. October + 3 months means November,
+      // December, January are deducted, so payback finishes in January.
+      paybackUntil: detail.salary_month && /^\d{4}-\d{2}$/.test(detail.salary_month) && detail.payback_months
+        ? (() => {
+            const [y, m] = detail.salary_month.split("-").map(Number);
+            const endIndex = y * 12 + (m - 1) + Number(detail.payback_months);
+            return monthLabel(Math.floor(endIndex / 12), (endIndex % 12) + 1);
+          })()
+        : "—",
       requestedTotal: formatMoney(detail.requested_total, detail.travel_currency),
       approvedTotal: formatMoney(detail.approved_total, detail.travel_currency),
       paymentMethod: detail.payment_method || "—",
@@ -2166,16 +2290,38 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                     {pdfFormSummary.applyingFor && <ReviewField icon={User} label="Applying For" value={pdfFormSummary.applyingFor} />}
                   </div>
 
-                  <div className="review-card-title review-card-subtitle">Trip</div>
-                  <div className="review-field-grid">
-                    <ReviewField icon={Plane} label="Type of Travel" value={pdfFormSummary.typeOfTravel} />
-                    <ReviewField icon={MapPin} label="Destination" value={pdfFormSummary.destination} />
-                    <ReviewField icon={Calendar} label="Departure Date" value={pdfFormSummary.departureDate} />
-                    <ReviewField icon={Calendar} label="Return Date" value={pdfFormSummary.returnDate} />
-                    <ReviewField icon={Clock3} label="Travel Duration" value={pdfFormSummary.travelDuration} />
-                    <ReviewField icon={FileText} label="Purpose" value={pdfFormSummary.purpose} />
-                    <ReviewField icon={Hash} label="Project Number" value={pdfFormSummary.projectNumber} />
-                  </div>
+                  {detail.type === "SALARY" ? (
+                    <>
+                      <div className="review-card-title review-card-subtitle">Salary Advance</div>
+                      <div className="review-field-grid">
+                        <ReviewField icon={Calendar} label="Salary Month" value={pdfFormSummary.salaryMonth} />
+                        <ReviewField icon={Clock3} label="Payback Duration" value={pdfFormSummary.paybackDuration} />
+                        <ReviewField icon={Calendar} label="Payback Until" value={pdfFormSummary.paybackUntil} />
+                        <ReviewField icon={FileText} label="Reason" value={pdfFormSummary.purpose} />
+                      </div>
+                    </>
+                  ) : detail.type === "LOAN" ? (
+                    <>
+                      <div className="review-card-title review-card-subtitle">Loan</div>
+                      <div className="review-field-grid">
+                        <ReviewField icon={Clock3} label="Payback Duration" value={pdfFormSummary.paybackDuration} />
+                        <ReviewField icon={FileText} label="Reason" value={pdfFormSummary.purpose} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="review-card-title review-card-subtitle">Trip</div>
+                      <div className="review-field-grid">
+                        <ReviewField icon={Plane} label="Type of Travel" value={pdfFormSummary.typeOfTravel} />
+                        <ReviewField icon={MapPin} label="Destination" value={pdfFormSummary.destination} />
+                        <ReviewField icon={Calendar} label="Departure Date" value={pdfFormSummary.departureDate} />
+                        <ReviewField icon={Calendar} label="Return Date" value={pdfFormSummary.returnDate} />
+                        <ReviewField icon={Clock3} label="Travel Duration" value={pdfFormSummary.travelDuration} />
+                        <ReviewField icon={FileText} label="Purpose" value={pdfFormSummary.purpose} />
+                        <ReviewField icon={Hash} label="Project Number" value={pdfFormSummary.projectNumber} />
+                      </div>
+                    </>
+                  )}
 
                   <div className="review-card-title review-card-subtitle">Payment</div>
                   <div className="review-field-grid">
@@ -2227,10 +2373,10 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
             </div>
 
             {isTravelAdvance && (
-              <div className="review-card">
+              <div className="review-card review-card-fill">
                 <div className="review-card-title">Lines</div>
 
-                <div className="review-table-wrap">
+                <div className="review-table-wrap review-table-wrap-fill">
                   <table className="review-table">
                     <thead>
                       <tr>
@@ -2251,6 +2397,17 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {item.doc_type === "ADVANCE" && (detail.attachments?.length ?? 0) > 0 && (
+              <div className="review-card review-card-wide">
+                <div className="review-card-title">Supporting Documents ({detail.attachments.length})</div>
+                <div className="review-receipt-list">
+                  {detail.attachments.map((a: any) => (
+                    <AdvanceAttachmentRow key={a.id} advanceId={item.id} attachment={a} />
+                  ))}
                 </div>
               </div>
             )}
@@ -2582,7 +2739,7 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
         <div className="review-modal-header">
           <div>
             <div className="review-modal-eyebrow">Request Review</div>
-            <h3>Review {detail?.request_type_name || "Change Request"}</h3>
+            <h3>Review {detail?.request_type_name || "Request"}</h3>
             <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
           </div>
           <button className="button small-button button-subtle" onClick={props.onClose}>

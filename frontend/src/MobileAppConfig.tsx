@@ -1,0 +1,508 @@
+import { useEffect, useState } from "react";
+import { api } from "./api";
+import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, PanelBottom, Smartphone, User } from "lucide-react";
+
+type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument";
+type Modules = Record<ModuleKey, boolean>;
+type TabBarKey = "home" | "inbox" | "profile";
+type TabBarItem = { key: TabBarKey; enabled: boolean };
+type Tab = "modules" | "tabbar" | "branding" | "push" | "distribution" | "analytics";
+
+type Analytics = {
+  totalDownloads: number;
+  totalLogins: number;
+  uniqueLoginUsers: number;
+  recentDownloads: { createdAt: string; fullName: string | null; version: string | null }[];
+  recentLogins: { createdAt: string; fullName: string | null }[];
+};
+
+const TAB_BAR_META: Record<TabBarKey, { label: string; icon: typeof Home }> = {
+  home: { label: "Home", icon: Home },
+  inbox: { label: "Inbox", icon: Inbox },
+  profile: { label: "Profile", icon: User }
+};
+const DEFAULT_TABS: TabBarItem[] = [
+  { key: "home", enabled: true },
+  { key: "inbox", enabled: true },
+  { key: "profile", enabled: true }
+];
+
+const MODULES: { key: ModuleKey; label: string; color: string; bg: string }[] = [
+  { key: "advances", label: "Advances", color: "#c8102e", bg: "#fdecec" },
+  { key: "clearances", label: "Clearances", color: "#0f9d58", bg: "#e8f8ee" },
+  { key: "overtime", label: "Overtime", color: "#b45309", bg: "#fef3e2" },
+  { key: "standby", label: "Standby", color: "#0369a1", bg: "#e0f2fe" },
+  { key: "customProcesses", label: "Custom Processes", color: "#7c3aed", bg: "#ede9fe" },
+  { key: "signADocument", label: "Sign a Document", color: "#c8102e", bg: "#fdecec" }
+];
+
+const DEFAULTS: Modules = {
+  advances: true,
+  clearances: true,
+  createAdvance: false,
+  createClearance: false,
+  overtime: false,
+  standby: false,
+  customProcesses: false,
+  signADocument: false
+};
+
+// Not Home tiles (so they stay out of MODULES and the phone preview) - they
+// show a "New" button on the app's My Advance Requests / My Clearances lists.
+const CREATE_TOGGLES: { key: ModuleKey; label: string; hint: string }[] = [
+  { key: "createAdvance", label: "Create advance requests", hint: "New button on My Advance Requests" },
+  { key: "createClearance", label: "Create clearances", hint: "New button on My Clearances, with receipt upload" }
+];
+
+const TABS: { key: Tab; label: string; icon: typeof LayoutGrid }[] = [
+  { key: "modules", label: "Modules", icon: LayoutGrid },
+  { key: "tabbar", label: "Tab Bar", icon: PanelBottom },
+  { key: "branding", label: "Branding", icon: Smartphone },
+  { key: "push", label: "Push Notifications", icon: Bell },
+  { key: "distribution", label: "Distribution", icon: Smartphone },
+  { key: "analytics", label: "Analytics", icon: BarChart3 }
+];
+
+function Toggle({ checked, disabled, onChange }: { checked: boolean; disabled?: boolean; onChange: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onChange}
+      style={{
+        width: 44,
+        height: 24,
+        borderRadius: 999,
+        border: "none",
+        background: checked ? "#0f9d58" : "#d7dbe3",
+        position: "relative",
+        flex: "none",
+        padding: 0,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.6 : 1
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 2,
+          left: checked ? 22 : 2,
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          background: "#fff",
+          boxShadow: "0 1px 3px rgba(0,0,0,.25)",
+          transition: "left .15s ease"
+        }}
+      />
+    </button>
+  );
+}
+
+function ComingSoon() {
+  return (
+    <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted)", background: "var(--panel-2, #f1f2f5)", padding: "2px 8px", borderRadius: 999 }}>
+      COMING SOON
+    </span>
+  );
+}
+
+// Which module tiles FlowDesk Mobile's Home screen shows - see
+// mobile/src/app/(tabs)/index.tsx, which reads GET /admin/mobile-config on
+// load and filters its tile grid by this. Only the Modules tab is actually
+// wired to a persisted setting; Branding and Push Notifications are laid
+// out to match the design mockup but aren't backed by real settings/
+// delivery yet (marked "Coming soon" rather than pretending they do
+// something) - Distribution is reference information only, same as the
+// mockup it's modeled on.
+export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
+  const [tab, setTab] = useState<Tab>("modules");
+  const [modules, setModules] = useState<Modules>(DEFAULTS);
+  const [savedModules, setSavedModules] = useState<Modules>(DEFAULTS);
+  const [tabsConfig, setTabsConfig] = useState<TabBarItem[]>(DEFAULT_TABS);
+  const [savedTabsConfig, setSavedTabsConfig] = useState<TabBarItem[]>(DEFAULT_TABS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [androidBuild, setAndroidBuild] = useState<{ version: string; uploadedAt: string } | null>(null);
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
+
+  useEffect(() => {
+    if (isAdmin) {
+      api.mobileAppAnalytics().then((r: any) => setAnalytics(r)).catch(() => {});
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    api.mobileAppConfig()
+      .then((r: any) => {
+        const m = { ...DEFAULTS, ...(r?.modules || {}) };
+        setModules(m);
+        setSavedModules(m);
+        const t = Array.isArray(r?.tabs) && r.tabs.length ? r.tabs : DEFAULT_TABS;
+        setTabsConfig(t);
+        setSavedTabsConfig(t);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+    api.latestMobileAppBuild().then((r: any) => setAndroidBuild(r?.build || null)).catch(() => {});
+  }, []);
+
+  function toggle(key: ModuleKey) {
+    if (!isAdmin) return;
+    setModules((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  function toggleTab(key: TabBarKey) {
+    if (!isAdmin) return;
+    setTabsConfig((prev) => prev.map((t) => (t.key === key ? { ...t, enabled: !t.enabled } : t)));
+  }
+
+  function moveTab(index: number, dir: -1 | 1) {
+    if (!isAdmin) return;
+    setTabsConfig((prev) => {
+      const target = index + dir;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const r = await api.updateMobileAppConfig(modules, tabsConfig);
+      const m = { ...DEFAULTS, ...(r?.modules || {}) };
+      setModules(m);
+      setSavedModules(m);
+      const t = Array.isArray(r?.tabs) && r.tabs.length ? r.tabs : tabsConfig;
+      setTabsConfig(t);
+      setSavedTabsConfig(t);
+    } catch (e: any) {
+      alert("Error saving mobile app configuration: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return null;
+
+  const dirty =
+    JSON.stringify(modules) !== JSON.stringify(savedModules) ||
+    JSON.stringify(tabsConfig) !== JSON.stringify(savedTabsConfig);
+  const enabled = MODULES.filter((m) => modules[m.key]);
+
+  return (
+    <div className="ep-panel" style={{ marginBottom: 20, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 26, height: 26, borderRadius: 7, background: "linear-gradient(135deg,#c8102e,#8f0c1f)" }} />
+          <span style={{ fontSize: 16, fontWeight: 700 }}>Mobile App Configuration</span>
+          {dirty && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fef3e2", padding: "3px 9px", borderRadius: 999 }}>
+              UNSAVED CHANGES
+            </span>
+          )}
+        </div>
+        {isAdmin && (
+          <button
+            onClick={save}
+            disabled={saving || !dirty}
+            style={{
+              padding: "9px 18px",
+              border: "none",
+              borderRadius: 9,
+              background: "#c8102e",
+              color: "#fff",
+              cursor: saving || !dirty ? "default" : "pointer",
+              fontSize: 13,
+              fontWeight: 700,
+              opacity: saving || !dirty ? 0.55 : 1
+            }}
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        )}
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap" }}>
+        <div style={{ width: 200, flex: "none", borderRight: "1px solid var(--border)", padding: "14px 0" }}>
+          {TABS.map((t) => {
+            const active = tab === t.key;
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  border: "none",
+                  background: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 18px",
+                  borderLeft: active ? "3px solid #c8102e" : "3px solid transparent",
+                  cursor: "pointer",
+                  textAlign: "left"
+                }}
+              >
+                <Icon size={15} color={active ? "#c8102e" : "var(--muted)"} />
+                <span style={{ fontSize: 13, color: active ? "#c8102e" : "var(--muted)", fontWeight: active ? 700 : 500 }}>{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ flex: "1 1 380px", minWidth: 320, padding: "22px 26px" }}>
+          {tab === "modules" && (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Home screen modules</div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Only enabled modules appear as tiles on the app&apos;s Home screen — the preview updates live.
+              </p>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                {MODULES.map((m, i) => (
+                  <div
+                    key={m.key}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "12px 16px",
+                      borderTop: i > 0 ? "1px solid var(--border)" : undefined
+                    }}
+                  >
+                    <GripVertical size={14} color="#c3c9d4" />
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: m.bg, flex: "none" }} />
+                    <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{m.label}</span>
+                    <Toggle checked={modules[m.key]} disabled={!isAdmin} onChange={() => toggle(m.key)} />
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ fontSize: 15, fontWeight: 700, margin: "22px 0 4px" }}>Creating requests</div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Let staff submit new requests from the app. When off, they can still view and approve.
+              </p>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                {CREATE_TOGGLES.map((c, i) => (
+                  <div
+                    key={c.key}
+                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i > 0 ? "1px solid var(--border)" : undefined }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 600 }}>{c.label}</div>
+                      <div style={{ fontSize: 12, color: "var(--muted)" }}>{c.hint}</div>
+                    </div>
+                    <Toggle checked={modules[c.key]} disabled={!isAdmin} onChange={() => toggle(c.key)} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === "tabbar" && (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Bottom tab bar</div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Which tabs show at the bottom of the app, and in what order. At least one must stay visible.
+              </p>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                {tabsConfig.map((t, i) => {
+                  const meta = TAB_BAR_META[t.key];
+                  const Icon = meta.icon;
+                  return (
+                    <div
+                      key={t.key}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "10px 16px",
+                        borderTop: i > 0 ? "1px solid var(--border)" : undefined
+                      }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column" }}>
+                        <button
+                          onClick={() => moveTab(i, -1)}
+                          disabled={!isAdmin || i === 0}
+                          style={{ border: "none", background: "none", padding: 0, cursor: !isAdmin || i === 0 ? "default" : "pointer", opacity: !isAdmin || i === 0 ? 0.3 : 1 }}
+                        >
+                          <ChevronUp size={14} color="var(--muted)" />
+                        </button>
+                        <button
+                          onClick={() => moveTab(i, 1)}
+                          disabled={!isAdmin || i === tabsConfig.length - 1}
+                          style={{ border: "none", background: "none", padding: 0, cursor: !isAdmin || i === tabsConfig.length - 1 ? "default" : "pointer", opacity: !isAdmin || i === tabsConfig.length - 1 ? 0.3 : 1 }}
+                        >
+                          <ChevronDown size={14} color="var(--muted)" />
+                        </button>
+                      </div>
+                      <div style={{ width: 28, height: 28, borderRadius: 8, background: "var(--panel-2, #f1f2f5)", display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
+                        <Icon size={15} color="var(--ink, #161b2e)" />
+                      </div>
+                      <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{meta.label}</span>
+                      <Toggle checked={t.enabled} disabled={!isAdmin} onChange={() => toggleTab(t.key)} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {tab === "branding" && (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 15, fontWeight: 700 }}>Branding</span>
+                <ComingSoon />
+              </div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Applies to the app icon badge, headers, and primary buttons across the app.
+              </p>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 10 }}>Accent color</div>
+                <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 9, background: "#c8102e", border: "3px solid #161b2e", boxSizing: "border-box" }} />
+                  <div style={{ width: 32, height: 32, borderRadius: 9, background: "#0f9d58" }} />
+                  <div style={{ width: 32, height: 32, borderRadius: 9, background: "#0369a1" }} />
+                  <div style={{ width: 32, height: 32, borderRadius: 9, background: "#7c3aed" }} />
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 10 }}>App icon</div>
+                <div style={{ width: 64, height: 64, borderRadius: 14, border: "1.5px dashed var(--border)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "var(--muted)" }}>
+                  Upload
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === "push" && (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 15, fontWeight: 700 }}>Push notifications</span>
+                <ComingSoon />
+              </div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Devices already register for push on login. Nothing is actually sent through them yet.
+              </p>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                {["New item awaiting your approval", "Your request was approved or rejected", "SLA reminder — step overdue"].map((label, i) => (
+                  <div key={label} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i > 0 ? "1px solid var(--border)" : undefined }}>
+                    <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{label}</span>
+                    <Toggle checked={i < 2} disabled onChange={() => {}} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === "distribution" && (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Distribution</div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>Internal-only for now — no public app store listing.</p>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+                  <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>Android — direct APK, served from Get the App</span>
+                  {androidBuild ? (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#0f9d58", background: "#e8f8ee", padding: "3px 9px", borderRadius: 999 }}>
+                      LIVE · v{androidBuild.version}
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", background: "var(--panel-2, #f1f2f5)", padding: "3px 9px", borderRadius: 999 }}>NOT SET UP</span>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+                  <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>iOS — TestFlight (internal)</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", background: "var(--panel-2, #f1f2f5)", padding: "3px 9px", borderRadius: 999 }}>NOT SET UP</span>
+                </div>
+              </div>
+              <div style={{ marginTop: 14, background: "#fef3e2", border: "1px solid #f3dfb5", borderRadius: 10, padding: "12px 16px", fontSize: 12, color: "#92400e" }}>
+                Once EAS builds are wired up, saving Modules/Branding here can publish as an over-the-air update — no store review needed for JS/config changes. A native code change still needs a new build.
+              </div>
+            </div>
+          )}
+
+          {tab === "analytics" && (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Analytics</div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Downloads from Get the App, and logins made through the app itself (tracked separately from web logins).
+              </p>
+              {!analytics ? (
+                <p style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</p>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+                    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{analytics.totalDownloads}</div>
+                      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>Total downloads</div>
+                    </div>
+                    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{analytics.totalLogins}</div>
+                      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>App logins</div>
+                    </div>
+                    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{analytics.uniqueLoginUsers}</div>
+                      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>Unique users</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 240px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>Recent downloads</div>
+                      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                        {analytics.recentDownloads.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>None yet</div>}
+                        {analytics.recentDownloads.map((d, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderTop: i > 0 ? "1px solid var(--border)" : undefined, fontSize: 12.5 }}>
+                            <span>{d.fullName || "Unknown"}{d.version ? ` · v${d.version}` : ""}</span>
+                            <span style={{ color: "var(--muted)" }}>{new Date(d.createdAt).toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ flex: "1 1 240px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>Recent logins</div>
+                      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                        {analytics.recentLogins.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>None yet</div>}
+                        {analytics.recentLogins.map((l, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderTop: i > 0 ? "1px solid var(--border)" : undefined, fontSize: 12.5 }}>
+                            <span>{l.fullName || "Unknown"}</span>
+                            <span style={{ color: "var(--muted)" }}>{new Date(l.createdAt).toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div style={{ width: 240, flex: "none", borderLeft: "1px solid var(--border)", padding: 20, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", alignSelf: "flex-start", marginBottom: 12 }}>
+            Live preview
+          </div>
+          <div style={{ width: 190, borderRadius: 22, border: "5px solid #161b2e", background: "#eef1f7", overflow: "hidden" }}>
+            <div style={{ padding: "12px 12px 8px" }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#161b2e" }}>Good afternoon, Kopano</div>
+              <div style={{ fontSize: 8.5, color: "#667085", marginTop: 4 }}>{enabled.length ? "2 awaiting your approval" : "Nothing to show yet"}</div>
+            </div>
+            <div style={{ padding: "0 10px 12px", minHeight: 120, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, alignContent: "start" }}>
+              {enabled.map((m) => (
+                <div key={m.key} style={{ background: "#fff", border: "1px solid #e3e7f0", borderRadius: 8, padding: 7 }}>
+                  <div style={{ width: 15, height: 15, borderRadius: 4, background: m.bg, marginBottom: 5 }} />
+                  <div style={{ fontSize: 7.5, fontWeight: 600, color: "#161b2e" }}>{m.label}</div>
+                </div>
+              ))}
+              {enabled.length === 0 && <div style={{ fontSize: 9.5, color: "#667085", gridColumn: "1 / -1" }}>No modules enabled</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

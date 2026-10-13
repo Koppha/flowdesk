@@ -1,39 +1,26 @@
 import { useEffect, useState } from "react";
 import { api, downloadBlob } from "./api";
 import { showNotice } from "./alerts";
-import { formatMoney } from "./constants";
-import { BarChart3, Clock3, Download, Filter, Wallet } from "lucide-react";
+import { BarChart3, Clock3, Download, Filter } from "lucide-react";
 
-// Finance-facing Overtime reports — supersedes the old fixed, unfilterable
-// allowance dump inside Overtime.tsx's Reports tab. Same shell shape as
-// TreasuryReportPage (filter bar + table backed by the same server-side
-// query as the export), but Overtime's own filter set (year/month/status/
-// compensation) rather than Treasury's (date range/division/outcome), so
-// it's a sibling component rather than a reuse of TreasuryReportPage itself.
-type ReportKey = "payment-queue" | "allowance" | "paid-history";
+// Overtime reports — supersedes the old fixed, unfilterable allowance dump
+// inside Overtime.tsx's Reports tab. Same shell shape as TreasuryReportPage
+// (filter bar + table backed by the same server-side query as the export),
+// but Overtime's own filter set (year/month/status/division/department)
+// rather than Treasury's (date range/division/outcome), so it's a sibling
+// component rather than a reuse of TreasuryReportPage itself. Hours-only —
+// there's no Finance/payment stage left in Overtime claims, so every column
+// here is a hours/status figure, never a money amount.
+type ReportKey = "allowance" | "paid-history";
 
 const TABS: { key: ReportKey; label: string; icon: any }[] = [
-  { key: "payment-queue", label: "Payment Queue", icon: Wallet },
-  { key: "allowance", label: "Allowance Report", icon: BarChart3 },
-  { key: "paid-history", label: "Paid History", icon: Clock3 }
+  { key: "allowance", label: "Hours Report", icon: BarChart3 },
+  { key: "paid-history", label: "Completed Claims", icon: Clock3 }
 ];
 
-type Column = { key: string; label: string; money?: boolean };
+type Column = { key: string; label: string };
 
 const COLUMNS: Record<ReportKey, Column[]> = {
-  "payment-queue": [
-    { key: "claim_no", label: "Claim No." },
-    { key: "employee_name", label: "Employee" },
-    { key: "employee_no", label: "E/N" },
-    { key: "division_name", label: "Division" },
-    { key: "hours_125", label: "125%" },
-    { key: "hours_150", label: "150%" },
-    { key: "hours_200", label: "200%" },
-    { key: "converted_hours", label: "Converted" },
-    { key: "hourly_rate", label: "Rate", money: true },
-    { key: "total_amount", label: "Amount", money: true },
-    { key: "compensation_preference", label: "Compensation" }
-  ],
   allowance: [
     { key: "claim_no", label: "Claim No." },
     { key: "employee_name", label: "Employee" },
@@ -43,8 +30,7 @@ const COLUMNS: Record<ReportKey, Column[]> = {
     { key: "hours_150", label: "150%" },
     { key: "hours_200", label: "200%" },
     { key: "converted_hours", label: "Converted" },
-    { key: "compensation_preference", label: "Compensation" },
-    { key: "total_amount", label: "Amount", money: true },
+    { key: "equivalent_days", label: "Equivalent Days" },
     { key: "status", label: "Status" }
   ],
   "paid-history": [
@@ -53,18 +39,15 @@ const COLUMNS: Record<ReportKey, Column[]> = {
     { key: "employee_no", label: "E/N" },
     { key: "division_name", label: "Division" },
     { key: "converted_hours", label: "Converted" },
-    { key: "hourly_rate", label: "Rate", money: true },
-    { key: "total_amount", label: "Amount", money: true },
-    { key: "compensation_preference", label: "Compensation" },
-    { key: "finance_reference", label: "Finance Ref." },
-    { key: "paid_at", label: "Paid At" }
+    { key: "equivalent_days", label: "Equivalent Days" },
+    { key: "closed_at", label: "Closed At" }
   ]
 };
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 export default function OvertimeReportsHub({ onBack }: { onBack: () => void }) {
-  const [tab, setTab] = useState<ReportKey>("payment-queue");
+  const [tab, setTab] = useState<ReportKey>("allowance");
   const [data, setData] = useState<any>({ items: [] });
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -106,7 +89,6 @@ export default function OvertimeReportsHub({ onBack }: { onBack: () => void }) {
 
   const items: any[] = Array.isArray(data.items) ? data.items : [];
   const columns = COLUMNS[tab];
-  const totals = data.totals;
 
   return (
     <div className="custom-requests-page">
@@ -118,7 +100,7 @@ export default function OvertimeReportsHub({ onBack }: { onBack: () => void }) {
             </span>
             <h2>Overtime Reports</h2>
           </div>
-          <p className="custom-requests-subtitle">Finance-facing overtime reporting — filtered, exportable, matching what's on screen.</p>
+          <p className="custom-requests-subtitle">Overtime hours reporting — filtered, exportable, matching what's on screen.</p>
         </div>
         <button onClick={onBack} className="ep-btn-outline custom-requests-back">
           Back
@@ -132,39 +114,6 @@ export default function OvertimeReportsHub({ onBack }: { onBack: () => void }) {
           </button>
         ))}
       </div>
-
-      {tab === "payment-queue" && totals && (
-        <div className="ep-kpi-row" style={{ marginBottom: 16 }}>
-          <div className="ep-kpi ep-kpi-gold">
-            <Wallet size={20} className="ep-kpi-icon" aria-hidden />
-            <div>
-              <div className="ep-kpi-value">{formatMoney(totals.total_to_pay)}</div>
-              <div className="ep-kpi-label">Total to Pay</div>
-            </div>
-          </div>
-          <div className="ep-kpi ep-kpi-blue">
-            <BarChart3 size={20} className="ep-kpi-icon" aria-hidden />
-            <div>
-              <div className="ep-kpi-value">{totals.claims_pending}</div>
-              <div className="ep-kpi-label">Claims Pending</div>
-            </div>
-          </div>
-          <div className="ep-kpi ep-kpi-cyan">
-            <Clock3 size={20} className="ep-kpi-icon" aria-hidden />
-            <div>
-              <div className="ep-kpi-value">{Number(totals.converted_hours || 0).toFixed(1)}</div>
-              <div className="ep-kpi-label">Converted Hours</div>
-            </div>
-          </div>
-          <div className="ep-kpi ep-kpi-purple">
-            <Clock3 size={20} className="ep-kpi-icon" aria-hidden />
-            <div>
-              <div className="ep-kpi-value">{totals.days_in_lieu_claims}</div>
-              <div className="ep-kpi-label">Days-in-Lieu Claims</div>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="ep-panel">
         <div className="ep-panel-head treasury-filter-bar">
@@ -190,14 +139,6 @@ export default function OvertimeReportsHub({ onBack }: { onBack: () => void }) {
             <label>Department</label>
             <input className="ep-form-input" placeholder="Any department" value={filters.department || ""} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))} />
           </div>
-          <div className="treasury-filter-field">
-            <label>Compensation</label>
-            <select className="ep-select" value={filters.compensation_preference || ""} onChange={(e) => setFilters((f) => ({ ...f, compensation_preference: e.target.value }))}>
-              <option value="">Any</option>
-              <option value="PAY">Pay</option>
-              <option value="DAYS">Days</option>
-            </select>
-          </div>
           <div className="treasury-filter-actions">
             <button className="ep-btn" onClick={load} disabled={loading}>Apply Filters</button>
             <button className="ep-btn-outline" onClick={() => void exportAs("csv")} disabled={exporting !== null}><Download size={14} /> CSV</button>
@@ -218,7 +159,7 @@ export default function OvertimeReportsHub({ onBack }: { onBack: () => void }) {
                 {items.map((row, i) => (
                   <tr key={row.id || i}>
                     {columns.map((c) => (
-                      <td key={c.key}>{c.money ? (row[c.key] != null ? formatMoney(Number(row[c.key])) : "—") : row[c.key] ?? "—"}</td>
+                      <td key={c.key}>{row[c.key] ?? "—"}</td>
                     ))}
                   </tr>
                 ))}

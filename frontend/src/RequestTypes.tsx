@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { confirmAction } from "./alerts";
+import SlaReminderSettings from "./SlaReminderSettings";
 import {
   AlertTriangle,
   ArrowDown,
@@ -349,11 +350,13 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
     salary_advance_enabled: boolean; loan_advance_enabled: boolean;
     salary_advance_max_payback_months: number; loan_advance_max_payback_months: number;
     vendor_contracts_enabled: boolean; service_contracts_enabled: boolean;
+    signature_enabled: boolean;
   }>({
     overtime_enabled: true, standby_enabled: true,
     salary_advance_enabled: true, loan_advance_enabled: true,
     salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6,
-    vendor_contracts_enabled: true, service_contracts_enabled: true
+    vendor_contracts_enabled: true, service_contracts_enabled: true,
+    signature_enabled: true
   });
   const [savingMaxMonths, setSavingMaxMonths] = useState<"salary_advance_max_payback_months" | "loan_advance_max_payback_months" | null>(null);
   const [loading, setLoading] = useState(false);
@@ -408,7 +411,8 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
           overtime_enabled: true, standby_enabled: true,
           salary_advance_enabled: true, loan_advance_enabled: true,
           salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6,
-          vendor_contracts_enabled: true, service_contracts_enabled: true
+          vendor_contracts_enabled: true, service_contracts_enabled: true,
+          signature_enabled: true
         }))
       ]);
       setRequestTypes(Array.isArray(data) ? data : []);
@@ -421,7 +425,8 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
         salary_advance_max_payback_months: Number(flags?.salary_advance_max_payback_months) || 6,
         loan_advance_max_payback_months: Number(flags?.loan_advance_max_payback_months) || 6,
         vendor_contracts_enabled: flags?.vendor_contracts_enabled !== false,
-        service_contracts_enabled: flags?.service_contracts_enabled !== false
+        service_contracts_enabled: flags?.service_contracts_enabled !== false,
+        signature_enabled: flags?.signature_enabled !== false
       });
     } catch { /* ignore */ }
     finally { setLoading(false); }
@@ -429,7 +434,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
 
   useEffect(() => { void load(); }, [load]);
 
-  async function toggleModule(key: "overtime_enabled" | "standby_enabled" | "salary_advance_enabled" | "loan_advance_enabled" | "vendor_contracts_enabled" | "service_contracts_enabled") {
+  async function toggleModule(key: "overtime_enabled" | "standby_enabled" | "salary_advance_enabled" | "loan_advance_enabled" | "vendor_contracts_enabled" | "service_contracts_enabled" | "signature_enabled") {
     const next = !moduleFlags[key];
     setModuleFlags((f) => ({ ...f, [key]: next }));
     try {
@@ -686,6 +691,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
             { icon: "🏦", label: "Loan Advance", desc: "Request a loan, repaid over a set number of months.", page: "MY_REQUESTS", flagKey: "loan_advance_enabled" as const, maxMonthsKey: "loan_advance_max_payback_months" as const },
             { icon: "📄", label: "Vendor Contracts", desc: "Track procurement agreements, payment schedules, and renewals.", page: "VENDOR_CONTRACTS", flagKey: "vendor_contracts_enabled" as const, maxMonthsKey: null },
             { icon: "📶", label: "Service Contracts", desc: "Track individual and company telecom service contracts and their renewals.", page: "SERVICE_CONTRACTS", flagKey: "service_contracts_enabled" as const, maxMonthsKey: null },
+            { icon: "✍️", label: "Electronic Signature", desc: "Sign uploaded documents and verify signatures publicly by code.", page: "SIGNATURES", flagKey: "signature_enabled" as const, maxMonthsKey: null },
           ].map((t) => {
             const active = t.flagKey ? moduleFlags[t.flagKey] : true;
             return (
@@ -751,6 +757,8 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
           })}
         </div>
       </div>
+
+      <SlaReminderSettings isAdmin={isAdmin} />
 
       {/* ── Custom Processes Table ── */}
       <div className="ep-panel">
