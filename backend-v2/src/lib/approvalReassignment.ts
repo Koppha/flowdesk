@@ -117,7 +117,7 @@ async function resolveDynamicApprover(
   stepIdx: number,
   workflowId: string
 ): Promise<ResolvedApprover | null> {
-  if (positionCode === "EXCO") return resolveDeptExco(department || "");
+  if (positionCode === "EXCO") return resolveDeptExco(department || "", movedUserId);
 
   const candidate = positionCode === "HOD"
     ? await resolveRequesterHod(movedUserId)

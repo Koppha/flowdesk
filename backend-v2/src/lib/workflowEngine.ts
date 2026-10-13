@@ -175,9 +175,30 @@ export async function resolveRequesterHod(
 // happens to equal the target department - which fails for exactly this
 // SEFS shape, silently leaving a "plain EXCO" step unresolvable even
 // though the correct answer was sitting right there in departments.
+//
+// When the requester is known, their own department's EXCO (sections.
+// exco_user_id - the UI's "Department" level) wins over the division's: a
+// GM who owns one department under a wider division (Ketja Nhlapo,
+// Products & Services, under Puleng Masoabi's Marketing & Customer
+// Experience) is that department's EXCO, and the division GM must never be
+// asked to approve for it. Only when the requester's department has no
+// EXCO of its own does this fall back to the division's.
 export async function resolveDeptExco(
-  department: string
+  department: string,
+  requesterId?: string | null
 ): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null } | null> {
+  if (requesterId) {
+    const viaOwnDepartment = (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
+      `SELECT x.id, x.full_name, x.title, x.email
+         FROM users r
+         JOIN sections s ON s.id = r.section_id
+         JOIN users x ON x.id = s.exco_user_id
+        WHERE r.id = $1 AND x.is_active = true
+        LIMIT 1`,
+      [requesterId]
+    ))[0];
+    if (viaOwnDepartment) return viaOwnDepartment;
+  }
   if (!department.trim()) return null;
   const viaDepartment = (await query<{ id: string; full_name: string | null; title: string | null; email: string | null }>(
     `SELECT u.id, u.full_name, u.title, u.email
@@ -367,7 +388,7 @@ export async function resolveWorkflowChain(params: {
     const stepCode = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
     return stepCode === "EXCO" && !step.assigned_user_ids?.length && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
   });
-  const deptExco = hasDeptExcoStep ? await resolveDeptExco(department) : null;
+  const deptExco = hasDeptExcoStep ? await resolveDeptExco(department, requesterId || null) : null;
 
   // A plain (non-fixed) CEO step routes to whoever currently holds that
   // role - see resolveCeo above.
