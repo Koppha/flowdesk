@@ -230,6 +230,25 @@ function parseBankAccount(paymentAccount: string | null | undefined): { bankName
   return { bankName: bankMatch?.[1]?.trim() || "", accountNumber: accountMatch?.[1]?.trim() || "" };
 }
 
+// An advance/clearance workflow step as the PDF's Approval Summary shows it:
+// what the person actually did (a countersign isn't an approval) and when.
+const DONE_LABEL: Record<string, string> = {
+  APPROVE: "Approved",
+  COUNTER_SIGN: "Countersigned",
+  DEPT_CAPTURE: "Captured",
+  MARK_PAID: "Paid",
+  DEPT_ACCOMODATION: "Accommodation booked",
+  DEPT_CLOSE: "Closed"
+};
+function workflowStepForPdf(s: any): ApprovalChainDisplayItem {
+  return {
+    title: s.position_name,
+    approverName: s.approver_name || "",
+    decision: s.approved ? (DONE_LABEL[s.action_type] ?? "Approved") : "Pending",
+    decidedAt: s.approved && s.approved_at ? formatDateTime(s.approved_at) : undefined
+  };
+}
+
 export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData> {
   const rows = await query<any>(
     `SELECT ar.*, u.full_name AS requester_name, u.department AS department, u.employee_no AS requester_employee_no,
@@ -392,7 +411,7 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
         line_total: formatMoney(l.line_total, currency)
       }))
     },
-    approvalChain: chain.map((s) => ({ title: s.position_name, approverName: s.approver_name || "", decision: s.approved ? "Approved" : "Pending" })),
+    approvalChain: chain.map(workflowStepForPdf),
     meta: { id, requestType: "ADVANCE_REQUEST", generatedAt: new Date().toISOString() }
   };
 }
@@ -450,7 +469,7 @@ export async function resolveClaimPdfData(id: string): Promise<ResolvedPdfData> 
       })),
       receipts: receipts.map((r) => ({ category: r.category || "", amount: formatMoney(r.amount, currency), notes: r.notes || "" }))
     },
-    approvalChain: chain.map((s) => ({ title: s.position_name, approverName: s.approver_name || "", decision: s.approved ? "Approved" : "Pending" })),
+    approvalChain: chain.map(workflowStepForPdf),
     meta: { id, requestType: "CLEARANCE_CLAIM", generatedAt: new Date().toISOString() }
   };
 }

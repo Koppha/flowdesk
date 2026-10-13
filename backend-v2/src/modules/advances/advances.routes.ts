@@ -2279,7 +2279,7 @@ advancesRouter.post("/:id/mark-paid", async (req: AuthedRequest, res, next) => {
         const isAuthorized = role === "ADMIN" || (await canApproveStep(markPaidStep, req.user!.userId, role, undefined, req.user!.sectionId));
         if (!isAuthorized) throw forbidden("You are not the assigned payer for this step");
 
-        newChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: true } : s));
+        newChain = chain.map((s, i) => (i === markPaidIdx ? { ...s, approved: true, approved_at: new Date().toISOString() } : s));
         const stillPending = group.indices.some((idx) => !newChain![idx].approved);
         if (stillPending) {
           // Other (non-payment) members of this parallel stage haven't finished yet —

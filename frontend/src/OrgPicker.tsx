@@ -140,6 +140,25 @@ export default function OrgPicker({
     ? teams.filter(t => t.section_id === resolved.sectionId)
     : [];
 
+  // A saved Department/Section that doesn't sit under the chosen parent (e.g.
+  // an SEFS user placed in MNO's same-named "Finance Operations" department).
+  // Without an option for it the select would *display* "— None —" while the
+  // old value stays selected underneath - so choosing "— None —" changed
+  // nothing and Save kept the wrong placement. Shown as a flagged option
+  // instead, so the user can see it and actually pick something else.
+  const orphanSection = resolved.sectionId && !filteredSections.some(s => s.id === resolved.sectionId)
+    ? (sections.find(s => s.id === resolved.sectionId) ?? null)
+    : null;
+  const orphanTeam = resolved.teamId && !filteredTeams.some(t => t.id === resolved.teamId)
+    ? (teams.find(t => t.id === resolved.teamId) ?? null)
+    : null;
+  const orphanParentName = (sec: { department_id?: string | null } | null) => {
+    const parent = sec?.department_id ? departments.find(d => d.id === sec.department_id) : null;
+    if (!parent) return "another division";
+    const company = parent.division_id ? divisions.find(d => d.id === parent.division_id)?.name : null;
+    return company ? `${parent.name} (${company})` : parent.name;
+  };
+
   // ─── Handlers ────────────────────────────────────────────────────────────
 
   function handleDivisionChange(divId: string) {
@@ -275,10 +294,18 @@ export default function OrgPicker({
             disabled={disabled}
           >
             <option value="">— None —</option>
+            {orphanSection && (
+              <option value={orphanSection.id}>{orphanSection.name} — belongs to {orphanParentName(orphanSection)}</option>
+            )}
             {filteredSections.map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
+          {orphanSection && (
+            <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
+              This department belongs to {orphanParentName(orphanSection)}, not the division chosen above. Choose "— None —" or one of this division's departments.
+            </div>
+          )}
         </div>
       )}
 
@@ -294,10 +321,18 @@ export default function OrgPicker({
             disabled={disabled}
           >
             <option value="">— None —</option>
+            {orphanTeam && (
+              <option value={orphanTeam.id}>{orphanTeam.name} — belongs to another department</option>
+            )}
             {filteredTeams.map(t => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
+          {orphanTeam && (
+            <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
+              This section isn't under the department chosen above. Choose "— None —" or one of its sections.
+            </div>
+          )}
         </div>
       )}
 

@@ -29,8 +29,8 @@ export function userLabel(u: DirectoryUser) {
 }
 
 export function ApproverCombobox({
-  users, value, onChange, allowFreeEmail
-}: { users: DirectoryUser[]; value: string; onChange: (id: string) => void; allowFreeEmail?: boolean }) {
+  users, value, onChange, allowFreeEmail, placeholder
+}: { users: DirectoryUser[]; value: string; onChange: (id: string) => void; allowFreeEmail?: boolean; placeholder?: string }) {
   const selected = users.find((u) => u.id === value) || null;
   // Lets the field hold a plain email for someone who hasn't logged into
   // FlowDesk yet — they'll get an email naming them on the request instead
@@ -123,7 +123,7 @@ export function ApproverCombobox({
         <input
           className="ep-form-input"
           style={{ paddingLeft: 26, paddingRight: (selected || isFreeEmail) ? 26 : 10 }}
-          placeholder={allowFreeEmail ? "Search approver, or type an email to invite…" : "Search approver by name, email…"}
+          placeholder={placeholder ?? (allowFreeEmail ? "Search approver, or type an email to invite…" : "Search approver by name, email…")}
           value={open ? query : (selected ? userLabel(selected) : (isFreeEmail ? value : ""))}
           onFocus={handleOpen}
           onChange={(e) => setQuery(e.target.value)}
@@ -143,7 +143,8 @@ export function ApproverCombobox({
         <div
           ref={dropdownRef}
           style={{
-            position: "fixed", zIndex: 1000,
+            // Above any modal overlay (z-index 1000), since pickers often sit in one.
+            position: "fixed", zIndex: 10000,
             width: dropdownWidth ?? "100%",
             ...(openLeftward ? { right: anchor.right } : { left: anchor.left }),
             ...(openUpward ? { bottom: anchor.bottom } : { top: anchor.top }),

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { roleLabel } from "./roles";
+import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { api } from "./api";
 import { confirmAction } from "./alerts";
 import {
@@ -1125,49 +1126,41 @@ export default function ReportingLines() {
                   <div className="rl-modal-section-title">Reporting Manager</div>
                   <div className="rl-form-group">
                     <label>Reports To <span style={{ color: "var(--danger)" }}>*</span></label>
-                    <select
-                      className="rl-form-select"
-                      value={editForm.manager_id}
-                      onChange={(e) => setEditForm((f) => ({ ...f, manager_id: e.target.value }))}
-                    >
-                      <option value="">— Select manager —</option>
-                      {(() => {
-                        const LEADERSHIP_ROLES = ["CEO", "EXCO", "HOD", "MANAGER"];
-                        const rolePriority: Record<string, number> = { CEO: 0, EXCO: 1, HOD: 2, MANAGER: 3 };
-                        const sameTeamIds = new Set(employees.map(e => e.id));
-                        const leadership = allUsers
-                          .filter(u => u.id !== editRow.id && u.is_active && LEADERSHIP_ROLES.includes(u.role))
-                          .sort((a, b) =>
-                            (rolePriority[a.role] ?? 9) - (rolePriority[b.role] ?? 9) ||
-                            (a.full_name || a.email).localeCompare(b.full_name || b.email)
-                          );
-                        const teamMembers = allUsers
-                          .filter(u => u.id !== editRow.id && u.is_active && !LEADERSHIP_ROLES.includes(u.role) && sameTeamIds.has(u.id))
-                          .sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
-                        return (
-                          <>
-                            {leadership.length > 0 && (
-                              <optgroup label="Leadership">
-                                {leadership.map(u => (
-                                  <option key={u.id} value={u.id}>
-                                    {u.full_name || u.email} ({roleLabel(u.role)})
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            {teamMembers.length > 0 && (
-                              <optgroup label={`${selectedLabel || editRow.department || "Section"} Members`}>
-                                {teamMembers.map(u => (
-                                  <option key={u.id} value={u.id}>
-                                    {u.full_name || u.email} ({u.title || roleLabel(u.role)})
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                          </>
+                    {(() => {
+                      // Same people, same order as before: leadership first
+                      // (CEO, EXCO, HOD, Manager), then this employee's own
+                      // section - now searchable by name, email or employee no.
+                      const LEADERSHIP_ROLES = ["CEO", "EXCO", "HOD", "MANAGER"];
+                      const rolePriority: Record<string, number> = { CEO: 0, EXCO: 1, HOD: 2, MANAGER: 3 };
+                      const sameTeamIds = new Set(employees.map(e => e.id));
+                      const leadership = allUsers
+                        .filter(u => u.id !== editRow.id && u.is_active && LEADERSHIP_ROLES.includes(u.role))
+                        .sort((a, b) =>
+                          (rolePriority[a.role] ?? 9) - (rolePriority[b.role] ?? 9) ||
+                          (a.full_name || a.email).localeCompare(b.full_name || b.email)
                         );
-                      })()}
-                    </select>
+                      const teamMembers = allUsers
+                        .filter(u => u.id !== editRow.id && u.is_active && !LEADERSHIP_ROLES.includes(u.role) && sameTeamIds.has(u.id))
+                        .sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
+                      const candidates: DirectoryUser[] = [
+                        ...leadership.map(u => ({
+                          id: u.id, full_name: u.full_name, email: u.email, employee_no: (u as any).employee_no ?? null,
+                          department: u.department ?? null, title: u.title ? `${roleLabel(u.role)} · ${u.title}` : roleLabel(u.role)
+                        })),
+                        ...teamMembers.map(u => ({
+                          id: u.id, full_name: u.full_name, email: u.email, employee_no: (u as any).employee_no ?? null,
+                          department: u.department ?? null, title: u.title || roleLabel(u.role)
+                        }))
+                      ];
+                      return (
+                        <ApproverCombobox
+                          users={candidates}
+                          value={editForm.manager_id}
+                          onChange={(id) => setEditForm((f) => ({ ...f, manager_id: id }))}
+                          placeholder="Type to search managers by name, email or employee no…"
+                        />
+                      );
+                    })()}
                   </div>
 
                   {editForm.manager_id && (() => {
