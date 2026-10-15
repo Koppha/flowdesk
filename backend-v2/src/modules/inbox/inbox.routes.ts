@@ -687,7 +687,12 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         // surfaced by loadWorkflowAdvancesForUser above — only add them here
         // for ADMIN (whose main loader is skipped), a view-only capture-feature
         // holder once the chain has actually reached them, or once already captured.
-        if (!captureStep.approved && !isAdmin && !(captureViewOnly && captureStepReached)) continue;
+        // The cutoff applies to ADMIN too: an advance still waiting on its
+        // manager/HOD isn't capture work yet (it was listing - and counting
+        // as pending - every advance from the moment it was submitted). The
+        // admin still sees those in the Approval Inbox.
+        if (!captureStep.approved && !captureStepReached) continue;
+        if (!captureStep.approved && !isAdmin && !captureViewOnly) continue;
         if (!isAdmin && !captureViewOnly) {
           const eligible = await canApproveStep(captureStep, req.user!.userId, effectiveRole, delegatedManagerIds, req.user!.sectionId);
           if (!eligible) continue;
