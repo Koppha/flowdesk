@@ -1992,6 +1992,40 @@ export async function notifyCustomRequestCancelled(args: {
 
 // ─── BRS notifications ─────────────────────────────────────────────────────────
 
+// Someone made owner (full rights) or co-writer (can edit content) of a BRS.
+export async function notifyBrsPeopleAdded(args: {
+  documentId: string;
+  brsTitle: string;
+  addedBy: string | null;
+  owner: { email: string; full_name: string | null } | null;
+  coWriters: Array<{ email: string; full_name: string | null }>;
+}) {
+  try {
+    const who = args.addedBy || "A colleague";
+    if (args.owner?.email) {
+      await sendMail({
+        to: [args.owner.email],
+        subject: `[BRS] You are the owner of "${args.brsTitle}"`,
+        text: [header("BRS — YOU ARE THE OWNER"), ``, `Hello ${args.owner.full_name || ""},`, ``,
+          `${who} made you the owner of the BRS "${args.brsTitle}". As owner you have full rights: edit every section, send it on, route it for approval, distribute and amend it.`,
+          ``, `Open it in FlowDesk: BRS Studio > My BRS.`, ``, footer()].join("\n")
+      });
+    }
+    const to = args.coWriters.map((c) => c.email).filter(Boolean);
+    if (to.length) {
+      await sendMail({
+        to,
+        subject: `[BRS] You are a co-writer on "${args.brsTitle}"`,
+        text: [header("BRS — YOU ARE A CO-WRITER"), ``, `Hello,`, ``,
+          `${who} added you as a co-writer on the BRS "${args.brsTitle}". You can edit its sections and Intake; every change you save is kept in its history.`,
+          ``, `Open it in FlowDesk: BRS Studio > My BRS.`, ``, footer()].join("\n")
+      });
+    }
+  } catch (error) {
+    logger.warn("brs_people_added_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
 export async function notifyBrsSectionAssigned(args: {
   documentId: string;
   brsTitle: string;

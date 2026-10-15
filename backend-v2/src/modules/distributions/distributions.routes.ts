@@ -4,6 +4,7 @@ import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { notifyDocumentDistributed } from "../../lib/notifications.js";
+import { brsCoWriterPermissions } from "../brs/brs.service.js";
 
 // Manual distribution of a fully approved BRS or Change Request. Nothing is
 // sent automatically on approval: the requester (or an admin) chooses who
@@ -39,16 +40,17 @@ export async function hasDistributionAccess(docType: DistributionDocType, docId:
   return rows.length > 0;
 }
 
-type DistributableDoc = { requesterId: string; title: string; label: string; ready: boolean; notReadyReason: string };
+type DistributableDoc = { requesterId: string; ownerId?: string | null; title: string; label: string; ready: boolean; notReadyReason: string };
 
 async function loadDistributableDoc(docType: DistributionDocType, docId: string): Promise<DistributableDoc> {
   if (docType === "BRS") {
-    const doc = (await query<{ requester_id: string; title: string; phase: string; reference_no: string | null }>(
-      `SELECT requester_id, title, phase, reference_no FROM brs_documents WHERE id = $1`, [docId]
+    const doc = (await query<{ requester_id: string; owner_user_id: string | null; title: string; phase: string; reference_no: string | null }>(
+      `SELECT requester_id, owner_user_id, title, phase, reference_no FROM brs_documents WHERE id = $1`, [docId]
     ))[0];
     if (!doc) throw notFound("BRS not found");
     return {
       requesterId: doc.requester_id,
+      ownerId: doc.owner_user_id,
       title: doc.reference_no ? `${doc.reference_no} — ${doc.title}` : doc.title,
       label: "BRS",
       ready: doc.phase === "BASELINE",
@@ -72,10 +74,12 @@ async function loadDistributableDoc(docType: DistributionDocType, docId: string)
   };
 }
 
-function assertCanDistribute(doc: DistributableDoc, actor: { userId: string; role: string }) {
-  if (actor.role !== "ADMIN" && doc.requesterId !== actor.userId) {
-    throw forbidden("Only the requester or an admin can distribute this");
-  }
+async function assertCanDistribute(docType: DistributionDocType, docId: string, doc: DistributableDoc, actor: { userId: string; role: string }) {
+  // A BRS's owner has the same full rights as its creator, and a co-writer
+  // may distribute if the creator/owner granted them that.
+  if (actor.role === "ADMIN" || doc.requesterId === actor.userId || (doc.ownerId && doc.ownerId === actor.userId)) return;
+  if (docType === "BRS" && (await brsCoWriterPermissions(docId, actor.userId)).perms.has("DISTRIBUTE")) return;
+  throw forbidden("You don't have permission to distribute this");
 }
 
 export const distributionsRouter = Router();
@@ -145,7 +149,7 @@ distributionsRouter.get("/:docType/:docId", async (req: AuthedRequest, res, next
   try {
     const docType = DocTypeParam.parse(req.params.docType);
     const doc = await loadDistributableDoc(docType, req.params.docId);
-    assertCanDistribute(doc, req.user!);
+    await assertCanDistribute(docType, req.params.docId, doc, req.user!);
     const rows = await query(
       `SELECT dd.id, dd.message, dd.targets, cardinality(dd.recipient_ids) AS recipient_count, dd.created_at,
               ub.full_name AS distributed_by_name
@@ -181,7 +185,7 @@ distributionsRouter.post("/:docType/:docId", async (req: AuthedRequest, res, nex
     }
 
     const doc = await loadDistributableDoc(docType, req.params.docId);
-    assertCanDistribute(doc, req.user!);
+    await assertCanDistribute(docType, req.params.docId, doc, req.user!);
     if (!doc.ready) throw badRequest(doc.notReadyReason);
 
     const recipients = await query<{ id: string; email: string; full_name: string | null }>(

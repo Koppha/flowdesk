@@ -12,6 +12,156 @@ export type BrsSectionRow = {
   status: "PENDING" | "IN_PROGRESS" | "SUBMITTED";
 };
 
+// ── Group membership ─────────────────────────────────────────────────────────
+// A person, or a whole Department (sections), Section (teams) or Division
+// (users.department) can be a co-writer or section assignee. Read live from
+// users so a move between teams takes effect at once, not at next login.
+export type BrsActorOrg = { userId: string; sectionId: string | null; teamId: string | null; division: string | null };
+
+export async function brsActorOrg(userId: string): Promise<BrsActorOrg> {
+  const u = (await query<{ section_id: string | null; team_id: string | null; department: string | null }>(
+    `SELECT section_id, team_id, department FROM users WHERE id = $1`, [userId]
+  ))[0];
+  return { userId, sectionId: u?.section_id ?? null, teamId: u?.team_id ?? null, division: u?.department ?? null };
+}
+
+// SQL condition matching a row (alias a) that names the actor or one of
+// their groups. $start..$start+3 = userId, sectionId, teamId, division.
+export function brsMemberMatch(alias: string, start: number) {
+  return `(${alias}.user_id = $${start}
+     OR (${alias}.section_ref_id IS NOT NULL AND ${alias}.section_ref_id = $${start + 1})
+     OR (${alias}.team_ref_id IS NOT NULL AND ${alias}.team_ref_id = $${start + 2})
+     OR (${alias}.division_name IS NOT NULL AND lower(trim(${alias}.division_name)) = lower(trim(coalesce($${start + 3}::text, '')))))`;
+}
+export function brsMemberParams(org: BrsActorOrg) {
+  return [org.userId, org.sectionId, org.teamId, org.division];
+}
+
+export async function isBrsCoWriter(documentId: string, userId: string) {
+  const org = await brsActorOrg(userId);
+  const rows = await query<{ id: string }>(
+    `SELECT c.id FROM brs_document_collaborators c WHERE c.document_id = $1 AND ${brsMemberMatch("c", 2)} LIMIT 1`,
+    [documentId, ...brsMemberParams(org)]
+  );
+  return rows.length > 0;
+}
+
+export async function isBrsContributor(documentId: string, userId: string, sectionId?: string) {
+  const org = await brsActorOrg(userId);
+  const rows = await query<{ id: string }>(
+    `SELECT a.id FROM brs_document_section_assignees a JOIN brs_document_sections s ON s.id = a.section_id
+      WHERE s.document_id = $1 ${sectionId ? "AND s.id = $6" : ""} AND ${brsMemberMatch("a", 2)} LIMIT 1`,
+    [documentId, ...brsMemberParams(org), ...(sectionId ? [sectionId] : [])]
+  );
+  return rows.length > 0;
+}
+
+// ── People and roles ─────────────────────────────────────────────────────────
+// CREATOR (requester_id) and OWNER (owner_user_id) have full rights; a
+// CO_WRITER edits content; a CONTRIBUTOR is a section assignee; APPROVER is
+// on the approval chain. Recorded on every audit entry so the trail shows the
+// capacity each person acted in, not just their name.
+export type BrsActorRole = "CREATOR" | "OWNER" | "CO_WRITER" | "CONTRIBUTOR" | "APPROVER" | "ADMIN" | "OTHER";
+
+export async function brsActorRole(
+  doc: { id: string; requester_id: string; owner_user_id?: string | null; brs_approval_submission_id?: string | null },
+  actor: { userId: string; role: string; sectionId?: string | null }
+): Promise<BrsActorRole> {
+  if (doc.requester_id === actor.userId) return "CREATOR";
+  if (doc.owner_user_id && doc.owner_user_id === actor.userId) return "OWNER";
+  if (await isBrsCoWriter(doc.id, actor.userId)) return "CO_WRITER";
+  if (await isBrsContributor(doc.id, actor.userId)) return "CONTRIBUTOR";
+  if (doc.brs_approval_submission_id) {
+    const onChain = await query<{ id: string }>(
+      `SELECT id FROM custom_request_submissions WHERE id = $1 AND approval_chain @> $2::jsonb`,
+      [doc.brs_approval_submission_id, JSON.stringify([{ approver_id: actor.userId }])]
+    );
+    if (onChain[0]) return "APPROVER";
+  }
+  return actor.role === "ADMIN" ? "ADMIN" : "OTHER";
+}
+
+// ── Co-writer permissions ───────────────────────────────────────────────────
+export const BRS_PERMISSIONS = ["EDIT", "INVITE", "WORKFLOW", "DISTRIBUTE", "AMEND"] as const;
+export type BrsPermission = (typeof BRS_PERMISSIONS)[number];
+
+// Union of every co-writer entry that names the actor (themselves or a
+// group they're in).
+export async function brsCoWriterPermissions(documentId: string, userId: string): Promise<{ isCoWriter: boolean; perms: Set<BrsPermission> }> {
+  const org = await brsActorOrg(userId);
+  const rows = await query<{ permissions: string[] }>(
+    `SELECT c.permissions FROM brs_document_collaborators c WHERE c.document_id = $1 AND ${brsMemberMatch("c", 2)}`,
+    [documentId, ...brsMemberParams(org)]
+  );
+  const perms = new Set<BrsPermission>();
+  for (const r of rows) for (const p of r.permissions || []) if ((BRS_PERMISSIONS as readonly string[]).includes(p)) perms.add(p as BrsPermission);
+  return { isCoWriter: rows.length > 0, perms };
+}
+
+// What the actor may do on this BRS. Creator, owner and admin can do
+// everything, and only they manage people/permissions; co-writers get
+// exactly what they were granted.
+export async function brsPermissions(
+  doc: { id: string; requester_id: string; owner_user_id?: string | null },
+  actor: { userId: string; role: string }
+) {
+  if (canManageBrs(doc, actor)) {
+    return { manage: true, edit: true, invite: true, workflow: true, distribute: true, amend: true };
+  }
+  const { perms } = await brsCoWriterPermissions(doc.id, actor.userId);
+  return { manage: false, edit: perms.has("EDIT"), invite: perms.has("INVITE"), workflow: perms.has("WORKFLOW"), distribute: perms.has("DISTRIBUTE"), amend: perms.has("AMEND") };
+}
+
+// Full rights: drive the workflow, route, distribute, amend, manage people.
+export function canManageBrs(doc: { requester_id: string; owner_user_id?: string | null }, actor: { userId: string; role: string }) {
+  return actor.role === "ADMIN" || doc.requester_id === actor.userId || (!!doc.owner_user_id && doc.owner_user_id === actor.userId);
+}
+
+// Content rights: everyone with full rights, plus co-writers granted EDIT.
+export async function canWriteBrs(doc: { id: string; requester_id: string; owner_user_id?: string | null }, actor: { userId: string; role: string }) {
+  if (canManageBrs(doc, actor)) return true;
+  return (await brsCoWriterPermissions(doc.id, actor.userId)).perms.has("EDIT");
+}
+
+// ── Audit trail ──────────────────────────────────────────────────────────────
+export async function recordBrsRevision(args: {
+  documentId: string;
+  kind: "CREATED" | "SECTION_SAVED" | "INTAKE_SAVED" | "PEOPLE_CHANGED" | "PHASE" | "ROUTED" | "APPROVAL_ACTION" | "BASELINED" | "RETURNED" | "REOPENED" | "AMENDMENT_STARTED";
+  actorId: string | null;
+  actorRole: BrsActorRole | null;
+  summary: string;
+  sectionId?: string | null;
+  sectionTitle?: string | null;
+  contentHtml?: string | null;
+  intakeData?: unknown;
+}) {
+  const phase = (await query<{ phase: string }>(`SELECT phase FROM brs_documents WHERE id = $1`, [args.documentId]))[0]?.phase ?? null;
+  await query(
+    `INSERT INTO brs_document_revisions (document_id, kind, section_id, section_title, content_html, intake_data, summary, phase, actor_id, actor_role)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [args.documentId, args.kind, args.sectionId ?? null, args.sectionTitle ?? null, args.contentHtml ?? null,
+     args.intakeData === undefined ? null : JSON.stringify(args.intakeData), args.summary, phase, args.actorId, args.actorRole]
+  );
+}
+
+// An approved BRS reopened for amendment: back to Draft, the approved
+// version stays on record, re-approval baselines the next version.
+export async function startBrsAmendment(documentId: string) {
+  const doc = (await query<{ current_version_id: string | null }>(`SELECT current_version_id FROM brs_documents WHERE id = $1`, [documentId]))[0];
+  const current = doc?.current_version_id
+    ? (await query<{ version_number: number }>(`SELECT version_number FROM brs_document_versions WHERE id = $1`, [doc.current_version_id]))[0]?.version_number ?? null
+    : null;
+  await query(
+    `UPDATE brs_document_sections SET status = 'IN_PROGRESS', updated_at = now() WHERE document_id = $1 AND status = 'SUBMITTED'`,
+    [documentId]
+  );
+  await query(
+    `UPDATE brs_documents SET phase = 'DRAFT', amending_from_version = $1, brs_approval_submission_id = NULL, return_comment = NULL, updated_at = now() WHERE id = $2`,
+    [current, documentId]
+  );
+  return current;
+}
+
 // Generates the next human-readable reference number, e.g. "BRS-2026-0007".
 // Backed by a real sequence (see ensureBrsSchema) so concurrent Intake
 // submissions never collide.
@@ -84,9 +234,13 @@ export async function baselineBrsDocument(documentId: string | null | undefined,
   ))[0];
 
   await query(
-    `UPDATE brs_documents SET phase = 'BASELINE', current_version_id = $1, updated_at = now() WHERE id = $2`,
+    `UPDATE brs_documents SET phase = 'BASELINE', current_version_id = $1, amending_from_version = NULL, updated_at = now() WHERE id = $2`,
     [version.id, documentId]
   );
+  await recordBrsRevision({
+    documentId, kind: "BASELINED", actorId: baselinedById, actorRole: "APPROVER",
+    summary: `Fully approved — baselined as version ${nextVersion}`
+  });
 }
 
 // Called when a BRS_APPROVAL submission is rejected at any step — bounces
@@ -108,6 +262,10 @@ export async function returnBrsDocumentToDraft(
     `UPDATE brs_documents SET phase = 'DRAFT', return_comment = $1, brs_approval_submission_id = NULL, updated_at = now() WHERE id = $2`,
     [comment, documentId]
   );
+  await recordBrsRevision({
+    documentId, kind: "RETURNED", actorId: null, actorRole: "APPROVER",
+    summary: `Returned to Draft by ${returnedBy || "an approver"}${comment ? `: ${comment}` : ""}`
+  });
 
   const requester = (await query<{ email: string; full_name: string | null }>(
     `SELECT email, full_name FROM users WHERE id = $1`, [doc.requester_id]

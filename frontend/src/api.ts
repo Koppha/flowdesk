@@ -606,7 +606,7 @@ export const api = {
   brsTypeAddPermission: (id: string, data: any) => req(`/brs-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   brsTypeRemovePermission: (id: string, permId: string) => req(`/brs-types/${id}/permissions/${permId}`, { method: "DELETE" }),
 
-  brsCreate: (data: { brs_type_id: string; title: string; intake_data?: Record<string, any> }) =>
+  brsCreate: (data: { brs_type_id: string; title: string; intake_data?: Record<string, any>; owner_user_id?: string | null; co_writer_ids?: string[]; co_writers?: Array<{ type: string; id: string | null; name: string | null; permissions?: string[] }> }) =>
     req("/brs", { method: "POST", body: JSON.stringify(data) }),
   myBrs: () => req("/brs/mine"),
   deleteBrs: (id: string) => req(`/brs/${id}`, { method: "DELETE" }),
@@ -615,8 +615,10 @@ export const api = {
   updateBrsSection: (id: string, sectionId: string, content_html: string) =>
     req(`/brs/${id}/sections/${sectionId}`, { method: "PATCH", body: JSON.stringify({ content_html }) }),
   submitBrsSection: (id: string, sectionId: string) => req(`/brs/${id}/sections/${sectionId}/submit`, { method: "POST" }),
-  addBrsSectionAssignee: (id: string, sectionId: string, data: { user_id?: string; section_ref_id?: string }) =>
+  addBrsSectionAssignee: (id: string, sectionId: string, data: { user_id?: string; section_ref_id?: string; team_ref_id?: string; division_name?: string }) =>
     req(`/brs/${id}/sections/${sectionId}/assignees`, { method: "POST", body: JSON.stringify(data) }),
+  removeBrsSectionAssignee: (id: string, sectionId: string, assigneeId: string) =>
+    req(`/brs/${id}/sections/${sectionId}/assignees/${assigneeId}`, { method: "DELETE" }),
   confirmBrsSectionAssignee: (id: string, sectionId: string) =>
     req(`/brs/${id}/sections/${sectionId}/assignees/confirm`, { method: "POST" }),
   advanceBrsPhase: (id: string) => req(`/brs/${id}/advance-phase`, { method: "POST" }),
@@ -627,6 +629,12 @@ export const api = {
   routeBrsApproval: (id: string, approval_chain: any[]) =>
     req(`/brs/${id}/route-approval`, { method: "POST", body: JSON.stringify({ approval_chain }) }),
   brsVersions: (id: string) => req(`/brs/${id}/versions`),
+  brsVersionDetail: (id: string, versionId: string) => req(`/brs/${id}/versions/${versionId}`),
+  brsHistory: (id: string) => req(`/brs/${id}/history`),
+  brsHistoryItem: (id: string, revisionId: string) => req(`/brs/${id}/history/${revisionId}`),
+  setBrsPeople: (id: string, data: { owner_user_id: string | null; co_writer_ids?: string[]; co_writers?: Array<{ type: string; id: string | null; name: string | null; permissions?: string[] }> }) =>
+    req(`/brs/${id}/people`, { method: "PUT", body: JSON.stringify(data) }),
+  amendBrs: (id: string, reason?: string) => req(`/brs/${id}/amend`, { method: "POST", body: JSON.stringify({ reason }) }),
   brsPdfBlob: (id: string) => fetchBlob(`/brs/${id}/pdf`),
 
   emailActionDetail: (token: string) => req(`/email-actions/${encodeURIComponent(token)}`),

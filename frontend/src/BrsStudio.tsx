@@ -2,10 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import { api, openBlobInNewTab } from "./api";
 import DistributeDialog from "./components/DistributeDialog";
+import BrsHistory from "./components/BrsHistory";
+import { BrsPeoplePicker, BrsRoleBadge, describeBrsPermissions } from "./components/BrsPeoplePicker";
+import OrgSearchModal, { OrgEntryChip, type OrgEntry } from "./components/OrgSearchModal";
 import { showNotice, confirmAction } from "./alerts";
 import { RichTextField } from "./shared/RichTextField";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, MoreVertical, Pencil, Plus, Send, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, History, MoreVertical, Pencil, Plus, Send, Trash2, Users } from "lucide-react";
 // Generic filter-bar/empty-state/page-header pieces built for the Finance
 // queue redesign - nothing about their implementation is Finance-specific,
 // so BRS Studio's landing page reuses them too rather than duplicating them.
@@ -97,7 +100,12 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   const [showNewForm, setShowNewForm] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newDepartment, setNewDepartment] = useState("");
-  const [newOwner, setNewOwner] = useState("");
+  const [newOwnerId, setNewOwnerId] = useState("");
+  const [newCoWriters, setNewCoWriters] = useState<OrgEntry[]>([]);
+  const [assignModalSectionId, setAssignModalSectionId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [peopleEdit, setPeopleEdit] = useState<{ ownerId: string; coWriters: OrgEntry[] } | null>(null);
+  const [savingPeople, setSavingPeople] = useState(false);
   const [newQuarter, setNewQuarter] = useState("");
   const [newProgrammeType, setNewProgrammeType] = useState("Ongoing / permanent");
   const [newJustification, setNewJustification] = useState("");
@@ -127,9 +135,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   const [savingIntake, setSavingIntake] = useState(false);
 
   const [companyDirectory, setCompanyDirectory] = useState<DirectoryUser[]>([]);
-  const [orgSections, setOrgSections] = useState<{ id: string; name: string }[]>([]);
   const [savingSection, setSavingSection] = useState<string | null>(null);
-  const [assignPicker, setAssignPicker] = useState<{ sectionId: string; mode: "person" | "section"; value: string } | null>(null);
   const [chain, setChain] = useState<ChainDraft[]>([{ approver_id: "", position_name: "", decision_type: "APPROVE" }]);
   const [routing, setRouting] = useState(false);
 
@@ -193,7 +199,6 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
 
   useEffect(() => {
     api.companyDirectory().then((rows: any) => setCompanyDirectory(Array.isArray(rows) ? rows : [])).catch(() => setCompanyDirectory([]));
-    api.sections().then((rows: any) => setOrgSections(Array.isArray(rows) ? rows : [])).catch(() => setOrgSections([]));
     api.brsDefaultType().then((t: any) => setDefaultTypeId(t?.id ?? null)).catch(() => setDefaultTypeId(null));
     api.departmentsByCompany().then((rows: any) => setDepartments(Array.isArray(rows) ? rows : [])).catch(() => setDepartments([]));
   }, []);
@@ -269,6 +274,8 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     setDocId(id);
     setChain([{ approver_id: "", position_name: "", decision_type: "APPROVE" }]);
     setViewingIndex(null);
+    setShowHistory(false);
+    setPeopleEdit(null);
     setView("workspace");
   }
 
@@ -287,16 +294,18 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
         title: newTitle.trim(),
         intake_data: {
           department: newDepartment || null,
-          product_owner: newOwner.trim() || null,
           target_quarter: newQuarter || null,
           programme_type: newProgrammeType || null,
           business_justification: newJustification || null
-        }
+        },
+        owner_user_id: newOwnerId || null,
+        co_writers: newCoWriters.map((e) => ({ type: e.type, id: e.id ?? null, name: e.name ?? null, permissions: e.permissions ?? ["EDIT"] }))
       });
       setShowNewForm(false);
       setNewTitle("");
       setNewDepartment("");
-      setNewOwner("");
+      setNewOwnerId("");
+      setNewCoWriters([]);
       setNewQuarter("");
       setNewProgrammeType("Ongoing / permanent");
       setNewJustification("");
@@ -330,17 +339,20 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     }
   }
 
-  async function doAssign(sectionId: string) {
-    if (!doc || !assignPicker || assignPicker.sectionId !== sectionId || !assignPicker.value) return;
+  async function assignEntries(sectionId: string, entries: OrgEntry[]) {
+    if (!doc) return;
     try {
-      await api.addBrsSectionAssignee(
-        doc.id, sectionId,
-        assignPicker.mode === "person" ? { user_id: assignPicker.value } : { section_ref_id: assignPicker.value }
-      );
-      setAssignPicker(null);
+      for (const e of entries) {
+        await api.addBrsSectionAssignee(doc.id, sectionId,
+          e.type === "user" ? { user_id: e.id! }
+            : e.type === "department" ? { section_ref_id: e.id! }
+            : e.type === "section" ? { team_ref_id: e.id! }
+            : { division_name: e.name! });
+      }
       loadDoc(doc.id);
-    } catch (e: any) {
-      void showNotice(e?.message || "Failed to assign");
+    } catch (err: any) {
+      void showNotice(err?.message || "Failed to assign");
+      loadDoc(doc.id);
     }
   }
 
@@ -409,6 +421,47 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     }
   }
 
+  async function savePeople() {
+    if (!doc || !peopleEdit) return;
+    setSavingPeople(true);
+    try {
+      await api.setBrsPeople(doc.id, {
+        owner_user_id: peopleEdit.ownerId || null,
+        co_writers: peopleEdit.coWriters.map((e) => ({ type: e.type, id: e.id ?? null, name: e.name ?? null, permissions: e.permissions ?? ["EDIT"] }))
+      });
+      setPeopleEdit(null);
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to update people");
+    } finally {
+      setSavingPeople(false);
+    }
+  }
+
+  // Reopen an approved BRS: the approved version stays on record; the
+  // amended content is re-approved as the next version.
+  async function amendDoc() {
+    if (!doc) return;
+    const current = (doc.versions || [])[0]?.version_number;
+    const result = await Swal.fire({
+      icon: "question",
+      title: "Amend this approved BRS?",
+      html: `It goes back to Draft for changes. Version ${current ?? "1"} stays on record as approved until the amended BRS is approved again as version ${(current ?? 1) + 1}.`,
+      input: "text",
+      inputPlaceholder: "What is being amended? (optional)",
+      showCancelButton: true,
+      confirmButtonText: "Start amendment"
+    });
+    if (!result.isConfirmed) return;
+    try {
+      await api.amendBrs(doc.id, result.value || undefined);
+      setViewingIndex(null);
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to start the amendment");
+    }
+  }
+
   async function saveIntake() {
     if (!doc) return;
     setSavingIntake(true);
@@ -438,15 +491,42 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   }
 
   const directorySorted = [...companyDirectory].sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
-  const isRequester = Boolean(doc && profile?.id && doc.requester_id === profile.id);
+  // Full rights (creator, owner, admin): drive the workflow, route, amend,
+  // distribute, manage people. Writers (those plus co-writers): edit content.
+  // Both come from the server, which enforces the same rules.
+  const canManage = Boolean(doc?.can_manage);
+  const canWrite = Boolean(doc?.can_write);
+  // Co-writers get exactly what the creator/owner granted them.
+  const myPerms = doc?.my_permissions || {};
+  const canWorkflow = Boolean(myPerms.workflow);
+  const canInvite = Boolean(myPerms.invite);
+  const canDistribute = Boolean(myPerms.distribute);
+  const canAmend = Boolean(myPerms.amend);
 
-  // The requester always owns every section of their own document; anyone
-  // else needs to actually be invited onto that section - true for Draft
-  // sections too, not just Department Input ones, so the requester can bring
-  // in collaborators (e.g. Legal, a co-author) to help draft.
+  // Writers edit every section; anyone else needs to be an assignee of it.
   function isSectionOwner(section: any): boolean {
-    if (isRequester) return true;
+    if (canWrite) return true;
     return (section.assignees || []).some((a: any) => a.user_id === profile?.id || (a.section_ref_id && a.section_ref_id === profile?.section_id));
+  }
+
+  function isSectionAssigneeOf(section: any): boolean {
+    return (section.assignees || []).some((a: any) => a.user_id === profile?.id || (a.section_ref_id && a.section_ref_id === profile?.section_id) || (a.team_ref_id && a.team_ref_id === profile?.team_id));
+  }
+
+  async function cancelInvitation(sectionId: string, assignee: any) {
+    if (!doc) return;
+    const ok = await confirmAction({
+      title: "Cancel this invitation?",
+      text: `${assignee.user_name || assignee.section_name || assignee.team_name || assignee.division_name || "They"} will no longer be able to work on this section. What they already saved stays in History.`,
+      confirmButtonText: "Cancel invitation"
+    });
+    if (!ok) return;
+    try {
+      await api.removeBrsSectionAssignee(doc.id, sectionId, assignee.id);
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to cancel the invitation");
+    }
   }
 
   function myUnconfirmedAssignee(section: any) {
@@ -499,24 +579,28 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                       </select>
                     </div>
                     <div className="ep-form-group">
-                      <label>Product owner</label>
-                      <input className="ep-form-input" value={newOwner} onChange={(e) => setNewOwner(e.target.value)} placeholder="Who owns this on the business side" />
-                    </div>
-                    <div className="ep-form-group">
                       <label>Target launch quarter</label>
                       <select className="ep-form-select" value={newQuarter} onChange={(e) => setNewQuarter(e.target.value)}>
                         <option value="">Select…</option>
                         {quarterOptions.map((q) => <option key={q} value={q}>{q}</option>)}
                       </select>
                     </div>
+                    <div className="ep-form-group">
+                      <label>Programme type</label>
+                      <select className="ep-form-select" value={newProgrammeType} onChange={(e) => setNewProgrammeType(e.target.value)}>
+                        <option value="Ongoing / permanent">Ongoing / permanent</option>
+                        <option value="Time-bound campaign">Time-bound campaign</option>
+                      </select>
+                    </div>
                   </div>
-                  <div className="ep-form-group" style={{ maxWidth: 280 }}>
-                    <label>Programme type</label>
-                    <select className="ep-form-select" value={newProgrammeType} onChange={(e) => setNewProgrammeType(e.target.value)}>
-                      <option value="Ongoing / permanent">Ongoing / permanent</option>
-                      <option value="Time-bound campaign">Time-bound campaign</option>
-                    </select>
-                  </div>
+                  <BrsPeoplePicker
+                    users={directorySorted}
+                    ownerId={newOwnerId}
+                    onOwnerChange={setNewOwnerId}
+                    coWriters={newCoWriters}
+                    onCoWritersChange={setNewCoWriters}
+                    excludeIds={profile?.id ? [profile.id] : []}
+                  />
                   <div className="ep-form-group">
                     <label>Business justification</label>
                     <RichTextField value={newJustification} onChange={setNewJustification} placeholder="Why this is worth building, backed by whatever numbers you have…" />
@@ -613,7 +697,10 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                 <tbody>
                   {pagedRows.map((d: any) => (
                     <tr key={d.id} style={{ cursor: "pointer" }} onClick={() => openDoc(d.id)}>
-                      <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{d.title}</td>
+                      <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>
+                        {d.title}
+                        {landingTab === "MINE" && d.my_role && d.my_role !== "CREATOR" && <span style={{ marginLeft: 8 }}><BrsRoleBadge role={d.my_role} /></span>}
+                      </td>
                       <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.reference_no}</td>
                       <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.intake_data?.department || "—"}</td>
                       <td style={{ fontSize: 13 }}>{d.requester_name || "—"}</td>
@@ -679,6 +766,11 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {doc && phaseBadge(doc.phase)}
+          {doc && (
+            <button className="ep-btn-outline" onClick={() => setShowHistory((v) => !v)}>
+              <History size={14} /> History
+            </button>
+          )}
           <button onClick={backToLanding} className="ep-btn-outline custom-requests-back"><ArrowLeft size={14} /> All BRS</button>
         </div>
       </div>
@@ -696,13 +788,21 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             const isLive = activeIdx === currentIdx;
             return (
               <>
+                {showHistory && <BrsHistory docId={doc.id} versions={doc.versions || []} onClose={() => setShowHistory(false)} />}
+                {doc.amending_from_version && doc.phase !== "BASELINE" && (
+                  <div className="brs-notify-banner" style={{ background: "#ede9fe", color: "#5b21b6" }}>
+                    Amending approved version {doc.amending_from_version}. That version stays on record; once this amendment is approved it becomes version {doc.amending_from_version + 1}.
+                  </div>
+                )}
                 <Stepper phase={doc.phase} viewing={activeIdx} onSelect={(i) => setViewingIndex(i === currentIdx ? null : i)} />
 
                 {!isLive && (
-                  <div className="brs-notify-banner" style={{ background: "var(--surface-soft)", color: "var(--muted)" }}>
-                    Viewing {STAGES[activeIdx].label} (read-only) — this BRS is actually at {STAGES[currentIdx].label}.
+                  <div className="brs-notify-banner" style={{ background: doc.phase === "APPROVAL" && canWrite ? "#ecfdf5" : "var(--surface-soft)", color: doc.phase === "APPROVAL" && canWrite ? "#065f46" : "var(--muted)" }}>
+                    {doc.phase === "APPROVAL" && canWrite && ["INTAKE", "DRAFT", "DEPT_INPUT"].includes(STAGES[activeIdx].key)
+                      ? <>This BRS is in approval — you can still correct its content here. Approval carries on without restarting, and every change is kept in History.</>
+                      : <>Viewing {STAGES[activeIdx].label} (read-only) — this BRS is actually at {STAGES[currentIdx].label}.</>}
                     <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                      {isRequester && doc.phase !== "BASELINE" && (
+                      {canWorkflow && doc.phase !== "BASELINE" && doc.phase !== "APPROVAL" && (
                         <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => void reopenDoc()}>
                           Reopen for editing
                         </button>
@@ -721,7 +821,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
           )}
 
           {activePhase === "INTAKE" && (() => {
-            const canEditIntake = isRequester && doc.phase !== "APPROVAL" && doc.phase !== "BASELINE";
+            const canEditIntake = canWrite && doc.phase !== "BASELINE";
             return (
               <div className="ep-panel" style={{ marginBottom: 16 }}>
                 <div className="ep-panel-head">
@@ -749,7 +849,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                         </div>
                         <div className="ep-form-group">
                           <label>Product owner</label>
-                          <input className="ep-form-input" value={intakeEdits.product_owner || ""} onChange={(e) => setIntakeEdits((prev) => ({ ...prev, product_owner: e.target.value }))} placeholder="Who owns this on the business side" />
+                          <div style={{ fontSize: 14, padding: "8px 0" }}>{doc.owner?.full_name || doc.intake_data?.product_owner || "—"} <span style={{ fontSize: 12, color: "var(--muted)" }}>(change under People)</span></div>
                         </div>
                       </div>
                       <div className="ep-form-row">
@@ -785,7 +885,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                         </div>
                         <div>
                           <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 3 }}>Product owner</div>
-                          <div style={{ fontSize: 14, marginBottom: 14 }}>{doc.intake_data?.product_owner || "—"}</div>
+                          <div style={{ fontSize: 14, marginBottom: 14 }}>{doc.owner?.full_name || doc.intake_data?.product_owner || "—"}</div>
                         </div>
                       </div>
                       <div className="ep-form-row">
@@ -802,6 +902,56 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                       <RichTextField value={doc.intake_data?.business_justification || ""} readOnly />
                     </>
                   )}
+
+                  <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <Users size={15} /><strong style={{ fontSize: 13 }}>People</strong>
+                      {canManage && !peopleEdit && (
+                        <button
+                          className="ep-btn-outline"
+                          style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}
+                          onClick={() => setPeopleEdit({
+                            ownerId: doc.owner?.id || "",
+                            coWriters: (doc.co_writers || []).map((c: any) => ({ type: c.type, id: c.ref_id, name: c.division_name, label: c.label, permissions: c.permissions || [] }))
+                          })}
+                        >
+                          Change people
+                        </button>
+                      )}
+                    </div>
+                    {peopleEdit ? (
+                      <>
+                        <BrsPeoplePicker
+                          users={directorySorted}
+                          ownerId={peopleEdit.ownerId}
+                          onOwnerChange={(id) => setPeopleEdit((p) => (p ? { ...p, ownerId: id } : p))}
+                          coWriters={peopleEdit.coWriters}
+                          onCoWritersChange={(entries) => setPeopleEdit((p) => (p ? { ...p, coWriters: entries } : p))}
+                          excludeIds={[doc.requester_id]}
+                        />
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button className="ep-btn" disabled={savingPeople} onClick={() => void savePeople()}>{savingPeople ? "Saving…" : "Save people"}</button>
+                          <button className="ep-btn-outline" disabled={savingPeople} onClick={() => setPeopleEdit(null)}>Cancel</button>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><BrsRoleBadge role="CREATOR" /> {doc.creator?.full_name || "—"}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><BrsRoleBadge role="OWNER" /> {doc.owner?.full_name || <span style={{ color: "var(--muted)" }}>No separate owner — the creator owns it</span>}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <BrsRoleBadge role="CO_WRITER" />
+                          {(doc.co_writers || []).length
+                            ? (doc.co_writers || []).map((c: any) => (
+                                <span key={c.entry_id} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                                  <OrgEntryChip entry={{ type: c.type, id: c.ref_id, name: c.division_name, label: c.label }} />
+                                  <span style={{ fontSize: 12, color: "var(--muted)" }}>{describeBrsPermissions(c.permissions || [])}</span>
+                                </span>
+                              ))
+                            : <span style={{ color: "var(--muted)" }}>None</span>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -821,7 +971,10 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                 {doc.sections
                   .filter((s: any) => s.owner_phase === (activePhase === "DRAFT" ? "DRAFT" : "DEPT_INPUT"))
                   .map((s: any) => {
-                    const canEdit = isLive && isSectionOwner(s) && s.status !== "SUBMITTED";
+                    // Editable on the live step, and - so an approver's comments
+                    // can be fixed without restarting - during Approval too.
+                    const editingInApproval = doc.phase === "APPROVAL";
+                    const canEdit = (isLive || editingInApproval) && isSectionOwner(s) && (s.status !== "SUBMITTED" || editingInApproval);
                     const mine = myUnconfirmedAssignee(s);
                     return (
                       <div key={s.id} className={`brs-section-card ${s.is_required && !s.content_html?.trim() ? "is-blocking" : ""}`}>
@@ -836,39 +989,27 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                         <div style={{ marginBottom: 10 }}>
                           {(s.assignees || []).map((a: any, i: number) => (
                             <div key={i} style={{ fontSize: 12, color: "var(--muted)", marginBottom: 2 }}>
-                              {a.user_name || a.section_name || a.user_email || "—"}
+                              {a.user_name || (a.section_name && `${a.section_name} (Department)`) || (a.team_name && `${a.team_name} (Section)`) || (a.division_name && `${a.division_name} (Division)`) || a.user_email || "—"}
                               {a.confirmed ? " · confirmed" : " · not yet confirmed"}
-                              {a.section_ref_id && !a.confirmed && " (any member can confirm)"}
+                              {(a.section_ref_id || a.team_ref_id || a.division_name) && !a.confirmed && " (any member can confirm)"}
+                              {a.added_by_name && <span> · invited by {a.added_by_name}</span>}
+                              {(canManage || a.added_by_id === profile?.id) && (
+                                <button
+                                  type="button"
+                                  onClick={() => void cancelInvitation(s.id, a)}
+                                  title="Cancel this invitation"
+                                  style={{ marginLeft: 8, border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 12, padding: 0 }}
+                                >
+                                  Cancel invitation
+                                </button>
+                              )}
                             </div>
                           ))}
-                          {(() => {
-                            const picker = assignPicker && assignPicker.sectionId === s.id ? assignPicker : null;
-                            if (!isLive || !(isRequester || (s.assignees || []).length > 0) || s.status === "SUBMITTED") return null;
-                            return picker ? (
-                              <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, maxWidth: 420 }}>
-                                <select className="ep-form-select" style={{ width: 90 }} value={picker.mode} onChange={(e) => setAssignPicker({ sectionId: s.id, mode: e.target.value as "person" | "section", value: "" })}>
-                                  <option value="person">Person</option>
-                                  <option value="section">Section</option>
-                                </select>
-                                {picker.mode === "person" ? (
-                                  <div style={{ flex: 1 }}>
-                                    <ApproverCombobox users={directorySorted} value={picker.value} onChange={(id) => setAssignPicker({ ...picker, value: id })} />
-                                  </div>
-                                ) : (
-                                  <select className="ep-form-select" style={{ flex: 1 }} value={picker.value} onChange={(e) => setAssignPicker({ ...picker, value: e.target.value })}>
-                                    <option value="">Select a section…</option>
-                                    {orgSections.map((sec) => <option key={sec.id} value={sec.id}>{sec.name}</option>)}
-                                  </select>
-                                )}
-                                <button className="ep-btn" style={{ padding: "6px 10px" }} onClick={() => doAssign(s.id)}>Add</button>
-                                <button className="ep-btn-outline" style={{ padding: "6px 10px" }} onClick={() => setAssignPicker(null)}>Cancel</button>
-                              </div>
-                            ) : (
-                              <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 10px", marginTop: 4 }} onClick={() => setAssignPicker({ sectionId: s.id, mode: "person", value: "" })}>
-                                {s.owner_phase === "DRAFT" ? "+ Invite collaborator" : "+ Assign"}
-                              </button>
-                            );
-                          })()}
+                          {isLive && (canInvite || isSectionAssigneeOf(s)) && s.status !== "SUBMITTED" && (
+                            <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 10px", marginTop: 4 }} onClick={() => setAssignModalSectionId(s.id)}>
+                              {s.owner_phase === "DRAFT" ? "+ Invite collaborators" : "+ Assign"}
+                            </button>
+                          )}
                         </div>
 
                         <RichTextField
@@ -887,12 +1028,12 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                             >
                               {savingSection === s.id ? "Saving…" : "Save"}
                             </button>
-                            {mine && (
+                            {mine && isLive && (
                               <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 12px" }} onClick={() => confirmSection(s.id)}>
                                 Confirm Ready
                               </button>
                             )}
-                            {s.owner_phase === "DEPT_INPUT" && (
+                            {s.owner_phase === "DEPT_INPUT" && isLive && (
                               <button className="ep-btn" style={{ fontSize: 12, padding: "5px 12px" }} onClick={() => submitSection(s.id)}>
                                 Mark Submitted
                               </button>
@@ -903,7 +1044,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     );
                   })}
 
-                {isLive && isRequester && (
+                {isLive && canWorkflow && (
                   <button className="ep-btn" style={{ marginTop: 8 }} onClick={advancePhase}>
                     {activePhase === "DRAFT" ? "Send on →" : "Advance to Consistency Gate →"}
                   </button>
@@ -917,7 +1058,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
               <div className="ep-panel-head">
                 <div className="ep-panel-title">Consistency Gate</div>
                 <div className="ep-panel-sub">No blanks, no gaps — every required section must be filled before this can be routed for approval.</div>
-                {isLive && isRequester && (
+                {isLive && canWorkflow && (
                   <button className="ep-btn-outline" style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }} onClick={() => void reopenDoc()}>
                     Back to Department Input
                   </button>
@@ -951,7 +1092,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                         ))}
                       </div>
                     )}
-                    {isLive && isRequester && (
+                    {isLive && canWorkflow && (
                       <>
                         {chain.map((c, idx) => (
                           <div key={idx} className="brs-chain-row">
@@ -1011,7 +1152,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
               <div className="ep-panel-head">
                 <div className="ep-panel-title">Approval Routing</div>
                 <div className="ep-panel-sub">Approvers act from their Approval Inbox — this is a read-only view of progress.</div>
-                {isLive && isRequester && approvalSubmission?.status === "IN_PROGRESS" && (
+                {isLive && canWorkflow && approvalSubmission?.status === "IN_PROGRESS" && (
                   <button
                     className="ep-btn-outline"
                     style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}
@@ -1022,13 +1163,23 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     {sendingReminder ? "Sending…" : "Send Reminder"}
                   </button>
                 )}
-                {isLive && isRequester && (
+                {isLive && canWorkflow && (
                   <button className="ep-btn-outline" style={{ marginLeft: approvalSubmission?.status === "IN_PROGRESS" ? 8 : "auto", fontSize: 12, padding: "4px 10px" }} onClick={() => void reopenDoc()}>
                     Reopen for editing
                   </button>
                 )}
               </div>
               <div className="ep-panel-body">
+                {isLive && canWrite && (
+                  <div className="brs-notify-banner" style={{ background: "#ecfdf5", color: "#065f46", marginBottom: 12 }}>
+                    An approver has comments? Correct the content directly — approval carries on without starting over, and every change is kept in History.
+                    <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                      <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => setViewingIndex(STAGES.findIndex((x) => x.key === "INTAKE"))}>Edit Intake</button>
+                      <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => setViewingIndex(STAGES.findIndex((x) => x.key === "DRAFT"))}>Edit Draft</button>
+                      <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => setViewingIndex(STAGES.findIndex((x) => x.key === "DEPT_INPUT"))}>Edit Department Input</button>
+                    </div>
+                  </div>
+                )}
                 {(approvalSubmission?.approval_chain || []).map((step: any, idx: number) => {
                   // Same fix as CustomRequestsHub's chain view: a step only
                   // reads "Pending" while it's actually its turn - anything
@@ -1063,13 +1214,20 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             <div className="ep-panel" style={{ marginBottom: 16 }}>
               <div className="ep-panel-head">
                 <div className="ep-panel-title">Baseline</div>
-                <div className="ep-panel-sub">Approved and locked. It is only shared with others when you distribute it. Raise a Change Request to amend it.</div>
+                <div className="ep-panel-sub">
+                  Approved{(doc.versions || [])[0] ? ` — version ${(doc.versions || [])[0].version_number}` : ""}. It is only shared with others when you distribute it. Use Amend to change it; the approved version stays on record.
+                </div>
               </div>
               <div className="ep-panel-body">
                 <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-                  {(isRequester || profile?.role === "ADMIN") && (
+                  {canDistribute && (
                     <button className="ep-btn" onClick={() => setDistributing(true)}>
                       <Send size={14} /> Distribute
+                    </button>
+                  )}
+                  {canAmend && (
+                    <button className="ep-btn-outline" onClick={() => void amendDoc()}>
+                      <Pencil size={14} /> Amend
                     </button>
                   )}
                   <button className="ep-btn-outline" onClick={() => { void openBlobInNewTab(() => api.brsPdfBlob(doc.id)); }}>
@@ -1096,6 +1254,22 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
           })()}
         </>
       )}
+      {assignModalSectionId && doc && (() => {
+        const sec = doc.sections.find((x: any) => x.id === assignModalSectionId);
+        const existing = (sec?.assignees || []).map((a: any) =>
+          a.user_id ? `user:${a.user_id}` : a.section_ref_id ? `department:${a.section_ref_id}` : a.team_ref_id ? `section:${a.team_ref_id}` : `division:${String(a.division_name || "").toLowerCase()}`
+        );
+        return (
+          <OrgSearchModal
+            title={sec?.owner_phase === "DRAFT" ? `Invite collaborators — ${sec?.title}` : `Assign — ${sec?.title}`}
+            subtitle="Search and select employees, or a whole division, department or section. Anyone in a group can fill in and confirm this section."
+            people={directorySorted}
+            excludeKeys={existing}
+            onAdd={(entries) => void assignEntries(assignModalSectionId, entries)}
+            onClose={() => setAssignModalSectionId(null)}
+          />
+        );
+      })()}
       {distributing && doc && (
         <DistributeDialog
           docType="BRS"

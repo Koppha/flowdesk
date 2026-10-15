@@ -140,6 +140,60 @@ export async function ensureBrsSchema() {
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_brs_doc_versions_document ON brs_document_versions(document_id)`);
 
+  // People: the owner has the same full rights as the creator (requester_id);
+  // co-writers can edit content (sections and Intake) but not drive the
+  // workflow. amending_from_version marks an approved BRS reopened for
+  // amendment - re-approval baselines the next version.
+  await query(`ALTER TABLE brs_documents ADD COLUMN IF NOT EXISTS owner_user_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE brs_documents ADD COLUMN IF NOT EXISTS amending_from_version integer`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS brs_document_collaborators (
+      id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id   uuid        NOT NULL REFERENCES brs_documents(id) ON DELETE CASCADE,
+      user_id       uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role          text        NOT NULL DEFAULT 'CO_WRITER',
+      added_by_id   uuid        REFERENCES users(id) ON DELETE SET NULL,
+      created_at    timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT brs_doc_collaborators_uq UNIQUE (document_id, user_id)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_brs_doc_collaborators_user ON brs_document_collaborators(user_id)`);
+  // Groups as well as people, for both section assignees and co-writers:
+  // a Department (sections row), a Section (teams row) or a whole Division
+  // (users.department name). Anyone currently in the group qualifies.
+  await query(`ALTER TABLE brs_document_collaborators ALTER COLUMN user_id DROP NOT NULL`);
+  await query(`ALTER TABLE brs_document_collaborators ADD COLUMN IF NOT EXISTS section_ref_id uuid REFERENCES sections(id) ON DELETE CASCADE`);
+  await query(`ALTER TABLE brs_document_collaborators ADD COLUMN IF NOT EXISTS team_ref_id uuid REFERENCES teams(id) ON DELETE CASCADE`);
+  await query(`ALTER TABLE brs_document_collaborators ADD COLUMN IF NOT EXISTS division_name text`);
+  await query(`ALTER TABLE brs_document_section_assignees ADD COLUMN IF NOT EXISTS team_ref_id uuid REFERENCES teams(id) ON DELETE CASCADE`);
+  await query(`ALTER TABLE brs_document_section_assignees ADD COLUMN IF NOT EXISTS division_name text`);
+  // What each co-writer may do, granted by the creator/owner:
+  // EDIT, INVITE, WORKFLOW (send on, route, reopen), DISTRIBUTE, AMEND.
+  // Empty = view only.
+  await query(`ALTER TABLE brs_document_collaborators ADD COLUMN IF NOT EXISTS permissions text[] NOT NULL DEFAULT ARRAY['EDIT']::text[]`);
+  // Who invited a section collaborator - they (and the creator/owner) can cancel it.
+  await query(`ALTER TABLE brs_document_section_assignees ADD COLUMN IF NOT EXISTS added_by_id uuid REFERENCES users(id) ON DELETE SET NULL`);
+
+  // Audit trail: every saved version of a section / the Intake, and every
+  // workflow event, with who did it and in what capacity on this document.
+  await query(`
+    CREATE TABLE IF NOT EXISTS brs_document_revisions (
+      id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id   uuid        NOT NULL REFERENCES brs_documents(id) ON DELETE CASCADE,
+      kind          text        NOT NULL,
+      section_id    uuid        REFERENCES brs_document_sections(id) ON DELETE SET NULL,
+      section_title text,
+      content_html  text,
+      intake_data   jsonb,
+      summary       text,
+      phase         text,
+      actor_id      uuid        REFERENCES users(id) ON DELETE SET NULL,
+      actor_role    text,
+      created_at    timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_brs_doc_revisions_document ON brs_document_revisions(document_id, created_at)`);
+
   // Added after brs_document_versions exists so the FK can be declared.
   await query(`
     DO $$

@@ -15,7 +15,7 @@ import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { acknowledgeCollection, createProvisioningTaskForSubmission, getProvisioningStatusForSubmission } from "../it-provisioning/it-provisioning.service.js";
-import { baselineBrsDocument, returnBrsDocumentToDraft } from "../brs/brs.service.js";
+import { baselineBrsDocument, recordBrsRevision, returnBrsDocumentToDraft } from "../brs/brs.service.js";
 import { isPeriodLocked } from "../attendance/attendance.routes.js";
 
 export const customRequestsRouter = Router();
@@ -1039,6 +1039,13 @@ export async function performCustomRequestAction(
   // brs.routes.ts POST /:id/route-approval) — the only BRS-specific code
   // needed here is baselining on approval, or bouncing back to Draft for
   // rework on rejection (never a dead end).
+  // BRS audit trail: every approver decision, in the document's own history.
+  if (submission.request_type_code === "BRS_APPROVAL" && submission.data?.brs_document_id) {
+    await recordBrsRevision({
+      documentId: submission.data.brs_document_id, kind: "APPROVAL_ACTION", actorId: actor.userId, actorRole: "APPROVER",
+      summary: `${step.position_name}: ${step.status === "NOTED" ? "Noted" : step.status === "APPROVED" ? "Approved" : "Rejected"}${comment ? ` — ${comment}` : ""}`
+    }).catch(() => {});
+  }
   if (newStatus === "APPROVED" && submission.request_type_code === "BRS_APPROVAL") {
     await baselineBrsDocument(submission.data?.brs_document_id, submission.id, actor.userId);
   }
