@@ -35,7 +35,8 @@ interface RefundableItem {
   org_division: string | null;
   department_name: string | null;
   duty_station: string | null;
-  // Where they travelled and when, from the advance this clears.
+  // Where they travelled from/to and when, from the advance this clears.
+  origin: string | null;
   destination: string | null;
   departure_date: string | null;
   return_date: string | null;
@@ -89,7 +90,7 @@ function StatusBadge({ status }: { status: string }) {
   return <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>{STATUS_LABEL[status] || status}</span>;
 }
 
-type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "refundable" | "status";
+type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "origin" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "refundable" | "status";
 
 const COLUMNS: ColumnOption[] = [
   { key: "name", label: "Name", locked: true },
@@ -97,6 +98,7 @@ const COLUMNS: ColumnOption[] = [
   { key: "division", label: "Division" },
   { key: "department", label: "Department" },
   { key: "dutyStation", label: "Duty Station" },
+  { key: "origin", label: "Starting Place" },
   { key: "destination", label: "Destination" },
   { key: "departure", label: "Departure" },
   { key: "return", label: "Return" },
@@ -212,6 +214,7 @@ export default function Refundable() {
           (i.org_division || "").toLowerCase().includes(q) ||
           (i.department_name || "").toLowerCase().includes(q) ||
           (i.destination || "").toLowerCase().includes(q) ||
+          (i.origin || "").toLowerCase().includes(q) ||
           (i.duty_station || "").toLowerCase().includes(q)
         );
       }
@@ -228,6 +231,7 @@ export default function Refundable() {
         case "empNo": return (a.employee_no || "").localeCompare(b.employee_no || "") * dir;
         case "division": return (a.org_division || "").localeCompare(b.org_division || "") * dir;
         case "department": return (a.department_name || "").localeCompare(b.department_name || "") * dir;
+        case "origin": return (a.origin || "").localeCompare(b.origin || "") * dir;
         case "destination": return (a.destination || "").localeCompare(b.destination || "") * dir;
         case "dutyStation": return (a.duty_station || "").localeCompare(b.duty_station || "") * dir;
         case "departure": return (a.departure_date || "").localeCompare(b.departure_date || "") * dir;
@@ -281,6 +285,7 @@ export default function Refundable() {
       ["division", "Division", (i) => String(i.org_division || "")],
       ["department", "Department", (i) => String(i.department_name || "")],
       ["dutyStation", "Duty Station", (i) => String(i.duty_station || "")],
+      ["origin", "Starting Place", (i) => String(i.origin || "")],
       ["destination", "Destination", (i) => String(i.destination || "")],
       ["departure", "Departure", (i) => String(i.departure_date ? fmtDate(i.departure_date) : "")],
       ["return", "Return", (i) => String(i.return_date ? fmtDate(i.return_date) : "")],
@@ -397,6 +402,7 @@ export default function Refundable() {
                   {show("division") && <SortableHeader label="Division" sortKeyName="division" />}
                   {show("department") && <SortableHeader label="Department" sortKeyName="department" />}
                   {show("dutyStation") && <SortableHeader label="Duty Station" sortKeyName="dutyStation" />}
+                  {show("origin") && <SortableHeader label="Starting Place" sortKeyName="origin" />}
                   {show("destination") && <SortableHeader label="Destination" sortKeyName="destination" />}
                   {show("departure") && <SortableHeader label="Departure" sortKeyName="departure" />}
                   {show("return") && <SortableHeader label="Return" sortKeyName="return" />}
@@ -422,6 +428,7 @@ export default function Refundable() {
                       {show("division") && <td style={{ fontSize: 13 }}>{item.org_division || "—"}</td>}
                     {show("department") && <td style={{ fontSize: 13 }}>{item.department_name || "—"}</td>}
                     {show("dutyStation") && <td style={{ fontSize: 13 }}>{item.duty_station || "—"}</td>}
+                      {show("origin") && <td style={{ fontSize: 13 }}>{item.origin || "—"}</td>}
                       {show("destination") && <td style={{ fontSize: 13 }}>{item.destination || "—"}</td>}
                       {show("departure") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.departure_date)}</td>}
                       {show("return") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.return_date)}</td>}

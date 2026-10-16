@@ -955,7 +955,7 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
     );
     // The Advances report shows where and when each trip went.
     const trips = await tripDetailsForAdvances(rows.map((r: any) => r.id));
-    return res.json(rows.map((r: any) => ({ ...r, ...(trips.get(r.id) ?? { destination: null, departure_date: null, return_date: null }) })));
+    return res.json(rows.map((r: any) => ({ ...r, ...(trips.get(r.id) ?? { origin: null, destination: null, departure_date: null, return_date: null }) })));
   } catch (err) {
     return next(err);
   }

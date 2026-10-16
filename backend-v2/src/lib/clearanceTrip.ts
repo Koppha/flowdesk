@@ -9,7 +9,9 @@ import { query } from "./db.js";
 //     "Mokhotlong, Thaba-Tseka").
 //   departure_date: the first trip line's date; return_date: the advance's
 //     return date, else the last trip line's date.
-export type TripDetails = { destination: string | null; departure_date: string | null; return_date: string | null };
+//   origin: where they set off from - the flight's departure airport, else the
+//     first place on the route ("Maseru").
+export type TripDetails = { origin: string | null; destination: string | null; departure_date: string | null; return_date: string | null };
 
 function placeName(raw: string): string {
   const s = raw.trim();
@@ -19,6 +21,18 @@ function placeName(raw: string): string {
     if (parts.length >= 2) return `${parts[parts.length - 1]}, ${parts[0]}`;
   }
   return s;
+}
+
+// Only a route ("Maseru → Quthing") says where a trip began; a line that is
+// just the destination ("South Africa / Free State / Bloemfontein") doesn't,
+// so that gives no starting place rather than repeating the destination.
+export function originFromLines(locations: string[]): string | null {
+  for (const loc of locations) {
+    if (!loc || !/(→|->)/.test(loc)) continue;
+    const first = loc.split(/\s*(?:→|->)\s*/).map((p) => p.trim()).filter(Boolean)[0];
+    if (first) return placeName(first);
+  }
+  return null;
 }
 
 export function destinationFromLines(locations: string[]): string | null {
@@ -45,10 +59,12 @@ export async function tripDetailsForAdvances(advanceIds: string[]): Promise<Map<
   const ids = Array.from(new Set(advanceIds.filter(Boolean)));
   const out = new Map<string, TripDetails>();
   if (!ids.length) return out;
-  const advances = await query<{ id: string; return_date: string | null; airport_city: string | null; airport_country: string | null }>(
-    `SELECT ar.id, to_char(ar.travel_return_date, 'YYYY-MM-DD') AS return_date, a.city AS airport_city, a.country AS airport_country
+  const advances = await query<{ id: string; return_date: string | null; airport_city: string | null; airport_country: string | null; origin_city: string | null; origin_country: string | null }>(
+    `SELECT ar.id, to_char(ar.travel_return_date, 'YYYY-MM-DD') AS return_date, a.city AS airport_city, a.country AS airport_country,
+            o.city AS origin_city, o.country AS origin_country
        FROM advance_requests ar
        LEFT JOIN airports a ON upper(a.iata_code) = upper(ar.travel_destination_iata)
+       LEFT JOIN airports o ON upper(o.iata_code) = upper(ar.travel_origin_iata)
       WHERE ar.id = ANY($1::uuid[])`,
     [ids]
   );
@@ -62,6 +78,9 @@ export async function tripDetailsForAdvances(advanceIds: string[]): Promise<Map<
     const own = lines.filter((l) => l.advance_request_id === a.id);
     const dates = own.map((l) => l.line_date).filter(Boolean).sort();
     out.set(a.id, {
+      origin: a.origin_city
+        ? [a.origin_city, a.origin_country].filter(Boolean).join(", ")
+        : originFromLines(own.map((l) => l.location || "")),
       destination: a.airport_city
         ? [a.airport_city, a.airport_country].filter(Boolean).join(", ")
         : destinationFromLines(own.map((l) => l.location || "")),
@@ -76,5 +95,5 @@ export async function tripDetailsForAdvances(advanceIds: string[]): Promise<Map<
 // carry linked_advance_id.
 export async function withTripDetails<T extends { linked_advance_id: string | null }>(rows: T[]): Promise<Array<T & TripDetails>> {
   const trips = await tripDetailsForAdvances(rows.map((r) => r.linked_advance_id).filter((x): x is string => !!x));
-  return rows.map((r) => ({ ...r, ...(trips.get(r.linked_advance_id || "") ?? { destination: null, departure_date: null, return_date: null }) }));
+  return rows.map((r) => ({ ...r, ...(trips.get(r.linked_advance_id || "") ?? { origin: null, destination: null, departure_date: null, return_date: null }) }));
 }

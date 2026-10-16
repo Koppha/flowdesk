@@ -33,6 +33,7 @@ export const CLEARANCE_ORG_COLUMNS: ReportColumn[] = [
 ];
 export const CLEARANCE_TRIP_COLUMNS: ReportColumn[] = [
   { key: "duty_station", label: "Duty Station" },
+  { key: "origin", label: "Starting Place" },
   { key: "destination", label: "Destination" },
   { key: "departure_date", label: "Departure", format: (v) => fmtReportDate(v) },
   { key: "return_date", label: "Return", format: (v) => fmtReportDate(v) },

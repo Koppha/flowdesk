@@ -37,6 +37,7 @@ const ALL_COLUMNS: { key: string; label: string }[] = [
   { key: "department", label: "Division" },
   { key: "departmentName", label: "Department" },
   { key: "type", label: "Type" },
+  { key: "origin", label: "Starting Place" },
   { key: "destination", label: "Destination" },
   { key: "departure", label: "Departure" },
   { key: "return", label: "Return" },
@@ -134,6 +135,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
       department: a => a.department ?? "",
       departmentName: a => a.department_name ?? "",
       type: a => travelTypeLabel(a.type, travelTypes),
+      origin: a => a.origin ?? "",
       destination: a => a.destination ?? "",
       departure: a => (a.departure_date ? fmtDate(a.departure_date) : ""),
       return: a => (a.return_date ? fmtDate(a.return_date) : ""),
@@ -262,6 +264,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
                   {visibleCols.department && <th>Division</th>}
                   {visibleCols.departmentName && <th>Department</th>}
                   {visibleCols.type && <th>Type</th>}
+                  {visibleCols.origin && <th>Starting Place</th>}
                   {visibleCols.destination && <th>Destination</th>}
                   {visibleCols.departure && <th>Departure</th>}
                   {visibleCols.return && <th>Return</th>}
@@ -286,6 +289,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
                     {visibleCols.department && <td style={{ color: "var(--muted)", fontSize: 13 }}>{a.department || "—"}</td>}
                     {visibleCols.departmentName && <td style={{ color: "var(--muted)", fontSize: 13 }}>{a.department_name || "—"}</td>}
                     {visibleCols.type && <td style={{ fontSize: 13 }}>{travelTypeLabel(a.type, travelTypes)}</td>}
+                    {visibleCols.origin && <td style={{ fontSize: 13 }}>{a.origin || "—"}</td>}
                     {visibleCols.destination && <td style={{ fontSize: 13 }}>{a.destination || "—"}</td>}
                     {visibleCols.departure && <td style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{fmtDate(a.departure_date)}</td>}
                     {visibleCols.return && <td style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{fmtDate(a.return_date)}</td>}

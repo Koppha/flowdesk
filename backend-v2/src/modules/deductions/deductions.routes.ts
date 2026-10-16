@@ -25,6 +25,7 @@ type DeductionRow = {
   department_name: string | null;
   duty_station: string | null;
   linked_advance_id: string | null;
+  origin: string | null;
   destination: string | null;
   departure_date: string | null;
   return_date: string | null;
