@@ -3,12 +3,13 @@ import Swal from "sweetalert2";
 import { api, openBlobInNewTab } from "./api";
 import DistributeDialog from "./components/DistributeDialog";
 import BrsHistory from "./components/BrsHistory";
+import BrsComments from "./components/BrsComments";
 import { BrsPeoplePicker, BrsRoleBadge, describeBrsPermissions } from "./components/BrsPeoplePicker";
 import OrgSearchModal, { OrgEntryChip, type OrgEntry } from "./components/OrgSearchModal";
 import { showNotice, confirmAction } from "./alerts";
 import { RichTextField } from "./shared/RichTextField";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, History, MoreVertical, Pencil, Plus, Send, Trash2, Users } from "lucide-react";
+import { ArrowDown, ArrowUp, MessageSquare, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, History, MoreVertical, Pencil, Plus, Send, Trash2, Users } from "lucide-react";
 // Generic filter-bar/empty-state/page-header pieces built for the Finance
 // queue redesign - nothing about their implementation is Finance-specific,
 // so BRS Studio's landing page reuses them too rather than duplicating them.
@@ -99,17 +100,23 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   const [defaultTypeId, setDefaultTypeId] = useState<string | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
   const [newTitle, setNewTitle] = useState("");
-  const [newDepartment, setNewDepartment] = useState("");
-  const [newOwnerId, setNewOwnerId] = useState("");
+  const [newOwnerIds, setNewOwnerIds] = useState<string[]>([]);
   const [newCoWriters, setNewCoWriters] = useState<OrgEntry[]>([]);
-  const [assignModalSectionId, setAssignModalSectionId] = useState<string | null>(null);
+  // The invite search, with the sections it applies to pre-ticked.
+  const [inviteModal, setInviteModal] = useState<{ initialIds: string[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [peopleEdit, setPeopleEdit] = useState<{ ownerId: string; coWriters: OrgEntry[] } | null>(null);
+  const [showComments, setShowComments] = useState(false);
+  // Comment-only reviewers chosen while building the approval route.
+  const [gateReviewers, setGateReviewers] = useState<OrgEntry[]>([]);
+  const [reviewerModal, setReviewerModal] = useState<"gate" | "live" | null>(null);
+  const [newSection, setNewSection] = useState<{ phase: "DRAFT" | "DEPT_INPUT"; title: string; required: boolean } | null>(null);
+  const [addingSection, setAddingSection] = useState(false);
+  const [peopleEdit, setPeopleEdit] = useState<{ ownerIds: string[]; coWriters: OrgEntry[] } | null>(null);
+  const [deptModal, setDeptModal] = useState(false);
   const [savingPeople, setSavingPeople] = useState(false);
   const [newQuarter, setNewQuarter] = useState("");
   const [newProgrammeType, setNewProgrammeType] = useState("Ongoing / permanent");
   const [newJustification, setNewJustification] = useState("");
-  const [departments, setDepartments] = useState<Array<{ company: string; departments: string[] }>>([]);
   const [creating, setCreating] = useState(false);
 
   const [docId, setDocId] = useState<string | null>(null);
@@ -157,7 +164,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
 
   const landingDeptOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const d of rows) { const dep = d.intake_data?.department; if (dep) set.add(dep); }
+    for (const d of rows) for (const dep of brsDepartmentNames(d.intake_data)) set.add(dep);
     return [{ value: "ALL", label: "All Departments" }, ...Array.from(set).sort().map((d) => ({ value: d, label: d }))];
   }, [rows]);
 
@@ -170,7 +177,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   const filteredRows = useMemo(() => {
     return rows.filter((d: any) => {
       if (statusFilter !== "ALL" && d.phase !== statusFilter) return false;
-      if (landingDeptFilter !== "ALL" && (d.intake_data?.department || "") !== landingDeptFilter) return false;
+      if (landingDeptFilter !== "ALL" && !brsDepartmentNames(d.intake_data).includes(landingDeptFilter)) return false;
       if (createdByFilter !== "ALL" && (d.requester_name || "") !== createdByFilter) return false;
       if (dateFrom && (!d.created_at || d.created_at < dateFrom)) return false;
       if (dateTo && (!d.created_at || d.created_at > dateTo)) return false;
@@ -200,7 +207,6 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   useEffect(() => {
     api.companyDirectory().then((rows: any) => setCompanyDirectory(Array.isArray(rows) ? rows : [])).catch(() => setCompanyDirectory([]));
     api.brsDefaultType().then((t: any) => setDefaultTypeId(t?.id ?? null)).catch(() => setDefaultTypeId(null));
-    api.departmentsByCompany().then((rows: any) => setDepartments(Array.isArray(rows) ? rows : [])).catch(() => setDepartments([]));
   }, []);
 
   // Next several calendar quarters from today, e.g. "Q4 2026", "Q1 2027", …
@@ -255,6 +261,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
       .then((d: any) => {
         setDoc(d);
         setIntakeEdits(d.intake_data || {});
+        if (d.my_role === "REVIEWER") setShowComments(true);
         if (d.brs_approval_submission_id) {
           api.customRequestDetail(d.brs_approval_submission_id).then(setApprovalSubmission).catch(() => setApprovalSubmission(null));
         } else {
@@ -275,6 +282,9 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     setChain([{ approver_id: "", position_name: "", decision_type: "APPROVE" }]);
     setViewingIndex(null);
     setShowHistory(false);
+    setShowComments(false);
+    setGateReviewers([]);
+    setNewSection(null);
     setPeopleEdit(null);
     setView("workspace");
   }
@@ -293,18 +303,16 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
         brs_type_id: defaultTypeId,
         title: newTitle.trim(),
         intake_data: {
-          department: newDepartment || null,
           target_quarter: newQuarter || null,
           programme_type: newProgrammeType || null,
           business_justification: newJustification || null
         },
-        owner_user_id: newOwnerId || null,
+        owner_user_ids: newOwnerIds,
         co_writers: newCoWriters.map((e) => ({ type: e.type, id: e.id ?? null, name: e.name ?? null, permissions: e.permissions ?? ["EDIT"] }))
       });
       setShowNewForm(false);
       setNewTitle("");
-      setNewDepartment("");
-      setNewOwnerId("");
+      setNewOwnerIds([]);
       setNewCoWriters([]);
       setNewQuarter("");
       setNewProgrammeType("Ongoing / permanent");
@@ -339,19 +347,21 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     }
   }
 
-  async function assignEntries(sectionId: string, entries: OrgEntry[]) {
-    if (!doc) return;
+  async function inviteEntries(entries: OrgEntry[], sectionIds: string[]) {
+    if (!doc || !entries.length || !sectionIds.length) return;
     try {
-      for (const e of entries) {
-        await api.addBrsSectionAssignee(doc.id, sectionId,
-          e.type === "user" ? { user_id: e.id! }
-            : e.type === "department" ? { section_ref_id: e.id! }
-            : e.type === "section" ? { team_ref_id: e.id! }
-            : { division_name: e.name! });
-      }
-      loadDoc(doc.id);
+      const res: any = await api.inviteBrsCollaborators(doc.id, {
+        entries: entries.map((e) => ({ type: e.type, id: e.id ?? null, name: e.name ?? null })),
+        section_ids: sectionIds
+      });
+      void showNotice(
+        res?.invitations
+          ? `Sent ${res.invitations} invitation${res.invitations === 1 ? "" : "s"}${res.skipped ? ` (${res.skipped} already on those sections were skipped)` : ""}.`
+          : "Everyone selected is already on those sections."
+      );
     } catch (err: any) {
-      void showNotice(err?.message || "Failed to assign");
+      void showNotice(err?.message || "Failed to invite");
+    } finally {
       loadDoc(doc.id);
     }
   }
@@ -421,12 +431,58 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     }
   }
 
+  function moveApprover(idx: number, delta: number) {
+    setChain((prev) => {
+      const to = idx + delta;
+      if (to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[to]] = [next[to], next[idx]];
+      return next;
+    });
+  }
+
+  async function saveLiveReviewers(entries: OrgEntry[]) {
+    if (!doc) return;
+    try {
+      await api.setBrsReviewers(doc.id, entries.map((e) => ({ type: e.type, id: e.id ?? null, name: e.name ?? null })));
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to update reviewers");
+    }
+  }
+
+  async function addSection() {
+    if (!doc || !newSection?.title.trim()) return;
+    setAddingSection(true);
+    try {
+      await api.addBrsSection(doc.id, { title: newSection.title.trim(), owner_phase: newSection.phase, is_required: newSection.required });
+      setNewSection(null);
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to add the section");
+    } finally {
+      setAddingSection(false);
+    }
+  }
+
+  async function removeSection(section: any) {
+    if (!doc) return;
+    const ok = await confirmAction({ title: `Remove "${section.title}"?`, text: "This section was added to this BRS and is still empty. It's removed from this BRS only; the removal is kept in History.", confirmButtonText: "Remove section" });
+    if (!ok) return;
+    try {
+      await api.removeBrsSection(doc.id, section.id);
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Failed to remove the section");
+    }
+  }
+
   async function savePeople() {
     if (!doc || !peopleEdit) return;
     setSavingPeople(true);
     try {
       await api.setBrsPeople(doc.id, {
-        owner_user_id: peopleEdit.ownerId || null,
+        owner_user_ids: peopleEdit.ownerIds,
         co_writers: peopleEdit.coWriters.map((e) => ({ type: e.type, id: e.id ?? null, name: e.name ?? null, permissions: e.permissions ?? ["EDIT"] }))
       });
       setPeopleEdit(null);
@@ -481,7 +537,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     if (!clean.length) { void showNotice("Add at least one approver before routing for approval."); return; }
     setRouting(true);
     try {
-      await api.routeBrsApproval(doc.id, clean);
+      await api.routeBrsApproval(doc.id, clean, gateReviewers.map((e) => ({ type: e.type, id: e.id ?? null, name: e.name ?? null })));
       loadDoc(doc.id);
     } catch (e: any) {
       void showNotice(e?.message || "Failed to route for approval");
@@ -566,18 +622,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     <label>Title</label>
                     <input className="ep-form-input" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="e.g. Complimentary Gift: Birthday and Anniversary" autoFocus />
                   </div>
-                  <div className="ep-form-row-3">
-                    <div className="ep-form-group">
-                      <label>Requesting department</label>
-                      <select className="ep-form-select" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)}>
-                        <option value="">Select…</option>
-                        {departments.map((g) => (
-                          <optgroup key={g.company} label={g.company}>
-                            {g.departments.map((d) => <option key={d} value={d}>{d}</option>)}
-                          </optgroup>
-                        ))}
-                      </select>
-                    </div>
+                  <div className="ep-form-row">
                     <div className="ep-form-group">
                       <label>Target launch quarter</label>
                       <select className="ep-form-select" value={newQuarter} onChange={(e) => setNewQuarter(e.target.value)}>
@@ -595,12 +640,15 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                   </div>
                   <BrsPeoplePicker
                     users={directorySorted}
-                    ownerId={newOwnerId}
-                    onOwnerChange={setNewOwnerId}
+                    ownerIds={newOwnerIds}
+                    onOwnersChange={setNewOwnerIds}
                     coWriters={newCoWriters}
                     onCoWritersChange={setNewCoWriters}
                     excludeIds={profile?.id ? [profile.id] : []}
                   />
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", margin: "-4px 0 14px" }}>
+                    Requesting departments fill in automatically from your department and your owners' and co-writers' — you can add or remove them once it's open.
+                  </div>
                   <div className="ep-form-group">
                     <label>Business justification</label>
                     <RichTextField value={newJustification} onChange={setNewJustification} placeholder="Why this is worth building, backed by whatever numbers you have…" />
@@ -699,7 +747,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     <tr key={d.id} style={{ cursor: "pointer" }} onClick={() => openDoc(d.id)}>
                       <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>
                         {d.title}
-                        {landingTab === "MINE" && d.my_role && d.my_role !== "CREATOR" && <span style={{ marginLeft: 8 }}><BrsRoleBadge role={d.my_role} /></span>}
+                        {(landingTab === "MINE" || landingTab === "ASSIGNED") && d.my_role && d.my_role !== "CREATOR" && <span style={{ marginLeft: 8 }}><BrsRoleBadge role={d.my_role} /></span>}
                       </td>
                       <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.reference_no}</td>
                       <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.intake_data?.department || "—"}</td>
@@ -767,9 +815,14 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {doc && phaseBadge(doc.phase)}
           {doc && (
-            <button className="ep-btn-outline" onClick={() => setShowHistory((v) => !v)}>
-              <History size={14} /> History
-            </button>
+            <>
+              <button className="ep-btn-outline" onClick={() => setShowComments((v) => !v)}>
+                <MessageSquare size={14} /> Comments{doc.comment_count ? ` (${doc.comment_count})` : ""}
+              </button>
+              <button className="ep-btn-outline" onClick={() => setShowHistory((v) => !v)}>
+                <History size={14} /> History
+              </button>
+            </>
           )}
           <button onClick={backToLanding} className="ep-btn-outline custom-requests-back"><ArrowLeft size={14} /> All BRS</button>
         </div>
@@ -789,6 +842,15 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             return (
               <>
                 {showHistory && <BrsHistory docId={doc.id} versions={doc.versions || []} onClose={() => setShowHistory(false)} />}
+                {showComments && (
+                  <BrsComments
+                    docId={doc.id}
+                    sections={doc.sections.map((x: any) => ({ id: x.id, title: x.title }))}
+                    myRole={doc.my_role}
+                    onClose={() => setShowComments(false)}
+                    onPosted={() => loadDoc(doc.id)}
+                  />
+                )}
                 {doc.amending_from_version && doc.phase !== "BASELINE" && (
                   <div className="brs-notify-banner" style={{ background: "#ede9fe", color: "#5b21b6" }}>
                     Amending approved version {doc.amending_from_version}. That version stays on record; once this amendment is approved it becomes version {doc.amending_from_version + 1}.
@@ -837,19 +899,19 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     <>
                       <div className="ep-form-row">
                         <div className="ep-form-group">
-                          <label>Requesting department</label>
-                          <select className="ep-form-select" value={intakeEdits.department || ""} onChange={(e) => setIntakeEdits((prev) => ({ ...prev, department: e.target.value }))}>
-                            <option value="">Select…</option>
-                            {departments.map((g) => (
-                          <optgroup key={g.company} label={g.company}>
-                            {g.departments.map((d) => <option key={d} value={d}>{d}</option>)}
-                          </optgroup>
-                        ))}
-                          </select>
+                          <label>Requesting departments</label>
+                          <BrsDepartmentChips
+                            units={brsUnits(intakeEdits)}
+                            onRemove={(key) => setIntakeEdits((prev) => ({ ...prev, departments: brsUnits(prev).filter((u) => brsUnitKey(u) !== key) }))}
+                          />
+                          <button type="button" className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px", marginTop: 6, alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => setDeptModal(true)}>
+                            <Plus size={13} /> Add department
+                          </button>
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Filled in from the creator, owners and co-writers. Save Intake to keep changes.</div>
                         </div>
                         <div className="ep-form-group">
-                          <label>Product owner</label>
-                          <div style={{ fontSize: 14, padding: "8px 0" }}>{doc.owner?.full_name || doc.intake_data?.product_owner || "—"} <span style={{ fontSize: 12, color: "var(--muted)" }}>(change under People)</span></div>
+                          <label>Owners</label>
+                          <div style={{ fontSize: 14, padding: "8px 0" }}>{(doc.owners || []).map((o: any) => o.full_name).join(", ") || doc.intake_data?.product_owner || "—"} <span style={{ fontSize: 12, color: "var(--muted)" }}>(change under People)</span></div>
                         </div>
                       </div>
                       <div className="ep-form-row">
@@ -880,12 +942,12 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     <>
                       <div className="ep-form-row">
                         <div>
-                          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 3 }}>Requesting department</div>
-                          <div style={{ fontSize: 14, marginBottom: 14 }}>{doc.intake_data?.department || "—"}</div>
+                          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 3 }}>Requesting departments</div>
+                          <div style={{ marginBottom: 14 }}>{brsUnits(doc.intake_data).length ? <BrsDepartmentChips units={brsUnits(doc.intake_data)} /> : "—"}</div>
                         </div>
                         <div>
-                          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 3 }}>Product owner</div>
-                          <div style={{ fontSize: 14, marginBottom: 14 }}>{doc.owner?.full_name || doc.intake_data?.product_owner || "—"}</div>
+                          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 3 }}>Owners</div>
+                          <div style={{ fontSize: 14, marginBottom: 14 }}>{(doc.owners || []).map((o: any) => o.full_name).join(", ") || doc.intake_data?.product_owner || "—"}</div>
                         </div>
                       </div>
                       <div className="ep-form-row">
@@ -911,7 +973,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                           className="ep-btn-outline"
                           style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}
                           onClick={() => setPeopleEdit({
-                            ownerId: doc.owner?.id || "",
+                            ownerIds: (doc.owners || []).map((o: any) => o.id),
                             coWriters: (doc.co_writers || []).map((c: any) => ({ type: c.type, id: c.ref_id, name: c.division_name, label: c.label, permissions: c.permissions || [] }))
                           })}
                         >
@@ -923,8 +985,8 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                       <>
                         <BrsPeoplePicker
                           users={directorySorted}
-                          ownerId={peopleEdit.ownerId}
-                          onOwnerChange={(id) => setPeopleEdit((p) => (p ? { ...p, ownerId: id } : p))}
+                          ownerIds={peopleEdit.ownerIds}
+                          onOwnersChange={(ids) => setPeopleEdit((p) => (p ? { ...p, ownerIds: ids } : p))}
                           coWriters={peopleEdit.coWriters}
                           onCoWritersChange={(entries) => setPeopleEdit((p) => (p ? { ...p, coWriters: entries } : p))}
                           excludeIds={[doc.requester_id]}
@@ -937,7 +999,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     ) : (
                       <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}><BrsRoleBadge role="CREATOR" /> {doc.creator?.full_name || "—"}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><BrsRoleBadge role="OWNER" /> {doc.owner?.full_name || <span style={{ color: "var(--muted)" }}>No separate owner — the creator owns it</span>}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><BrsRoleBadge role="OWNER" /> {(doc.owners || []).length ? (doc.owners || []).map((o: any) => o.full_name).join(", ") : <span style={{ color: "var(--muted)" }}>No separate owner — the creator owns it</span>}</div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                           <BrsRoleBadge role="CO_WRITER" />
                           {(doc.co_writers || []).length
@@ -961,6 +1023,11 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             <div className="ep-panel" style={{ marginBottom: 16 }}>
               <div className="ep-panel-head">
                 <div className="ep-panel-title">{activePhase === "DRAFT" ? "Draft" : "Department Input"}</div>
+                {isLive && canInvite && (
+                  <button className="ep-btn-outline" style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px", order: 2 }} onClick={() => setInviteModal({ initialIds: [] })}>
+                    + Invite collaborators to several sections
+                  </button>
+                )}
                 <div className="ep-panel-sub">
                   {activePhase === "DRAFT"
                     ? "Fill in every required section below, then send this on."
@@ -980,7 +1047,13 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                       <div key={s.id} className={`brs-section-card ${s.is_required && !s.content_html?.trim() ? "is-blocking" : ""}`}>
                         <div className="brs-section-card-head">
                           <div>
-                            <div className="brs-section-card-title">{s.title}{s.is_required && <span style={{ color: "#dc2626" }}> *</span>}</div>
+                            <div className="brs-section-card-title">
+                              {s.title}{s.is_required && <span style={{ color: "#dc2626" }}> *</span>}
+                              {!s.type_section_id && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "#6d28d9", background: "#ede9fe", padding: "1px 7px", borderRadius: 99 }}>Added to this BRS</span>}
+                              {!s.type_section_id && canManage && doc.phase !== "BASELINE" && !(s.content_html || "").replace(/<[^>]*>/g, "").trim() && (
+                                <button type="button" onClick={() => void removeSection(s)} style={{ marginLeft: 8, border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 12 }}>Remove</button>
+                              )}
+                            </div>
                             {s.description && <div className="brs-section-card-meta">{s.description}</div>}
                           </div>
                           <span className={`custom-status-badge custom-status-${s.status.toLowerCase().replace(/_/g, "-")}`}>{s.status.replace(/_/g, " ")}</span>
@@ -1006,7 +1079,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                             </div>
                           ))}
                           {isLive && (canInvite || isSectionAssigneeOf(s)) && s.status !== "SUBMITTED" && (
-                            <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 10px", marginTop: 4 }} onClick={() => setAssignModalSectionId(s.id)}>
+                            <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 10px", marginTop: 4 }} onClick={() => setInviteModal({ initialIds: [s.id] })}>
                               {s.owner_phase === "DRAFT" ? "+ Invite collaborators" : "+ Assign"}
                             </button>
                           )}
@@ -1044,6 +1117,38 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     );
                   })}
 
+                {canManage && doc.phase !== "BASELINE" && (isLive || doc.phase === "APPROVAL") && (
+                  newSection && newSection.phase === (activePhase === "DRAFT" ? "DRAFT" : "DEPT_INPUT") ? (
+                    <div className="brs-section-card" style={{ borderStyle: "dashed" }}>
+                      <div className="ep-form-row">
+                        <div className="ep-form-group">
+                          <label>New section title</label>
+                          <input className="ep-form-input" autoFocus value={newSection.title} onChange={(e) => setNewSection({ ...newSection, title: e.target.value })} placeholder="e.g. Data Privacy Considerations" />
+                        </div>
+                        <div className="ep-form-group">
+                          <label>Filled in during</label>
+                          <select className="ep-form-select" value={newSection.phase} onChange={(e) => setNewSection({ ...newSection, phase: e.target.value as any })}>
+                            <option value="DRAFT">Draft</option>
+                            <option value="DEPT_INPUT">Department Input</option>
+                          </select>
+                        </div>
+                      </div>
+                      <label className="ep-checkbox-label" style={{ marginBottom: 8 }}>
+                        <input type="checkbox" checked={newSection.required} onChange={(e) => setNewSection({ ...newSection, required: e.target.checked })} />
+                        Required (blocks the Consistency Gate if left blank)
+                      </label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button className="ep-btn" disabled={addingSection || !newSection.title.trim()} onClick={() => void addSection()}>{addingSection ? "Adding…" : "Add section"}</button>
+                        <button className="ep-btn-outline" onClick={() => setNewSection(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 12px", marginBottom: 8 }}
+                      onClick={() => setNewSection({ phase: activePhase === "DRAFT" ? "DRAFT" : "DEPT_INPUT", title: "", required: false })}>
+                      <Plus size={13} /> Add section
+                    </button>
+                  )
+                )}
                 {isLive && canWorkflow && (
                   <button className="ep-btn" style={{ marginTop: 8 }} onClick={advancePhase}>
                     {activePhase === "DRAFT" ? "Send on →" : "Advance to Consistency Gate →"}
@@ -1096,7 +1201,11 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                       <>
                         {chain.map((c, idx) => (
                           <div key={idx} className="brs-chain-row">
-                            <span style={{ fontSize: 12, color: "var(--muted)" }}>{idx + 1}</span>
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                              <span style={{ fontSize: 12, color: "var(--muted)", minWidth: 14 }}>{idx + 1}</span>
+                              <button className="ep-icon-btn" style={{ padding: 2 }} disabled={idx === 0} onClick={() => moveApprover(idx, -1)} title="Move up" aria-label="Move approver up"><ArrowUp size={13} /></button>
+                              <button className="ep-icon-btn" style={{ padding: 2 }} disabled={idx === chain.length - 1} onClick={() => moveApprover(idx, 1)} title="Move down" aria-label="Move approver down"><ArrowDown size={13} /></button>
+                            </span>
                             <ApproverCombobox
                               users={directorySorted}
                               value={c.approver_id}
@@ -1135,7 +1244,17 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                             </button>
                           </div>
                         ))}
-                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>Reviewers <span style={{ fontWeight: 400, color: "var(--muted)" }}>— comment only, they don't approve</span></div>
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>Add a Department or Section: everyone in it can open this BRS and add comments.</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                            {gateReviewers.map((r) => (
+                              <OrgEntryChip key={`${r.type}:${r.id || r.name}`} entry={r} onRemove={() => setGateReviewers((prev) => prev.filter((x) => x !== r))} />
+                            ))}
+                            <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 10px" }} onClick={() => setReviewerModal("gate")}>+ Add reviewers</button>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                           <button className="ep-btn-outline" onClick={() => setChain((prev) => [...prev, { approver_id: "", position_name: "", decision_type: "APPROVE" }])}>+ Add approver</button>
                           <button className="ep-btn" disabled={routing} onClick={submitRouteApproval}>{routing ? "Routing…" : "Route for Approval →"}</button>
                         </div>
@@ -1180,6 +1299,26 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     </div>
                   </div>
                 )}
+                <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <strong style={{ fontSize: 13 }}>Reviewers</strong>
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>comment only</span>
+                    {canWorkflow && doc.phase !== "BASELINE" && (
+                      <button className="ep-btn-outline" style={{ marginLeft: "auto", fontSize: 12, padding: "3px 10px" }} onClick={() => setReviewerModal("live")}>+ Add reviewers</button>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {(doc.reviewers || []).length ? (doc.reviewers || []).map((r: any) => (
+                      <OrgEntryChip
+                        key={r.entry_id}
+                        entry={{ type: r.type, id: r.ref_id, name: r.division_name, label: r.label }}
+                        onRemove={canWorkflow && doc.phase !== "BASELINE" ? () => void saveLiveReviewers(
+                          (doc.reviewers || []).filter((x: any) => x.entry_id !== r.entry_id).map((x: any) => ({ type: x.type, id: x.ref_id, name: x.division_name, label: x.label }))
+                        ) : undefined}
+                      />
+                    )) : <span style={{ fontSize: 12, color: "var(--muted)" }}>None</span>}
+                  </div>
+                </div>
                 {(approvalSubmission?.approval_chain || []).map((step: any, idx: number) => {
                   // Same fix as CustomRequestsHub's chain view: a step only
                   // reads "Pending" while it's actually its turn - anything
@@ -1254,19 +1393,58 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
           })()}
         </>
       )}
-      {assignModalSectionId && doc && (() => {
-        const sec = doc.sections.find((x: any) => x.id === assignModalSectionId);
-        const existing = (sec?.assignees || []).map((a: any) =>
-          a.user_id ? `user:${a.user_id}` : a.section_ref_id ? `department:${a.section_ref_id}` : a.team_ref_id ? `section:${a.team_ref_id}` : `division:${String(a.division_name || "").toLowerCase()}`
-        );
+      {deptModal && doc && (
+        <OrgSearchModal
+          title="Add requesting departments"
+          subtitle="Search Org Structure for a Division or a Department."
+          people={[]}
+          kinds={["division", "department"]}
+          excludeKeys={brsUnits(intakeEdits).map(brsUnitKey)}
+          onAdd={(entries) => setIntakeEdits((prev) => ({
+            ...prev,
+            departments: [
+              ...brsUnits(prev),
+              ...entries.map((e) => ({ type: e.type, id: e.type === "division" ? null : e.id ?? null, name: e.type === "division" ? (e.name || e.label) : e.label, parent: null, company: null }))
+            ]
+          }))}
+          onClose={() => setDeptModal(false)}
+        />
+      )}
+      {reviewerModal && doc && (() => {
+        const current: OrgEntry[] = reviewerModal === "gate"
+          ? gateReviewers
+          : (doc.reviewers || []).map((x: any) => ({ type: x.type, id: x.ref_id, name: x.division_name, label: x.label }));
         return (
           <OrgSearchModal
-            title={sec?.owner_phase === "DRAFT" ? `Invite collaborators — ${sec?.title}` : `Assign — ${sec?.title}`}
-            subtitle="Search and select employees, or a whole division, department or section. Anyone in a group can fill in and confirm this section."
+            title="Add reviewers"
+            subtitle="Choose a Department or Section. Everyone in it can open this BRS and add comments — they don't approve it."
+            people={[]}
+            kinds={["department", "section"]}
+            excludeKeys={current.map((e) => `${e.type}:${e.type === "division" ? (e.name || "").toLowerCase() : e.id}`)}
+            onAdd={(entries) => {
+              if (reviewerModal === "gate") setGateReviewers((prev) => [...prev, ...entries]);
+              else void saveLiveReviewers([...current, ...entries]);
+            }}
+            onClose={() => setReviewerModal(null)}
+          />
+        );
+      })()}
+      {inviteModal && doc && (() => {
+        // Sections this person may invite onto: all of them with Invite
+        // permission, otherwise only the ones they're already assigned to.
+        const targets = doc.sections
+          .filter((x: any) => x.status !== "SUBMITTED" && (canInvite || isSectionAssigneeOf(x)))
+          .map((x: any) => ({ id: x.id, label: x.title, hint: x.owner_phase === "DRAFT" ? "Draft section" : "Department Input section" }));
+        return (
+          <OrgSearchModal
+            title="Invite collaborators"
+            subtitle="Tick every section they should work on, then search and add employees, or a whole division, department or section. Anyone in a group can fill in and confirm their sections."
             people={directorySorted}
-            excludeKeys={existing}
-            onAdd={(entries) => void assignEntries(assignModalSectionId, entries)}
-            onClose={() => setAssignModalSectionId(null)}
+            targets={targets}
+            initialTargetIds={inviteModal.initialIds.filter((id) => targets.some((t: any) => t.id === id))}
+            targetsLabel="Invite to these sections"
+            onAdd={(entries, targetIds) => void inviteEntries(entries, targetIds)}
+            onClose={() => setInviteModal(null)}
           />
         );
       })()}
@@ -1279,6 +1457,37 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
           onDone={(count) => { void showNotice(`Distributed to ${count} ${count === 1 ? "person" : "people"}.`); }}
         />
       )}
+    </div>
+  );
+}
+
+// Requesting departments: Org Structure units saved on intake_data.departments
+// (or, for an older BRS, the single department name it was opened with).
+type BrsUnit = { type: string; id: string | null; name: string; parent?: string | null; company?: string | null };
+function brsUnits(intake: any): BrsUnit[] {
+  if (Array.isArray(intake?.departments)) return intake.departments;
+  return intake?.department ? [{ type: "division", id: null, name: intake.department }] : [];
+}
+function brsUnitKey(u: { type: string; id?: string | null; name?: string | null }) {
+  return u.type === "division" ? `division:${(u.name || "").toLowerCase()}` : `department:${u.id}`;
+}
+function brsDepartmentNames(intake: any): string[] {
+  return brsUnits(intake).map((u) => u.name).filter(Boolean);
+}
+function BrsDepartmentChips({ units, onRemove }: { units: BrsUnit[]; onRemove?: (key: string) => void }) {
+  if (!units.length) return <div style={{ fontSize: 13, color: "var(--muted)" }}>None yet.</div>;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {units.map((u) => (
+        <span key={brsUnitKey(u)} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px 4px 10px", borderRadius: 99, background: u.type === "division" ? "#fce7f3" : "#e0e7ff", color: u.type === "division" ? "#be185d" : "#4338ca", fontSize: 12.5, fontWeight: 600 }}>
+          {u.name}
+          <span style={{ fontWeight: 400, opacity: 0.8 }}>· {[u.type === "division" ? "Division" : "Department", u.parent, u.company].filter(Boolean).join(" · ")}</span>
+          {onRemove && (
+            <button type="button" aria-label={`Remove ${u.name}`} onClick={() => onRemove(brsUnitKey(u))}
+              style={{ border: "none", background: "transparent", cursor: "pointer", color: "inherit", padding: 0, display: "inline-flex", fontSize: 14, lineHeight: 1 }}>×</button>
+          )}
+        </span>
+      ))}
     </div>
   );
 }

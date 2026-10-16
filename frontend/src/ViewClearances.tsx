@@ -4,7 +4,7 @@ import { formatMoney } from "./constants";
 import {
   ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, Building2, Users
 } from "lucide-react";
-import { BusinessUnitTabs, FinanceFilterBar, FilterField, SearchField, FinanceEmptyState, type BusinessUnit } from "./components/FinanceQueueKit";
+import { BusinessUnitTabs, FinanceFilterBar, FilterField, SearchField, FinanceEmptyState, type BusinessUnit, ColumnChooser, useColumnVisibility, type ColumnOption } from "./components/FinanceQueueKit";
 
 // Human-facing labels for every real clearance_claims.status value (see
 // ClaimStatus in claims.service.ts) - plain badges, no color-coded urgency
@@ -33,8 +33,18 @@ interface ClearanceItem {
   employee_name: string | null;
   employee_no: string | null;
   division_name: string | null;
+  // division_name is the company (the tabs); these are the traveller's
+  // Division and Department in Org Structure, e.g. Technical / Operations.
+  org_division: string | null;
+  department_name: string | null;
+  duty_station: string | null;
+  // Where they travelled and when, from the advance this clears.
   destination: string | null;
+  departure_date: string | null;
+  return_date: string | null;
+  // VR Date = when the advance this clears was approved.
   vr_date: string | null;
+  clearance_submitted_at: string | null;
   has_receipts: boolean;
   advance_amount: string | number;
   cleared_amount: string | number;
@@ -51,7 +61,27 @@ function fmtDate(s: string | null | undefined) {
   return new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-type SortKey = "name" | "empNo" | "division" | "destination" | "vrDate" | "advAmount" | "clearedAmount" | "toBeExpensed" | "salaryDeduction" | "payable" | "status";
+type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "salaryDeduction" | "payable" | "status";
+
+const COLUMNS: ColumnOption[] = [
+  { key: "name", label: "Name", locked: true },
+  { key: "empNo", label: "Emp. No" },
+  { key: "division", label: "Division" },
+  { key: "department", label: "Department" },
+  { key: "dutyStation", label: "Duty Station" },
+  { key: "destination", label: "Destination" },
+  { key: "departure", label: "Departure" },
+  { key: "return", label: "Return" },
+  { key: "vrDate", label: "VR Date (advance approved)" },
+  { key: "submitted", label: "Clearance Submitted" },
+  { key: "receipts", label: "Receipts" },
+  { key: "advAmount", label: "Adv Amount" },
+  { key: "clearedAmount", label: "Cleared Amount" },
+  { key: "toBeExpensed", label: "Amount To Be Expensed" },
+  { key: "salaryDeduction", label: "Salary Deduction" },
+  { key: "payable", label: "Payable" },
+  { key: "status", label: "Status" },
+];
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
@@ -71,6 +101,8 @@ export default function ViewClearances() {
 
   const [sortKey, setSortKey] = useState<SortKey>("vrDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const columns = useColumnVisibility("finance-columns:view-clearances");
+  const show = columns.show;
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -100,8 +132,10 @@ export default function ViewClearances() {
         return (
           (i.employee_name || "").toLowerCase().includes(q) ||
           (i.employee_no || "").toLowerCase().includes(q) ||
-          (i.division_name || "").toLowerCase().includes(q) ||
-          (i.destination || "").toLowerCase().includes(q)
+          (i.org_division || "").toLowerCase().includes(q) ||
+          (i.department_name || "").toLowerCase().includes(q) ||
+          (i.destination || "").toLowerCase().includes(q) ||
+          (i.duty_station || "").toLowerCase().includes(q)
         );
       }
       return true;
@@ -115,8 +149,13 @@ export default function ViewClearances() {
       switch (sortKey) {
         case "name": return (a.employee_name || "").localeCompare(b.employee_name || "") * dir;
         case "empNo": return (a.employee_no || "").localeCompare(b.employee_no || "") * dir;
-        case "division": return (a.division_name || "").localeCompare(b.division_name || "") * dir;
+        case "division": return (a.org_division || "").localeCompare(b.org_division || "") * dir;
+        case "department": return (a.department_name || "").localeCompare(b.department_name || "") * dir;
         case "destination": return (a.destination || "").localeCompare(b.destination || "") * dir;
+        case "dutyStation": return (a.duty_station || "").localeCompare(b.duty_station || "") * dir;
+        case "departure": return (a.departure_date || "").localeCompare(b.departure_date || "") * dir;
+        case "return": return (a.return_date || "").localeCompare(b.return_date || "") * dir;
+        case "submitted": return (a.clearance_submitted_at || "").localeCompare(b.clearance_submitted_at || "") * dir;
         case "advAmount": return (Number(a.advance_amount) - Number(b.advance_amount)) * dir;
         case "clearedAmount": return (Number(a.cleared_amount) - Number(b.cleared_amount)) * dir;
         case "toBeExpensed": return (Number(a.amount_to_be_expensed) - Number(b.amount_to_be_expensed)) * dir;
@@ -144,14 +183,30 @@ export default function ViewClearances() {
   }
 
   function exportCsv() {
-    const headers = ["Name", "Emp No", "Division", "Destination", "VR Date", "Receipts", "Adv Amount", "Cleared Amount", "Amount To Be Expensed", "Salary Deduction", "Payable", "Status"];
-    const rows = sorted.map((i) => [
-      i.employee_name || "", i.employee_no || "", i.division_name || "", i.destination || "",
-      fmtDate(i.vr_date), i.has_receipts ? "Yes" : "No",
-      Number(i.advance_amount || 0).toFixed(2), Number(i.cleared_amount || 0).toFixed(2),
-      Number(i.amount_to_be_expensed || 0).toFixed(2), Number(i.salary_deduction || 0).toFixed(2),
-      Number(i.payable || 0).toFixed(2), STATUS_LABEL[i.status] || i.status
-    ]);
+    // Exports the columns currently shown (Company is always included).
+    const allCsvColumns: Array<[string, string, (i: typeof sorted[number]) => string]> = [
+      ["name", "Name", (i) => String(i.employee_name || "")],
+      ["empNo", "Emp No", (i) => String(i.employee_no || "")],
+      ["*", "Company", (i) => String(i.division_name || "")],
+      ["division", "Division", (i) => String(i.org_division || "")],
+      ["department", "Department", (i) => String(i.department_name || "")],
+      ["dutyStation", "Duty Station", (i) => String(i.duty_station || "")],
+      ["destination", "Destination", (i) => String(i.destination || "")],
+      ["departure", "Departure", (i) => String(i.departure_date ? fmtDate(i.departure_date) : "")],
+      ["return", "Return", (i) => String(i.return_date ? fmtDate(i.return_date) : "")],
+      ["vrDate", "VR Date", (i) => String(fmtDate(i.vr_date))],
+      ["submitted", "Clearance Submitted", (i) => String(i.clearance_submitted_at ? fmtDate(i.clearance_submitted_at) : "")],
+      ["receipts", "Receipts", (i) => String(i.has_receipts ? "Yes" : "No")],
+      ["advAmount", "Adv Amount", (i) => String(Number(i.advance_amount || 0).toFixed(2))],
+      ["clearedAmount", "Cleared Amount", (i) => String(Number(i.cleared_amount || 0).toFixed(2))],
+      ["toBeExpensed", "Amount To Be Expensed", (i) => String(Number(i.amount_to_be_expensed || 0).toFixed(2))],
+      ["salaryDeduction", "Salary Deduction", (i) => String(Number(i.salary_deduction || 0).toFixed(2))],
+      ["payable", "Payable", (i) => String(Number(i.payable || 0).toFixed(2))],
+      ["status", "Status", (i) => String(STATUS_LABEL[i.status] || i.status)],
+    ];
+    const csvColumns = allCsvColumns.filter(([key]) => key === "*" || show(key));
+    const headers = csvColumns.map(([, h]) => h);
+    const rows = sorted.map((i) => csvColumns.map(([, , f]) => f(i)));
     const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const el = document.createElement("a");
     el.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
@@ -177,6 +232,7 @@ export default function ViewClearances() {
           <p className="ep-subtitle">Every clearance company-wide, at whatever stage it's currently at — view only, nothing to action here.</p>
         </div>
         <div className="ep-actions">
+          <ColumnChooser columns={COLUMNS} show={columns.show} toggle={columns.toggle} reset={columns.reset} />
           <button className="ep-btn-outline" onClick={exportCsv} disabled={!sorted.length}>
             <Download size={14} /> Export
           </button>
@@ -191,7 +247,7 @@ export default function ViewClearances() {
         showReset={Boolean(search || companyFilter !== "ALL" || dateFrom || dateTo)}
         onReset={() => { setSearch(""); setCompanyFilter("ALL"); setDateFrom(""); setDateTo(""); setPage(1); }}
       >
-        <SearchField label="Search" placeholder="Search name, emp no, division, destination…" value={search} onChange={(v) => { setSearch(v); setPage(1); }} />
+        <SearchField label="Search" placeholder="Search name, emp no, division, department, destination, duty station…" value={search} onChange={(v) => { setSearch(v); setPage(1); }} />
         <FilterField label="Closed From">
           <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
         </FilterField>
@@ -209,45 +265,61 @@ export default function ViewClearances() {
               <thead>
                 <tr>
                   <SortableHeader label="Name" sortKeyName="name" />
-                  <SortableHeader label="Emp. No" sortKeyName="empNo" />
-                  <SortableHeader label="Division" sortKeyName="division" />
-                  <SortableHeader label="Destination" sortKeyName="destination" />
-                  <SortableHeader label="VR Date" sortKeyName="vrDate" />
-                  <th>Receipts</th>
-                  <SortableHeader label="Adv Amount" sortKeyName="advAmount" />
-                  <SortableHeader label="Cleared Amount" sortKeyName="clearedAmount" />
-                  <SortableHeader label="Amount To Be Expnsd" sortKeyName="toBeExpensed" />
-                  <SortableHeader label="Salary Deduction" sortKeyName="salaryDeduction" />
-                  <SortableHeader label="Payable" sortKeyName="payable" />
-                  <SortableHeader label="Status" sortKeyName="status" />
+                  {show("empNo") && <SortableHeader label="Emp. No" sortKeyName="empNo" />}
+                  {show("division") && <SortableHeader label="Division" sortKeyName="division" />}
+                  {show("department") && <SortableHeader label="Department" sortKeyName="department" />}
+                  {show("dutyStation") && <SortableHeader label="Duty Station" sortKeyName="dutyStation" />}
+                  {show("destination") && <SortableHeader label="Destination" sortKeyName="destination" />}
+                  {show("departure") && <SortableHeader label="Departure" sortKeyName="departure" />}
+                  {show("return") && <SortableHeader label="Return" sortKeyName="return" />}
+                  {show("vrDate") && <SortableHeader label="VR Date" sortKeyName="vrDate" />}
+                  {show("submitted") && <SortableHeader label="Clearance Submitted" sortKeyName="submitted" />}
+                  {show("receipts") && <th>Receipts</th>}
+                  {show("advAmount") && <SortableHeader label="Adv Amount" sortKeyName="advAmount" />}
+                  {show("clearedAmount") && <SortableHeader label="Cleared Amount" sortKeyName="clearedAmount" />}
+                  {show("toBeExpensed") && <SortableHeader label="Amount To Be Expensed" sortKeyName="toBeExpensed" />}
+                  {show("salaryDeduction") && <SortableHeader label="Salary Deduction" sortKeyName="salaryDeduction" />}
+                  {show("payable") && <SortableHeader label="Payable" sortKeyName="payable" />}
+                  {show("status") && <SortableHeader label="Status" sortKeyName="status" />}
                 </tr>
               </thead>
               <tbody>
                 {paged.map((item) => (
                   <tr key={item.id}>
                     <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.employee_name || "—"}</td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.employee_no || "—"}</td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.division_name || "—"}</td>
-                    <td style={{ fontSize: 13 }}>{item.destination || "—"}</td>
-                    <td style={{ fontSize: 13 }}>{fmtDate(item.vr_date)}</td>
-                    <td>{item.has_receipts
+                    {show("empNo") && <td style={{ color: "var(--muted)", fontSize: 13 }}>{item.employee_no || "—"}</td>}
+                    {show("division") && <td style={{ fontSize: 13 }}>{item.org_division || "—"}</td>}
+                    {show("department") && <td style={{ fontSize: 13 }}>{item.department_name || "—"}</td>}
+                    {show("dutyStation") && <td style={{ fontSize: 13 }}>{item.duty_station || "—"}</td>}
+                    {show("destination") && <td style={{ fontSize: 13 }}>{item.destination || "—"}</td>}
+                    {show("departure") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.departure_date)}</td>}
+                    {show("return") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.return_date)}</td>}
+                    {show("vrDate") && <td style={{ fontSize: 13 }}>{fmtDate(item.vr_date)}</td>}
+                    {show("submitted") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.clearance_submitted_at)}</td>}
+                    {show("receipts") && <td>{item.has_receipts
                       ? <span style={{ color: "#065f46", fontWeight: 600, fontSize: 12 }}>Yes</span>
                       : <span style={{ color: "var(--muted)", fontSize: 12 }}>No</span>}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>{formatMoney(item.advance_amount, item.currency)}</td>
-                    <td style={{ fontWeight: 600 }}>{formatMoney(item.cleared_amount, item.currency)}</td>
-                    <td>{formatMoney(item.amount_to_be_expensed, item.currency)}</td>
-                    <td style={{ color: Number(item.salary_deduction) > 0 ? "#dc2626" : "var(--muted)", fontWeight: 600 }}>
-                      {formatMoney(item.salary_deduction, item.currency)}
-                    </td>
-                    <td style={{ color: Number(item.payable) > 0 ? "#059669" : "var(--muted)", fontWeight: 600 }}>
-                      {formatMoney(item.payable, item.currency)}
-                    </td>
-                    <td>
-                      <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#f1f5f9", color: "#475569", whiteSpace: "nowrap" }}>
-                        {STATUS_LABEL[item.status] || item.status}
-                      </span>
-                    </td>
+                    </td>}
+                    {show("advAmount") && <td style={{ fontWeight: 600 }}>{formatMoney(item.advance_amount, item.currency)}</td>}
+                    {show("clearedAmount") && <td style={{ fontWeight: 600 }}>{formatMoney(item.cleared_amount, item.currency)}</td>}
+                    {show("toBeExpensed") && <td>{formatMoney(item.amount_to_be_expensed, item.currency)}</td>}
+                    {show("salaryDeduction") && (
+                      <td style={{ color: Number(item.salary_deduction) > 0 ? "#dc2626" : "var(--muted)", fontWeight: 600 }}>
+                        {formatMoney(item.salary_deduction, item.currency)}
+                      </td>
+                    )}
+                    {show("payable") && (
+                      <td style={{ color: Number(item.payable) > 0 ? "#059669" : "var(--muted)", fontWeight: 600 }}>
+                        {formatMoney(item.payable, item.currency)}
+                      </td>
+                    )}
+                    {show("status") && (
+                      <td>
+                        <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#f1f5f9", color: "#475569", whiteSpace: "nowrap" }}>
+                          {STATUS_LABEL[item.status] || item.status}
+                        </span>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

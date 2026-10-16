@@ -3,7 +3,9 @@ import { hashPassword } from "../lib/auth.js";
 import { query } from "../lib/db.js";
 import { ensureStandbySchema } from "../modules/standby/standby.routes.js";
 import { ensureOvertimeSchema } from "../modules/overtime/overtime.routes.js";
+import { ensureReportingLineSyncSchema } from "../lib/reportingLineSync.js";
 import { ensureVendorContractsSchema } from "../modules/vendor-contracts/vendor-contracts.routes.js";
+import { ensureEmployeeContractsSchema } from "../modules/employee-contracts/employee-contracts.routes.js";
 import { ensureServiceContractsSchema } from "../modules/service-contracts/service-contracts.schema.js";
 import { env } from "../config/env.js";
 import { ensureDepartmentGroups, ensureManagerTypesTable, ensureUserOrgColumns } from "../lib/departments.js";
@@ -56,6 +58,7 @@ export async function bootstrapSystem() {
   await ensureFinanceAuthoritySchema();
   await ensureOvertimeSchema();
   await ensureVendorContractsSchema();
+  await ensureEmployeeContractsSchema();
   await ensureServiceContractsSchema();
   await ensureSalariesSchema();
   await ensureReportingViewsSchema();
@@ -1374,6 +1377,7 @@ async function ensureReportingLinesSchema() {
   await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_employee ON reporting_lines(employee_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_manager  ON reporting_lines(manager_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_reporting_lines_active   ON reporting_lines(is_active)`);
+  await ensureReportingLineSyncSchema();
 }
 
 // Explicit PA (personal assistant) -> principal (boss) assignments. The

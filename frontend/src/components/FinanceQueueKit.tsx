@@ -1,4 +1,5 @@
-import { Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Columns3, Search } from "lucide-react";
 
 // Shared visual kit for the Finance-section queues (Compensation Claims,
 // Deductions, Refundable, Payments, Capture Inbox): a Business Unit tab row
@@ -163,6 +164,71 @@ export function FinancePageHeader({
         </div>
       </div>
       {actions && <div className="ep-actions">{actions}</div>}
+    </div>
+  );
+}
+
+// ── Choose columns ───────────────────────────────────────────────────────
+// Each viewer picks which columns a finance table shows; remembered in this
+// browser (a per-viewer convenience - falls back to the defaults if storage
+// is unavailable). `locked` columns (e.g. Name) can't be hidden.
+export type ColumnOption = { key: string; label: string; locked?: boolean };
+
+export function useColumnVisibility(storageKey: string, defaultHidden: string[] = []) {
+  const [hidden, setHidden] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch { /* storage unavailable */ }
+    return new Set(defaultHidden);
+  });
+  function save(next: Set<string>) {
+    setHidden(next);
+    try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* storage unavailable */ }
+  }
+  return {
+    show: (key: string) => !hidden.has(key),
+    toggle: (key: string) => { const next = new Set(hidden); if (next.has(key)) next.delete(key); else next.add(key); save(next); },
+    reset: () => save(new Set(defaultHidden))
+  };
+}
+
+export function ColumnChooser({ columns, show, toggle, reset }: {
+  columns: ColumnOption[];
+  show: (key: string) => boolean;
+  toggle: (key: string) => void;
+  reset: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+  const shownCount = columns.filter((c) => show(c.key)).length;
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button type="button" className="ep-btn-outline" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <Columns3 size={14} /> Columns <span style={{ color: "var(--muted)", fontWeight: 500 }}>{shownCount}/{columns.length}</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 30, minWidth: 230, background: "var(--surface, #fff)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 10px 30px rgba(15,23,42,0.15)", padding: 8 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--muted)", padding: "4px 8px 6px", textTransform: "uppercase", letterSpacing: 0.4 }}>Show columns</div>
+          <div style={{ maxHeight: 340, overflowY: "auto" }}>
+            {columns.map((c) => (
+              <label key={c.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6, fontSize: 13, cursor: c.locked ? "default" : "pointer", opacity: c.locked ? 0.6 : 1 }}>
+                <input type="checkbox" checked={show(c.key)} disabled={c.locked} onChange={() => toggle(c.key)} />
+                {c.label}
+              </label>
+            ))}
+          </div>
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 6 }}>
+            <button type="button" onClick={reset} style={{ border: "none", background: "transparent", color: "var(--primary, #2563eb)", cursor: "pointer", fontSize: 12.5, padding: "4px 8px" }}>Reset to default</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -145,6 +145,10 @@ export async function ensureBrsSchema() {
   // workflow. amending_from_version marks an approved BRS reopened for
   // amendment - re-approval baselines the next version.
   await query(`ALTER TABLE brs_documents ADD COLUMN IF NOT EXISTS owner_user_id uuid REFERENCES users(id)`);
+  // A BRS can have several owners (all with full rights). owner_user_id is
+  // kept as the first of them for anything that still reads a single owner.
+  await query(`ALTER TABLE brs_documents ADD COLUMN IF NOT EXISTS owner_user_ids uuid[] NOT NULL DEFAULT '{}'`);
+  await query(`UPDATE brs_documents SET owner_user_ids = ARRAY[owner_user_id] WHERE owner_user_id IS NOT NULL AND cardinality(owner_user_ids) = 0`);
   await query(`ALTER TABLE brs_documents ADD COLUMN IF NOT EXISTS amending_from_version integer`);
   await query(`
     CREATE TABLE IF NOT EXISTS brs_document_collaborators (
@@ -171,6 +175,38 @@ export async function ensureBrsSchema() {
   // EDIT, INVITE, WORKFLOW (send on, route, reopen), DISTRIBUTE, AMEND.
   // Empty = view only.
   await query(`ALTER TABLE brs_document_collaborators ADD COLUMN IF NOT EXISTS permissions text[] NOT NULL DEFAULT ARRAY['EDIT']::text[]`);
+  // Reviewers: a Department (sections row) or a Section (teams row) - or a
+  // person - whose members can open the BRS and comment, but don't approve.
+  await query(`
+    CREATE TABLE IF NOT EXISTS brs_document_reviewers (
+      id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id    uuid        NOT NULL REFERENCES brs_documents(id) ON DELETE CASCADE,
+      user_id        uuid        REFERENCES users(id) ON DELETE CASCADE,
+      section_ref_id uuid        REFERENCES sections(id) ON DELETE CASCADE,
+      team_ref_id    uuid        REFERENCES teams(id) ON DELETE CASCADE,
+      division_name  text,
+      added_by_id    uuid        REFERENCES users(id) ON DELETE SET NULL,
+      created_at     timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_brs_doc_reviewers_document ON brs_document_reviewers(document_id)`);
+  // Comments by anyone involved - reviewers especially - on the whole BRS or one section.
+  await query(`
+    CREATE TABLE IF NOT EXISTS brs_document_comments (
+      id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id uuid        NOT NULL REFERENCES brs_documents(id) ON DELETE CASCADE,
+      section_id  uuid        REFERENCES brs_document_sections(id) ON DELETE SET NULL,
+      author_id   uuid        REFERENCES users(id) ON DELETE SET NULL,
+      author_role text,
+      body        text        NOT NULL,
+      created_at  timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_brs_doc_comments_document ON brs_document_comments(document_id, created_at)`);
+  // Sections the creator added to this document (not from the template) -
+  // the only ones that can be removed again.
+  await query(`ALTER TABLE brs_document_sections ADD COLUMN IF NOT EXISTS added_by_id uuid REFERENCES users(id) ON DELETE SET NULL`);
+
   // Who invited a section collaborator - they (and the creator/owner) can cancel it.
   await query(`ALTER TABLE brs_document_section_assignees ADD COLUMN IF NOT EXISTS added_by_id uuid REFERENCES users(id) ON DELETE SET NULL`);
 

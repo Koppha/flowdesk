@@ -1807,6 +1807,14 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
     );
 
     await ensureUserOrgColumns();
+    // Company / Department / Section picked on the create form - these were
+    // accepted but never saved, so new users lost their Department/Section
+    // (and with it their org groups and workflow routing). A Section implies
+    // its Department.
+    const placement = { division_id: parsed.data.division_id ?? null, section_id: parsed.data.section_id ?? null, team_id: parsed.data.team_id ?? null };
+    if (placement.team_id && !placement.section_id) {
+      placement.section_id = (await query<{ section_id: string | null }>(`SELECT section_id FROM teams WHERE id = $1`, [placement.team_id]))[0]?.section_id ?? null;
+    }
     const rows = await query<{
       id: string;
       full_name: string | null;
@@ -1822,10 +1830,12 @@ authRouter.post("/users", requireRole(["ADMIN"]), async (req: AuthedRequest, res
       created_at: string;
       updated_at: string;
     }>(
-      `INSERT INTO users (id, employee_no, full_name, title, department, email, role, password_hash, is_active, employment_type, profile_completed, manager_type_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), now())
+      `INSERT INTO users (id, employee_no, full_name, title, department, email, role, password_hash, is_active, employment_type, profile_completed, manager_type_id,
+                          division_id, section_id, team_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), now())
        RETURNING id, full_name, email, employee_no, title, department, employment_type, role, profile_completed, is_active, manager_type_id, created_at, updated_at`,
-      [randomUUID(), employeeNo, parsed.data.full_name ?? null, title, department, email, role, hash, isActive, employmentType, profileCompleted, managerTypeId]
+      [randomUUID(), employeeNo, parsed.data.full_name ?? null, title, department, email, role, hash, isActive, employmentType, profileCompleted, managerTypeId,
+       placement.division_id, placement.section_id, placement.team_id]
     );
 
     const created = rows[0];

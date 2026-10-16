@@ -13,12 +13,15 @@
 #   sudo -E kubectl apply -f deploy/k8s-ingress-prod1.yaml.example
 #
 # The Service/Endpoints below has no pod selector - the app runs as pm2
-# processes on the host (and on PROD2), not as pods, so this just tells the
-# ingress controller where to actually proxy: both PROD nodes' own nginx on
-# port 5174, which already handles /api/ (-> 4000) and / (-> serve)
-# internally. Listing both node IPs here means either PROD1's or PROD2's
-# app can serve a request that lands on PROD1's ingress, matching the
-# active-active design described in step 4.
+# processes on the host, not as pods, so this just tells the ingress
+# controller where to actually proxy: PROD1's own host nginx on port 5174,
+# which handles /api/ (-> 4000) and / (-> serve on 127.0.0.1:5175).
+#
+# PROD1 ONLY - do not add PROD2 (10.3.10.69). On PROD2, port 5174 is the
+# plain `serve` frontend (its /api/ routing lives in nginx on 443), so an
+# API call proxied there gets index.html back instead of JSON and lists
+# show as empty/zero. Listing both IPs did exactly that to ~40% of PROD1
+# traffic until 2026-10-16. DNS round-robin already sends PROD2 its share.
 apiVersion: v1
 kind: Service
 metadata:
@@ -38,7 +41,6 @@ metadata:
 subsets:
   - addresses:
       - ip: 10.3.10.49
-      - ip: 10.3.10.69
     ports:
       - name: http
         port: 5174

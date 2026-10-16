@@ -4,7 +4,8 @@ import { randomUUID } from "crypto";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { getDepartmentLeadership, getSectionLeadership, getTeamLeadership, listDepartmentGroups } from "../../lib/departments.js";
+import { getDepartmentLeadership, listDepartmentGroups } from "../../lib/departments.js";
+import { computeOrgManager, scheduleReportingLineSync, syncReportingLines } from "../../lib/reportingLineSync.js";
 import { getDelegationsForManager } from "../../lib/delegations.js";
 
 const OPEN_ADVANCE_STATUSES = "('SUBMITTED','COUNTERSIGNED','HR_REVIEW','HR_OFFICER','APPROVED')";
@@ -24,37 +25,10 @@ const OPEN_CLAIM_STATUSES = "('SUBMITTED','MANAGER_APPROVED','EXCO_APPROVED','FI
 // (/reporting-lines/auto-generate is a separate bulk admin tool that
 // doesn't go through this function and is department-only today - not
 // updated here, out of scope for this fix.)
+// One rule shared with the workflow engine and the automatic reporting
+// lines (lib/reportingLineSync.ts).
 async function getFallbackManagerId(userId: string): Promise<string | null> {
-  const userRows = await query<{ role: string; department: string | null; section_id: string | null; team_id: string | null }>(
-    `SELECT role::text AS role, department, section_id, team_id FROM users WHERE id = $1`,
-    [userId]
-  );
-  const user = userRows[0];
-  if (!user) return null;
-
-  if (user.role === "EXCO") {
-    const ceoRows = await query<{ id: string }>(
-      `SELECT id FROM users WHERE role::text = 'CEO' AND is_active = true ORDER BY full_name LIMIT 1`
-    );
-    return ceoRows[0]?.id ?? null;
-  }
-
-  const fallbackId = (leadership: { hod_user_id: string | null; manager_user_id: string | null; exco_user_id: string | null }) => {
-    if (user.role === "HOD") return leadership.exco_user_id ?? null;
-    if (user.role === "MANAGER") return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
-    return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
-  };
-
-  if (user.team_id) {
-    const teamId = fallbackId(await getTeamLeadership(user.team_id));
-    if (teamId) return teamId;
-  }
-  if (user.section_id) {
-    const sectionId = fallbackId(await getSectionLeadership(user.section_id));
-    if (sectionId) return sectionId;
-  }
-  if (!user.department) return null;
-  return fallbackId(await getDepartmentLeadership(user.department));
+  return (await computeOrgManager(userId)).manager_id;
 }
 
 export const reportingLinesRouter = Router();
@@ -177,13 +151,20 @@ reportingLinesRouter.get("/", requireRole(["ADMIN", "MANAGER", "EXCO"]), async (
          rl.effective_from,
          rl.effective_to,
          rl.reason,
+         rl.source,
          m.full_name      AS manager_name,
          m.email          AS manager_email,
          m.title          AS manager_title,
-         m.role           AS manager_role
+         m.role           AS manager_role,
+         ro.manager_id    AS org_manager_id,
+         om.full_name     AS org_manager_name,
+         ro.basis         AS org_basis,
+         ro.ambiguous     AS org_ambiguous
        FROM users u
        LEFT JOIN reporting_lines rl ON rl.employee_id = u.id AND rl.is_active = true
        LEFT JOIN users m            ON m.id = rl.manager_id
+       LEFT JOIN reporting_line_org ro ON ro.employee_id = u.id
+       LEFT JOIN users om           ON om.id = ro.manager_id
        ${filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : ""}
        ORDER BY u.full_name NULLS LAST, u.email`,
       params
@@ -311,10 +292,13 @@ reportingLinesRouter.post("/", requireRole(["ADMIN"]), async (req: AuthedRequest
       [employee_id]
     );
 
+    // Set by hand: always wins over Org Structure. Clearing it (no manager_id)
+    // lets the automatic line from Org Structure come back on the next sync.
+    scheduleReportingLineSync(2_000);
     if (manager_id !== undefined) {
       const rows = await query(
-        `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, effective_to, reason, created_by_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, effective_to, reason, created_by_id, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'MANUAL')
          RETURNING *`,
         [
           randomUUID(),
@@ -334,122 +318,37 @@ reportingLinesRouter.post("/", requireRole(["ADMIN"]), async (req: AuthedRequest
   }
 });
 
-// POST /reporting-lines/auto-generate
+// POST /reporting-lines/auto-generate — build reporting lines from Org
+// Structure, using the same rule as the Workflow Builder's Manager steps.
+// Never touches a line set by hand: it fills in everyone without one and
+// keeps the automatic ones current.
 reportingLinesRouter.post("/auto-generate", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
-    const departments = await listDepartmentGroups();
+    const r = await syncReportingLines(req.user!.userId);
     const warnings: string[] = [];
-    let generated = 0;
-    const processedEmployeeIds = new Set<string>();
+    if (r.manualDiffers) warnings.push(`${r.manualDiffers} line(s) set by hand differ from Org Structure — left as set; review them in the list.`);
+    if (r.ambiguous) warnings.push(`${r.ambiguous} employee(s) sit where Org Structure has more than one manager — check those lines.`);
+    if (r.noManager) warnings.push(`${r.noManager} employee(s) have no manager in Org Structure — assign leadership or set their line by hand.`);
+    return res.json({ ok: true, generated: r.created + r.updated, ...r, warnings });
+  } catch (err) {
+    return next(err);
+  }
+});
 
-    // Find the active CEO (top of the entire chain)
-    const ceoUsers = await query<{ id: string; full_name: string | null }>(
-      `SELECT id, full_name FROM users WHERE role::text = 'CEO' AND is_active = true ORDER BY full_name LIMIT 1`
+// POST /reporting-lines/:employeeId/reset — drop a line set by hand and go
+// back to the automatic one from Org Structure.
+reportingLinesRouter.post("/:employeeId/reset", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    await query(
+      `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true AND source <> 'AUTO'`,
+      [req.params.employeeId]
     );
-    const ceoId: string | null = ceoUsers[0]?.id ?? null;
-
-    if (!ceoId) {
-      warnings.push("No active CEO found — EXCO members will have no reporting manager");
-    }
-
-    // Wire CEO → no one (top of chain)
-    if (ceoId) {
-      await query(
-        `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true`,
-        [ceoId]
-      );
-    }
-
-    for (const dept of departments as any[]) {
-      if (!dept.name) continue;
-
-      const employees = await query<{ id: string; role: string; full_name: string | null }>(
-        `SELECT id, role::text AS role, full_name FROM users
-         WHERE lower(trim(department)) = lower(trim($1))
-           AND is_active = true
-           AND role::text NOT IN ('ADMIN', 'CEO')`,
-        [dept.name]
-      );
-
-      if (employees.length === 0) continue;
-
-      const managerId: string | null = dept.manager_user_id ?? null;
-      const hodId: string | null = dept.hod_user_id ?? null;
-      const excoId: string | null = dept.exco_user_id ?? null;
-
-      if (!managerId && !hodId) {
-        warnings.push(`${dept.name}: no manager or HOD assigned — employees skipped`);
-      }
-
-      for (const emp of employees) {
-        let reportsTo: string | null = null;
-
-        if (emp.role === "EXCO" || emp.id === excoId) {
-          // EXCO reports to CEO
-          reportsTo = ceoId;
-          if (!reportsTo) warnings.push(`${dept.name}: EXCO "${emp.full_name || emp.id}" has no CEO to report to`);
-        } else if (emp.role === "HOD" || emp.id === hodId) {
-          // HOD reports to EXCO
-          reportsTo = excoId;
-          if (!reportsTo) warnings.push(`${dept.name}: HOD "${emp.full_name || emp.id}" has no EXCO to report to`);
-        } else if (emp.role === "MANAGER" || emp.id === managerId) {
-          // Manager reports to HOD, or EXCO if no HOD
-          reportsTo = hodId ?? excoId ?? null;
-          if (!reportsTo) warnings.push(`${dept.name}: Manager "${emp.full_name || emp.id}" has no HOD or EXCO to report to`);
-        } else {
-          // All other employees report to manager
-          reportsTo = managerId ?? null;
-          if (!reportsTo) warnings.push(`${dept.name}: No manager for employee "${emp.full_name || emp.id}"`);
-        }
-
-        if (!reportsTo) continue;
-
-        const mgr = await query<{ id: string; is_active: boolean }>(`SELECT id, is_active FROM users WHERE id = $1`, [reportsTo]);
-        if (!mgr[0]?.is_active) {
-          warnings.push(`"${emp.full_name || emp.id}": assigned manager is inactive — skipped`);
-          continue;
-        }
-
-        await query(
-          `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true`,
-          [emp.id]
-        );
-        await query(
-          `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, reason, created_by_id)
-           VALUES ($1, $2, $3, CURRENT_DATE, 'Auto-generated', $4)`,
-          [randomUUID(), emp.id, reportsTo, req.user!.userId]
-        );
-        generated++;
-        processedEmployeeIds.add(emp.id);
-      }
-    }
-
-    // EXCO members placed directly at Division level (no department under
-    // them at all - e.g. SEFS's single EXCO covering every SEFS
-    // department) never match the per-department loop above, since it only
-    // finds employees via users.department. Wire any leftover active EXCO
-    // straight to the CEO too, same as their department-scoped peers.
-    if (ceoId) {
-      const orphanedExco = await query<{ id: string; full_name: string | null }>(
-        `SELECT id, full_name FROM users WHERE role::text = 'EXCO' AND is_active = true`
-      );
-      for (const exco of orphanedExco) {
-        if (processedEmployeeIds.has(exco.id)) continue;
-        await query(
-          `UPDATE reporting_lines SET is_active = false, updated_at = now() WHERE employee_id = $1 AND is_active = true`,
-          [exco.id]
-        );
-        await query(
-          `INSERT INTO reporting_lines (id, employee_id, manager_id, effective_from, reason, created_by_id)
-           VALUES ($1, $2, $3, CURRENT_DATE, 'Auto-generated (Division-level EXCO)', $4)`,
-          [randomUUID(), exco.id, ceoId, req.user!.userId]
-        );
-        generated++;
-        processedEmployeeIds.add(exco.id);
-      }
-    }
-
-    return res.json({ ok: true, generated, warnings });
+    await syncReportingLines(req.user!.userId);
+    const line = (await query(
+      `SELECT rl.manager_id, m.full_name AS manager_name FROM reporting_lines rl LEFT JOIN users m ON m.id = rl.manager_id
+        WHERE rl.employee_id = $1 AND rl.is_active = true`, [req.params.employeeId]
+    ))[0] ?? null;
+    return res.json({ ok: true, line });
   } catch (err) {
     return next(err);
   }

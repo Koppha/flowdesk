@@ -40,17 +40,18 @@ export async function hasDistributionAccess(docType: DistributionDocType, docId:
   return rows.length > 0;
 }
 
-type DistributableDoc = { requesterId: string; ownerId?: string | null; title: string; label: string; ready: boolean; notReadyReason: string };
+type DistributableDoc = { requesterId: string; ownerIds?: string[]; title: string; label: string; ready: boolean; notReadyReason: string };
 
 async function loadDistributableDoc(docType: DistributionDocType, docId: string): Promise<DistributableDoc> {
   if (docType === "BRS") {
-    const doc = (await query<{ requester_id: string; owner_user_id: string | null; title: string; phase: string; reference_no: string | null }>(
-      `SELECT requester_id, owner_user_id, title, phase, reference_no FROM brs_documents WHERE id = $1`, [docId]
+    const doc = (await query<{ requester_id: string; owner_ids: string[]; title: string; phase: string; reference_no: string | null }>(
+      `SELECT requester_id, CASE WHEN cardinality(owner_user_ids) > 0 THEN owner_user_ids ELSE array_remove(ARRAY[owner_user_id], NULL) END AS owner_ids,
+              title, phase, reference_no FROM brs_documents WHERE id = $1`, [docId]
     ))[0];
     if (!doc) throw notFound("BRS not found");
     return {
       requesterId: doc.requester_id,
-      ownerId: doc.owner_user_id,
+      ownerIds: doc.owner_ids ?? [],
       title: doc.reference_no ? `${doc.reference_no} — ${doc.title}` : doc.title,
       label: "BRS",
       ready: doc.phase === "BASELINE",
@@ -75,9 +76,9 @@ async function loadDistributableDoc(docType: DistributionDocType, docId: string)
 }
 
 async function assertCanDistribute(docType: DistributionDocType, docId: string, doc: DistributableDoc, actor: { userId: string; role: string }) {
-  // A BRS's owner has the same full rights as its creator, and a co-writer
-  // may distribute if the creator/owner granted them that.
-  if (actor.role === "ADMIN" || doc.requesterId === actor.userId || (doc.ownerId && doc.ownerId === actor.userId)) return;
+  // A BRS's owners have the same full rights as its creator, and a co-writer
+  // may distribute if the creator/an owner granted them that.
+  if (actor.role === "ADMIN" || doc.requesterId === actor.userId || (doc.ownerIds ?? []).includes(actor.userId)) return;
   if (docType === "BRS" && (await brsCoWriterPermissions(docId, actor.userId)).perms.has("DISTRIBUTE")) return;
   throw forbidden("You don't have permission to distribute this");
 }

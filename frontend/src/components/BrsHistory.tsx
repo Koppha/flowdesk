@@ -20,7 +20,11 @@ const KIND_LABEL: Record<string, string> = {
   BASELINED: "Approved version",
   RETURNED: "Returned to Draft",
   REOPENED: "Reopened",
-  AMENDMENT_STARTED: "Amendment started"
+  AMENDMENT_STARTED: "Amendment started",
+  SECTION_ADDED: "Section added",
+  SECTION_REMOVED: "Section removed",
+  REVIEWERS_CHANGED: "Reviewers changed",
+  COMMENTED: "Comment"
 };
 
 function fmt(ts: string) {

@@ -42,6 +42,8 @@ import { mobileConfigRouter } from "./modules/admin/mobile-config.routes.js";
 import { mobileAppRouter } from "./modules/mobile-app/mobile-app.routes.js";
 import { paAssignmentsRouter } from "./modules/admin/pa-assignments.routes.js";
 import { vendorContractsRouter } from "./modules/vendor-contracts/vendor-contracts.routes.js";
+import { scheduleReportingLineSync } from "./lib/reportingLineSync.js";
+import { employeeContractsRouter } from "./modules/employee-contracts/employee-contracts.routes.js";
 import { serviceContractsRouter } from "./modules/service-contracts/service-contracts.routes.js";
 import { serviceContractsExternalRouter } from "./modules/service-contracts/service-contracts.external.routes.js";
 import { searchRouter } from "./modules/search/search.routes.js";
@@ -90,6 +92,14 @@ export function createApp() {
   });
 
   app.use("/health", healthRouter);
+  // Org Structure, a user's placement/role, or a reporting line changed:
+  // bring the automatic reporting lines up to date (debounced).
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && /^\/(auth\/(users|departments|groups|sections|teams|divisions|org-structure|position-vacancies|complete-profile|resolve-or-invite-approver|admin\/reset-profiles)|admin\/data-cleanup|reporting-lines\/?$)/.test(req.path)) {
+      res.on("finish", () => { if (res.statusCode < 400) scheduleReportingLineSync(); });
+    }
+    next();
+  });
   app.use("/auth", authRouter);
   app.use("/advances", advancesRouter);
   app.use("/accommodation-requests", accommodationRouter);
@@ -105,6 +115,7 @@ export function createApp() {
   app.use("/standby", standbyRouter);
   app.use("/standby-reports", standbyReportsRouter);
   app.use("/vendor-contracts", vendorContractsRouter);
+  app.use("/employee-contracts", employeeContractsRouter);
   app.use("/service-contracts", serviceContractsRouter);
   // Public path is https://flowdesk.etl.co.ls/api/v1/service-contracts/... -
   // PROD's nginx strips the /api/ prefix before proxying to this backend

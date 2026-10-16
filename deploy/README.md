@@ -127,11 +127,18 @@ identical; check the live file on each box, don't assume it matches git).
 For `https://flowdesk.etl.co.ls` to reach the app on this node at all, a
 Kubernetes `Ingress` + `Service` + `Endpoints` + TLS `Secret` (namespace
 `default`, see `deploy/k8s-ingress-prod1.yaml.example`) had to be created
-pointing at `10.3.10.49:5174` / `10.3.10.69:5174` - without it, this node's
+pointing at `10.3.10.49:5174` - without it, this node's
 ingress just 404s every request, which is exactly what happened on
 2026-08-18: DNS sent ~half of requests to a working PROD2 and half to a
 PROD1 with no route in, so the site alternated between working and 404 on
 every reload until this was applied.
+
+The Endpoints must list **PROD1 only**. PROD2's port 5174 is the bare
+`serve` frontend (its `/api/` proxy is in nginx on 443), so including
+`10.3.10.69:5174` made the ingress send some API calls there and get
+`index.html` back instead of JSON - lists randomly showed as empty/zero for
+everyone landing on PROD1. Fixed 2026-10-16 by removing PROD2 from the
+Endpoints.
 
 If PROD1 is ever rebuilt, re-apply `deploy/k8s-ingress-prod1.yaml.example`
 (fill in the cert paths, `kubectl apply -f -`) as part of setup - it's not

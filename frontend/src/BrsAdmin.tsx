@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { showNotice } from "./alerts";
-import { FileText, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, FileText, Trash2 } from "lucide-react";
 
 type BrsSectionDraft = {
   id?: string;
@@ -93,6 +93,17 @@ export default function BrsAdmin({ onBack }: { onBack: () => void }) {
     }
   }
 
+  // Saved order = list order (sort_order is the index on save).
+  function moveSection(idx: number, delta: number) {
+    setSections((prev) => {
+      const to = idx + delta;
+      if (to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[to]] = [next[to], next[idx]];
+      return next;
+    });
+  }
+
   function updateSection(idx: number, patch: Partial<BrsSectionDraft>) {
     setSections((prev) => prev.map((s, i) => i === idx ? { ...s, ...patch } : s));
   }
@@ -151,11 +162,18 @@ export default function BrsAdmin({ onBack }: { onBack: () => void }) {
           <div className="ep-panel" style={{ marginBottom: 16 }}>
             <div className="ep-panel-head">
               <div className="ep-panel-title">Sections</div>
-              <div className="ep-panel-sub">Draft sections are filled by the requester; Department Input sections are handed off in parallel.</div>
+              <div className="ep-panel-sub">Draft sections are filled by the requester; Department Input sections are handed off in parallel. Use ↑ ↓ to set the order new BRS documents open with, then Save.</div>
             </div>
             <div className="ep-panel-body">
               {sections.map((s, idx) => (
-                <div key={idx} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                <div key={s.id || `new-${idx}`} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>Section {idx + 1} of {sections.length}</span>
+                    <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+                      <button className="ep-icon-btn" disabled={idx === 0} onClick={() => moveSection(idx, -1)} title="Move up" aria-label="Move section up"><ArrowUp size={14} /></button>
+                      <button className="ep-icon-btn" disabled={idx === sections.length - 1} onClick={() => moveSection(idx, 1)} title="Move down" aria-label="Move section down"><ArrowDown size={14} /></button>
+                    </div>
+                  </div>
                   <div className="ep-form-row">
                     <div className="ep-form-group">
                       <label>Title</label>

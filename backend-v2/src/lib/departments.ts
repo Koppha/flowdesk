@@ -477,23 +477,20 @@ export async function listDepartmentGroups() {
 // The same names as listDepartmentGroups, grouped under the company
 // (divisions table: MNO, SEFS, HigherLife) each belongs to, so pickers can
 // show which company a unit is in. Names with no company go under "Other".
+// Only real, active departments from Org Structure that belong to a company -
+// never free-text department values typed on user profiles (those used to
+// leak in as an "Other" group, e.g. "Commercial", "Finance - SEFS").
 export async function listDepartmentGroupsByCompany(): Promise<Array<{ company: string; departments: string[] }>> {
-  const names = await listDepartmentGroups();
-  const rows = await query<{ name: string; company: string | null }>(
-    `SELECT trim(d.name) AS name, trim(v.name) AS company
+  const rows = await query<{ name: string; company: string }>(
+    `SELECT DISTINCT trim(d.name) AS name, trim(v.name) AS company
        FROM departments d
-       LEFT JOIN divisions v ON v.id = d.division_id
-      WHERE d.active = true`
+       JOIN divisions v ON v.id = d.division_id
+      WHERE d.active = true AND trim(d.name) <> ''
+      ORDER BY 2, 1`
   );
-  const companyOf = new Map(rows.map((r) => [r.name.toLowerCase(), r.company || null]));
   const groups = new Map<string, string[]>();
-  for (const name of names) {
-    const company = companyOf.get(name.toLowerCase()) || "Other";
-    groups.set(company, [...(groups.get(company) ?? []), name]);
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => (a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b)))
-    .map(([company, departments]) => ({ company, departments }));
+  for (const r of rows) groups.set(r.company, [...(groups.get(r.company) ?? []), r.name]);
+  return [...groups.entries()].map(([company, departments]) => ({ company, departments }));
 }
 
 const DEPARTMENT_ALIASES = new Map<string, string>([

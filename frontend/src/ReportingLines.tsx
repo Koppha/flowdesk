@@ -68,7 +68,22 @@ type ReportingRow = {
   effective_from: string | null;
   effective_to: string | null;
   reason: string | null;
+  // AUTO = built from Org Structure (same manager the workflows use);
+  // MANUAL = set by hand, always wins.
+  source: "AUTO" | "MANUAL" | null;
+  org_manager_id: string | null;
+  org_manager_name: string | null;
+  org_basis: string | null;
+  org_ambiguous: boolean | null;
 };
+
+// A line worth a second look: set by hand but Org Structure says someone
+// else, or built automatically where Org Structure has several managers.
+function needsReview(r: { reporting_line_id: string | null; source: string | null; manager_id: string | null; org_manager_id: string | null; org_ambiguous: boolean | null }) {
+  if (!r.reporting_line_id) return false;
+  if (r.source === "AUTO") return !!r.org_ambiguous;
+  return !!r.org_manager_id && r.org_manager_id !== r.manager_id;
+}
 
 type OrgSection = {
   id: string;
@@ -429,6 +444,9 @@ export default function ReportingLines() {
     if (statusFilter === "active") rows = rows.filter((r) => r.is_active);
     if (statusFilter === "inactive") rows = rows.filter((r) => !r.is_active);
     if (statusFilter === "unassigned") rows = rows.filter((r) => !r.manager_id);
+    if (statusFilter === "review") rows = rows.filter(needsReview);
+    if (statusFilter === "manual") rows = rows.filter((r) => r.reporting_line_id && r.source !== "AUTO");
+    if (statusFilter === "auto") rows = rows.filter((r) => r.source === "AUTO");
     return rows;
   }, [employees, tableSearch, roleFilter, statusFilter]);
 
@@ -495,13 +513,33 @@ export default function ReportingLines() {
     finally { setHistoryLoading(false); }
   }
 
+  // ─── Reset to automatic ─────────────────────────────────────────────────────
+
+  async function resetToAutomatic(row: ReportingRow) {
+    setRowMenuId(null);
+    const confirmed = await confirmAction({
+      title: `Reset ${row.full_name || row.email} to automatic?`,
+      text: row.org_manager_name
+        ? `The line set by hand is dropped and they report to ${row.org_manager_name}, from Org Structure — the same manager their workflows use.`
+        : "The line set by hand is dropped. Org Structure has no manager for them, so they'll have none until leadership is assigned.",
+      confirmButtonText: "Reset"
+    });
+    if (!confirmed) return;
+    try {
+      await api.resetReportingLine(row.id);
+      await Promise.all([loadEmployees(selectedDept, selectedSectionId, selectedTeamId), loadAllUsers(), loadStats()]);
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    }
+  }
+
   // ─── Auto Generate ──────────────────────────────────────────────────────────
 
   async function handleAutoGenerate() {
     const confirmed = await confirmAction({
-      title: "Auto-generate reporting lines?",
-      text: "This will replace existing active reporting lines based on leadership assignments.",
-      confirmButtonText: "Generate"
+      title: "Build reporting lines from Org Structure?",
+      text: "Everyone without a line gets one from Org Structure — the same manager the Workflow Builder's Manager steps route to. Lines set by hand are never changed. This also runs automatically whenever Org Structure changes.",
+      confirmButtonText: "Build lines"
     });
     if (!confirmed) return;
     setGenerating(true);
@@ -608,7 +646,7 @@ export default function ReportingLines() {
             disabled={generating}
           >
             <Shuffle size={15} />
-            {generating ? "Generating…" : "Auto Generate Lines"}
+            {generating ? "Building…" : "Build from Org Structure"}
           </button>
         </div>
       </div>
@@ -618,7 +656,7 @@ export default function ReportingLines() {
         <div className={`rl-banner ${genResult.warnings.length > 0 ? "rl-banner-warn" : "rl-banner-ok"}`}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {genResult.warnings.length > 0 ? <AlertTriangle size={16} /> : null}
-            <strong>{genResult.generated} reporting lines generated.</strong>
+            <strong>{genResult.generated} reporting line{genResult.generated === 1 ? "" : "s"} built or updated from Org Structure.</strong>
             {genResult.warnings.length > 0 && <span>{genResult.warnings.length} warning(s).</span>}
           </div>
           {genResult.warnings.length > 0 && (
@@ -838,6 +876,9 @@ export default function ReportingLines() {
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
                 <option value="unassigned">No Manager</option>
+                <option value="review">Needs review</option>
+                <option value="auto">Automatic (Org Structure)</option>
+                <option value="manual">Set by hand</option>
               </select>
               {/* Assign Manager */}
               <button className="rl-btn-primary" style={{ whiteSpace: "nowrap" }}>
@@ -912,10 +953,14 @@ export default function ReportingLines() {
                             <div>
                               <div className="rl-emp-name" style={{ fontSize: "0.85rem" }}>{row.manager_name || row.manager_email}</div>
                               <div className="rl-emp-sub">{row.manager_title || (row.manager_role ? roleLabel(row.manager_role) : "")}</div>
+                              <LineSourceNote row={row} />
                             </div>
                           </div>
                         ) : (
-                          <span className="rl-unassigned">— Not assigned</span>
+                          <>
+                            <span className="rl-unassigned">— Not assigned</span>
+                            {row.reporting_line_id && <LineSourceNote row={row} />}
+                          </>
                         )}
                       </td>
                       {/* Department */}
@@ -964,6 +1009,11 @@ export default function ReportingLines() {
                                 <button className="rl-dropdown-item" onClick={() => void openHistory(row)}>
                                   <History size={13} />View History
                                 </button>
+                                {row.reporting_line_id && row.source !== "AUTO" && (
+                                  <button className="rl-dropdown-item" onClick={() => void resetToAutomatic(row)}>
+                                    <Shuffle size={13} />Reset to automatic
+                                  </button>
+                                )}
                                 <button className="rl-dropdown-item rl-dropdown-danger">
                                   <X size={13} />Clear Assignment
                                 </button>
@@ -1280,6 +1330,30 @@ export default function ReportingLines() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Under the manager's name: where the line came from, and whether it needs a look.
+function LineSourceNote({ row }: { row: ReportingRow }) {
+  const tiny: React.CSSProperties = { fontSize: 11, marginTop: 2, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" };
+  const chip = (bg: string, color: string, text: string) => (
+    <span style={{ padding: "1px 7px", borderRadius: 99, background: bg, color, fontWeight: 700, whiteSpace: "nowrap" }}>{text}</span>
+  );
+  if (row.source === "AUTO") {
+    return (
+      <div style={tiny}>
+        {chip("#e0f2fe", "#075985", `Automatic · ${row.org_basis || "Org Structure"}`)}
+        {row.org_ambiguous && <span style={{ color: "#b45309" }}>Org Structure has more than one manager here — check</span>}
+      </div>
+    );
+  }
+  if (!row.reporting_line_id) return null;
+  const differs = !!row.org_manager_id && row.org_manager_id !== row.manager_id;
+  return (
+    <div style={tiny}>
+      {chip("#f1f5f9", "#334155", "Set by hand")}
+      {differs && <span style={{ color: "#b45309" }}>Org Structure: {row.org_manager_name}</span>}
     </div>
   );
 }

@@ -47,10 +47,17 @@ export default function OrgSearchModal(props: {
   people: Person[];
   kinds?: OrgEntryType[];
   excludeKeys?: string[];
-  onAdd: (entries: OrgEntry[]) => void;
+  // Optional: the places to apply the selection to (e.g. BRS sections), ticked
+  // in one go so people aren't invited section by section.
+  targets?: Array<{ id: string; label: string; hint?: string }>;
+  initialTargetIds?: string[];
+  targetsLabel?: string;
+  onAdd: (entries: OrgEntry[], targetIds: string[]) => void;
   onClose: () => void;
 }) {
-  const { title, subtitle, people, kinds = ["division", "department", "section", "user"], excludeKeys = [], onAdd, onClose } = props;
+  const { title, subtitle, people, kinds = ["division", "department", "section", "user"], excludeKeys = [], targets, initialTargetIds = [], targetsLabel = "Apply to", onAdd, onClose } = props;
+  const [targetIds, setTargetIds] = useState<string[]>(initialTargetIds);
+  const needsTarget = Boolean(targets?.length) && targetIds.length === 0;
   const [options, setOptions] = useState<{ divisions: any[]; departments: any[]; sections: any[] }>({ divisions: [], departments: [], sections: [] });
   const [query, setQuery] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -108,7 +115,8 @@ export default function OrgSearchModal(props: {
 
   const isPicked = (r: Row) => picked.some((p) => p.key === r.key);
   function act(r: Row) {
-    if (!multi) { onAdd([r.entry]); onClose(); return; }
+    if (needsTarget) return;
+    if (!multi) { onAdd([r.entry], targetIds); onClose(); return; }
     setPicked((prev) => (isPicked(r) ? prev.filter((p) => p.key !== r.key) : [...prev, r]));
   }
 
@@ -126,6 +134,29 @@ export default function OrgSearchModal(props: {
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", display: "flex", padding: 4 }} aria-label="Close"><X size={18} /></button>
         </div>
+
+        {targets && targets.length > 0 && (
+          <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{targetsLabel}</span>
+              <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 8 }}>{targetIds.length} of {targets.length} ticked</span>
+              <button type="button" onClick={() => setTargetIds(targetIds.length === targets.length ? [] : targets.map((t) => t.id))}
+                style={{ marginLeft: "auto", border: "none", background: "transparent", color: "#1d4ed8", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                {targetIds.length === targets.length ? "Clear all" : "Select all"}
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "4px 12px", maxHeight: 120, overflowY: "auto" }}>
+              {targets.map((t) => (
+                <label key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }} title={t.hint}>
+                  <input type="checkbox" checked={targetIds.includes(t.id)}
+                    onChange={(e) => setTargetIds(e.target.checked ? [...targetIds, t.id] : targetIds.filter((x) => x !== t.id))} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.label}</span>
+                </label>
+              ))}
+            </div>
+            {needsTarget && <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>Tick at least one section first.</div>}
+          </div>
+        )}
 
         <div style={{ position: "relative", marginBottom: 12 }}>
           <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
@@ -168,8 +199,8 @@ export default function OrgSearchModal(props: {
                   </div>
                   <div style={{ fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.subtitle}</div>
                 </div>
-                <button type="button" onClick={() => act(r)} aria-label={`Add ${r.name}`}
-                  style={{ width: 36, height: 36, borderRadius: 8, flexShrink: 0, border: `1px solid ${sel ? "#1d4ed8" : "#93c5fd"}`, background: sel ? "#1d4ed8" : "var(--surface)", color: sel ? "#fff" : "#1d4ed8", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 600 }}>
+                <button type="button" onClick={() => act(r)} aria-label={`Add ${r.name}`} disabled={needsTarget}
+                  style={{ width: 36, height: 36, borderRadius: 8, flexShrink: 0, border: `1px solid ${sel ? "#1d4ed8" : "#93c5fd"}`, background: sel ? "#1d4ed8" : "var(--surface)", color: sel ? "#fff" : "#1d4ed8", cursor: needsTarget ? "not-allowed" : "pointer", opacity: needsTarget ? 0.4 : 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 600 }}>
                   {multi && sel ? "✓" : "+"}
                 </button>
               </div>
@@ -188,9 +219,9 @@ export default function OrgSearchModal(props: {
           </button>
         </div>
         {multi && picked.length > 0 && (
-          <button type="button" onClick={() => { onAdd(picked.map((p) => p.entry)); onClose(); }}
+          <button type="button" disabled={needsTarget} onClick={() => { onAdd(picked.map((p) => p.entry), targetIds); onClose(); }}
             style={{ marginTop: 12, padding: "9px 14px", background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-            Add Selected ({picked.length})
+            Add Selected ({picked.length}){targets?.length ? ` to ${targetIds.length} ${targetIds.length === 1 ? "section" : "sections"}` : ""}
           </button>
         )}
         <div style={{ marginTop: 14, padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, fontSize: 12, color: "#1e40af" }}>

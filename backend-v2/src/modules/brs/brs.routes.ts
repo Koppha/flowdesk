@@ -4,10 +4,10 @@ import { z } from "zod";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { notifyBrsPeopleAdded, notifyBrsSectionAssigned, notifyCustomRequestStep } from "../../lib/notifications.js";
+import { notifyBrsPeopleAdded, notifyBrsReviewersAdded, notifyBrsSectionAssigned, notifyCustomRequestStep } from "../../lib/notifications.js";
 import {
-  brsActorOrg, brsActorRole, brsMemberMatch, brsMemberParams, brsPermissions, BRS_PERMISSIONS, canManageBrs, canWriteBrs, checkConsistencyGate,
-  isBrsContributor, isBrsCoWriter,
+  brsActorOrg, brsActorRole, brsOwnerIds, isBrsOwner, brsMemberMatch, brsMemberParams, brsPermissions, BRS_PERMISSIONS, canManageBrs, canWriteBrs, checkConsistencyGate,
+  isBrsContributor, isBrsCoWriter, isBrsReviewer,
   nextBrsReferenceNo, recordBrsRevision, reopenBrsDocumentForEditing, startBrsAmendment
 } from "./brs.service.js";
 import { renderBrsPdf } from "../../lib/pdf/brsDocumentPdfRenderer.js";
@@ -133,6 +133,78 @@ async function loadDocumentOr404(id: string) {
 }
 
 // Active users only; returns them keyed by id (throws on any unknown id).
+// ── Requesting departments ──────────────────────────────────────────────────
+// Org Structure units (a Division, or a Department within one), filled in
+// automatically from the creator, owners and co-writers. Stored on
+// intake_data.departments; intake_data.department keeps the names as text for
+// the cover page/PDF and older readers.
+type OrgUnit = { type: "division" | "department"; id: string | null; name: string; parent: string | null; company: string | null };
+const unitKey = (u: { type: string; id?: string | null; name?: string | null }) =>
+  u.type === "division" ? `division:${(u.name || "").toLowerCase()}` : `department:${u.id}`;
+
+async function orgUnitsFor(userIds: string[], groups: Array<{ type: string; id?: string | null; name?: string | null }>): Promise<OrgUnit[]> {
+  const out: OrgUnit[] = [];
+  const push = (u: OrgUnit | null) => { if (u && u.name && !out.some((x) => unitKey(x) === unitKey(u))) out.push(u); };
+  const sectionUnit = async (sectionId: string) => {
+    const r = (await query<{ id: string; name: string; division: string | null; company: string | null }>(
+      `SELECT s.id, s.name, d.name AS division, v.name AS company FROM sections s
+         LEFT JOIN departments d ON d.id = s.department_id LEFT JOIN divisions v ON v.id = d.division_id WHERE s.id = $1`, [sectionId]
+    ))[0];
+    return r ? { type: "department" as const, id: r.id, name: r.name, parent: r.division, company: r.company } : null;
+  };
+  const divisionUnit = async (name: string) => {
+    const r = (await query<{ name: string; company: string | null }>(
+      `SELECT d.name, v.name AS company FROM departments d LEFT JOIN divisions v ON v.id = d.division_id
+        WHERE lower(trim(d.name)) = lower(trim($1)) ORDER BY d.active DESC LIMIT 1`, [name]
+    ))[0];
+    return r ? { type: "division" as const, id: null, name: r.name, parent: null, company: r.company } : null;
+  };
+  const ids = Array.from(new Set(userIds.filter(Boolean)));
+  if (ids.length) {
+    const users = await query<{ id: string; section_id: string | null; department: string | null }>(
+      `SELECT id, section_id, department FROM users WHERE id = ANY($1::uuid[])`, [ids]
+    );
+    for (const id of ids) {
+      const u = users.find((x) => x.id === id);
+      if (!u) continue;
+      push(u.section_id ? await sectionUnit(u.section_id) : u.department ? await divisionUnit(u.department) : null);
+    }
+  }
+  for (const g of groups) {
+    if (g.type === "division" && g.name) push(await divisionUnit(g.name));
+    else if (g.type === "department" && g.id) push(await sectionUnit(g.id));
+    else if (g.type === "section" && g.id) {
+      const t = (await query<{ section_id: string | null }>(`SELECT section_id FROM teams WHERE id = $1`, [g.id]))[0];
+      if (t?.section_id) push(await sectionUnit(t.section_id));
+    }
+  }
+  return out;
+}
+
+// The BRS's current units - from intake_data.departments, or for a BRS made
+// before that existed, its single department name looked up as a Division.
+async function currentUnits(intake: any): Promise<OrgUnit[]> {
+  if (Array.isArray(intake?.departments)) return intake.departments;
+  if (intake?.department) return orgUnitsFor([], [{ type: "division", name: intake.department }]).then((u) => u.length ? u : [{ type: "division", id: null, name: intake.department, parent: null, company: null }]);
+  return [];
+}
+function withUnits(intake: any, units: OrgUnit[]) {
+  return { ...intake, departments: units, department: units.map((u) => u.name).join(", ") || null };
+}
+const OrgUnitSchema = z.object({
+  type: z.enum(["division", "department"]),
+  id: z.string().uuid().nullish(),
+  name: z.string().trim().min(1).max(200),
+  parent: z.string().nullish(),
+  company: z.string().nullish()
+});
+
+async function ownerNames(ids: string[]) {
+  if (!ids.length) return null;
+  const rows = await query<{ id: string; full_name: string | null }>(`SELECT id, full_name FROM users WHERE id = ANY($1::uuid[])`, [ids]);
+  return ids.map((id) => rows.find((r) => r.id === id)?.full_name).filter(Boolean).join(", ") || null;
+}
+
 async function loadActiveUsers(ids: string[]) {
   const unique = [...new Set(ids.filter(Boolean))];
   if (!unique.length) return new Map<string, { id: string; full_name: string | null; email: string }>();
@@ -153,10 +225,12 @@ async function assertCanEditSection(doc: any, sectionId: string, actor: { userId
 
 async function assertCanViewDocument(doc: any, actor: { userId: string; role: string; sectionId?: string | null }) {
   if (actor.role === "ADMIN" || doc.requester_id === actor.userId) return;
-  if (doc.owner_user_id === actor.userId) return;
+  if (isBrsOwner(doc, actor.userId)) return;
   // Any co-writer - including view-only ones - can open it.
   if (await isBrsCoWriter(doc.id, actor.userId)) return;
   if (await isBrsContributor(doc.id, actor.userId)) return;
+  // Reviewers (a person, or anyone in a reviewing Department/Section) can open it to comment.
+  if (await isBrsReviewer(doc.id, actor.userId)) return;
   if (doc.brs_approval_submission_id) {
     const onChain = (await query<{ id: string }>(
       `SELECT id FROM custom_request_submissions WHERE id = $1 AND approval_chain @> $2::jsonb`,
@@ -176,6 +250,7 @@ const CreateSchema = z.object({
   title: z.string().trim().min(1, "Title is required"),
   intake_data: z.record(z.string(), z.any()).default({}),
   // Picked from FlowDesk users; full rights, same as the creator.
+  owner_user_ids: z.array(z.string().uuid()).max(20).default([]),
   owner_user_id: z.string().uuid().nullish(),
   // Can edit content from the start: people and/or whole groups.
   co_writer_ids: z.array(z.string().uuid()).default([]),
@@ -204,21 +279,31 @@ brsRouter.post("/", async (req: AuthedRequest, res, next) => {
     );
     if (!typeSections.length) throw badRequest("This BRS type has no sections configured yet");
 
-    const ownerId = parsed.data.owner_user_id || null;
+    const ownerIds = Array.from(new Set([...parsed.data.owner_user_ids, ...(parsed.data.owner_user_id ? [parsed.data.owner_user_id] : [])]))
+      .filter((id) => id !== req.user!.userId);
+    // An owner who was also picked as a co-writer is just an owner.
     const coWriterEntries = await resolveGroupEntries([
       ...parsed.data.co_writer_ids.map((id) => ({ type: "user" as const, id })),
       ...parsed.data.co_writers
-    ].filter((e) => !(e.type === "user" && (e.id === req.user!.userId || e.id === ownerId))));
-    const people = await loadActiveUsers(ownerId ? [ownerId] : []);
-    // Kept in intake_data too, so the cover page / PDF read the owner's name.
-    const intake = { ...parsed.data.intake_data, product_owner: ownerId ? people.get(ownerId)!.full_name : (parsed.data.intake_data.product_owner ?? null) };
+    ].filter((e) => !(e.type === "user" && (e.id === req.user!.userId || ownerIds.includes(e.id!)))));
+    const people = await loadActiveUsers(ownerIds);
+    // Requesting departments fill in from the creator, owners and co-writers.
+    const units = await orgUnitsFor(
+      [req.user!.userId, ...ownerIds, ...coWriterEntries.filter((e) => e.type === "user").map((e) => e.id!)],
+      coWriterEntries.filter((e) => e.type !== "user")
+    );
+    // Owner names kept in intake_data too, so the cover page / PDF read them.
+    const intake = withUnits(
+      { ...parsed.data.intake_data, product_owner: ownerIds.length ? ownerIds.map((id) => people.get(id)!.full_name).join(", ") : (parsed.data.intake_data.product_owner ?? null) },
+      units
+    );
 
     const referenceNo = await nextBrsReferenceNo();
     const doc = (await query<{ id: string }>(
-      `INSERT INTO brs_documents (brs_type_id, title, reference_no, requester_id, owner_user_id, phase, intake_data)
-       VALUES ($1, $2, $3, $4, $5, 'DRAFT', $6)
+      `INSERT INTO brs_documents (brs_type_id, title, reference_no, requester_id, owner_user_id, owner_user_ids, phase, intake_data)
+       VALUES ($1, $2, $3, $4, $5, $6::uuid[], 'DRAFT', $7)
        RETURNING id`,
-      [brsType.id, parsed.data.title, referenceNo, req.user!.userId, ownerId, JSON.stringify(intake)]
+      [brsType.id, parsed.data.title, referenceNo, req.user!.userId, ownerIds[0] ?? null, ownerIds, JSON.stringify(intake)]
     ))[0];
     for (const e of coWriterEntries) {
       const c = entryColumns(e);
@@ -247,13 +332,13 @@ brsRouter.post("/", async (req: AuthedRequest, res, next) => {
 
     await recordBrsRevision({
       documentId: doc.id, kind: "CREATED", actorId: req.user!.userId, actorRole: "CREATOR",
-      summary: `Created${ownerId ? ` — owner ${people.get(ownerId)!.full_name}` : ""}${coWriterEntries.length ? `; co-writers: ${coWriterEntries.map((e) => `${e.label} (${describePermissions(normalizePermissions(e.permissions))})`).join(", ")}` : ""}`,
+      summary: `Created${ownerIds.length ? ` — owner${ownerIds.length > 1 ? "s" : ""} ${ownerIds.map((id) => people.get(id)!.full_name).join(", ")}` : ""}${coWriterEntries.length ? `; co-writers: ${coWriterEntries.map((e) => `${e.label} (${describePermissions(normalizePermissions(e.permissions))})`).join(", ")}` : ""}`,
       intakeData: intake
     });
     void (async () => notifyBrsPeopleAdded({
       documentId: doc.id, brsTitle: parsed.data.title, addedBy: req.user!.fullName ?? null,
-      owner: ownerId ? people.get(ownerId)! : null,
-      coWriters: (await entryEmails(coWriterEntries)).filter((em) => !ownerId || em !== people.get(ownerId)!.email).map((email) => ({ email, full_name: null }))
+      owners: ownerIds.map((id) => people.get(id)!),
+      coWriters: (await entryEmails(coWriterEntries)).filter((em) => !ownerIds.some((id) => people.get(id)!.email === em)).map((email) => ({ email, full_name: null }))
     }))();
 
     return res.status(201).json({ id: doc.id, reference_no: referenceNo });
@@ -266,13 +351,13 @@ brsRouter.post("/", async (req: AuthedRequest, res, next) => {
 brsRouter.get("/mine", async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query(
-      `SELECT d.*, bt.name AS brs_type_name, u.full_name AS requester_name, ow.full_name AS owner_name,
-              CASE WHEN d.requester_id = $1 THEN 'CREATOR' WHEN d.owner_user_id = $1 THEN 'OWNER' ELSE 'CO_WRITER' END AS my_role
+      `SELECT d.*, bt.name AS brs_type_name, u.full_name AS requester_name,
+              (SELECT string_agg(ow.full_name, ', ' ORDER BY array_position(d.owner_user_ids, ow.id)) FROM users ow WHERE ow.id = ANY(d.owner_user_ids)) AS owner_name,
+              CASE WHEN d.requester_id = $1 THEN 'CREATOR' WHEN $1::uuid = ANY(d.owner_user_ids) THEN 'OWNER' ELSE 'CO_WRITER' END AS my_role
          FROM brs_documents d
          JOIN brs_types bt ON bt.id = d.brs_type_id
          JOIN users u ON u.id = d.requester_id
-         LEFT JOIN users ow ON ow.id = d.owner_user_id
-        WHERE d.requester_id = $1 OR d.owner_user_id = $1
+        WHERE d.requester_id = $1 OR $1::uuid = ANY(d.owner_user_ids)
            OR EXISTS (SELECT 1 FROM brs_document_collaborators c WHERE c.document_id = d.id AND ${brsMemberMatch("c", 1)})
         ORDER BY d.created_at DESC`,
       brsMemberParams(await brsActorOrg(req.user!.userId))
@@ -313,13 +398,15 @@ brsRouter.get("/shared-with-me", async (req: AuthedRequest, res, next) => {
 brsRouter.get("/assigned-to-me", async (req: AuthedRequest, res, next) => {
   try {
     const rows = await query(
-      `SELECT DISTINCT d.*, bt.name AS brs_type_name, u.full_name AS requester_name
+      `SELECT d.*, bt.name AS brs_type_name, u.full_name AS requester_name,
+              CASE WHEN EXISTS (SELECT 1 FROM brs_document_sections s JOIN brs_document_section_assignees a ON a.section_id = s.id
+                                 WHERE s.document_id = d.id AND ${brsMemberMatch("a", 1)}) THEN 'CONTRIBUTOR' ELSE 'REVIEWER' END AS my_role
          FROM brs_documents d
          JOIN brs_types bt ON bt.id = d.brs_type_id
          JOIN users u ON u.id = d.requester_id
-         JOIN brs_document_sections s ON s.document_id = d.id
-         JOIN brs_document_section_assignees a ON a.section_id = s.id
-        WHERE ${brsMemberMatch("a", 1)}
+        WHERE EXISTS (SELECT 1 FROM brs_document_sections s JOIN brs_document_section_assignees a ON a.section_id = s.id
+                       WHERE s.document_id = d.id AND ${brsMemberMatch("a", 1)})
+           OR EXISTS (SELECT 1 FROM brs_document_reviewers r WHERE r.document_id = d.id AND ${brsMemberMatch("r", 1)})
         ORDER BY d.created_at DESC`,
       brsMemberParams(await brsActorOrg(req.user!.userId))
     );
@@ -353,9 +440,12 @@ brsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
         )
       : [];
     const gate = await checkConsistencyGate(doc.id);
-    const owner = doc.owner_user_id
-      ? (await query<{ id: string; full_name: string | null; email: string }>(`SELECT id, full_name, email FROM users WHERE id = $1`, [doc.owner_user_id]))[0] ?? null
-      : null;
+    const ownerIdList = brsOwnerIds(doc);
+    const ownerRows = ownerIdList.length
+      ? await query<{ id: string; full_name: string | null; email: string }>(`SELECT id, full_name, email FROM users WHERE id = ANY($1::uuid[])`, [ownerIdList])
+      : [];
+    const owners = ownerIdList.map((id) => ownerRows.find((r) => r.id === id)).filter(Boolean);
+    const owner = owners[0] ?? null;
     const perms = await brsPermissions(doc, req.user!);
     const creator = (await query<{ id: string; full_name: string | null; email: string }>(`SELECT id, full_name, email FROM users WHERE id = $1`, [doc.requester_id]))[0] ?? null;
     const coWriters = await query(
@@ -377,10 +467,27 @@ brsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       [doc.id]
     );
 
+    const reviewers = await query(
+      `SELECT r.id AS entry_id,
+              CASE WHEN r.user_id IS NOT NULL THEN 'user' WHEN r.section_ref_id IS NOT NULL THEN 'department' WHEN r.team_ref_id IS NOT NULL THEN 'section' ELSE 'division' END AS type,
+              coalesce(r.user_id, r.section_ref_id, r.team_ref_id)::text AS ref_id, r.division_name,
+              coalesce(u.full_name, sec.name, tm.name, r.division_name) AS label
+         FROM brs_document_reviewers r
+         LEFT JOIN users u ON u.id = r.user_id
+         LEFT JOIN sections sec ON sec.id = r.section_ref_id
+         LEFT JOIN teams tm ON tm.id = r.team_ref_id
+        WHERE r.document_id = $1 ORDER BY 2, 5`,
+      [doc.id]
+    );
+    const commentCount = (await query<{ n: number }>(`SELECT count(*)::int AS n FROM brs_document_comments WHERE document_id = $1`, [doc.id]))[0].n;
+
     return res.json({
       ...doc,
+      reviewers,
+      comment_count: commentCount,
       creator,
       owner,
+      owners,
       co_writers: coWriters,
       versions,
       my_role: await brsActorRole(doc, req.user!),
@@ -443,7 +550,17 @@ brsRouter.patch("/:id/intake", async (req: AuthedRequest, res, next) => {
       throw forbidden("Only the creator, owner or a co-writer can edit Intake");
     }
 
-    const updated = { ...doc.intake_data, ...parsed.data.intake_data };
+    let updated = { ...doc.intake_data, ...parsed.data.intake_data };
+    if (parsed.data.intake_data.departments !== undefined) {
+      const units = z.array(OrgUnitSchema).max(50).safeParse(parsed.data.intake_data.departments);
+      if (!units.success) throw badRequest("Invalid requesting departments");
+      // Fill in each unit's division/company from Org Structure.
+      const resolved = await orgUnitsFor([], units.data.map((u) => ({ type: u.type, id: u.id ?? null, name: u.name })));
+      const enriched = (units.data as OrgUnit[])
+        .map((u) => resolved.find((r) => unitKey(r) === unitKey(u)) ?? { ...u, id: u.id ?? null, parent: u.parent ?? null, company: u.company ?? null })
+        .filter((u, i, all) => all.findIndex((x) => unitKey(x) === unitKey(u)) === i);
+      updated = withUnits(updated, enriched);
+    }
     if (JSON.stringify(updated) === JSON.stringify(doc.intake_data)) return res.json({ ok: true, unchanged: true });
     await query(`UPDATE brs_documents SET intake_data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updated), doc.id]);
     await recordBrsRevision({
@@ -614,6 +731,82 @@ brsRouter.post("/:id/sections/:sectionId/assignees", async (req: AuthedRequest, 
   }
 });
 
+// POST /brs/:id/assignees — invite people and/or whole groups onto several
+// sections at once. Anyone already on a section is skipped there; each
+// person gets one email listing all of their new sections.
+const BulkInviteSchema = z.object({
+  entries: z.array(GroupEntrySchema).min(1, "Choose at least one person or group"),
+  section_ids: z.array(z.string().uuid()).min(1, "Tick at least one section")
+});
+brsRouter.post("/:id/assignees", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = BulkInviteSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid invitation", parsed.error.flatten());
+    const doc = await loadDocumentOr404(req.params.id);
+    if (doc.phase === "BASELINE") throw badRequest("This BRS is approved — use Amend before inviting more collaborators");
+
+    const sections = await query<{ id: string; title: string; status: string }>(
+      `SELECT id, title, status FROM brs_document_sections WHERE document_id = $1 AND id = ANY($2::uuid[]) ORDER BY sort_order`,
+      [doc.id, parsed.data.section_ids]
+    );
+    if (sections.length !== new Set(parsed.data.section_ids).size) throw badRequest("One or more ticked sections are not part of this BRS");
+
+    // Invite permission covers every section; otherwise only sections the
+    // actor is already an assignee of.
+    if (!(await brsPermissions(doc, req.user!)).invite) {
+      for (const sec of sections) {
+        if (!(await isSectionAssignee(sec.id, req.user!))) throw forbidden(`You don't have permission to invite people onto "${sec.title}"`);
+      }
+    }
+
+    const entries = await resolveGroupEntries(parsed.data.entries);
+    const added: Array<{ entry: (typeof entries)[number]; sections: string[] }> = entries.map((entry) => ({ entry, sections: [] }));
+    for (const sec of sections) {
+      for (const item of added) {
+        const c = entryColumns(item.entry);
+        const exists = (await query<{ id: string }>(
+          `SELECT id FROM brs_document_section_assignees
+            WHERE section_id = $1 AND user_id IS NOT DISTINCT FROM $2 AND section_ref_id IS NOT DISTINCT FROM $3
+              AND team_ref_id IS NOT DISTINCT FROM $4 AND lower(coalesce(division_name,'')) = lower(coalesce($5::text,''))`,
+          [sec.id, c.user_id, c.section_ref_id, c.team_ref_id, c.division_name]
+        ))[0];
+        if (exists) continue;
+        await query(
+          `INSERT INTO brs_document_section_assignees (section_id, user_id, section_ref_id, team_ref_id, division_name, added_by_id)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [sec.id, c.user_id, c.section_ref_id, c.team_ref_id, c.division_name, req.user!.userId]
+        );
+        item.sections.push(sec.title);
+      }
+      await query(
+        `UPDATE brs_document_sections SET status = CASE WHEN status = 'PENDING' THEN 'IN_PROGRESS' ELSE status END,
+                due_at = CASE WHEN due_at IS NULL AND sla_hours IS NOT NULL THEN now() + (sla_hours || ' hours')::interval ELSE due_at END,
+                updated_at = now()
+          WHERE id = $1`,
+        [sec.id]
+      );
+    }
+
+    const done = added.filter((a) => a.sections.length);
+    if (done.length) {
+      await recordBrsRevision({
+        documentId: doc.id, kind: "PEOPLE_CHANGED", actorId: req.user!.userId, actorRole: await brsActorRole(doc, req.user!),
+        summary: `Invited ${done.map((a) => `${a.entry.label} onto ${a.sections.map((t) => `"${t}"`).join(", ")}`).join("; ")}`
+      });
+      for (const a of done) {
+        void (async () => notifyBrsSectionAssigned({
+          documentId: doc.id, brsTitle: doc.title, requesterName: req.user!.fullName ?? null,
+          sectionTitle: a.sections.join(", "), assigneeEmails: await entryEmails([a.entry])
+        }))();
+      }
+    }
+    const invitations = done.reduce((n, a) => n + a.sections.length, 0);
+    return res.status(201).json({ ok: true, invitations, skipped: entries.length * sections.length - invitations });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // POST /brs/:id/sections/:sectionId/assignees/confirm — the current user
 // confirms their own assignee entry (individually, or via section membership).
 brsRouter.post("/:id/sections/:sectionId/assignees/confirm", async (req: AuthedRequest, res, next) => {
@@ -752,6 +945,38 @@ brsRouter.get("/:id/gate-check", async (req: AuthedRequest, res, next) => {
   }
 });
 
+// Replaces the reviewer list; emails anyone newly added; logs the change.
+async function setBrsReviewers(doc: any, entriesIn: GroupEntry[], actor: { userId: string; role: string; fullName?: string }) {
+  const wanted = await resolveGroupEntries(entriesIn);
+  const keyOf = (e: { type: string; id?: string | null; name?: string | null }) => `${e.type}:${e.type === "division" ? (e.name || "").toLowerCase() : e.id}`;
+  const before = await query<{ id: string; user_id: string | null; section_ref_id: string | null; team_ref_id: string | null; division_name: string | null; label: string }>(
+    `SELECT r.id, r.user_id, r.section_ref_id, r.team_ref_id, r.division_name,
+            coalesce(u.full_name, sec.name || ' (Department)', tm.name || ' (Section)', r.division_name || ' (Division)') AS label
+       FROM brs_document_reviewers r LEFT JOIN users u ON u.id = r.user_id LEFT JOIN sections sec ON sec.id = r.section_ref_id LEFT JOIN teams tm ON tm.id = r.team_ref_id
+      WHERE r.document_id = $1`, [doc.id]
+  );
+  const beforeKey = (b: (typeof before)[number]) => b.user_id ? `user:${b.user_id}` : b.section_ref_id ? `department:${b.section_ref_id}` : b.team_ref_id ? `section:${b.team_ref_id}` : `division:${(b.division_name || "").toLowerCase()}`;
+  const added = wanted.filter((e) => !before.some((b) => beforeKey(b) === keyOf(e)));
+  const removed = before.filter((b) => !wanted.some((e) => keyOf(e) === beforeKey(b)));
+  if (!added.length && !removed.length) return { added: 0, removed: 0 };
+  if (removed.length) await query(`DELETE FROM brs_document_reviewers WHERE id = ANY($1::uuid[])`, [removed.map((r) => r.id)]);
+  for (const e of added) {
+    const c = entryColumns(e);
+    await query(
+      `INSERT INTO brs_document_reviewers (document_id, user_id, section_ref_id, team_ref_id, division_name, added_by_id) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [doc.id, c.user_id, c.section_ref_id, c.team_ref_id, c.division_name, actor.userId]
+    );
+  }
+  const parts: string[] = [];
+  if (added.length) parts.push(`Reviewers added: ${added.map((e) => e.label).join(", ")}`);
+  if (removed.length) parts.push(`Reviewers removed: ${removed.map((r) => r.label).join(", ")}`);
+  await recordBrsRevision({ documentId: doc.id, kind: "REVIEWERS_CHANGED", actorId: actor.userId, actorRole: await brsActorRole(doc, actor), summary: parts.join("; ") });
+  if (added.length) {
+    void (async () => notifyBrsReviewersAdded({ documentId: doc.id, brsTitle: doc.title, addedBy: actor.fullName ?? null, emails: await entryEmails(added) }))();
+  }
+  return { added: added.length, removed: removed.length };
+}
+
 // POST /brs/:id/route-approval — the single reuse seam: spins up a real
 // custom_request_submissions row under the BRS_APPROVAL type so the entire
 // existing free-form chain/approve/reject/notify/email-one-click machinery
@@ -763,7 +988,9 @@ const ChainStepSchema = z.object({
   decision_type: z.enum(["APPROVE", "NOTE"]).default("APPROVE")
 });
 const RouteApprovalSchema = z.object({
-  approval_chain: z.array(ChainStepSchema).min(1, "At least one approver is required")
+  approval_chain: z.array(ChainStepSchema).min(1, "At least one approver is required"),
+  // Comment-only reviewers (Departments / Sections) routed alongside the approvers.
+  reviewers: z.array(GroupEntrySchema).optional()
 });
 brsRouter.post("/:id/route-approval", async (req: AuthedRequest, res, next) => {
   try {
@@ -832,6 +1059,9 @@ brsRouter.post("/:id/route-approval", async (req: AuthedRequest, res, next) => {
     );
     await recordBrsRevision({ documentId: doc.id, kind: "ROUTED", actorId: req.user!.userId, actorRole: await brsActorRole(doc, req.user!),
       summary: `Routed for approval: ${chain.map((c) => `${c.approver_name} (${c.position_name})`).join(" → ")}` });
+    if (parsed.data.reviewers?.length) {
+      await setBrsReviewers(doc, parsed.data.reviewers, req.user!);
+    }
 
     void notifyCustomRequestStep({
       submissionId: submission.id,
@@ -916,9 +1146,7 @@ brsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
       sections,
       brs_type_name: doc.brs_type_name ?? null,
       department: doc.intake_data?.department ?? null,
-      product_owner: doc.owner_user_id
-        ? ((await query<{ full_name: string | null }>(`SELECT full_name FROM users WHERE id = $1`, [doc.owner_user_id]))[0]?.full_name ?? doc.intake_data?.product_owner ?? null)
-        : (doc.intake_data?.product_owner ?? null),
+      product_owner: (await ownerNames(brsOwnerIds(doc))) ?? doc.intake_data?.product_owner ?? null,
       target_quarter: doc.intake_data?.target_quarter ?? null,
       departments_included: departmentsIncluded,
       approvers
@@ -965,7 +1193,8 @@ brsRouter.get("/:id/versions/:versionId", async (req: AuthedRequest, res, next) 
 // PUT /brs/:id/people — set the owner (full rights, one person) and the
 // co-writers (people and/or whole groups).
 const PeopleSchema = z.object({
-  owner_user_id: z.string().uuid().nullable(),
+  owner_user_ids: z.array(z.string().uuid()).max(20).optional(),
+  owner_user_id: z.string().uuid().nullish(),
   co_writer_ids: z.array(z.string().uuid()).default([]),
   co_writers: z.array(GroupEntrySchema).default([])
 });
@@ -976,13 +1205,18 @@ brsRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
     const doc = await loadDocumentOr404(req.params.id);
     if (!canManageBrs(doc, req.user!)) throw forbidden("Only the creator or owner can change who works on this BRS");
 
-    const ownerId = parsed.data.owner_user_id;
-    if (ownerId === doc.requester_id) throw badRequest("The creator already has full rights — choose someone else as owner, or leave it empty");
-    const people = await loadActiveUsers(ownerId ? [ownerId] : []);
+    const ownerIds = Array.from(new Set(parsed.data.owner_user_ids ?? (parsed.data.owner_user_id ? [parsed.data.owner_user_id] : [])));
+    if (ownerIds.includes(doc.requester_id)) throw badRequest("The creator already has full rights — choose someone else as owner");
+    const prevOwners = brsOwnerIds(doc);
+    const people = await loadActiveUsers(Array.from(new Set([...ownerIds, ...prevOwners])).filter((id) => ownerIds.includes(id)));
+    const prevOwnerNames = prevOwners.length
+      ? new Map((await query<{ id: string; full_name: string | null }>(`SELECT id, full_name FROM users WHERE id = ANY($1::uuid[])`, [prevOwners])).map((r) => [r.id, r.full_name]))
+      : new Map<string, string | null>();
+    // Making a co-writer an owner moves them: an owner is never also listed as a co-writer.
     const wanted = await resolveGroupEntries([
       ...parsed.data.co_writer_ids.map((id) => ({ type: "user" as const, id })),
       ...parsed.data.co_writers
-    ].filter((e) => !(e.type === "user" && (e.id === doc.requester_id || e.id === ownerId))));
+    ].filter((e) => !(e.type === "user" && (e.id === doc.requester_id || ownerIds.includes(e.id!)))));
     const keyOf = (e: { type: string; id?: string | null; name?: string | null }) =>
       `${e.type}:${e.type === "division" ? (e.name || "").toLowerCase() : e.id}`;
 
@@ -997,7 +1231,9 @@ brsRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
     const beforeKeys = new Set(beforeKeyed.map((b) => b.key));
     const added = wanted.filter((e) => !beforeKeys.has(keyOf(e)));
     const removed = beforeKeyed.filter((b) => !wantedKeys.has(b.key));
-    const ownerChanged = (doc.owner_user_id ?? null) !== (ownerId ?? null);
+    const ownersAdded = ownerIds.filter((id) => !prevOwners.includes(id));
+    const ownersRemoved = prevOwners.filter((id) => !ownerIds.includes(id));
+    const ownerChanged = ownersAdded.length > 0 || ownersRemoved.length > 0 || ownerIds.join(",") !== prevOwners.join(",");
     // Kept entries whose granted permissions changed.
     const permChanged = wanted
       .map((e) => ({ e, prev: beforeKeyed.find((b) => b.key === keyOf(e)) }))
@@ -1012,8 +1248,19 @@ brsRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
         )).map((r) => r.label)
       : [];
 
-    await query(`UPDATE brs_documents SET owner_user_id = $1, intake_data = intake_data || $2::jsonb, updated_at = now() WHERE id = $3`,
-      [ownerId, JSON.stringify({ product_owner: ownerId ? people.get(ownerId)!.full_name : null }), doc.id]);
+    // Newly added people's departments join the requesting departments
+    // (ones already there, or removed by hand, are left as they are).
+    const unitsBefore = await currentUnits(doc.intake_data);
+    const newUnits = (await orgUnitsFor(
+      [...ownersAdded, ...added.filter((e) => e.type === "user").map((e) => e.id!)],
+      added.filter((e) => e.type !== "user")
+    )).filter((u) => !unitsBefore.some((b) => unitKey(b) === unitKey(u)));
+    const intakePatch = {
+      product_owner: ownerIds.length ? ownerIds.map((id) => people.get(id)!.full_name).join(", ") : null,
+      ...(newUnits.length ? { departments: [...unitsBefore, ...newUnits], department: [...unitsBefore, ...newUnits].map((u) => u.name).join(", ") } : {})
+    };
+    await query(`UPDATE brs_documents SET owner_user_id = $1, owner_user_ids = $2::uuid[], intake_data = intake_data || $3::jsonb, updated_at = now() WHERE id = $4`,
+      [ownerIds[0] ?? null, ownerIds, JSON.stringify(intakePatch), doc.id]);
     if (removed.length) await query(`DELETE FROM brs_document_collaborators WHERE id = ANY($1::uuid[])`, [removed.map((r) => r.row.id)]);
     for (const e of added) {
       const c = entryColumns(e);
@@ -1028,7 +1275,9 @@ brsRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
       await query(`UPDATE brs_document_collaborators SET permissions = $1::text[] WHERE id = $2`, [normalizePermissions(x.e.permissions), x.prev!.row.id]);
     }
     const parts: string[] = [];
-    if (ownerChanged) parts.push(ownerId ? `Owner set to ${people.get(ownerId)!.full_name}` : "Owner removed");
+    if (ownersAdded.length) parts.push(`Owners added: ${ownersAdded.map((id) => people.get(id)!.full_name).join(", ")}`);
+    if (ownersRemoved.length) parts.push(`Owners removed: ${ownersRemoved.map((id) => prevOwnerNames.get(id) || "—").join(", ")}`);
+    if (newUnits.length) parts.push(`Requesting departments added: ${newUnits.map((u) => u.name).join(", ")}`);
     if (added.length) parts.push(`Co-writers added: ${added.map((e) => `${e.label} (${describePermissions(normalizePermissions(e.permissions))})`).join(", ")}`);
     if (permChanged.length) parts.push(`Permissions changed: ${permChanged.map((x) => `${x.e.label} ${describePermissions(normalizePermissions(x.prev!.row.permissions))} → ${describePermissions(normalizePermissions(x.e.permissions))}`).join("; ")}`);
     if (removedLabels.length) parts.push(`Co-writers removed: ${removedLabels.join(", ")}`);
@@ -1036,7 +1285,7 @@ brsRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
 
     void (async () => notifyBrsPeopleAdded({
       documentId: doc.id, brsTitle: doc.title, addedBy: req.user!.fullName ?? null,
-      owner: ownerChanged && ownerId ? people.get(ownerId)! : null,
+      owners: ownersAdded.map((id) => people.get(id)!),
       coWriters: (await entryEmails(added)).map((email) => ({ email, full_name: null }))
     }))();
     return res.json({ ok: true });
@@ -1106,6 +1355,129 @@ brsRouter.get("/:id/history/:revisionId", async (req: AuthedRequest, res, next) 
         ))[0] ?? null
       : null;
     return res.json({ ...row, previous });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// PUT /brs/:id/reviewers — the comment-only reviewers (creator, owner, or a
+// co-writer allowed to route). Can change at any point before approval.
+const ReviewersSchema = z.object({ reviewers: z.array(GroupEntrySchema) });
+brsRouter.put("/:id/reviewers", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = ReviewersSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid reviewers", parsed.error.flatten());
+    const doc = await loadDocumentOr404(req.params.id);
+    if (!(await brsPermissions(doc, req.user!)).workflow) throw forbidden("You don't have permission to change the reviewers");
+    if (doc.phase === "BASELINE") throw badRequest("This BRS is approved — use Amend before changing reviewers");
+    return res.json({ ok: true, ...(await setBrsReviewers(doc, parsed.data.reviewers, req.user!)) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /brs/:id/comments — everyone who can open the BRS can read them.
+brsRouter.get("/:id/comments", async (req: AuthedRequest, res, next) => {
+  try {
+    const doc = await loadDocumentOr404(req.params.id);
+    await assertCanViewDocument(doc, req.user!);
+    const rows = await query(
+      `SELECT c.id, c.section_id, s.title AS section_title, c.body, c.author_role, c.created_at, u.full_name AS author_name
+         FROM brs_document_comments c
+         LEFT JOIN users u ON u.id = c.author_id
+         LEFT JOIN brs_document_sections s ON s.id = c.section_id
+        WHERE c.document_id = $1 ORDER BY c.created_at ASC`,
+      [doc.id]
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /brs/:id/comments — reviewers' main tool, open to everyone involved.
+const CommentSchema = z.object({ body: z.string().trim().min(1, "Write a comment first").max(5000), section_id: z.string().uuid().nullish() });
+brsRouter.post("/:id/comments", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = CommentSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid comment", parsed.error.flatten());
+    const doc = await loadDocumentOr404(req.params.id);
+    await assertCanViewDocument(doc, req.user!);
+    let sectionTitle: string | null = null;
+    if (parsed.data.section_id) {
+      const sec = (await query<{ title: string }>(`SELECT title FROM brs_document_sections WHERE id = $1 AND document_id = $2`, [parsed.data.section_id, doc.id]))[0];
+      if (!sec) throw badRequest("That section isn't part of this BRS");
+      sectionTitle = sec.title;
+    }
+    const role = await brsActorRole(doc, req.user!);
+    const row = (await query<{ id: string }>(
+      `INSERT INTO brs_document_comments (document_id, section_id, author_id, author_role, body) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [doc.id, parsed.data.section_id ?? null, req.user!.userId, role, parsed.data.body]
+    ))[0];
+    await recordBrsRevision({
+      documentId: doc.id, kind: "COMMENTED", actorId: req.user!.userId, actorRole: role,
+      summary: `Comment${sectionTitle ? ` on "${sectionTitle}"` : ""}: ${parsed.data.body.length > 140 ? parsed.data.body.slice(0, 140) + "…" : parsed.data.body}`
+    });
+    return res.status(201).json({ id: row.id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /brs/:id/sections — the creator (owner/admin) adds a section of their
+// own to this BRS, beyond the template's.
+const AddSectionSchema = z.object({
+  title: z.string().trim().min(1, "Give the section a title").max(200),
+  description: z.string().trim().max(1000).nullish(),
+  owner_phase: z.enum(["DRAFT", "DEPT_INPUT"]).default("DRAFT"),
+  is_required: z.boolean().default(false)
+});
+brsRouter.post("/:id/sections", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = AddSectionSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid section", parsed.error.flatten());
+    const doc = await loadDocumentOr404(req.params.id);
+    if (!canManageBrs(doc, req.user!)) throw forbidden("Only the creator or owner can add sections");
+    if (doc.phase === "BASELINE") throw badRequest("This BRS is approved — use Amend before adding sections");
+    const key = `custom_${parsed.data.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40)}_${Date.now().toString(36)}`;
+    const row = (await query<{ id: string }>(
+      `INSERT INTO brs_document_sections (document_id, section_key, title, description, owner_phase, is_required, sort_order, added_by_id)
+       VALUES ($1, $2, $3, $4, $5, $6, (SELECT coalesce(max(sort_order), -1) + 1 FROM brs_document_sections WHERE document_id = $1), $7)
+       RETURNING id`,
+      [doc.id, key, parsed.data.title, parsed.data.description || null, parsed.data.owner_phase, parsed.data.is_required, req.user!.userId]
+    ))[0];
+    await recordBrsRevision({
+      documentId: doc.id, kind: "SECTION_ADDED", actorId: req.user!.userId, actorRole: await brsActorRole(doc, req.user!),
+      summary: `Section added: "${parsed.data.title}" (${parsed.data.owner_phase === "DRAFT" ? "Draft" : "Department Input"}, ${parsed.data.is_required ? "required" : "optional"})`,
+      sectionId: row.id, sectionTitle: parsed.data.title
+    });
+    return res.status(201).json({ id: row.id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// DELETE /brs/:id/sections/:sectionId — only a section added to this BRS
+// (not a template one), and only while it's still empty.
+brsRouter.delete("/:id/sections/:sectionId", async (req: AuthedRequest, res, next) => {
+  try {
+    const doc = await loadDocumentOr404(req.params.id);
+    if (!canManageBrs(doc, req.user!)) throw forbidden("Only the creator or owner can remove sections");
+    if (doc.phase === "BASELINE") throw badRequest("This BRS is approved — use Amend before removing sections");
+    const sec = (await query<{ id: string; title: string; type_section_id: string | null; content_html: string | null }>(
+      `SELECT id, title, type_section_id, content_html FROM brs_document_sections WHERE id = $1 AND document_id = $2`, [req.params.sectionId, doc.id]
+    ))[0];
+    if (!sec) throw notFound("Section not found");
+    if (sec.type_section_id) throw badRequest("Sections from the BRS template can't be removed — only ones added to this BRS");
+    if ((sec.content_html || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").trim()) {
+      throw badRequest("This section already has content — clear it first if you really want to remove it");
+    }
+    await query(`DELETE FROM brs_document_sections WHERE id = $1`, [sec.id]);
+    await recordBrsRevision({
+      documentId: doc.id, kind: "SECTION_REMOVED", actorId: req.user!.userId, actorRole: await brsActorRole(doc, req.user!),
+      summary: `Section removed: "${sec.title}"`
+    });
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }

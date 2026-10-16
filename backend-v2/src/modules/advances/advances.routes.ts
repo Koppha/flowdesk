@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { destinationProblem, travelRegionOf } from "../../lib/travelRegions.js";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
@@ -174,6 +175,17 @@ const UpdateAdvanceSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["external_end_date"], message: "Finish date cannot be before the start date" });
   }
 });
+
+// A regional travel type's destination must be in its region (CMA vs Rest
+// of Africa) - checked for the destination airport and every trip line.
+async function assertDestinationMatchesType(typeCode: string, destinationIata: string | null | undefined) {
+  if (!destinationIata || !travelRegionOf(typeCode)) return;
+  const airport = (await query<{ country: string | null; city: string | null }>(
+    `SELECT country, city FROM airports WHERE upper(iata_code) = upper($1)`, [destinationIata]
+  ))[0];
+  const problem = destinationProblem(typeCode, airport?.country);
+  if (problem) throw badRequest(`${airport?.city ? airport.city + ": " : ""}${problem}`);
+}
 
 const LinesSchema = z.object({
   lines: z
@@ -1307,6 +1319,7 @@ advancesRouter.post("/", async (req: AuthedRequest, res, next) => {
     }
 
     const type = await assertAdvanceTypeAllowed(parsed.data.type);
+    await assertDestinationMatchesType(type, parsed.data.travel_destination_iata);
     await assertPaybackMonthsAllowed(type, parsed.data.payback_months);
     await assertSalaryMonthWindowAllowed(type, parsed.data.salary_month);
 
@@ -1406,6 +1419,13 @@ advancesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         }
       }
     }
+    if (parsedData.travel_destination_iata !== undefined || parsedData.type !== undefined) {
+      await assertDestinationMatchesType(
+        (parsedData.type as string | undefined) ?? adv.type,
+        (parsedData.travel_destination_iata as string | undefined) ??
+          (await query<{ iata: string | null }>(`SELECT travel_destination_iata AS iata FROM advance_requests WHERE id = $1`, [adv.id]))[0]?.iata
+      );
+    }
     if (parsedData.payback_months !== undefined) {
       await assertPaybackMonthsAllowed((parsedData.type as string | undefined) ?? adv.type, parsedData.payback_months as number);
     }
@@ -1471,6 +1491,10 @@ advancesRouter.put("/:id/lines", async (req: AuthedRequest, res, next) => {
 
     const travelType = await getTravelTypeByCode(adv.type);
     if (!travelType?.active) throw badRequest("Travel lines can only be added for travel advances");
+    for (const line of parsed.data.lines) {
+      const problem = destinationProblem(adv.type, (line.travel_meta as any)?.country);
+      if (problem) throw badRequest(problem);
+    }
     const configuredMealValue = await getTravelRateForCode(adv.type, adv.requester_role);
 
     // Delete + per-line insert + total recompute all run in one transaction —

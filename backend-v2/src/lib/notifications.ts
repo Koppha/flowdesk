@@ -1997,17 +1997,18 @@ export async function notifyBrsPeopleAdded(args: {
   documentId: string;
   brsTitle: string;
   addedBy: string | null;
-  owner: { email: string; full_name: string | null } | null;
+  owners: Array<{ email: string; full_name: string | null }>;
   coWriters: Array<{ email: string; full_name: string | null }>;
 }) {
   try {
     const who = args.addedBy || "A colleague";
-    if (args.owner?.email) {
+    for (const owner of args.owners) {
+      if (!owner.email) continue;
       await sendMail({
-        to: [args.owner.email],
-        subject: `[BRS] You are the owner of "${args.brsTitle}"`,
-        text: [header("BRS — YOU ARE THE OWNER"), ``, `Hello ${args.owner.full_name || ""},`, ``,
-          `${who} made you the owner of the BRS "${args.brsTitle}". As owner you have full rights: edit every section, send it on, route it for approval, distribute and amend it.`,
+        to: [owner.email],
+        subject: `[BRS] You are an owner of "${args.brsTitle}"`,
+        text: [header("BRS — YOU ARE AN OWNER"), ``, `Hello ${owner.full_name || ""},`, ``,
+          `${who} made you an owner of the BRS "${args.brsTitle}". As an owner you have full rights: edit every section, send it on, route it for approval, distribute and amend it.`,
           ``, `Open it in FlowDesk: BRS Studio > My BRS.`, ``, footer()].join("\n")
       });
     }
@@ -2026,6 +2027,22 @@ export async function notifyBrsPeopleAdded(args: {
   }
 }
 
+// Reviewers of a BRS - comment only, no approval.
+export async function notifyBrsReviewersAdded(args: { documentId: string; brsTitle: string; addedBy: string | null; emails: string[] }) {
+  try {
+    if (!args.emails.length) return;
+    await sendMail({
+      to: args.emails,
+      subject: `[Review requested] BRS: ${args.brsTitle}`,
+      text: [header("BRS — YOUR REVIEW IS REQUESTED"), ``, `Hello,`, ``,
+        `${args.addedBy || "A colleague"} asked you to review the BRS "${args.brsTitle}". Please read it and add your comments — you don't need to approve it.`,
+        ``, `Open it in FlowDesk: BRS Studio > Assigned to Me.`, ``, footer()].join("\n")
+    });
+  } catch (error) {
+    logger.warn("brs_reviewers_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
 export async function notifyBrsSectionAssigned(args: {
   documentId: string;
   brsTitle: string;
@@ -2041,7 +2058,9 @@ export async function notifyBrsSectionAssigned(args: {
       ``,
       `Hello,`,
       ``,
-      `${args.requesterName || "A colleague"} assigned you the "${args.sectionTitle}" section of the BRS "${args.brsTitle}" — please fill it in and confirm when it's ready.`,
+      args.sectionTitle.includes(", ")
+        ? `${args.requesterName || "A colleague"} invited you to collaborate on these sections of the BRS "${args.brsTitle}": ${args.sectionTitle}. Please fill them in and confirm each when it's ready.`
+        : `${args.requesterName || "A colleague"} assigned you the "${args.sectionTitle}" section of the BRS "${args.brsTitle}" — please fill it in and confirm when it's ready.`,
       ``,
       footer()
     ].join("\n");
@@ -3177,3 +3196,64 @@ export async function notifySlaReminder(args: {
   }
 }
 
+
+// ─── Employee Contracts (interns & temps) — expiry reminder ────────────────
+// Goes to HR only (the configured reminder recipients) - never to the
+// employee whose contract it is.
+export async function notifyEmployeeContractExpiring(args: {
+  recipients: string[];
+  contractNo: string;
+  personName: string;
+  contractType: string;
+  position: string | null;
+  department: string | null;
+  endDate: string;
+  daysLeft: number;
+}) {
+  if (!args.recipients.length) return;
+  const when = args.daysLeft <= 0 ? "expires today" : args.daysLeft === 1 ? "expires tomorrow" : `expires in ${args.daysLeft} days`;
+  const typeLabel = args.contractType === "INTERN" ? "Intern" : "Temporary";
+  const body = [
+    header("EMPLOYEE CONTRACT — EXPIRY REMINDER"),
+    ``,
+    `The ${typeLabel.toLowerCase()} contract for ${args.personName} ${when}. Decide whether to renew or end it before the end date.`,
+    ``,
+    detailBlock([
+      ["Contract", args.contractNo],
+      ["Employee", args.personName],
+      ["Type", typeLabel],
+      ["Position", args.position],
+      ["Department", args.department],
+      ["End Date", args.endDate]
+    ]),
+    ``,
+    `Log in to FlowDesk and open Contracts > Employee Contracts to renew or end it.`,
+    ``,
+    footer()
+  ].join("\n");
+  await sendMail({ to: args.recipients, subject: `[Contracts] ${args.personName}'s ${typeLabel.toLowerCase()} contract ${when}`, text: body });
+}
+
+// Sent to the intern/temp themselves - only when HR ticked "Also remind the
+// employee" on that contract. Separate wording from HR's reminder.
+export async function notifyEmployeeOwnContractExpiring(args: {
+  email: string;
+  personName: string;
+  contractType: string;
+  endDate: string;
+  daysLeft: number;
+}) {
+  const when = args.daysLeft <= 0 ? "ends today" : args.daysLeft === 1 ? "ends tomorrow" : `ends in ${args.daysLeft} days`;
+  const typeLabel = args.contractType === "INTERN" ? "internship" : "temporary contract";
+  const body = [
+    header("YOUR CONTRACT — END DATE REMINDER"),
+    ``,
+    `Hello ${args.personName},`,
+    ``,
+    `This is a reminder that your ${typeLabel} with Econet Telecom Lesotho ${when} (${args.endDate}).`,
+    `If you have questions about what happens next, please contact Human Resources.`,
+    ``,
+    `This is an automated notification. Please do not reply.`
+  ].join("\n");
+  await sendMail({ to: [args.email], subject: `Reminder: your ${typeLabel} ${when}`, text: body });
+}

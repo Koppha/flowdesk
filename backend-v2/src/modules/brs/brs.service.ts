@@ -46,6 +46,15 @@ export async function isBrsCoWriter(documentId: string, userId: string) {
   return rows.length > 0;
 }
 
+export async function isBrsReviewer(documentId: string, userId: string) {
+  const org = await brsActorOrg(userId);
+  const rows = await query<{ id: string }>(
+    `SELECT r.id FROM brs_document_reviewers r WHERE r.document_id = $1 AND ${brsMemberMatch("r", 2)} LIMIT 1`,
+    [documentId, ...brsMemberParams(org)]
+  );
+  return rows.length > 0;
+}
+
 export async function isBrsContributor(documentId: string, userId: string, sectionId?: string) {
   const org = await brsActorOrg(userId);
   const rows = await query<{ id: string }>(
@@ -57,20 +66,32 @@ export async function isBrsContributor(documentId: string, userId: string, secti
 }
 
 // ── People and roles ─────────────────────────────────────────────────────────
-// CREATOR (requester_id) and OWNER (owner_user_id) have full rights; a
+// Owners of a BRS (any number, all with full rights). Falls back to the
+// single legacy owner_user_id for a row read before the migration ran.
+export type BrsOwnedDoc = { requester_id: string; owner_user_id?: string | null; owner_user_ids?: string[] | null };
+export function brsOwnerIds(doc: BrsOwnedDoc): string[] {
+  const ids = Array.isArray(doc.owner_user_ids) ? doc.owner_user_ids : [];
+  return ids.length ? ids : doc.owner_user_id ? [doc.owner_user_id] : [];
+}
+export function isBrsOwner(doc: BrsOwnedDoc, userId: string) {
+  return brsOwnerIds(doc).includes(userId);
+}
+
+// CREATOR (requester_id) and OWNERS (owner_user_ids) have full rights; a
 // CO_WRITER edits content; a CONTRIBUTOR is a section assignee; APPROVER is
 // on the approval chain. Recorded on every audit entry so the trail shows the
 // capacity each person acted in, not just their name.
-export type BrsActorRole = "CREATOR" | "OWNER" | "CO_WRITER" | "CONTRIBUTOR" | "APPROVER" | "ADMIN" | "OTHER";
+export type BrsActorRole = "CREATOR" | "OWNER" | "CO_WRITER" | "CONTRIBUTOR" | "REVIEWER" | "APPROVER" | "ADMIN" | "OTHER";
 
 export async function brsActorRole(
-  doc: { id: string; requester_id: string; owner_user_id?: string | null; brs_approval_submission_id?: string | null },
+  doc: { id: string; brs_approval_submission_id?: string | null } & BrsOwnedDoc,
   actor: { userId: string; role: string; sectionId?: string | null }
 ): Promise<BrsActorRole> {
   if (doc.requester_id === actor.userId) return "CREATOR";
-  if (doc.owner_user_id && doc.owner_user_id === actor.userId) return "OWNER";
+  if (isBrsOwner(doc, actor.userId)) return "OWNER";
   if (await isBrsCoWriter(doc.id, actor.userId)) return "CO_WRITER";
   if (await isBrsContributor(doc.id, actor.userId)) return "CONTRIBUTOR";
+  if (await isBrsReviewer(doc.id, actor.userId)) return "REVIEWER";
   if (doc.brs_approval_submission_id) {
     const onChain = await query<{ id: string }>(
       `SELECT id FROM custom_request_submissions WHERE id = $1 AND approval_chain @> $2::jsonb`,
@@ -102,7 +123,7 @@ export async function brsCoWriterPermissions(documentId: string, userId: string)
 // everything, and only they manage people/permissions; co-writers get
 // exactly what they were granted.
 export async function brsPermissions(
-  doc: { id: string; requester_id: string; owner_user_id?: string | null },
+  doc: { id: string } & BrsOwnedDoc,
   actor: { userId: string; role: string }
 ) {
   if (canManageBrs(doc, actor)) {
@@ -113,12 +134,12 @@ export async function brsPermissions(
 }
 
 // Full rights: drive the workflow, route, distribute, amend, manage people.
-export function canManageBrs(doc: { requester_id: string; owner_user_id?: string | null }, actor: { userId: string; role: string }) {
-  return actor.role === "ADMIN" || doc.requester_id === actor.userId || (!!doc.owner_user_id && doc.owner_user_id === actor.userId);
+export function canManageBrs(doc: BrsOwnedDoc, actor: { userId: string; role: string }) {
+  return actor.role === "ADMIN" || doc.requester_id === actor.userId || isBrsOwner(doc, actor.userId);
 }
 
 // Content rights: everyone with full rights, plus co-writers granted EDIT.
-export async function canWriteBrs(doc: { id: string; requester_id: string; owner_user_id?: string | null }, actor: { userId: string; role: string }) {
+export async function canWriteBrs(doc: { id: string } & BrsOwnedDoc, actor: { userId: string; role: string }) {
   if (canManageBrs(doc, actor)) return true;
   return (await brsCoWriterPermissions(doc.id, actor.userId)).perms.has("EDIT");
 }
@@ -126,7 +147,7 @@ export async function canWriteBrs(doc: { id: string; requester_id: string; owner
 // ── Audit trail ──────────────────────────────────────────────────────────────
 export async function recordBrsRevision(args: {
   documentId: string;
-  kind: "CREATED" | "SECTION_SAVED" | "INTAKE_SAVED" | "PEOPLE_CHANGED" | "PHASE" | "ROUTED" | "APPROVAL_ACTION" | "BASELINED" | "RETURNED" | "REOPENED" | "AMENDMENT_STARTED";
+  kind: "CREATED" | "SECTION_ADDED" | "SECTION_REMOVED" | "REVIEWERS_CHANGED" | "COMMENTED" | "SECTION_SAVED" | "INTAKE_SAVED" | "PEOPLE_CHANGED" | "PHASE" | "ROUTED" | "APPROVAL_ACTION" | "BASELINED" | "RETURNED" | "REOPENED" | "AMENDMENT_STARTED";
   actorId: string | null;
   actorRole: BrsActorRole | null;
   summary: string;

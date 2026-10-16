@@ -606,7 +606,7 @@ export const api = {
   brsTypeAddPermission: (id: string, data: any) => req(`/brs-types/${id}/permissions`, { method: "POST", body: JSON.stringify(data) }),
   brsTypeRemovePermission: (id: string, permId: string) => req(`/brs-types/${id}/permissions/${permId}`, { method: "DELETE" }),
 
-  brsCreate: (data: { brs_type_id: string; title: string; intake_data?: Record<string, any>; owner_user_id?: string | null; co_writer_ids?: string[]; co_writers?: Array<{ type: string; id: string | null; name: string | null; permissions?: string[] }> }) =>
+  brsCreate: (data: { brs_type_id: string; title: string; intake_data?: Record<string, any>; owner_user_ids?: string[]; co_writer_ids?: string[]; co_writers?: Array<{ type: string; id: string | null; name: string | null; permissions?: string[] }> }) =>
     req("/brs", { method: "POST", body: JSON.stringify(data) }),
   myBrs: () => req("/brs/mine"),
   deleteBrs: (id: string) => req(`/brs/${id}`, { method: "DELETE" }),
@@ -617,6 +617,16 @@ export const api = {
   submitBrsSection: (id: string, sectionId: string) => req(`/brs/${id}/sections/${sectionId}/submit`, { method: "POST" }),
   addBrsSectionAssignee: (id: string, sectionId: string, data: { user_id?: string; section_ref_id?: string; team_ref_id?: string; division_name?: string }) =>
     req(`/brs/${id}/sections/${sectionId}/assignees`, { method: "POST", body: JSON.stringify(data) }),
+  inviteBrsCollaborators: (id: string, data: { entries: Array<{ type: string; id: string | null; name: string | null }>; section_ids: string[] }) =>
+    req(`/brs/${id}/assignees`, { method: "POST", body: JSON.stringify(data) }),
+  brsComments: (id: string) => req(`/brs/${id}/comments`),
+  addBrsComment: (id: string, data: { body: string; section_id: string | null }) =>
+    req(`/brs/${id}/comments`, { method: "POST", body: JSON.stringify(data) }),
+  setBrsReviewers: (id: string, reviewers: Array<{ type: string; id: string | null; name: string | null }>) =>
+    req(`/brs/${id}/reviewers`, { method: "PUT", body: JSON.stringify({ reviewers }) }),
+  addBrsSection: (id: string, data: { title: string; description?: string | null; owner_phase: "DRAFT" | "DEPT_INPUT"; is_required: boolean }) =>
+    req(`/brs/${id}/sections`, { method: "POST", body: JSON.stringify(data) }),
+  removeBrsSection: (id: string, sectionId: string) => req(`/brs/${id}/sections/${sectionId}`, { method: "DELETE" }),
   removeBrsSectionAssignee: (id: string, sectionId: string, assigneeId: string) =>
     req(`/brs/${id}/sections/${sectionId}/assignees/${assigneeId}`, { method: "DELETE" }),
   confirmBrsSectionAssignee: (id: string, sectionId: string) =>
@@ -626,13 +636,13 @@ export const api = {
   updateBrsIntake: (id: string, intake_data: Record<string, any>) =>
     req(`/brs/${id}/intake`, { method: "PATCH", body: JSON.stringify({ intake_data }) }),
   brsGateCheck: (id: string) => req(`/brs/${id}/gate-check`),
-  routeBrsApproval: (id: string, approval_chain: any[]) =>
-    req(`/brs/${id}/route-approval`, { method: "POST", body: JSON.stringify({ approval_chain }) }),
+  routeBrsApproval: (id: string, approval_chain: any[], reviewers?: Array<{ type: string; id: string | null; name: string | null }>) =>
+    req(`/brs/${id}/route-approval`, { method: "POST", body: JSON.stringify({ approval_chain, reviewers }) }),
   brsVersions: (id: string) => req(`/brs/${id}/versions`),
   brsVersionDetail: (id: string, versionId: string) => req(`/brs/${id}/versions/${versionId}`),
   brsHistory: (id: string) => req(`/brs/${id}/history`),
   brsHistoryItem: (id: string, revisionId: string) => req(`/brs/${id}/history/${revisionId}`),
-  setBrsPeople: (id: string, data: { owner_user_id: string | null; co_writer_ids?: string[]; co_writers?: Array<{ type: string; id: string | null; name: string | null; permissions?: string[] }> }) =>
+  setBrsPeople: (id: string, data: { owner_user_ids: string[]; co_writer_ids?: string[]; co_writers?: Array<{ type: string; id: string | null; name: string | null; permissions?: string[] }> }) =>
     req(`/brs/${id}/people`, { method: "PUT", body: JSON.stringify(data) }),
   amendBrs: (id: string, reason?: string) => req(`/brs/${id}/amend`, { method: "POST", body: JSON.stringify({ reason }) }),
   brsPdfBlob: (id: string) => fetchBlob(`/brs/${id}/pdf`),
@@ -660,6 +670,7 @@ export const api = {
   reportingLineHistory: (employeeId: string) => req(`/reporting-lines/employee/${employeeId}/history`),
   upsertReportingLine: (data: any) => req("/reporting-lines", { method: "POST", body: JSON.stringify(data) }),
   autoGenerateReportingLines: () => req("/reporting-lines/auto-generate", { method: "POST", body: JSON.stringify({}) }),
+  resetReportingLine: (employeeId: string) => req(`/reporting-lines/${employeeId}/reset`, { method: "POST", body: JSON.stringify({}) }),
   myTeam: () => req("/reporting-lines/my-team"),
 
   travelTypes: () => req("/travel/types"),
@@ -712,6 +723,22 @@ export const api = {
   updateSalariesSettings: (data: { application_open_day: number }) =>
     req("/salaries/settings", { method: "PUT", body: JSON.stringify(data) }),
 
+  employeeContracts: () => req("/employee-contracts"),
+  employeeContract: (id: string) => req(`/employee-contracts/${id}`),
+  createEmployeeContract: (body: any) => req("/employee-contracts", { method: "POST", body: JSON.stringify(body) }),
+  updateEmployeeContract: (id: string, body: any) => req(`/employee-contracts/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  renewEmployeeContract: (id: string, body: any) => req(`/employee-contracts/${id}/renew`, { method: "POST", body: JSON.stringify(body) }),
+  closeEmployeeContract: (id: string, body: any) => req(`/employee-contracts/${id}/close`, { method: "POST", body: JSON.stringify(body) }),
+  deleteEmployeeContract: (id: string) => req(`/employee-contracts/${id}`, { method: "DELETE" }),
+  uploadEmployeeContractDocument: (id: string, form: FormData) => req(`/employee-contracts/${id}/documents`, { method: "POST", body: form }),
+  employeeContractDocumentBlob: (id: string, docId: string) => fetchBlob(`/employee-contracts/${id}/documents/${docId}`),
+  deleteEmployeeContractDocument: (id: string, docId: string) => req(`/employee-contracts/${id}/documents/${docId}`, { method: "DELETE" }),
+  employeeContractSettings: () => req("/employee-contracts/settings"),
+  employeeContractSuggestions: () => req("/employee-contracts/suggestions"),
+  employeeContractPerson: (userId: string) => req(`/employee-contracts/person/${userId}`),
+  dismissEmployeeContractSuggestion: (userId: string, reason: string | null) => req(`/employee-contracts/suggestions/${userId}/dismiss`, { method: "POST", body: JSON.stringify({ reason }) }),
+  undismissEmployeeContractSuggestion: (userId: string) => req(`/employee-contracts/suggestions/${userId}/dismiss`, { method: "DELETE" }),
+  saveEmployeeContractSettings: (body: any) => req("/employee-contracts/settings", { method: "PUT", body: JSON.stringify(body) }),
   vendorContractsAccess: () => req("/vendor-contracts/access"),
   vendorContractsDashboard: () => req("/vendor-contracts/dashboard"),
   vendorContracts: () => req("/vendor-contracts"),

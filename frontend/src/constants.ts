@@ -32,6 +32,36 @@ export const CMA_COUNTRIES = [
   "Lesotho"
 ] as const;
 
+// Every other African country - the "Rest of Africa Excluding CMA" travel
+// type. Mirrors backend-v2/src/lib/travelRegions.ts, which enforces it.
+export const REST_OF_AFRICA_COUNTRIES = [
+  "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi", "Cabo Verde", "Cameroon", "Central African Republic",
+  "Chad", "Comoros", "Côte d'Ivoire", "DR Congo", "Djibouti", "Egypt", "Equatorial Guinea", "Eritrea", "Ethiopia", "Gabon",
+  "Gambia", "Ghana", "Guinea", "Guinea-Bissau", "Kenya", "Liberia", "Libya", "Madagascar", "Malawi", "Mali", "Mauritania",
+  "Mauritius", "Morocco", "Mozambique", "Niger", "Nigeria", "Republic of the Congo", "Rwanda", "São Tomé and Príncipe",
+  "Senegal", "Seychelles", "Sierra Leone", "Somalia", "South Sudan", "Sudan", "Tanzania", "Togo", "Tunisia", "Uganda",
+  "Zambia", "Zimbabwe"
+] as const;
+
+// The airport list's older names -> the names above.
+const COUNTRY_ALIASES: Record<string, string> = {
+  "swaziland": "Eswatini", "cape verde": "Cabo Verde", "cote d'ivoire": "Côte d'Ivoire",
+  "congo (brazzaville)": "Republic of the Congo", "congo (kinshasa)": "DR Congo", "sao tome and principe": "São Tomé and Príncipe"
+};
+export function canonicalCountry(name: string | null | undefined): string {
+  const raw = String(name ?? "").trim();
+  return COUNTRY_ALIASES[raw.toLowerCase()] ?? raw;
+}
+
+// The countries a regional travel type covers (null = any destination).
+// Codes differ between UAT and PROD, so matched loosely.
+export function travelTypeCountries(typeCode: string | null | undefined): readonly string[] | null {
+  const code = String(typeCode ?? "").toUpperCase();
+  if (code.includes("AFRICA")) return REST_OF_AFRICA_COUNTRIES;
+  if (code.includes("CMA")) return CMA_COUNTRIES;
+  return null;
+}
+
 export type TravelLocationMode = "DISTRICT" | "COUNTRY_CITY";
 export type TravelRateKind = "MEAL" | "DAILY";
 

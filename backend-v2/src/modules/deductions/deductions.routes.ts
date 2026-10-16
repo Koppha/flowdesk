@@ -4,6 +4,7 @@ import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { isCompensationFinanceSection } from "../../lib/financeAuthority.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
+import { withTripDetails } from "../../lib/clearanceTrip.js";
 import { canAccessDeductions } from "../../lib/deductionsPermissions.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 
@@ -20,9 +21,16 @@ type DeductionRow = {
   employee_name: string | null;
   employee_no: string | null;
   division_name: string | null;
+  org_division: string | null;
+  department_name: string | null;
+  duty_station: string | null;
+  linked_advance_id: string | null;
   destination: string | null;
+  departure_date: string | null;
+  return_date: string | null;
   month: string | null;
   vr_date: string | null;
+  clearance_submitted_at: string | null;
   has_receipts: boolean;
   advance_amount: string;
   cleared_amount: string;
@@ -41,14 +49,23 @@ const LIST_QUERY = `
          u.full_name AS employee_name,
          u.employee_no,
          dv.name AS division_name,
-         c.duty_station AS destination,
+         -- division_name above is the company (the page's tabs). The
+         -- traveller's actual Division and Department in Org Structure
+         -- (UI Division = users.department, UI Department = sections).
+         nullif(trim(u.department), '') AS org_division,
+         (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name,
+         c.duty_station,
+         c.linked_advance_id,
          c.month,
-         ar.approved_at AS vr_date,
+         ar.approved_at AS vr_date, -- VR Date: when the advance this clears was approved
+         c.submitted_at AS clearance_submitted_at,
          EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
          COALESCE(c.currency, 'LSL') AS currency,
          c.advance_amount,
          c.claim_total AS cleared_amount,
-         abs(c.balance_amount) AS amount_to_be_expensed,
+         -- Zero balance: the whole advance was spent. Otherwise what was
+         -- actually cleared (spent) is what gets expensed.
+         CASE WHEN coalesce(c.balance_amount, 0) = 0 THEN c.advance_amount ELSE c.claim_total END AS amount_to_be_expensed,
          CASE WHEN c.balance_amount > 0 THEN c.balance_amount ELSE 0 END AS salary_deduction,
          CASE WHEN c.balance_amount < 0 THEN -c.balance_amount ELSE 0 END AS payable,
          c.deducted_at,
@@ -103,14 +120,23 @@ const ALL_CLEARANCES_QUERY = `
          u.full_name AS employee_name,
          u.employee_no,
          dv.name AS division_name,
-         c.duty_station AS destination,
+         -- division_name above is the company (the page's tabs). The
+         -- traveller's actual Division and Department in Org Structure
+         -- (UI Division = users.department, UI Department = sections).
+         nullif(trim(u.department), '') AS org_division,
+         (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name,
+         c.duty_station,
+         c.linked_advance_id,
          c.month,
-         ar.approved_at AS vr_date,
+         ar.approved_at AS vr_date, -- VR Date: when the advance this clears was approved
+         c.submitted_at AS clearance_submitted_at,
          EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
          COALESCE(c.currency, 'LSL') AS currency,
          c.advance_amount,
          c.claim_total AS cleared_amount,
-         abs(c.balance_amount) AS amount_to_be_expensed,
+         -- Zero balance: the whole advance was spent. Otherwise what was
+         -- actually cleared (spent) is what gets expensed.
+         CASE WHEN coalesce(c.balance_amount, 0) = 0 THEN c.advance_amount ELSE c.claim_total END AS amount_to_be_expensed,
          CASE WHEN c.balance_amount > 0 THEN c.balance_amount ELSE 0 END AS salary_deduction,
          CASE WHEN c.balance_amount < 0 THEN -c.balance_amount ELSE 0 END AS payable,
          c.status::text AS status,
@@ -127,7 +153,7 @@ deductionsRouter.get("/all-clearances", async (req: AuthedRequest, res, next) =>
     const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
     const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
     const rows = await query<DeductionRow & { status: string }>(`${ALL_CLEARANCES_QUERY} ORDER BY c.updated_at DESC`);
-    const items = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
+    const items = await withTripDetails(allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows);
     return res.json({ items });
   } catch (err) {
     return next(err);
@@ -146,7 +172,7 @@ deductionsRouter.get("/", async (req: AuthedRequest, res, next) => {
     const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
     const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
     const rows = await query<DeductionRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
-    const items = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
+    const items = await withTripDetails(allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows);
     return res.json({ items });
   } catch (err) {
     return next(err);

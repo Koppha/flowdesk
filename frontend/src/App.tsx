@@ -18,6 +18,7 @@ import ReportClearanceAgeing from "./ReportClearanceAgeing";
 import ReportAuditReconciliation from "./ReportAuditReconciliation";
 import ReportDeptDivisionClearance from "./ReportDeptDivisionClearance";
 import VendorContracts from "./VendorContracts";
+import EmployeeContracts from "./EmployeeContracts";
 import ServiceContracts from "./ServiceContracts";
 import ITProvisioning from "./ITProvisioning";
 import Overtime from "./Overtime";
@@ -62,7 +63,7 @@ import MyTeam from "./MyTeam";
 import { useEmploymentTypes } from "./useEmploymentTypes";
 import Swal from "sweetalert2";
 import { confirmAction, showNotice } from "./alerts";
-import { CMA_COUNTRIES, CURRENCIES, DEFAULT_BACKDATE_GRACE_DAYS, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, earliestAllowedTripDate, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeCurrency, travelTypeLabel } from "./constants";
+import { CURRENCIES, canonicalCountry, travelTypeCountries, DEFAULT_BACKDATE_GRACE_DAYS, LESOTHO_DISTRICTS, SOUTH_AFRICA_PROVINCES, TravelType, currentApprovalStepLabel, displayOrgGroupName, earliestAllowedTripDate, formatMoney, getCurrencySymbol, isAdvancePastApproval, isTravelTypeCode, stepDoneStatusLabel, travelTypeCurrency, travelTypeLabel } from "./constants";
 import econetLogo from "./assets/econetLogo.webp";
 import { HolidayCalendarButton } from "./HolidayCalendar";
 import { roleLabel } from "./roles";
@@ -453,7 +454,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "GET_THE_APP";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "GET_THE_APP";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -1147,6 +1148,12 @@ export default function App() {
   // travel type ("CMA" vs "COMMON_MONETARY_AREA_CMA") - match loosely
   // rather than hardcoding one, so this works in either environment.
   const isCmaTravelType = String(selectedTravelType?.code || "").toUpperCase().includes("CMA");
+  // CMA / Rest of Africa: only destinations in that region can be picked
+  // (the server enforces the same).
+  const regionCountries = travelTypeCountries(selectedTravelType?.code);
+  const destinationAirports = regionCountries
+    ? airports.filter((a) => regionCountries.includes(canonicalCountry(a.country)))
+    : airports;
   // The advance is billed at the traveller's own rate (whoever it's
   // actually for, not necessarily the person filling in the form on their
   // behalf) — EXCO/CEO have their own configured rates precisely so this
@@ -1398,6 +1405,7 @@ export default function App() {
     ],
     overtime_request:       ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     overtime_claim:         ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
+    employee_contracts:     ["ADMIN"],
   };
 
   function canAccessFeature(key: string): boolean {
@@ -4000,6 +4008,13 @@ export default function App() {
     const createdTime = createdAt ? new Date(createdAt).getTime() : Date.now();
     const expectedCompletion = Number.isFinite(createdTime) ? new Date(createdTime + targetMs) : null;
     const approvalRows = stages.filter((stage: any) => !["draft", "submitted"].includes(stage.key));
+    // The current step hasn't been actioned yet - show when it became this
+    // approver's turn: the latest completed step (or the submission).
+    const waitingSince = stages
+      .filter((stage: any) => stage.state === "done" && stage.date)
+      .map((stage: any) => String(stage.date))
+      .sort()
+      .pop() || "";
     const commentEvents = events.filter((event: any) => event?.after_json?.comments);
     const requester = advance.requester_name || profile?.full_name || me?.fullName || me?.username || "Unknown";
     const department = advance.department || profile?.department || me?.department || "—";
@@ -4117,6 +4132,8 @@ export default function App() {
                               <dt>Route</dt>
                               <dd>{origin ? airportLabel(origin) : (advance.travel_origin_iata || "—")} → {destination ? airportLabel(destination) : advance.travel_destination_iata}</dd>
                             </div>
+                            <div><dt>Destination</dt><dd>{destination ? [destination.city, destination.country].filter(Boolean).join(", ") : "—"}</dd></div>
+                            <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
                             <div><dt>Departure</dt><dd>{departureLine ? formatTrackingDate(departureLine.line_date, false) : "—"}</dd></div>
                             <div><dt>Return</dt><dd>{formatTrackingDate(advance.travel_return_date, false)}</dd></div>
                             <div><dt>Duration</dt><dd>{departureLine ? `${departureLine.meals_count} day${departureLine.meals_count === 1 ? "" : "s"}` : "—"}</dd></div>
@@ -4136,6 +4153,9 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
+                          <dl className="tracking-detail-list" style={{ marginTop: 10 }}>
+                            <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
+                          </dl>
                         </div>
                       )}
                     </section>
@@ -4159,8 +4179,12 @@ export default function App() {
                               <td>{index + 1}</td>
                               <td>{stage.actor || (stage.state === "done" ? "System" : "Pending")}</td>
                               <td><span className={`tracking-mini-status is-${stage.state}`}>{stage.status}</span></td>
-                              <td>{stage.date ? formatTrackingDate(stage.date) : "—"}</td>
-                              <td>{commentEvents.find((event: any) => event.created_at === stage.date)?.after_json?.comments || "—"}</td>
+                              <td>
+                                {stage.date ? formatTrackingDate(stage.date)
+                                  : stage.state === "active" && waitingSince ? <span style={{ color: "var(--muted)" }}>Waiting since {formatTrackingDate(waitingSince)}</span>
+                                  : "—"}
+                              </td>
+                              <td>{stage.date ? (commentEvents.find((event: any) => event.created_at === stage.date)?.after_json?.comments || "—") : "—"}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -4980,9 +5004,9 @@ export default function App() {
           {hasItProvisioningAccess && (
             <a href="#" className={navItemClass(page === "IT_PROVISIONING")} onClick={(e) => { e.preventDefault(); setPage("IT_PROVISIONING"); }}><span className="sidebar-nav-icon"><Monitor size={18} aria-hidden /></span>IT Provisioning <b>{itProvisioningCount}</b></a>
           )}
-          {(hasVendorContractsAccess || hasServiceContractsAccess) && (
-            <div className={`sidebar-group ${groupOpen("contracts", ["VENDOR_CONTRACTS", "SERVICE_CONTRACTS"].includes(page)) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(page === "VENDOR_CONTRACTS" || page === "SERVICE_CONTRACTS")} onClick={(e) => { e.preventDefault(); toggleGroup("contracts", ["VENDOR_CONTRACTS", "SERVICE_CONTRACTS"].includes(page)); }}>
+          {(hasVendorContractsAccess || hasServiceContractsAccess || canAccessFeature("employee_contracts")) && (
+            <div className={`sidebar-group ${groupOpen("contracts", ["VENDOR_CONTRACTS", "SERVICE_CONTRACTS", "EMPLOYEE_CONTRACTS"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["VENDOR_CONTRACTS", "SERVICE_CONTRACTS", "EMPLOYEE_CONTRACTS"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("contracts", ["VENDOR_CONTRACTS", "SERVICE_CONTRACTS", "EMPLOYEE_CONTRACTS"].includes(page)); }}>
                 <span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>Contracts
                 <strong><ChevronDown size={14} aria-hidden /></strong>
               </a>
@@ -4992,6 +5016,9 @@ export default function App() {
                 )}
                 {hasServiceContractsAccess && (
                   <a href="#" className={navItemClass(page === "SERVICE_CONTRACTS")} onClick={(e) => { e.preventDefault(); setPage("SERVICE_CONTRACTS"); }}><Wifi size={14} aria-hidden />Service Contracts</a>
+                )}
+                {canAccessFeature("employee_contracts") && (
+                  <a href="#" className={navItemClass(page === "EMPLOYEE_CONTRACTS")} onClick={(e) => { e.preventDefault(); setPage("EMPLOYEE_CONTRACTS"); }}><Users size={14} aria-hidden />Employee Contracts</a>
                 )}
               </div>
             </div>
@@ -5209,6 +5236,8 @@ export default function App() {
             <DataCleanup onBack={() => setPage("SETTINGS")} />
           ) : page === "SIGNATURES" ? (
             <SignDocument />
+          ) : page === "EMPLOYEE_CONTRACTS" ? (
+            <EmployeeContracts />
           ) : page === "VENDOR_CONTRACTS" ? (
             <VendorContracts />
           ) : page === "SERVICE_CONTRACTS" ? (
@@ -5692,6 +5721,7 @@ export default function App() {
                       { key: "hr_operations_review",   label: "HR Operations Review",     group: "HR Operations" },
                       { key: "overtime_request",       label: "Overtime Request",         group: "Overtime" },
                       { key: "overtime_claim",         label: "Overtime Claim",            group: "Overtime" },
+                      { key: "employee_contracts",       label: "Employee Contracts (Interns & Temps)", group: "Contracts" },
                       { key: "vendor_contracts",         label: "Vendor Contracts (View)",   group: "Contracts" },
                       { key: "vendor_contracts_manage",  label: "Vendor Contracts (Manage)", group: "Contracts" },
                       { key: "service_contracts",        label: "Service Contracts (View)",   group: "Contracts" },
@@ -5731,6 +5761,7 @@ export default function App() {
                       hr_operations_review:   ["ADMIN","Section: Human Resources Operations"],
                       overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
+                      employee_contracts:       ["ADMIN"],
                       vendor_contracts:         ["ADMIN"],
                       vendor_contracts_manage:  ["ADMIN"],
                       service_contracts:        ["ADMIN"],
@@ -7929,14 +7960,14 @@ export default function App() {
                         {destinationManualEntry ? (
                           <div style={{ display: "flex", gap: 8 }}>
                             <input value={tripDestinationCity} onChange={(e) => setTripDestinationCity(e.target.value)} placeholder="Town / city" style={{ flex: 1 }} />
-                            {isCmaTravelType ? (
+                            {regionCountries ? (
                               <select
                                 value={tripDestinationCountry}
                                 onChange={(e) => setTripDestinationCountry(e.target.value)}
                                 style={{ flex: 1 }}
                               >
                                 <option value="">Select country</option>
-                                {CMA_COUNTRIES.map((country) => (
+                                {regionCountries.map((country) => (
                                   <option key={country} value={country}>{country}</option>
                                 ))}
                               </select>
@@ -7958,7 +7989,8 @@ export default function App() {
                             )}
                           </div>
                         ) : (
-                          <AirportPicker airports={airports} value={tripDestinationIata} onChange={setTripDestinationIata} placeholder="Destination city or airport code" />
+                          <AirportPicker airports={destinationAirports} value={tripDestinationIata} onChange={setTripDestinationIata}
+                            placeholder={isCmaTravelType ? "Destination in South Africa, Namibia, Eswatini or Lesotho" : regionCountries ? "Destination in Africa outside the CMA" : "Destination city or airport code"} />
                         )}
                         <button type="button" className="link-button" style={{ fontSize: 12, marginTop: 6 }} onClick={() => { setDestinationManualEntry((v) => !v); setTripDestinationIata(""); setTripDestinationCity(""); setTripDestinationCountry(""); }}>
                           {destinationManualEntry ? "Search airports instead" : "Traveling by road? Enter manually"}

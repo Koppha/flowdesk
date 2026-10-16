@@ -4,6 +4,8 @@ import { logger } from "./lib/logger.js";
 import { bootstrapSystem } from "./bootstrap/system.js";
 import { sendPendingChangeRequestFollowUps } from "./modules/custom-requests/custom-requests.routes.js";
 import { startVendorContractReminderWorker } from "./modules/vendor-contracts/vendor-contracts.routes.js";
+import { startReportingLineSyncWorker } from "./lib/reportingLineSync.js";
+import { startEmployeeContractReminderWorker } from "./modules/employee-contracts/employee-contracts.routes.js";
 import { startSlaReminderWorker } from "./modules/sla/sla.service.js";
 import { reassignAllPendingApprovals } from "./lib/approvalReassignment.js";
 
@@ -48,6 +50,8 @@ async function runApprovalReassignmentSweep() {
 void runApprovalReassignmentSweep; // retained for the admin route / re-enabling later; not auto-invoked
 
 startVendorContractReminderWorker();
+startEmployeeContractReminderWorker();
+startReportingLineSyncWorker();
 startSlaReminderWorker();
 
 const app = createApp();
