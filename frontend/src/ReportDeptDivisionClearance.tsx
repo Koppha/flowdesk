@@ -1,11 +1,13 @@
 import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
 
 const columns: ReportColumn[] = [
+  { key: "company", label: "Company" },
   { key: "division_name", label: "Division" },
   { key: "department", label: "Department" },
   { key: "trips", label: "Trips" },
   { key: "total_advances", label: "Total Advances", money: true },
   { key: "total_verified_expenses", label: "Total Verified Expenses", money: true },
+  { key: "total_to_be_expensed", label: "Total To Be Expensed", money: true },
   { key: "total_refunds", label: "Total Refunds", money: true },
   { key: "total_paybacks", label: "Total Paybacks", money: true },
   { key: "avg_clearance_days", label: "Avg Clearance Days", format: (v) => (v != null ? Number(v).toFixed(1) : "—") },

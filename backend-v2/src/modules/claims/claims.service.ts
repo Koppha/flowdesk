@@ -159,6 +159,67 @@ export async function getClaimById(id: string) {
   return rows[0] ?? null;
 }
 
+// Steps that never hold a clearance up: "View" (DEPT_REPORTS, read-only FYI)
+// and HR Operations' close step (DEPT_CLOSE). A clearance closes as soon as
+// its approvers (Manager/HOD/EXCO...) have approved; the DEPT_CLOSE step stays
+// in the chain only to say who reviews a payback proof / refund afterwards.
+const NON_BLOCKING_CLAIM_STEPS = new Set(["DEPT_REPORTS", "DEPT_CLOSE"]);
+export function isNonBlockingClaimStep(step: { action_type?: string | null }) {
+  return NON_BLOCKING_CLAIM_STEPS.has(String(step.action_type || ""));
+}
+
+// Who gets read-only access to a closed clearance, by the claimant's company:
+// MNO and HigherLife -> HR Operations and Treasury & Financial Accounting;
+// SEFS -> Finance Operations. Added to the chain as "View" steps when it
+// finishes (so the inbox's view-only list and canViewClaim pick them up).
+export function clearanceViewerGroups(company: string | null | undefined): string[] {
+  return String(company || "").toUpperCase() === "SEFS"
+    ? ["Department: Finance Operations"]
+    : ["Section: Human Resources Operations", "Section: Treasury & Financial Accounting"];
+}
+export function withClearanceViewSteps(chain: ChainStep[], company: string | null | undefined): ChainStep[] {
+  const existing = new Set(chain.filter((s) => s.action_type === "DEPT_REPORTS").map((s) => s.approval_group_name));
+  let order = Math.max(0, ...chain.map((s) => Number(s.step_order) || 0));
+  const added = clearanceViewerGroups(company)
+    .filter((g) => !existing.has(g))
+    .map((g) => ({
+      step_order: ++order,
+      action_type: "DEPT_REPORTS",
+      position_name: g,
+      approval_group_name: g,
+      approval_mode: "ANY_ONE",
+      approver_id: null,
+      approver_ids: [],
+      approvers: [],
+      approver_name: null,
+      approver_email: null,
+      approver_title: null,
+      required: false,
+      can_reject: false,
+      can_rollback: false,
+      final_approval: false,
+      parallel_with_previous: true,
+      assigned_user_id: null
+    }) as unknown as ChainStep);
+  return [...chain, ...added];
+}
+
+// What a clearance becomes once its approvers are done. Balanced -> closed
+// (COMPLETED, nothing left for Treasury); refund/payback -> the existing
+// settlement steps, unchanged.
+export function claimOutcomeAfterApproval(balanceAmount: number) {
+  const financialOutcome = computeFinancialOutcome(balanceAmount);
+  if (financialOutcome === "BALANCED") {
+    return { financialOutcome, employeeClearanceStatus: "FULLY_CLEARED" as EmployeeClearanceStatus, treasurySettlementStatus: "NOT_REQUIRED" as const, nextStatus: "COMPLETED" as ClaimStatus };
+  }
+  return {
+    financialOutcome,
+    employeeClearanceStatus: "CLEARANCE_PENDING" as EmployeeClearanceStatus,
+    treasurySettlementStatus: "PENDING" as const,
+    nextStatus: (financialOutcome === "REFUND_DUE" ? "REFUND_DUE" : "PAYBACK_DUE") as ClaimStatus
+  };
+}
+
 // Advances a workflow-driven clearance claim to its next chain step. Mirrors
 // advanceWorkflowStep (advances.service.ts) for clearance_claims.
 export async function advanceClaimWorkflowStep(args: {
@@ -188,8 +249,10 @@ export async function advanceClaimWorkflowStep(args: {
   // performClaimReject), so without this check the same or another eligible
   // approver could still call approve and walk a rejected claim to CLOSED.
   return withTransaction(async (client) => {
-    const lockedRows = await client.query<{ status: ClaimStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null; balance_amount: string }>(
-      `SELECT status, workflow_step_order, approval_chain, balance_amount FROM clearance_claims WHERE id=$1 FOR UPDATE`,
+    const lockedRows = await client.query<{ status: ClaimStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null; balance_amount: string; company: string | null }>(
+      `SELECT c.status, c.workflow_step_order, c.approval_chain, c.balance_amount,
+              (SELECT dv.name FROM users u LEFT JOIN divisions dv ON dv.id = u.division_id WHERE u.id = c.claimant_id) AS company
+         FROM clearance_claims c WHERE c.id=$1 FOR UPDATE OF c`,
       [claim.id]
     );
     const locked = lockedRows.rows[0];
@@ -228,7 +291,7 @@ export async function advanceClaimWorkflowStep(args: {
     // (see inbox.routes.ts's loadClaimsForUser), not a decision anyone needs
     // to make. It just stays unapproved forever, same treatment as
     // DEPT_ACCOMODATION gets in advances.service.ts's own advanceWorkflowStep.
-    const stillPending = group.indices.some((idx) => chain[idx].action_type !== "DEPT_REPORTS" && !newChain[idx].approved);
+    const stillPending = group.indices.some((idx) => !isNonBlockingClaimStep(chain[idx]) && !newChain[idx].approved);
     let nextStatus: ClaimStatus;
     let newStepOrder: number;
     let hasMore: boolean;
@@ -245,7 +308,9 @@ export async function advanceClaimWorkflowStep(args: {
       newStepOrder = stepIdx;
       hasMore = true;
     } else {
-      const nextIdx = group.indices[group.indices.length - 1] + 1;
+      let nextIdx = group.indices[group.indices.length - 1] + 1;
+      // Skip over steps that don't hold a clearance up (View, HR close).
+      while (nextIdx < newChain.length && isNonBlockingClaimStep(newChain[nextIdx])) nextIdx++;
       hasMore = nextIdx < newChain.length;
       newStepOrder = hasMore ? nextIdx : newChain.length;
       if (hasMore) {
@@ -265,26 +330,26 @@ export async function advanceClaimWorkflowStep(args: {
         // branch. Never CLOSED directly any more: compute the financial
         // outcome and route onward instead (see computeFinancialOutcome's
         // doc comment for the balance_amount sign convention).
-        financialOutcome = computeFinancialOutcome(Number(locked.balance_amount));
-        if (financialOutcome === "BALANCED") {
-          employeeClearanceStatus = "FULLY_CLEARED";
-          treasurySettlementStatus = "NOT_REQUIRED";
-          nextStatus = "FINANCE_TREASURY_REVIEW";
-        } else if (financialOutcome === "REFUND_DUE") {
-          employeeClearanceStatus = "CLEARANCE_PENDING";
-          treasurySettlementStatus = "PENDING";
-          nextStatus = "REFUND_DUE";
-        } else {
-          employeeClearanceStatus = "CLEARANCE_PENDING";
-          treasurySettlementStatus = "PENDING";
-          nextStatus = "PAYBACK_DUE";
-        }
+        // Approvers are done: balanced trips close here (no HR close, no
+        // Treasury review); refunds/paybacks go to their settlement steps.
+        const outcome = claimOutcomeAfterApproval(Number(locked.balance_amount));
+        financialOutcome = outcome.financialOutcome;
+        employeeClearanceStatus = outcome.employeeClearanceStatus;
+        treasurySettlementStatus = outcome.treasurySettlementStatus;
+        nextStatus = outcome.nextStatus;
       }
     }
 
     // closed_at is stamped for every terminal-ish outcome status below, same
     // as it always was for the old unconditional CLOSED — kept as a single
     // "when did this claim stop being purely a pending approval" marker.
+    // Chain finished: give HR/Treasury (MNO, HigherLife) or Finance Operations
+    // (SEFS) read-only access, and park the step pointer past the end.
+    let finalChain = newChain;
+    if (financialOutcome !== null) {
+      finalChain = withClearanceViewSteps(newChain, locked.company);
+      newStepOrder = finalChain.length;
+    }
     const stampClosedAt = nextStatus === "CLOSED" || financialOutcome !== null;
     await client.query(
       `UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4,
@@ -292,13 +357,74 @@ export async function advanceClaimWorkflowStep(args: {
          financial_outcome=COALESCE($6, financial_outcome),
          employee_clearance_status=COALESCE($7, employee_clearance_status),
          treasury_settlement_status=COALESCE($8, treasury_settlement_status),
+         treasury_completed_at=CASE WHEN $9 THEN now() ELSE treasury_completed_at END,
          updated_at=now()
        WHERE id=$1`,
-      [claim.id, nextStatus, newStepOrder, JSON.stringify(newChain), stampClosedAt, financialOutcome, employeeClearanceStatus, treasurySettlementStatus]
+      [claim.id, nextStatus, newStepOrder, JSON.stringify(finalChain), stampClosedAt, financialOutcome, employeeClearanceStatus, treasurySettlementStatus, nextStatus === "COMPLETED"]
     );
 
     const nextApprover = nextApprovers[0] ?? null;
 
     return { nextStatus, newStepOrder, hasMore, currentStep, stillPending, nextApprover, nextApprovers, financialOutcome };
   });
+}
+
+// One-off catch-up for clearances that were already waiting when the
+// "close once the approvers have approved" rule came in:
+//  - still in the approval chain but with only non-blocking steps (HR close /
+//    View) left -> finish them exactly as the last approval now would;
+//  - balanced ones parked in FINANCE_TREASURY_REVIEW -> close (COMPLETED).
+// Refunds/paybacks already in their settlement steps are left alone. Each
+// change is audit-logged. dryRun returns what would change without writing.
+export async function autoCloseFinishedClearances(opts: { dryRun: boolean; actorId?: string | null }) {
+  const rows = await query<{ id: string; status: ClaimStatus; workflow_step_order: number | null; approval_chain: ChainStep[] | null; balance_amount: string; financial_outcome: string | null; company: string | null; claimant: string | null }>(
+    `SELECT c.id, c.status, c.workflow_step_order, c.approval_chain, c.balance_amount, c.financial_outcome,
+            dv.name AS company, u.full_name AS claimant
+       FROM clearance_claims c
+       JOIN users u ON u.id = c.claimant_id
+       LEFT JOIN divisions dv ON dv.id = u.division_id
+      WHERE c.approval_chain IS NOT NULL
+        AND (c.status IN ('SUBMITTED','MANAGER_APPROVED','EXCO_APPROVED','HR_OFFICER')
+             OR (c.status = 'FINANCE_TREASURY_REVIEW' AND c.financial_outcome = 'BALANCED'))`
+  );
+  const changes: Array<{ id: string; claimant: string | null; company: string | null; from: string; to: string }> = [];
+  for (const r of rows) {
+    const chain = r.approval_chain as ChainStep[];
+    let to: ClaimStatus;
+    let outcome: ReturnType<typeof claimOutcomeAfterApproval> | null = null;
+    if (r.status === "FINANCE_TREASURY_REVIEW") {
+      to = "COMPLETED";
+    } else {
+      const remaining = chain.slice(r.workflow_step_order ?? 0);
+      if (!remaining.length || remaining.some((s) => !isNonBlockingClaimStep(s) && !(s as any).approved)) continue;
+      outcome = claimOutcomeAfterApproval(Number(r.balance_amount));
+      to = outcome.nextStatus;
+    }
+    changes.push({ id: r.id, claimant: r.claimant, company: r.company, from: r.status, to });
+    if (opts.dryRun) continue;
+    const finalChain = withClearanceViewSteps(chain, r.company);
+    await withTransaction(async (client) => {
+      const res = await client.query(
+        `UPDATE clearance_claims SET status=$2, workflow_step_order=$3, approval_chain=$4,
+           closed_at=COALESCE(closed_at, now()),
+           financial_outcome=COALESCE($5, financial_outcome),
+           employee_clearance_status=COALESCE($6, employee_clearance_status),
+           treasury_settlement_status=COALESCE($7, treasury_settlement_status),
+           treasury_completed_at=CASE WHEN $8 THEN now() ELSE treasury_completed_at END,
+           updated_at=now()
+         WHERE id=$1 AND status=$9`,
+        [r.id, to, finalChain.length, JSON.stringify(finalChain), outcome?.financialOutcome ?? null,
+         to === "COMPLETED" ? "FULLY_CLEARED" : (outcome?.employeeClearanceStatus ?? null),
+         to === "COMPLETED" ? "NOT_REQUIRED" : (outcome?.treasurySettlementStatus ?? null),
+         to === "COMPLETED", r.status]
+      );
+      if (res.rowCount) {
+        await client.query(
+          `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json) VALUES ($1, 'CLAIM_AUTO_CLOSED', 'CLAIM', $2, $3, $4)`,
+          [opts.actorId ?? null, r.id, JSON.stringify({ status: r.status }), JSON.stringify({ status: to, reason: "Clearance closes once the approvers have approved" })]
+        );
+      }
+    });
+  }
+  return changes;
 }

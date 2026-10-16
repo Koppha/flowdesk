@@ -1,4 +1,4 @@
-import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
+import TreasuryReportPage, { type ReportColumn, AMOUNT_TO_BE_EXPENSED_COLUMN, CLEARANCE_ORG_COLUMNS, CLEARANCE_TRIP_COLUMNS } from "./TreasuryReportPage";
 
 function fmtDate(s: string | null | undefined) {
   if (!s) return "—";
@@ -8,13 +8,14 @@ function fmtDate(s: string | null | undefined) {
 const OUTCOME_LABEL: Record<string, string> = { BALANCED: "Balanced", REFUND_DUE: "Refund Due", PAYBACK_DUE: "Payback Due" };
 
 const columns: ReportColumn[] = [
-  { key: "employee_name", label: "Employee" },
-  { key: "division_name", label: "Division" },
-  { key: "department", label: "Department" },
-  { key: "destination", label: "Destination" },
+  { key: "employee_name", label: "Employee", locked: true },
+  { key: "employee_no", label: "Employee No" },
+  ...CLEARANCE_ORG_COLUMNS,
+  ...CLEARANCE_TRIP_COLUMNS,
   { key: "financial_outcome", label: "Original Outcome", format: (v) => OUTCOME_LABEL[v] || v },
   { key: "advance_amount", label: "Advance", money: true },
   { key: "verified_expenses", label: "Verified Expenses", money: true },
+  AMOUNT_TO_BE_EXPENSED_COLUMN,
   { key: "balance_amount", label: "Refund/Payback", money: true },
   { key: "treasury_completion_date", label: "Treasury Completion", format: (v) => fmtDate(v) },
   { key: "processing_days", label: "Processing Days" }

@@ -382,7 +382,12 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
       // flat daily rate, not per-meal amounts, so there's no meal breakdown
       // to show — leave this blank and the renderer drops the row entirely.
       // SALARY/LOAN aren't a travel type at all, same treatment.
-      meals_summary: isReserved || adv.travel_rate_kind === "DAILY" ? "" : `Breakfast x ${breakfastCount} | Lunch x ${lunchCount} | Dinner x ${dinnerCount}`,
+      // "Apply for Other" has no meal breakdown either - just a total amount
+      // and the dates - so there's nothing to count (it printed "x 0" for
+      // every meal). Same for any travel advance with no trip lines.
+      meals_summary: isReserved || adv.travel_rate_kind === "DAILY" || isApplyForOther || lines.length === 0
+        ? ""
+        : `Breakfast x ${breakfastCount} | Lunch x ${lunchCount} | Dinner x ${dinnerCount}`,
       purpose: adv.purpose || "",
       project_number: isReserved ? "" : (adv.project_number || ""),
       extra_cost_amount: Number(adv.extra_cost_amount || 0) > 0 ? formatMoney(adv.extra_cost_amount, currency) : "",

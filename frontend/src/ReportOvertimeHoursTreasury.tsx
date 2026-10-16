@@ -1,4 +1,4 @@
-import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
+import TreasuryReportPage, { type ReportColumn, CLEARANCE_ORG_COLUMNS } from "./TreasuryReportPage";
 
 function fmtDate(s: string | null | undefined) {
   if (!s) return "—";
@@ -10,10 +10,9 @@ function fmtDate(s: string | null | undefined) {
 // Treasury report is hours-only, no amount column.
 const columns: ReportColumn[] = [
   { key: "claim_no", label: "Claim No" },
-  { key: "employee_name", label: "Employee" },
+  { key: "employee_name", label: "Employee", locked: true },
   { key: "employee_no", label: "Employee No" },
-  { key: "division_name", label: "Division" },
-  { key: "department", label: "Department" },
+  ...CLEARANCE_ORG_COLUMNS,
   { key: "converted_hours", label: "Converted Hours" },
   { key: "equivalent_days", label: "Equivalent Days" },
   { key: "status", label: "Status" },

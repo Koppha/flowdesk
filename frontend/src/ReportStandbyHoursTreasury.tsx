@@ -1,4 +1,4 @@
-import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
+import TreasuryReportPage, { type ReportColumn, CLEARANCE_ORG_COLUMNS } from "./TreasuryReportPage";
 
 function fmtDate(s: string | null | undefined) {
   if (!s) return "—";
@@ -11,10 +11,9 @@ function fmtDate(s: string | null | undefined) {
 const columns: ReportColumn[] = [
   { key: "type", label: "Type", format: (v) => (v === "CALL_OUT" ? "Call-Out" : "Standby Claim") },
   { key: "claim_no", label: "Claim No" },
-  { key: "employee_name", label: "Employee" },
+  { key: "employee_name", label: "Employee", locked: true },
   { key: "employee_no", label: "Employee No" },
-  { key: "division_name", label: "Division" },
-  { key: "department", label: "Department" },
+  ...CLEARANCE_ORG_COLUMNS,
   { key: "hours", label: "Hours" },
   { key: "status", label: "Status" },
   { key: "submitted_at", label: "Submitted", format: (v) => fmtDate(v) },

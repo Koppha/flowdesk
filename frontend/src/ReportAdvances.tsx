@@ -35,7 +35,11 @@ const PAGE_SIZE = 20;
 const ALL_COLUMNS: { key: string; label: string }[] = [
   { key: "employee", label: "Employee" },
   { key: "department", label: "Division" },
+  { key: "departmentName", label: "Department" },
   { key: "type", label: "Type" },
+  { key: "destination", label: "Destination" },
+  { key: "departure", label: "Departure" },
+  { key: "return", label: "Return" },
   { key: "status", label: "Status" },
   { key: "requested", label: "Requested" },
   { key: "approved", label: "Approved" },
@@ -105,6 +109,8 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
         const q = search.toLowerCase();
         return (a.requester_name || "").toLowerCase().includes(q) ||
                (a.department || "").toLowerCase().includes(q) ||
+               (a.department_name || "").toLowerCase().includes(q) ||
+               (a.destination || "").toLowerCase().includes(q) ||
                (a.employee_no || "").toLowerCase().includes(q);
       }
       return true;
@@ -126,7 +132,11 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
     const valueByKey: Record<string, (a: any) => string | number> = {
       employee: a => a.requester_name ?? "",
       department: a => a.department ?? "",
+      departmentName: a => a.department_name ?? "",
       type: a => travelTypeLabel(a.type, travelTypes),
+      destination: a => a.destination ?? "",
+      departure: a => (a.departure_date ? fmtDate(a.departure_date) : ""),
+      return: a => (a.return_date ? fmtDate(a.return_date) : ""),
       status: a => a.status,
       requested: a => a.requested_total ?? "",
       approved: a => a.approved_total ?? "",
@@ -211,7 +221,7 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
       <div className="ep-panel" style={{ marginBottom: 14 }}>
         <div className="ep-filter-bar" style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "14px 20px", alignItems: "center" }}>
           <div className="ep-search" style={{ flex: "1 1 200px" }}>
-            <input placeholder="Search name, division…" value={search}
+            <input placeholder="Search name, division, department, destination…" value={search}
               onChange={e => { setSearch(e.target.value); setPage(1); }} />
           </div>
           <select className="ep-form-select" value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}>
@@ -250,7 +260,11 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
                 <tr>
                   {visibleCols.employee && <th>Employee</th>}
                   {visibleCols.department && <th>Division</th>}
+                  {visibleCols.departmentName && <th>Department</th>}
                   {visibleCols.type && <th>Type</th>}
+                  {visibleCols.destination && <th>Destination</th>}
+                  {visibleCols.departure && <th>Departure</th>}
+                  {visibleCols.return && <th>Return</th>}
                   {visibleCols.status && <th>Status</th>}
                   {visibleCols.requested && <th>Requested</th>}
                   {visibleCols.approved && <th>Approved</th>}
@@ -270,7 +284,11 @@ export default function ReportAdvances({ advances, travelTypes, onBack }: Props)
                       </td>
                     )}
                     {visibleCols.department && <td style={{ color: "var(--muted)", fontSize: 13 }}>{a.department || "—"}</td>}
+                    {visibleCols.departmentName && <td style={{ color: "var(--muted)", fontSize: 13 }}>{a.department_name || "—"}</td>}
                     {visibleCols.type && <td style={{ fontSize: 13 }}>{travelTypeLabel(a.type, travelTypes)}</td>}
+                    {visibleCols.destination && <td style={{ fontSize: 13 }}>{a.destination || "—"}</td>}
+                    {visibleCols.departure && <td style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{fmtDate(a.departure_date)}</td>}
+                    {visibleCols.return && <td style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{fmtDate(a.return_date)}</td>}
                     {visibleCols.status && <td><StatusBadge status={a.status} /></td>}
                     {visibleCols.requested && <td style={{ fontWeight: 600 }}>{formatMoney(a.requested_total, travelTypeCurrency(a.type, travelTypes))}</td>}
                     {visibleCols.approved && <td style={{ color: "var(--muted)" }}>{formatMoney(a.approved_total, travelTypeCurrency(a.type, travelTypes))}</td>}

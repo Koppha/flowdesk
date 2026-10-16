@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { destinationProblem, travelRegionOf } from "../../lib/travelRegions.js";
+import { tripDetailsForAdvances } from "../../lib/clearanceTrip.js";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
@@ -795,6 +796,7 @@ advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("
            FULL OUTER JOIN clm ON clm.user_id = adv.user_id AND clm.currency = adv.currency
        )
        SELECT u.id AS requester_id, u.full_name AS requester_name, u.department,
+              (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name,
               c.currency,
               COALESCE(c.paid_before, 0) - COALESCE(c.settled_before, 0) AS opening_balance,
               COALESCE(c.requested_in_period, 0) AS total_requested,
@@ -853,6 +855,8 @@ async function loadClearanceStatusReport(requesterId?: string) {
      SELECT ar.id AS advance_id, ar.type, ar.approved_total, ar.requested_total, ar.paid_at,
             COALESCE(tt.currency, 'LSL') AS currency,
             u.id AS requester_id, u.full_name AS requester_name, u.department,
+            -- u.department is the Division; department_name the Department (section).
+            (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name,
             lc.id AS claim_id, lc.status AS claim_status, lc.claim_total,
             lc.submitted_at, lc.closed_at, lc.settled_at,
             ${OVERDUE_SELECT},
@@ -882,6 +886,7 @@ async function loadClearanceStatusReport(requesterId?: string) {
       requester_id: r.requester_id,
       requester_name: r.requester_name,
       department: r.department,
+      department_name: r.department_name,
       approved_total: Number(r.approved_total ?? r.requested_total ?? 0),
       currency: r.currency,
       paid_at: r.paid_at,
@@ -939,14 +944,18 @@ advancesRouter.get("/", async (req: AuthedRequest, res, next) => {
     const allowed = await hasFeatureAccess(req.user!.userId, req.user!.role, "report_advances", ["ADMIN"]);
     if (!allowed) throw forbidden("Not authorized to list all advances");
     const rows = await query(
-      `SELECT ar.*, u.full_name AS requester_name, u.department AS department, ep.full_name AS external_beneficiary_name, ${OVERDUE_SELECT}
+      `SELECT ar.*, u.full_name AS requester_name, u.department AS department,
+              (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name,
+              ep.full_name AS external_beneficiary_name, ${OVERDUE_SELECT}
          FROM advance_requests ar
          JOIN users u ON u.id = ar.requester_id
          LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
          CROSS JOIN advance_recovery_settings ars
         ORDER BY ar.created_at DESC`
     );
-    return res.json(rows);
+    // The Advances report shows where and when each trip went.
+    const trips = await tripDetailsForAdvances(rows.map((r: any) => r.id));
+    return res.json(rows.map((r: any) => ({ ...r, ...(trips.get(r.id) ?? { destination: null, departure_date: null, return_date: null }) })));
   } catch (err) {
     return next(err);
   }

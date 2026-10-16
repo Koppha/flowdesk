@@ -3,6 +3,7 @@ import { type AuthedRequest, requireAuth, requireFeatureAccess } from "../../lib
 import { query } from "../../lib/db.js";
 import { sendCsv } from "../../lib/csvExport.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
+import { withTripDetails } from "../../lib/clearanceTrip.js";
 
 // Same company-scoping rule as the Capture Inbox (see inbox.routes.ts's
 // getViewerDivisionScope usage) - a non-admin Treasury/Finance viewer only
@@ -24,8 +25,27 @@ export const treasuryReportsRouter = Router();
 treasuryReportsRouter.use(requireAuth);
 treasuryReportsRouter.use(requireFeatureAccess("treasury_processing", ["ADMIN", "Section: Treasury & Financial Accounting"]));
 
+// The traveller's place in Org Structure: company (MNO/SEFS/HigherLife =
+// divisions table), real Division (users.department) and Department (the
+// section they sit in, directly or through their team).
+const ORG_COLUMNS = `
+  dv.name AS company,
+  nullif(trim(u.department), '') AS division_name,
+  (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department,
+`;
+// Every clearance row also gets duty station (where they're based), VR date
+// (advance approved), when the clearance was submitted, and the amount to
+// be expensed (zero balance -> the advance; otherwise what was cleared).
+// Destination/departure/return - where and when they actually travelled -
+// come from the linked advance via withTripDetails after the query.
+const ORG_TRIP_COLUMNS = `${ORG_COLUMNS}
+  c.duty_station, c.linked_advance_id, c.submitted_at AS clearance_submitted_at,
+  (SELECT ar.approved_at FROM advance_requests ar WHERE ar.id = c.linked_advance_id) AS vr_date,
+  CASE WHEN coalesce(c.balance_amount, 0) = 0 THEN c.advance_amount ELSE c.claim_total END AS amount_to_be_expensed,
+`;
+
 type Filters = {
-  date_from?: string; date_to?: string; employee_id?: string; division?: string; department?: string;
+  date_from?: string; date_to?: string; employee_id?: string; company?: string; division?: string; department?: string;
   financial_outcome?: string; workflow_status?: string; treasury_status?: string;
 };
 
@@ -36,8 +56,9 @@ function buildWhere(f: Filters, alias = "c", allowedDivisions?: string[] | null)
   if (f.date_from) where.push(`${alias}.submitted_at >= ${p(f.date_from)}`);
   if (f.date_to) where.push(`${alias}.submitted_at <= ${p(f.date_to)}`);
   if (f.employee_id) where.push(`${alias}.claimant_id = ${p(f.employee_id)}`);
-  if (f.division) where.push(`dv.name = ${p(f.division)}`);
-  if (f.department) where.push(`u.department = ${p(f.department)}`);
+  if (f.company) where.push(`dv.name = ${p(f.company)}`);
+  if (f.division) where.push(`lower(trim(u.department)) = lower(trim(${p(f.division)}))`);
+  if (f.department) where.push(`EXISTS (SELECT 1 FROM sections s WHERE lower(s.name) = lower(${p(f.department)}) AND s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id)))`);
   if (f.financial_outcome) where.push(`${alias}.financial_outcome = ${p(f.financial_outcome)}`);
   if (f.workflow_status) where.push(`${alias}.status = ${p(f.workflow_status)}`);
   if (f.treasury_status) where.push(`${alias}.treasury_settlement_status = ${p(f.treasury_status)}`);
@@ -45,7 +66,9 @@ function buildWhere(f: Filters, alias = "c", allowedDivisions?: string[] | null)
   return { whereSql: where.join(" AND "), params };
 }
 
-function respond(req: AuthedRequest, res: any, filename: string, headers: string[], rowsToCsv: (r: any) => (string | number | null)[], rows: any[]) {
+async function respond(req: AuthedRequest, res: any, filename: string, headers: string[], rowsToCsv: (r: any) => (string | number | null)[], rowsIn: any[]) {
+  // Row reports get where/when they travelled; aggregated reports pass through.
+  const rows = rowsIn.length && "linked_advance_id" in rowsIn[0] ? await withTripDetails(rowsIn) : rowsIn;
   if (req.query.format === "csv") {
     return sendCsv(res, filename, headers, rows.map(rowsToCsv));
   }
@@ -57,10 +80,10 @@ treasuryReportsRouter.get("/clearance-summary", async (req: AuthedRequest, res, 
   try {
     const { whereSql, params } = buildWhere(req.query as Filters, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT c.id, c.financial_outcome, c.status, c.employee_clearance_status,
-              c.advance_amount, c.claim_total AS verified_expenses, c.balance_amount,
+      `SELECT c.id, c.financial_outcome, c.status, c.employee_clearance_status, ${ORG_TRIP_COLUMNS}
+              c.advance_amount, c.claim_total AS verified_expenses, c.balance_amount, COALESCE(c.currency, 'LSL') AS currency,
               to_char(date_trunc('month', c.submitted_at), 'YYYY-MM') AS month,
-              dv.name AS division_name, u.department, u.full_name AS employee_name
+              u.full_name AS employee_name, u.employee_no
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
          LEFT JOIN divisions dv ON dv.id = u.division_id
@@ -86,7 +109,7 @@ treasuryReportsRouter.get("/clearance-summary", async (req: AuthedRequest, res, 
         ["Month", "Division", "Department", "Employee", "Outcome", "Advance", "Verified Expenses", "Status"],
         rows.map((r) => [r.month, r.division_name, r.department, r.employee_name, r.financial_outcome, r.advance_amount, r.verified_expenses, r.status]));
     }
-    return res.json({ items: rows, totals });
+    return res.json({ items: await withTripDetails(rows), totals });
   } catch (err) { return next(err); }
 });
 
@@ -96,8 +119,8 @@ treasuryReportsRouter.get("/refunds-due", async (req: AuthedRequest, res, next) 
     const f = { ...(req.query as Filters), financial_outcome: "REFUND_DUE" };
     const { whereSql, params } = buildWhere(f, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT c.id, u.full_name AS employee_name, u.employee_no, dv.name AS division_name, u.department,
-              c.duty_station AS destination, c.submitted_at, c.closed_at,
+      `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
+              c.submitted_at, c.closed_at,
               c.advance_amount, c.claim_total AS verified_expenses,
               -c.balance_amount AS refund_amount,
               c.status, c.treasury_settlement_status, c.treasury_officer_id, off.full_name AS treasury_officer_name,
@@ -125,7 +148,7 @@ treasuryReportsRouter.get("/employee-paybacks", async (req: AuthedRequest, res, 
     const f = { ...(req.query as Filters), financial_outcome: "PAYBACK_DUE" };
     const { whereSql, params } = buildWhere(f, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT c.id, u.full_name AS employee_name, u.employee_no, dv.name AS division_name, u.department,
+      `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
               c.advance_amount, c.claim_total AS verified_expenses, c.balance_amount AS payback_amount,
               c.payback_verified_at, c.payback_verified_by_id, verifier.full_name AS verified_by_name,
               c.treasury_settlement_status, c.treasury_reconciliation_date,
@@ -157,8 +180,8 @@ treasuryReportsRouter.get("/fully-cleared", async (req: AuthedRequest, res, next
     const f = { ...(req.query as Filters), workflow_status: "COMPLETED" };
     const { whereSql, params } = buildWhere(f, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT c.id, u.full_name AS employee_name, dv.name AS division_name, u.department,
-              c.duty_station AS destination, c.submitted_at, c.closed_at,
+      `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
+              c.submitted_at, c.closed_at,
               c.financial_outcome, c.advance_amount, c.claim_total AS verified_expenses, c.balance_amount,
               c.payback_verified_at AS hr_completion_date, c.treasury_completed_at AS treasury_completion_date,
               COALESCE(c.treasury_completed_at, c.closed_at) AS final_completion_date,
@@ -183,8 +206,8 @@ treasuryReportsRouter.get("/outstanding", async (req: AuthedRequest, res, next) 
   try {
     const { whereSql, params } = buildWhere({ ...(req.query as Filters) }, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT c.id, u.full_name AS employee_name, dv.name AS division_name, u.department,
-              c.financial_outcome, c.status, c.balance_amount,
+      `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
+              c.financial_outcome, c.status, c.balance_amount, c.advance_amount, c.claim_total AS verified_expenses,
               CASE
                 WHEN c.status IN ('PAYBACK_DUE','REFUND_DUE') THEN 'Employee'
                 WHEN c.status IN ('PAYBACK_PROOF_SUBMITTED','PAYBACK_PROOF_REJECTED') THEN 'HR Operations'
@@ -255,7 +278,9 @@ treasuryReportsRouter.get("/audit-reconciliation", async (req: AuthedRequest, re
   try {
     const { whereSql, params } = buildWhere({ ...(req.query as Filters) }, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT c.id, u.full_name AS employee_name, c.financial_outcome, c.status,
+      `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
+              c.advance_amount, c.claim_total AS verified_expenses, COALESCE(c.currency, 'LSL') AS currency,
+              c.financial_outcome, c.status,
               c.balance_amount AS required_settlement_amount, c.settlement_amount AS actual_settlement_amount,
               c.settled_reference AS payment_reference, c.treasury_posting_reference AS posting_reference,
               verifier.full_name AS hr_verifier, off.full_name AS treasury_processor,
@@ -270,7 +295,7 @@ treasuryReportsRouter.get("/audit-reconciliation", async (req: AuthedRequest, re
         ORDER BY c.submitted_at DESC`,
       params
     );
-    const items = rows.map((r) => {
+    const items = (await withTripDetails(rows)).map((r) => {
       const required = Math.abs(Number(r.required_settlement_amount || 0));
       const actual = r.actual_settlement_amount != null ? Math.abs(Number(r.actual_settlement_amount)) : null;
       const exceptions: string[] = [];
@@ -296,8 +321,9 @@ treasuryReportsRouter.get("/department-division", async (req: AuthedRequest, res
   try {
     const { whereSql, params } = buildWhere({ ...(req.query as Filters) }, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT dv.name AS division_name, u.department,
+      `SELECT ${ORG_COLUMNS}
               count(*)::int AS trips,
+              sum(CASE WHEN coalesce(c.balance_amount, 0) = 0 THEN c.advance_amount ELSE c.claim_total END) AS total_to_be_expensed,
               sum(c.advance_amount) AS total_advances,
               sum(c.claim_total) AS total_verified_expenses,
               sum(CASE WHEN c.financial_outcome = 'REFUND_DUE' THEN -c.balance_amount ELSE 0 END) AS total_refunds,
@@ -310,13 +336,13 @@ treasuryReportsRouter.get("/department-division", async (req: AuthedRequest, res
          JOIN users u ON u.id = c.claimant_id
          LEFT JOIN divisions dv ON dv.id = u.division_id
         WHERE ${whereSql}
-        GROUP BY dv.name, u.department
-        ORDER BY dv.name, u.department`,
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 2, 3`,
       params
     );
     return respond(req, res, "department-division.csv",
-      ["Division", "Department", "Trips", "Total Advances", "Total Verified Expenses", "Total Refunds", "Total Paybacks", "Avg Clearance Days", "Outstanding", "Overdue", "Completion Rate %"],
-      (r) => [r.division_name, r.department, r.trips, r.total_advances, r.total_verified_expenses, r.total_refunds, r.total_paybacks, r.avg_clearance_days, r.outstanding, r.overdue, r.completion_rate],
+      ["Company", "Division", "Department", "Trips", "Total Advances", "Total Verified Expenses", "Total Refunds", "Total Paybacks", "Avg Clearance Days", "Outstanding", "Overdue", "Completion Rate %"],
+      (r) => [r.company, r.division_name, r.department, r.trips, r.total_advances, r.total_verified_expenses, r.total_refunds, r.total_paybacks, r.avg_clearance_days, r.outstanding, r.overdue, r.completion_rate],
       rows);
   } catch (err) { return next(err); }
 });
@@ -330,7 +356,7 @@ treasuryReportsRouter.get("/department-division", async (req: AuthedRequest, res
 // filter set since neither table has financial_outcome/claimant_id/etc.
 // ---------------------------------------------------------------------------
 
-type HoursFilters = { date_from?: string; date_to?: string; division?: string; department?: string; status?: string };
+type HoursFilters = { date_from?: string; date_to?: string; company?: string; division?: string; department?: string; status?: string };
 
 function buildHoursWhere(f: HoursFilters, alias: string, dateColumn: string, allowedDivisions?: string[] | null) {
   const where: string[] = [`${alias}.status <> 'DRAFT'`];
@@ -338,8 +364,9 @@ function buildHoursWhere(f: HoursFilters, alias: string, dateColumn: string, all
   const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
   if (f.date_from) where.push(`${alias}.${dateColumn} >= ${p(f.date_from)}`);
   if (f.date_to) where.push(`${alias}.${dateColumn} <= ${p(f.date_to)}`);
-  if (f.division) where.push(`dv.name = ${p(f.division)}`);
-  if (f.department) where.push(`u.department = ${p(f.department)}`);
+  if (f.company) where.push(`dv.name = ${p(f.company)}`);
+  if (f.division) where.push(`lower(trim(u.department)) = lower(trim(${p(f.division)}))`);
+  if (f.department) where.push(`EXISTS (SELECT 1 FROM sections s WHERE lower(s.name) = lower(${p(f.department)}) AND s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id)))`);
   if (f.status) where.push(`${alias}.status = ${p(f.status)}`);
   if (allowedDivisions) where.push(`dv.name = ANY(${p(allowedDivisions)}::text[])`);
   return { whereSql: where.join(" AND "), params };
@@ -350,7 +377,7 @@ treasuryReportsRouter.get("/overtime-hours", async (req: AuthedRequest, res, nex
   try {
     const { whereSql, params } = buildHoursWhere(req.query as HoursFilters, "c", "submitted_at", await getReportDivisionScope(req));
     const rows = await query<any>(
-      `SELECT c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, dv.name AS division_name, u.department,
+      `SELECT c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, ${ORG_COLUMNS}
               c.year, c.month, c.total_overtime, c.converted_hours, c.equivalent_days, c.status, c.submitted_at, c.closed_at
          FROM overtime_claims c
          JOIN users u ON u.id = c.employee_id
@@ -382,7 +409,7 @@ treasuryReportsRouter.get("/standby-hours", async (req: AuthedRequest, res, next
     const divisionScope = await getReportDivisionScope(req);
     const claimFilters = buildHoursWhere(req.query as HoursFilters, "c", "submitted_at", divisionScope);
     const claimRows = await query<any>(
-      `SELECT 'STANDBY_CLAIM' AS type, c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, dv.name AS division_name, u.department,
+      `SELECT 'STANDBY_CLAIM' AS type, c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, ${ORG_COLUMNS}
               c.total_standby_hours, c.compensable_hours AS hours, c.status, c.submitted_at, c.closed_at
          FROM standby_claims c
          JOIN users u ON u.id = c.employee_id
@@ -392,7 +419,7 @@ treasuryReportsRouter.get("/standby-hours", async (req: AuthedRequest, res, next
     );
     const calloutFilters = buildHoursWhere(req.query as HoursFilters, "c", "submitted_at", divisionScope);
     const calloutRows = await query<any>(
-      `SELECT 'CALL_OUT' AS type, c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, dv.name AS division_name, u.department,
+      `SELECT 'CALL_OUT' AS type, c.id, c.claim_no, u.full_name AS employee_name, u.employee_no, ${ORG_COLUMNS}
               c.hours AS total_standby_hours, c.converted_hours AS hours, c.status, c.submitted_at, c.closed_at
          FROM standby_callout_claims c
          JOIN users u ON u.id = c.employee_id

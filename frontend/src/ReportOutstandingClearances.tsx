@@ -1,9 +1,10 @@
-import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
+import TreasuryReportPage, { type ReportColumn, CLEARANCE_ORG_COLUMNS, CLEARANCE_TRIP_COLUMNS } from "./TreasuryReportPage";
 
 const columns: ReportColumn[] = [
-  { key: "employee_name", label: "Employee" },
-  { key: "division_name", label: "Division" },
-  { key: "department", label: "Department" },
+  { key: "employee_name", label: "Employee", locked: true },
+  { key: "employee_no", label: "Employee No" },
+  ...CLEARANCE_ORG_COLUMNS,
+  ...CLEARANCE_TRIP_COLUMNS,
   { key: "responsible_team", label: "Responsible Team" },
   { key: "status", label: "Workflow Status" },
   { key: "balance_amount", label: "Outstanding Amount", money: true },

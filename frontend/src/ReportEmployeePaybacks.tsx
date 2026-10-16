@@ -1,4 +1,4 @@
-import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
+import TreasuryReportPage, { type ReportColumn, AMOUNT_TO_BE_EXPENSED_COLUMN, CLEARANCE_ORG_COLUMNS, CLEARANCE_TRIP_COLUMNS } from "./TreasuryReportPage";
 
 function fmtDate(s: string | null | undefined) {
   if (!s) return "—";
@@ -6,11 +6,12 @@ function fmtDate(s: string | null | undefined) {
 }
 
 const columns: ReportColumn[] = [
-  { key: "employee_name", label: "Employee" },
+  { key: "employee_name", label: "Employee", locked: true },
   { key: "employee_no", label: "Employee No" },
-  { key: "division_name", label: "Division" },
-  { key: "department", label: "Department" },
+  ...CLEARANCE_ORG_COLUMNS,
+  ...CLEARANCE_TRIP_COLUMNS,
   { key: "payback_amount", label: "Required Payback", money: true },
+  AMOUNT_TO_BE_EXPENSED_COLUMN,
   { key: "first_submission_date", label: "First Submission", format: (v) => fmtDate(v) },
   { key: "submission_count", label: "# Submissions" },
   { key: "verified_by_name", label: "HR Verified By" },

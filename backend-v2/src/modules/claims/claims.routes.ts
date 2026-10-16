@@ -196,6 +196,15 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
   return { claimTotal };
 }
 
+// The HR Operations step that reviews a payback proof / refund: the chain's
+// DEPT_CLOSE step. Found by type rather than position - "View" steps are
+// appended after it when a clearance closes.
+function paybackReviewStep(chain: ChainStep[]): ChainStep {
+  for (let i = chain.length - 1; i >= 0; i--) if (chain[i].action_type === "DEPT_CLOSE") return chain[i];
+  for (let i = chain.length - 1; i >= 0; i--) if (chain[i].action_type !== "DEPT_REPORTS") return chain[i];
+  return chain[chain.length - 1];
+}
+
 export async function canViewClaim(args: { role: string; sectionId?: string | null; status?: string; claimantId: string; userId: string; approvalChain?: ChainStep[] | null; workflowStepOrder?: number | null; managerChainIds?: string[]; delegatedManagerIds?: string[] | null }) {
   if (args.role === "ADMIN") return true;
   if (args.claimantId === args.userId) return true;
@@ -245,8 +254,7 @@ export async function canViewClaim(args: { role: string; sectionId?: string | nu
   // reuse the same "am I eligible on the DEPT_CLOSE step" check the payback-
   // proof routes use, rather than a separate permission axis.
   if (POST_CHAIN_STATUSES.includes(args.status || "") && args.approvalChain?.length) {
-    const lastStep = args.approvalChain[args.approvalChain.length - 1];
-    if (await isRoundRobinCandidate(lastStep, args.userId, args.role)) return true;
+    if (await isRoundRobinCandidate(paybackReviewStep(args.approvalChain), args.userId, args.role)) return true;
   }
 
   // NOTE: this used to also grant view access to anyone in the claimant's
@@ -325,7 +333,7 @@ claimsRouter.get("/payback-review-queue", async (req: AuthedRequest, res, next) 
     for (const r of rows) {
       if (req.user!.role !== "ADMIN") {
         const chain = r.approval_chain as ChainStep[] | null;
-        const lastStep = chain?.[chain.length - 1];
+        const lastStep = chain?.length ? paybackReviewStep(chain) : null;
         if (!lastStep || !(await isRoundRobinCandidate(lastStep, req.user!.userId, req.user!.role))) continue;
       }
       const { approval_chain, ...rest } = r;
@@ -1301,7 +1309,7 @@ const PaybackProofSchema = z.object({
 async function requirePaybackReviewer(claim: NonNullable<Awaited<ReturnType<typeof getClaimById>>>, req: AuthedRequest) {
   if (req.user!.role === "ADMIN") return;
   if (!claim.approval_chain?.length) throw forbidden("This clearance has no configured approval workflow.");
-  const lastStep = (claim.approval_chain as ChainStep[])[claim.approval_chain.length - 1];
+  const lastStep = paybackReviewStep(claim.approval_chain as ChainStep[]);
   const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
   const eligible = await canApproveStep(lastStep, req.user!.userId, req.user!.role, delegatedManagerIds, req.user!.sectionId);
   if (!eligible) throw forbidden("You are not the assigned HR Operations reviewer for this clearance.");

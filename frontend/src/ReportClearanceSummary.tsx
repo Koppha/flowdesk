@@ -1,14 +1,16 @@
-import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
+import TreasuryReportPage, { type ReportColumn, AMOUNT_TO_BE_EXPENSED_COLUMN, CLEARANCE_ORG_COLUMNS, CLEARANCE_TRIP_COLUMNS } from "./TreasuryReportPage";
 import { formatMoney } from "./constants";
 
 const columns: ReportColumn[] = [
   { key: "month", label: "Month" },
-  { key: "division_name", label: "Division" },
-  { key: "department", label: "Department" },
-  { key: "employee_name", label: "Employee" },
+  { key: "employee_name", label: "Employee", locked: true },
+  { key: "employee_no", label: "Employee No" },
+  ...CLEARANCE_ORG_COLUMNS,
+  ...CLEARANCE_TRIP_COLUMNS,
   { key: "financial_outcome", label: "Outcome" },
   { key: "advance_amount", label: "Advance", money: true },
   { key: "verified_expenses", label: "Verified Expenses", money: true },
+  AMOUNT_TO_BE_EXPENSED_COLUMN,
   { key: "status", label: "Status" }
 ];
 

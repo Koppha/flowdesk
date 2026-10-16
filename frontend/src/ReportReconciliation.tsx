@@ -6,7 +6,8 @@ import { api } from "./api";
 interface Row {
   requester_id: string;
   requester_name: string;
-  department: string | null;
+  department: string | null;      // Division
+  department_name: string | null; // Department (section)
   opening_balance: number;
   total_requested: number;
   total_paid: number;
@@ -64,9 +65,9 @@ export default function ReportReconciliation({ onBack, meUserId }: Props) {
   const active = tab === "mine" ? mine : others;
 
   function exportCsv() {
-    const headers = ["Requester", "Division", "Opening Balance", "Total Requested", "Total Paid", "Total Settled", "Closing Balance"];
+    const headers = ["Requester", "Division", "Department", "Opening Balance", "Total Requested", "Total Paid", "Total Settled", "Closing Balance"];
     const csvRows = active.map(r => [
-      r.requester_name ?? "", r.department ?? "",
+      r.requester_name ?? "", r.department ?? "", r.department_name ?? "",
       r.opening_balance, r.total_requested, r.total_paid, r.total_settled, r.closing_balance,
     ]);
     const csv = [headers, ...csvRows].map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -140,6 +141,7 @@ export default function ReportReconciliation({ onBack, meUserId }: Props) {
                 <tr>
                   <th>Requester</th>
                   <th>Division</th>
+                  <th>Department</th>
                   <th>Opening Balance</th>
                   <th>Total Requested</th>
                   <th>Total Paid</th>
@@ -152,6 +154,7 @@ export default function ReportReconciliation({ onBack, meUserId }: Props) {
                   <tr key={r.requester_id}>
                     <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{r.requester_name || "—"}</td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{r.department || "—"}</td>
+                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{r.department_name || "—"}</td>
                     <td>{formatMoney(r.opening_balance, r.currency ?? "LSL")}</td>
                     <td style={{ fontWeight: 600 }}>{formatMoney(r.total_requested, r.currency ?? "LSL")}</td>
                     <td>{formatMoney(r.total_paid, r.currency ?? "LSL")}</td>

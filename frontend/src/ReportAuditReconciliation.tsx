@@ -1,7 +1,10 @@
-import TreasuryReportPage, { type ReportColumn } from "./TreasuryReportPage";
+import TreasuryReportPage, { type ReportColumn, CLEARANCE_ORG_COLUMNS, CLEARANCE_TRIP_COLUMNS } from "./TreasuryReportPage";
 
 const columns: ReportColumn[] = [
-  { key: "employee_name", label: "Employee" },
+  { key: "employee_name", label: "Employee", locked: true },
+  { key: "employee_no", label: "Employee No" },
+  ...CLEARANCE_ORG_COLUMNS,
+  ...CLEARANCE_TRIP_COLUMNS.map((c) => ({ ...c, hidden: true })),
   { key: "financial_outcome", label: "Outcome" },
   { key: "required_settlement_amount", label: "Required", money: true },
   { key: "actual_settlement_amount", label: "Actual", money: true },

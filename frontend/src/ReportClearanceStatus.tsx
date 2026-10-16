@@ -15,7 +15,10 @@ type Row = {
   type: string;
   requester_id: string;
   requester_name: string | null;
+  // The traveller's Division (users.department) - this report groups by it -
+  // and their Department (section) within it.
   department: string | null;
+  department_name: string | null;
   approved_total: number;
   currency: string;
   paid_at: string | null;
@@ -139,7 +142,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
     if (departmentFilter && (r.department || "Unassigned") !== departmentFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      return (r.requester_name || "").toLowerCase().includes(q) || (r.department || "").toLowerCase().includes(q);
+      return (r.requester_name || "").toLowerCase().includes(q) || (r.department || "").toLowerCase().includes(q) || (r.department_name || "").toLowerCase().includes(q);
     }
     return true;
   }), [rows, statusFilter, departmentFilter, search]);
@@ -151,11 +154,11 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
 
   function exportCsv() {
     const h = [
-      ...(isMine ? [] : ["Employee", "Department"]),
+      ...(isMine ? [] : ["Employee", "Division", "Department"]),
       "Advance Type", "Amount", "Paid Date", "Clearance Status", "Claim Stage", "Submitted", "Closed/Settled"
     ];
     const csvRows = filtered.map((r) => [
-      ...(isMine ? [] : [r.requester_name || "—", r.department || "—"]),
+      ...(isMine ? [] : [r.requester_name || "—", r.department || "—", r.department_name || "—"]),
       r.type,
       formatMoney(r.approved_total, r.currency),
       fmtDate(r.paid_at),
@@ -226,7 +229,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 14, alignItems: "start" }}>
           <div className="ep-panel" style={{ padding: "16px 20px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>Clearance by Department</div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Clearance by Division</div>
               <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--muted)" }}>
                 {(["COMPLETE", "NOT_COMPLETE", "NOT_CLEARED"] as const).map((s) => (
                   <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -236,7 +239,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
                 ))}
               </div>
             </div>
-            <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 14px" }}>Top {topDepartmentsByVolume.length} departments by paid travel advance volume. Click a bar to filter the table below.</p>
+            <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 14px" }}>Top {topDepartmentsByVolume.length} divisions by paid travel advance volume. Click a bar to filter the table below.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {topDepartmentsByVolume.map((d) => {
                 const isActive = departmentFilter === d.department;
@@ -280,8 +283,8 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
           </div>
 
           <div className="ep-panel" style={{ padding: "16px 20px" }}>
-            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Not Cleared by Department</div>
-            <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 12px" }}>Departments with the most unresolved clearances.</p>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Not Cleared by Division</div>
+            <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 12px" }}>Divisions with the most unresolved clearances.</p>
             {topDepartmentsByNotCleared.length === 0 ? (
               <div style={{ fontSize: 13, color: "var(--muted)" }}>Nothing not-cleared right now.</div>
             ) : (
@@ -326,12 +329,12 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
           {!isMine && (
             <div className="ep-search" style={{ flex: "1 1 220px" }}>
               <Search size={14} />
-              <input placeholder="Search employee or department…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input placeholder="Search employee, division or department…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
           )}
           {!isMine && (
             <select className="ep-form-select" value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ minWidth: 180 }}>
-              <option value="">All Departments</option>
+              <option value="">All Divisions</option>
               {departments.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
           )}
@@ -350,6 +353,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
               <thead>
                 <tr>
                   {!isMine && <th>Employee</th>}
+                  {!isMine && <th>Division</th>}
                   {!isMine && <th>Department</th>}
                   <th>Advance Type</th>
                   <th>Amount</th>
@@ -365,6 +369,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
                     <tr key={r.advance_id}>
                       {!isMine && <td style={{ fontWeight: 600 }}>{r.requester_name || "—"}</td>}
                       {!isMine && <td style={{ color: "var(--muted)" }}>{r.department || "—"}</td>}
+                      {!isMine && <td style={{ color: "var(--muted)" }}>{r.department_name || "—"}</td>}
                       <td>{r.type}</td>
                       <td style={{ fontWeight: 600 }}>{formatMoney(r.approved_total, r.currency)}</td>
                       <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(r.paid_at)}</td>
