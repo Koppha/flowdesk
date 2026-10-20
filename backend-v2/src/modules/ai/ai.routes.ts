@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AuthedRequest, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
 import { badRequest } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
+import { assistantConfigured, conversationForDisplay, DAILY_LIMIT, streamChat, usedToday } from "./assistant.js";
 
 function startOfCurrentMonth() {
   const now = new Date();
@@ -147,4 +148,61 @@ aiRouter.post("/ocr-extract", async (req: AuthedRequest, res, next) => {
   } catch (err) {
     return next(err);
   }
+});
+
+// ── AI Assistant (Claude) ────────────────────────────────────────────────
+// Available to everyone by default; an admin can restrict it from Roles &
+// Permissions ("AI Assistant"). Not configured until ANTHROPIC_API_KEY is set.
+export const AI_ASSISTANT_DEFAULT_ROLES = ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"];
+const requireAssistant = requireFeatureAccess("ai_assistant", AI_ASSISTANT_DEFAULT_ROLES);
+
+aiRouter.get("/assistant/status", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    return res.json({ configured: assistantConfigured(), daily_limit: DAILY_LIMIT, used_today: await usedToday(req.user!.userId) });
+  } catch (err) { return next(err); }
+});
+
+aiRouter.get("/assistant/conversations", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    const rows = await query(
+      `SELECT id, title, updated_at FROM ai_conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 20`, [req.user!.userId]
+    );
+    return res.json({ items: rows });
+  } catch (err) { return next(err); }
+});
+
+aiRouter.get("/assistant/conversations/:id", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    const c = await conversationForDisplay(req.params.id, req.user!.userId);
+    if (!c) return res.status(404).json({ error: "Conversation not found" });
+    return res.json(c);
+  } catch (err) { return next(err); }
+});
+
+aiRouter.delete("/assistant/conversations/:id", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    await query(`DELETE FROM ai_conversations WHERE id = $1 AND user_id = $2`, [req.params.id, req.user!.userId]);
+    return res.json({ ok: true });
+  } catch (err) { return next(err); }
+});
+
+aiRouter.post("/assistant/chat", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = z.object({ message: z.string().trim().min(1).max(4000), conversation_id: z.string().uuid().nullish() }).safeParse(req.body);
+    if (!parsed.success) throw badRequest("Type a question first");
+    if (!assistantConfigured()) return res.status(503).json({ error: "The AI assistant hasn't been set up yet." });
+    if ((await usedToday(req.user!.userId)) >= DAILY_LIMIT) {
+      return res.status(429).json({ error: `You've reached today's limit of ${DAILY_LIMIT} questions - it resets at midnight.` });
+    }
+    await streamChat({
+      res,
+      userId: req.user!.userId,
+      token: String(req.headers.authorization || ""),
+      user: { fullName: req.user!.fullName ?? null, role: req.user!.role },
+      conversationId: parsed.data.conversation_id ?? null,
+      message: parsed.data.message,
+      // The person closed the panel / lost connection before the answer finished.
+      onClose: (fn) => res.on("close", () => { if (!res.writableEnded) fn(); })
+    });
+  } catch (err) { return next(err); }
 });

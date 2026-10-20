@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, openBlobInNewTab } from "./api";
 import DistributeDialog from "./components/DistributeDialog";
+import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
+import { BrsPeoplePicker, CR_PERMISSION_OPTIONS, CR_PRESETS } from "./components/BrsPeoplePicker";
+import OrgSearchModal, { type OrgEntry } from "./components/OrgSearchModal";
 import { showNotice } from "./alerts";
 import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, X, Share2 } from "lucide-react";
 import { ApproverCombobox, COMBOBOX_DROPDOWN_HEIGHT, COMBOBOX_DROPDOWN_MIN_WIDTH, EMAIL_RE, userLabel, type DirectoryUser } from "./shared/ApproverCombobox";
@@ -43,6 +46,11 @@ type AssigneeEntry = {
   email: string | null;
   teamId?: string | null;
   teamName?: string | null;
+  // A whole Department (sections) or Division (users.department) - any one
+  // member can confirm, like a Section (team).
+  departmentId?: string | null;
+  departmentName?: string | null;
+  divisionName?: string | null;
   confirmed: boolean;
   confirmed_at: string | null;
   confirmedBy?: string | null;
@@ -116,6 +124,10 @@ type Submission = {
   // Computer Request only: where IT Provisioning is up to.
   it_provisioning?: { status: string; assigned_to_name: string | null; asset_number: string | null; ready_for_collection_at: string | null; collection_acknowledged_at: string | null } | null;
   attachments?: Attachment[];
+  // Change Request collaboration
+  updated_at?: string;
+  my_role?: "OWNER" | "CO_WRITER";
+  requester_name?: string | null;
 };
 
 type CustomRequestsHubProps = {
@@ -176,7 +188,58 @@ function AttachmentDownloadLink({ submissionId, attachment }: { submissionId: st
 }
 
 function assigneeLabel(a: AssigneeEntry) {
-  return a.teamId ? `Section: ${a.teamName}` : a.name || a.email || "—";
+  if (a.teamId) return `Section: ${a.teamName}`;
+  if (a.departmentId) return `Department: ${a.departmentName}`;
+  if (a.divisionName) return `Division: ${a.divisionName}`;
+  return a.name || a.email || "—";
+}
+const isGroupAssignee = (a: AssigneeEntry) => Boolean(a.teamId || a.departmentId || a.divisionName);
+// The signed-in person is covered by this assignee - themselves or a group they're in.
+function assigneeIsMe(a: AssigneeEntry, profile: any) {
+  if (!profile) return false;
+  if (a.id && a.id === profile.id) return true;
+  if (a.teamId && profile.team_id && a.teamId === profile.team_id) return true;
+  if (a.departmentId && profile.section_id && a.departmentId === profile.section_id) return true;
+  if (a.divisionName && profile.department && a.divisionName.trim().toLowerCase() === String(profile.department).trim().toLowerCase()) return true;
+  return false;
+}
+const assigneeKey = (a: AssigneeEntry) => a.teamId ? `section:${a.teamId}` : a.departmentId ? `department:${a.departmentId}` : a.divisionName ? `division:${a.divisionName.toLowerCase()}` : a.id ? `user:${a.id}` : `email:${(a.email || "").toLowerCase()}`;
+function orgEntryToAssignee(e: OrgEntry, users: DirectoryUser[]): AssigneeEntry {
+  const base = { id: null, name: null, email: null, teamId: null, teamName: null, confirmed: false, confirmed_at: null };
+  if (e.type === "section") return { ...base, teamId: e.id ?? null, teamName: e.label };
+  if (e.type === "department") return { ...base, departmentId: e.id ?? null, departmentName: e.label };
+  if (e.type === "division") return { ...base, divisionName: e.name ?? e.label };
+  const u = users.find((x) => x.id === e.id);
+  return { ...base, id: e.id ?? null, name: u?.full_name ?? e.label, email: u?.email ?? null };
+}
+
+// Search people and whole groups (the same search as BRS), plus invite by
+// email for someone without an account. Used for Change Assignee.
+function AssigneeOrgPicker({ users, exclude, onAdd }: { users: DirectoryUser[]; exclude: AssigneeEntry[]; onAdd: (entries: AssigneeEntry[]) => void }) {
+  const [searching, setSearching] = useState(false);
+  const [email, setEmail] = useState("");
+  const validEmail = EMAIL_RE.test(email.trim());
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <button type="button" className="ep-btn-outline" style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 38 }} onClick={() => setSearching(true)}>
+        <Search size={14} /> Add people, sections, departments or divisions
+      </button>
+      <input className="ep-form-input" style={{ flex: 1, minWidth: 180 }} placeholder="…or invite by email" value={email} onChange={(e) => setEmail(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && validEmail) { e.preventDefault(); onAdd([{ id: null, name: null, email: email.trim(), confirmed: false, confirmed_at: null }]); setEmail(""); } }} />
+      <button type="button" className="ep-btn-outline" disabled={!validEmail} style={{ height: 38 }}
+        onClick={() => { onAdd([{ id: null, name: null, email: email.trim(), confirmed: false, confirmed_at: null }]); setEmail(""); }}>Invite</button>
+      {searching && (
+        <OrgSearchModal
+          title="Assign people or groups"
+          subtitle="Search and select employees, or a whole division, department or section — any one member of a group can confirm for it."
+          people={users}
+          excludeKeys={exclude.map(assigneeKey)}
+          onAdd={(entries) => onAdd(entries.map((e) => orgEntryToAssignee(e, users)))}
+          onClose={() => setSearching(false)}
+        />
+      )}
+    </div>
+  );
 }
 
 type AssigneePick = { kind: "user"; id: string } | { kind: "team"; id: string } | { kind: "email"; value: string };
@@ -347,81 +410,38 @@ function AssigneeCombobox({
 // assign a whole team (any member can confirm later). Confirmation happens
 // post-submission.
 function UserMultiField({
-  entries, users, teams, onAdd, onRemove
-}: { entries: AssigneeEntry[]; users: DirectoryUser[]; teams: TeamOption[]; onAdd: (entry: AssigneeEntry) => void; onRemove: (idx: number) => void }) {
-  const [pending, setPending] = useState<AssigneePick | null>(null);
-
-  function commitPick() {
-    if (!pending) return;
-    if (pending.kind === "team") {
-      const t = teams.find((x) => x.id === pending.id);
-      if (!t) return;
-      onAdd({ id: null, name: null, email: null, teamId: t.id, teamName: t.name, confirmed: false, confirmed_at: null });
-    } else if (pending.kind === "user") {
-      const u = users.find((x) => x.id === pending.id);
-      if (!u) return;
-      onAdd({ id: u.id, name: u.full_name, email: u.email, confirmed: false, confirmed_at: null });
-    } else {
-      onAdd({ id: null, name: null, email: pending.value, confirmed: false, confirmed_at: null });
-    }
-    setPending(null);
-  }
-
+  entries, users, onAdd, onRemove
+}: { entries: AssigneeEntry[]; users: DirectoryUser[]; teams?: TeamOption[]; onAdd: (entry: AssigneeEntry) => void; onRemove: (idx: number) => void }) {
   return (
     <div>
       {entries.map((a, idx) => (
         <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--surface-soft)", borderRadius: 6, marginBottom: 6, fontSize: 13 }}>
           <div>
             <strong>{assigneeLabel(a)}</strong>
-            {!a.id && !a.teamId && <span style={{ color: "var(--muted)" }}> · invited, no account yet</span>}
+            {!a.id && !isGroupAssignee(a) && <span style={{ color: "var(--muted)" }}> · invited, no account yet</span>}
             {a.id && a.name && <span style={{ color: "var(--muted)" }}> · {a.email}</span>}
-            {a.teamId && <span style={{ color: "var(--muted)" }}> · any member can confirm</span>}
+            {isGroupAssignee(a) && <span style={{ color: "var(--muted)" }}> · any member can confirm</span>}
           </div>
           <button type="button" className="ep-icon-btn" onClick={() => onRemove(idx)} title="Remove">
             <Trash2 size={14} />
           </button>
         </div>
       ))}
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <div style={{ flex: 1 }}>
-          <AssigneeCombobox users={users} teams={teams} value={pending} onChange={setPending} allowFreeEmail />
-        </div>
-        <button type="button" className="ep-btn-outline" disabled={!pending} onClick={commitPick} style={{ whiteSpace: "nowrap", padding: "0 10px", height: 38 }}>
-          <Plus size={14} />
-        </button>
-      </div>
+      <AssigneeOrgPicker users={users} exclude={entries} onAdd={(added) => added.forEach(onAdd)} />
     </div>
   );
 }
 
 // Inline "add another assignee" picker for an already-submitted request
-// (Assigned to Me tab) — an existing assignee can pull in another person or team to help.
+// (Assigned to Me tab) — pull in another person or a whole group to help.
+type AssigneeAddPayload = { id?: string; email?: string; name?: string; team_id?: string; department_id?: string; division_name?: string };
 function AssigneeAdder({
-  users, teams, onAdd
-}: { users: DirectoryUser[]; teams: TeamOption[]; onAdd: (entry: { id?: string; email?: string; name?: string; team_id?: string }) => void }) {
-  const [pending, setPending] = useState<AssigneePick | null>(null);
-
-  function commitPick() {
-    if (!pending) return;
-    if (pending.kind === "team") {
-      onAdd({ team_id: pending.id });
-    } else if (pending.kind === "user") {
-      onAdd({ id: pending.id });
-    } else {
-      onAdd({ email: pending.value });
-    }
-    setPending(null);
-  }
-
+  users, existing, onAdd
+}: { users: DirectoryUser[]; teams?: TeamOption[]; existing?: AssigneeEntry[]; onAdd: (entry: AssigneeAddPayload) => void }) {
   return (
-    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-      <div style={{ flex: 1 }}>
-        <AssigneeCombobox users={users} teams={teams} value={pending} onChange={setPending} allowFreeEmail />
-      </div>
-      <button type="button" className="ep-btn-outline" disabled={!pending} onClick={commitPick} style={{ whiteSpace: "nowrap", padding: "0 10px", height: 38 }}>
-        <Plus size={14} />
-      </button>
-    </div>
+    <AssigneeOrgPicker users={users} exclude={existing ?? []} onAdd={(entries) => entries.forEach((a) => onAdd(
+      a.teamId ? { team_id: a.teamId } : a.departmentId ? { department_id: a.departmentId } : a.divisionName ? { division_name: a.divisionName } : a.id ? { id: a.id } : { email: a.email ?? undefined }
+    ))} />
   );
 }
 
@@ -643,6 +663,12 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [remindingId, setRemindingId] = useState<string | null>(null);
+  // Change Request collaboration: the open workspace, the draft being
+  // submitted through the wizard, and the "save as draft" people dialog.
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [draftDialog, setDraftDialog] = useState<{ ownerIds: string[]; coWriters: OrgEntry[] } | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
   // Attendance Register only - day-by-day autosave (see attendance.routes.ts)
   // lets the grid be built up over several sessions instead of only ever
   // reaching the database on final Submit.
@@ -845,7 +871,12 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
     if (!selectedType) return;
     try {
       const rows = await api.myCustomRequests();
-      setMine(Array.isArray(rows) ? rows.filter((r: any) => r.request_type_code === selectedType.code) : []);
+      const own = Array.isArray(rows) ? rows.filter((r: any) => r.request_type_code === selectedType.code) : [];
+      // Change Requests I own or co-write but didn't start show here too.
+      const shared = selectedType.code === "CHANGE_REQUEST" ? await api.changeRequestsCollaborating().catch(() => []) : [];
+      const ids = new Set(own.map((r: any) => r.id));
+      setMine([...own, ...(Array.isArray(shared) ? shared.filter((r: any) => !ids.has(r.id)) : [])]
+        .sort((a: any, b: any) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))));
     } catch { /* silent */ }
   }
 
@@ -974,8 +1005,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
       await api.submitCustomRequest({
         request_type_id: selectedTypeId,
         data: payloadData,
-        approval_chain: submitChain
+        approval_chain: submitChain,
+        draft_id: draftId
       }, attachmentFiles);
+      setDraftId(null);
       setValues({});
       setChain(
         fixedChain?.length
@@ -1010,6 +1043,47 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
       }
     }
     setWizardStep((s) => Math.min(s + 1, approvalsStepIndex));
+  }
+
+  // Change Request only: save the form as a draft that owners and co-writers
+  // finish together. A draft already open in the wizard is just updated.
+  async function saveChangeRequestDraft(people?: { ownerIds: string[]; coWriters: OrgEntry[] }) {
+    setSavingDraft(true);
+    setError(null);
+    try {
+      let id = draftId;
+      if (id) {
+        await api.crSaveFields(id, values);
+      } else {
+        const created = await api.createChangeRequestDraft({
+          data: values,
+          owner_user_ids: people?.ownerIds ?? [],
+          co_writers: (people?.coWriters ?? []).map((c) => ({ type: c.type, id: c.id ?? null, name: c.name ?? null, permissions: c.permissions ?? ["EDIT"] }))
+        });
+        id = created.id;
+      }
+      setDraftDialog(null);
+      setDraftId(null);
+      setValues({});
+      setWizardStep(1);
+      setTab("MINE");
+      setWorkspaceId(id);
+    } catch (e: any) {
+      setError(e?.message || "Couldn't save the draft.");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  // From the workspace: carry the draft into the wizard to pick approvers and submit.
+  function submitDraftThroughWizard(draft: { id: string; data: Record<string, any> }) {
+    setWorkspaceId(null);
+    setDraftId(draft.id);
+    setValues({ ...draft.data });
+    setAttachmentFiles([]);
+    setWizardStep(1);
+    setError(null);
+    setTab("NEW");
   }
 
   async function handleCancelSubmission(id: string) {
@@ -1088,7 +1162,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
     }
   }
 
-  async function addAssignee(submissionId: string, fieldKey: string, entry: { id?: string; email?: string; name?: string; team_id?: string }) {
+  async function addAssignee(submissionId: string, fieldKey: string, entry: AssigneeAddPayload) {
     setAssigneeActionError(null);
     try {
       await api.addCustomRequestAssignee(submissionId, { field_key: fieldKey, ...entry });
@@ -1290,8 +1364,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
     return items;
   }
 
-  function renderField(f: RequestField) {
-    const value = values[f.field_key] ?? "";
+  // `vals`/`set` let the Change Request workspace reuse the same editors on
+  // its own edit buffer.
+  function renderField(f: RequestField, vals: Record<string, any> = values, set: (key: string, value: any) => void = setValue) {
+    const value = vals[f.field_key] ?? "";
     switch (f.field_type) {
       case "table":
         return renderTableField(f);
@@ -1302,7 +1378,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
               <ApproverCombobox
                 users={companyDirectorySorted}
                 value={value}
-                onChange={(id) => setValue(f.field_key, id)}
+                onChange={(id) => set(f.field_key, id)}
                 allowFreeEmail
               />
             </div>
@@ -1311,7 +1387,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                 type="button"
                 className="ep-btn-outline"
                 style={{ whiteSpace: "nowrap", padding: "0 10px", height: 38 }}
-                onClick={() => setValue(f.field_key, profile.id)}
+                onClick={() => set(f.field_key, profile.id)}
                 title="Assign this to yourself"
               >
                 Myself
@@ -1320,20 +1396,20 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
           </div>
         );
       case "user_multi": {
-        const entries: AssigneeEntry[] = Array.isArray(values[f.field_key]) ? values[f.field_key] : [];
+        const entries: AssigneeEntry[] = Array.isArray(vals[f.field_key]) ? vals[f.field_key] : [];
         return (
           <UserMultiField
             entries={entries}
             users={companyDirectorySorted}
             teams={teams}
-            onAdd={(entry) => setValue(f.field_key, [...entries, entry])}
-            onRemove={(idx) => setValue(f.field_key, entries.filter((_, i) => i !== idx))}
+            onAdd={(entry) => set(f.field_key, [...entries, entry])}
+            onRemove={(idx) => set(f.field_key, entries.filter((_, i) => i !== idx))}
           />
         );
       }
       case "section":
         return (
-          <select className="ep-form-select" value={value} onChange={(e) => setValue(f.field_key, e.target.value)}>
+          <select className="ep-form-select" value={value} onChange={(e) => set(f.field_key, e.target.value)}>
             <option value="">{f.placeholder || "Select a section…"}</option>
             {sections.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
           </select>
@@ -1345,7 +1421,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             rows={3}
             placeholder={f.placeholder || ""}
             value={value}
-            onChange={(e) => setValue(f.field_key, e.target.value)}
+            onChange={(e) => set(f.field_key, e.target.value)}
           />
         );
       case "number":
@@ -1355,33 +1431,33 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             className="ep-form-input"
             placeholder={f.placeholder || ""}
             value={value}
-            onChange={(e) => setValue(f.field_key, e.target.value)}
+            onChange={(e) => set(f.field_key, e.target.value)}
           />
         );
       case "date":
         // The "month" field (e.g. Attendance Register) only ever needs a
         // calendar month, not a specific day.
         if (f.field_key === "month") {
-          return <MonthYearPicker value={value} onChange={(v) => setValue(f.field_key, v)} />;
+          return <MonthYearPicker value={value} onChange={(v) => set(f.field_key, v)} />;
         }
         return (
           <input
             type="date"
             className="ep-form-input"
             value={value}
-            onChange={(e) => setValue(f.field_key, e.target.value)}
+            onChange={(e) => set(f.field_key, e.target.value)}
           />
         );
       case "checkbox":
         return (
           <label className="ep-checkbox-label">
-            <input type="checkbox" checked={Boolean(value)} onChange={(e) => setValue(f.field_key, e.target.checked)} />
+            <input type="checkbox" checked={Boolean(value)} onChange={(e) => set(f.field_key, e.target.checked)} />
             {f.placeholder || f.field_label}
           </label>
         );
       case "select":
         return (
-          <select className="ep-form-select" value={value} onChange={(e) => setValue(f.field_key, e.target.value)}>
+          <select className="ep-form-select" value={value} onChange={(e) => set(f.field_key, e.target.value)}>
             <option value="">{f.placeholder || "Select…"}</option>
             {((f.options as { label: string; value: string }[]) || []).map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -1394,7 +1470,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             className="ep-form-input"
             placeholder={f.placeholder || ""}
             value={value}
-            onChange={(e) => setValue(f.field_key, e.target.value)}
+            onChange={(e) => set(f.field_key, e.target.value)}
           />
         );
     }
@@ -1521,7 +1597,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                       {multiFields.map((f) => {
                         const entries: AssigneeEntry[] = Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : [];
                         const mine = entries.find((a) =>
-                          a.id === profile?.id || (a.teamId && profile?.team_id && a.teamId === profile.team_id)
+                          assigneeIsMe(a, profile)
                         );
                         return (
                           <div key={f.field_key} style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
@@ -1531,8 +1607,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                                 <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
                                   <div>
                                     {assigneeLabel(a)}
-                                    {!a.id && !a.teamId && <span style={{ color: "var(--muted)" }}> · invited, no account yet</span>}
-                                    {a.teamId && <span style={{ color: "var(--muted)" }}> · any member can confirm</span>}
+                                    {!a.id && !isGroupAssignee(a) && <span style={{ color: "var(--muted)" }}> · invited, no account yet</span>}
+                                    {isGroupAssignee(a) && <span style={{ color: "var(--muted)" }}> · any member can confirm</span>}
                                     {a.confirmed && a.confirmedBy && <span style={{ color: "var(--muted)" }}> · confirmed by {a.confirmedBy}</span>}
                                   </div>
                                   {statusBadge(a.confirmed ? "APPROVED" : "PENDING")}
@@ -1546,7 +1622,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                             )}
                             {s.status === "IN_PROGRESS" && (
                               <div style={{ marginTop: 8, maxWidth: 460 }}>
-                                <AssigneeAdder users={companyDirectorySorted} teams={teams} onAdd={(entry) => addAssignee(s.id, f.field_key, entry)} />
+                                <AssigneeAdder users={companyDirectorySorted} existing={entries} onAdd={(entry) => addAssignee(s.id, f.field_key, entry)} />
                               </div>
                             )}
                           </div>
@@ -1572,7 +1648,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                         // plan also confirms them — filling it in IS their "I'm done" signal.
                         const myUnconfirmedField = multiFields.find((f) => {
                           const entries: AssigneeEntry[] = Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : [];
-                          const mine = entries.find((a) => a.id === profile?.id || (a.teamId && profile?.team_id && a.teamId === profile.team_id));
+                          const mine = entries.find((a) => assigneeIsMe(a, profile));
                           return mine && !mine.confirmed;
                         });
                         return (
@@ -1687,6 +1763,15 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
               </div>
 
               <div className="custom-request-form-body">
+              {draftId && (
+                <div className="custom-request-note custom-request-note-neutral" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <span>You're submitting a draft worked on with others. Check the details, pick the approvers and submit — its people, sections, comments and history carry on.</span>
+                  <button className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px", marginLeft: "auto" }}
+                    onClick={() => { const id = draftId; setDraftId(null); setValues({}); setWizardStep(1); setTab("MINE"); setWorkspaceId(id); }}>
+                    Back to the draft
+                  </button>
+                </div>
+              )}
               {!isApprovalsStep && (
                 <>
                   <div className="ep-form-fields-grid">
@@ -1900,6 +1985,17 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                 >
                   Back
                 </button>
+                {isChangeRequestType && (
+                  <button
+                    className="ep-btn-outline"
+                    style={{ marginLeft: "auto", marginRight: 8 }}
+                    disabled={savingDraft || submitting}
+                    title="Save it as a draft and invite owners and co-writers to finish it with you"
+                    onClick={() => (draftId ? void saveChangeRequestDraft() : setDraftDialog({ ownerIds: [], coWriters: [] }))}
+                  >
+                    {savingDraft ? "Saving…" : draftId ? "Save draft" : "Save as draft & invite people"}
+                  </button>
+                )}
                 {isApprovalsStep ? (
                   <button className="ep-btn" onClick={handleSubmit} disabled={submitting}>
                     {submitting ? "Submitting…" : `Submit ${selectedType?.name || "Request"}`}
@@ -1919,17 +2015,30 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
           </div>
           <div className="ep-panel-body">
             {!mine.length ? (
-              <div className="ep-empty"><p>You haven't submitted any requests of this type yet.</p></div>
+              <div className="ep-empty"><p>{isChangeRequestType ? "You have no Change Requests or drafts yet." : "You haven't submitted any requests of this type yet."}</p></div>
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
                 {mine.map((s) => (
                   <div key={s.id} className="card" style={{ padding: 14 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setExpanded(expanded === s.id ? null : s.id)}>
                       <div>
-                        <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || s.request_type_name}</div>
-                        <div style={{ fontSize: 12, color: "var(--muted)" }}>Submitted {new Date(s.created_at).toLocaleDateString()}</div>
+                        <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || (s.status === "DRAFT" ? "Untitled Change Request" : s.request_type_name)}</div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                          {s.status === "DRAFT" ? "Draft started" : "Submitted"} {new Date(s.created_at).toLocaleDateString()}
+                          {s.my_role && <> · You're {s.my_role === "OWNER" ? "an owner" : "a co-writer"}{s.requester_name ? ` — started by ${s.requester_name}` : ""}</>}
+                        </div>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {s.request_type_code === "CHANGE_REQUEST" && (
+                          <button
+                            className={s.status === "DRAFT" ? "ep-btn" : "ep-btn-outline"}
+                            style={{ fontSize: 12, padding: "4px 10px" }}
+                            onClick={(e) => { e.stopPropagation(); setWorkspaceId(s.id); }}
+                            title="People, sections, comments and history"
+                          >
+                            {s.status === "DRAFT" ? "Open draft" : "Open workspace"}
+                          </button>
+                        )}
                         {s.status === "APPROVED" && selectedType?.requires_closure && closingId !== s.id && (
                           <button
                             className="ep-btn-outline"
@@ -2118,6 +2227,47 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             )}
           </div>
         </div>
+      )}
+      {workspaceId && (
+        <ChangeRequestWorkspace
+          submissionId={workspaceId}
+          currentUserId={profile?.id ?? null}
+          directory={companyDirectorySorted}
+          renderFieldEditor={(f, vals, set) => renderField(f as RequestField, vals, set)}
+          onSubmitDraft={submitDraftThroughWizard}
+          onChanged={() => void loadMine()}
+          onClose={() => { setWorkspaceId(null); void loadMine(); }}
+        />
+      )}
+      {draftDialog && createPortal(
+        <div className="ep-modal-overlay" onClick={() => !savingDraft && setDraftDialog(null)}>
+          <div className="ep-modal" style={{ maxWidth: 760 }} onClick={(e) => e.stopPropagation()}>
+            <div className="ep-modal-head">
+              <div>
+                <h3 className="ep-modal-title">Save as draft</h3>
+                <p className="ep-modal-sub">Add owners and co-writers to finish this Change Request with you. You can add or remove people later.</p>
+              </div>
+            </div>
+            <div className="ep-modal-body">
+              <BrsPeoplePicker
+                users={companyDirectorySorted}
+                ownerIds={draftDialog.ownerIds}
+                onOwnersChange={(ids) => setDraftDialog((d) => (d ? { ...d, ownerIds: ids } : d))}
+                coWriters={draftDialog.coWriters}
+                onCoWritersChange={(entries) => setDraftDialog((d) => (d ? { ...d, coWriters: entries } : d))}
+                excludeIds={profile?.id ? [profile.id] : []}
+                permissionOptions={CR_PERMISSION_OPTIONS}
+                presets={CR_PRESETS}
+              />
+              {error && <div className="custom-request-error">{error}</div>}
+            </div>
+            <div className="ep-modal-footer">
+              <button className="ep-btn-outline" disabled={savingDraft} onClick={() => setDraftDialog(null)}>Cancel</button>
+              <button className="ep-btn" disabled={savingDraft} onClick={() => void saveChangeRequestDraft(draftDialog)}>{savingDraft ? "Saving…" : "Save draft"}</button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
       {distributingId && (() => {
         const sub = mine.find((m) => m.id === distributingId);

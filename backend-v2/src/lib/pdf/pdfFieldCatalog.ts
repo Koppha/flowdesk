@@ -744,7 +744,7 @@ export async function resolveCustomRequestPdfData(id: string): Promise<ResolvedP
     }
     if (value == null) scalars[f.field_key] = "";
     else if (f.field_type === "user" && typeof value === "object") scalars[f.field_key] = value.name || value.full_name || "";
-    else if (f.field_type === "user_multi" && Array.isArray(value)) scalars[f.field_key] = value.map((v: any) => v.name || v.full_name || "").join(", ");
+    else if (f.field_type === "user_multi" && Array.isArray(value)) scalars[f.field_key] = value.map((v: any) => v.name || v.full_name || (v.teamName ? `${v.teamName} (Section)` : v.departmentName ? `${v.departmentName} (Department)` : v.divisionName ? `${v.divisionName} (Division)` : v.email || "")).filter(Boolean).join(", ");
     else if (typeof value === "boolean") scalars[f.field_key] = value ? "Yes" : "No";
     else if (typeof value === "object") scalars[f.field_key] = JSON.stringify(value);
     else scalars[f.field_key] = String(value);

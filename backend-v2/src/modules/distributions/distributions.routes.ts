@@ -5,6 +5,7 @@ import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { notifyDocumentDistributed } from "../../lib/notifications.js";
 import { brsCoWriterPermissions } from "../brs/brs.service.js";
+import { crCoWriterPermissions, recordCrRevision } from "../custom-requests/change-collab.service.js";
 
 // Manual distribution of a fully approved BRS or Change Request. Nothing is
 // sent automatically on approval: the requester (or an admin) chooses who
@@ -58,8 +59,8 @@ async function loadDistributableDoc(docType: DistributionDocType, docId: string)
       notReadyReason: "A BRS can only be distributed once it has been fully approved"
     };
   }
-  const sub = (await query<{ requester_id: string; status: string; code: string; data: any }>(
-    `SELECT s.requester_id, s.status, rt.code, s.data
+  const sub = (await query<{ requester_id: string; owner_user_ids: string[] | null; status: string; code: string; data: any }>(
+    `SELECT s.requester_id, s.owner_user_ids, s.status, rt.code, s.data
        FROM custom_request_submissions s
        JOIN custom_request_types rt ON rt.id = s.request_type_id
       WHERE s.id = $1`,
@@ -68,6 +69,7 @@ async function loadDistributableDoc(docType: DistributionDocType, docId: string)
   if (!sub || sub.code !== "CHANGE_REQUEST") throw notFound("Change Request not found");
   return {
     requesterId: sub.requester_id,
+    ownerIds: sub.owner_user_ids ?? [],
     title: String(sub.data?.description_of_change || "Change Request").slice(0, 120),
     label: "Change Request",
     ready: ["APPROVED", "CLOSED"].includes(sub.status),
@@ -80,6 +82,7 @@ async function assertCanDistribute(docType: DistributionDocType, docId: string, 
   // may distribute if the creator/an owner granted them that.
   if (actor.role === "ADMIN" || doc.requesterId === actor.userId || (doc.ownerIds ?? []).includes(actor.userId)) return;
   if (docType === "BRS" && (await brsCoWriterPermissions(docId, actor.userId)).perms.has("DISTRIBUTE")) return;
+  if (docType === "CHANGE_REQUEST" && (await crCoWriterPermissions(docId, actor.userId)).perms.has("DISTRIBUTE")) return;
   throw forbidden("You don't have permission to distribute this");
 }
 
@@ -218,6 +221,14 @@ distributionsRouter.post("/:docType/:docId", async (req: AuthedRequest, res, nex
        VALUES ($1, $2, $3, $4, $5, $6::uuid[])`,
       [docType, req.params.docId, req.user!.userId, message || null, JSON.stringify(targets), recipients.map((r) => r.id)]
     );
+    if (docType === "CHANGE_REQUEST") {
+      const to = [...targets.people, ...targets.divisions, ...targets.departments, ...targets.sections].filter(Boolean);
+      await recordCrRevision({
+        submissionId: req.params.docId, kind: "DISTRIBUTED", actorId: req.user!.userId,
+        actorRole: doc.requesterId === req.user!.userId ? "CREATOR" : (doc.ownerIds ?? []).includes(req.user!.userId) ? "OWNER" : req.user!.role === "ADMIN" ? "ADMIN" : "CO_WRITER",
+        summary: `Distributed to ${to.join(", ")} (${recipients.length} ${recipients.length === 1 ? "person" : "people"})`
+      }).catch(() => {});
+    }
 
     void notifyDocumentDistributed({
       docId: req.params.docId,

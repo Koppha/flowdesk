@@ -17,6 +17,7 @@ import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfR
 import { acknowledgeCollection, createProvisioningTaskForSubmission, getProvisioningStatusForSubmission } from "../it-provisioning/it-provisioning.service.js";
 import { baselineBrsDocument, recordBrsRevision, returnBrsDocumentToDraft } from "../brs/brs.service.js";
 import { isPeriodLocked } from "../attendance/attendance.routes.js";
+import { assertCanSubmit, assigneeLabel, assigneeMatches, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision } from "./change-collab.service.js";
 
 export const customRequestsRouter = Router();
 customRequestsRouter.use(requireAuth);
@@ -51,29 +52,16 @@ type AssigneeEntry = {
   email: string | null;
   teamId: string | null;
   teamName: string | null;
+  // A whole Department (sections table) or Division (users.department, by name).
+  departmentId?: string | null;
+  departmentName?: string | null;
+  divisionName?: string | null;
   confirmed: boolean;
   confirmed_at: string | null;
   confirmedBy: string | null;
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// True if the actor (by id, or by team membership for team entries) appears
-// in any "user_multi" field's assignee array on this submission — used to
-// gate the add/confirm assignee endpoints.
-function isSubmissionAssignee(
-  data: Record<string, any>,
-  fields: Array<{ field_key: string; field_type: string }>,
-  actor: { userId: string; teamId?: string | null }
-): boolean {
-  return fields.some((f) => {
-    if (f.field_type !== "user_multi") return false;
-    const arr = data[f.field_key];
-    return Array.isArray(arr) && arr.some((a: AssigneeEntry) =>
-      a?.id === actor.userId || (a?.teamId && actor.teamId && a.teamId === actor.teamId)
-    );
-  });
-}
 
 // approver_id/position_name are nullish here because fixed-chain submissions
 // don't send them for the AUTO_MANAGER step — the server resolves it instead.
@@ -86,6 +74,30 @@ const ChainStepSchema = z.object({
   position_name: z.string().trim().nullish(),
   decision_type: z.enum(["APPROVE", "NOTE"]).default("APPROVE")
 });
+
+// Change Request audit trail (change-collab.service.ts) for events that go
+// through this generic router. Never fails the action it records.
+async function auditChangeRequest(
+  submissionId: string,
+  actor: { userId: string; role: string; teamId?: string | null },
+  kind: Parameters<typeof recordCrRevision>[0]["kind"],
+  summary: string,
+  extra: { changes?: ReturnType<typeof diffFields>; sectionKey?: string | null; sectionTitle?: string | null } = {}
+) {
+  try {
+    const sub = (await query<any>(
+      `SELECT s.*, rt.code FROM custom_request_submissions s JOIN custom_request_types rt ON rt.id = s.request_type_id WHERE s.id = $1`,
+      [submissionId]
+    ))[0];
+    if (!sub || sub.code !== "CHANGE_REQUEST") return;
+    const fields = await query<{ field_key: string; field_type: string }>(
+      `SELECT field_key, field_type FROM request_type_fields WHERE request_type_id = $1 AND is_active = true`, [sub.request_type_id]
+    );
+    await recordCrRevision({ submissionId, kind, actorId: actor.userId, actorRole: await crActorRole(sub, actor, fields), summary, ...extra });
+  } catch (e) {
+    logger.warn("cr_revision_failed", { submission_id: submissionId, error: serializeError(e) });
+  }
+}
 
 const CreateSchema = z.object({
   request_type_id: z.string().uuid(),
@@ -106,23 +118,6 @@ const CloseSchema = z.object({
 const CancelSchema = z.object({
   comment: z.string().trim().min(1, "A comment is required to cancel a request")
 });
-
-async function assertCanSubmit(userId: string, role: string, department: string | null, employmentType: string | null, requestTypeId: string) {
-  if (role === "ADMIN") return;
-  const perm = await query<{ id: string }>(
-    `SELECT id FROM request_type_permissions
-      WHERE request_type_id = $1 AND can_submit = true
-        AND (
-          permission_type = 'ALL'
-          OR (permission_type = 'USER' AND user_id = $2)
-          OR (permission_type = 'DEPARTMENT' AND lower(trim(department)) = lower(trim($3)))
-          OR (permission_type = 'EMPLOYMENT_TYPE' AND upper(trim(employment_type)) = upper(trim($4)))
-        )
-      LIMIT 1`,
-    [requestTypeId, userId, department ?? "", employmentType ?? ""]
-  );
-  if (!perm[0]) throw forbidden("You do not have permission to submit this request type");
-}
 
 // POST /custom-requests — submit a new request with a requester-defined approval chain.
 // Sent as multipart/form-data so the wizard's attachment step can ride along with the
@@ -153,6 +148,20 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     if (requestType.is_internal) throw badRequest("This request type cannot be submitted directly");
 
     await assertCanSubmit(req.user!.userId, req.user!.role, req.user!.department ?? null, req.user!.employmentType ?? null, requestType.id);
+
+    // Change Request only: submitting a draft that owners and co-writers
+    // worked on (change-collab.routes.ts) promotes that row in place, so its
+    // people, sections, comments and history carry on.
+    const draftId = typeof req.body.draft_id === "string" && req.body.draft_id ? req.body.draft_id : null;
+    let crDraft: { id: string; requester_id: string; owner_user_ids: string[] | null } | undefined;
+    if (draftId) {
+      if (requestType.code !== "CHANGE_REQUEST") throw badRequest("Only a Change Request can be submitted from a draft");
+      const row = (await query<any>(`SELECT * FROM custom_request_submissions WHERE id = $1 AND request_type_id = $2`, [draftId, requestType.id]))[0];
+      if (!row) throw notFound("Draft not found");
+      if (row.status !== "DRAFT") throw badRequest("This draft has already been submitted");
+      if (!(await crPermissions(row, req.user!)).submit) throw forbidden("You don't have permission to submit this Change Request for approval");
+      crDraft = { id: row.id, requester_id: row.requester_id, owner_user_ids: row.owner_user_ids };
+    }
 
     // Attendance Register only: an admin can close a month once payroll
     // processing starts (attendance.routes.ts) - blocks a fresh submission
@@ -189,8 +198,17 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     const teamNotifications: { fieldLabel: string; teamName: string; memberEmails: string[] }[] = [];
     for (const f of fields) {
       if (f.field_type !== "user_multi") continue;
-      const raw = parsed.data.data[f.field_key];
-      if (!Array.isArray(raw)) continue;
+      // The form sends groups as teamId / departmentId / divisionName (the
+      // same shape it displays); the API also takes team_id / department_id
+      // / division_name. Normalise to the snake_case form here.
+      const rawIn = parsed.data.data[f.field_key];
+      if (!Array.isArray(rawIn)) continue;
+      const raw = rawIn.map((a: any) => ({
+        ...a,
+        team_id: a?.team_id ?? a?.teamId ?? null,
+        department_id: a?.department_id ?? a?.departmentId ?? null,
+        division_name: a?.division_name ?? a?.divisionName ?? null
+      }));
 
       const ids = raw.filter((a: any) => a?.id).map((a: any) => a.id);
       const teamIds = raw.filter((a: any) => a?.team_id).map((a: any) => a.team_id);
@@ -213,6 +231,22 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
           resolved.push({ id: null, name: null, email: null, teamId: t.id, teamName: t.name, confirmed: false, confirmed_at: null, confirmedBy: null });
           const members = await query<{ email: string }>(`SELECT email FROM users WHERE team_id = $1 AND is_active = true`, [t.id]);
           if (members.length) teamNotifications.push({ fieldLabel: f.field_label, teamName: t.name, memberEmails: members.map((m) => m.email) });
+          continue;
+        }
+        if (a?.department_id) {
+          const d = (await query<{ id: string; name: string }>(`SELECT id, name FROM sections WHERE id = $1 AND active = true`, [a.department_id]))[0];
+          if (!d) throw badRequest(`"${f.field_label}" names a department that no longer exists`);
+          resolved.push({ id: null, name: null, email: null, teamId: null, teamName: null, departmentId: d.id, departmentName: d.name, confirmed: false, confirmed_at: null, confirmedBy: null });
+          const members = await query<{ email: string }>(`SELECT email FROM users WHERE section_id = $1 AND is_active = true`, [d.id]);
+          if (members.length) teamNotifications.push({ fieldLabel: f.field_label, teamName: `${d.name} (Department)`, memberEmails: members.map((m) => m.email) });
+          continue;
+        }
+        if (a?.division_name) {
+          const d = (await query<{ name: string }>(`SELECT name FROM departments WHERE lower(trim(name)) = lower(trim($1)) AND active = true`, [a.division_name]))[0];
+          if (!d) throw badRequest(`"${f.field_label}" names a division that no longer exists`);
+          resolved.push({ id: null, name: null, email: null, teamId: null, teamName: null, divisionName: d.name, confirmed: false, confirmed_at: null, confirmedBy: null });
+          const members = await query<{ email: string }>(`SELECT email FROM users WHERE lower(trim(department)) = lower(trim($1)) AND is_active = true`, [d.name]);
+          if (members.length) teamNotifications.push({ fieldLabel: f.field_label, teamName: `${d.name} (Division)`, memberEmails: members.map((m) => m.email) });
           continue;
         }
         if (a?.id && userMap.has(a.id)) {
@@ -262,6 +296,9 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     // approver is still requester-chosen.
     if (chainInput.some((s) => s.approver_id === req.user!.userId)) {
       throw badRequest("You cannot select yourself as an approver on your own request");
+    }
+    if (crDraft && chainInput.some((s) => s.approver_id === crDraft!.requester_id)) {
+      throw badRequest("The person who started this Change Request cannot also approve it");
     }
 
     const approverIds = chainInput.map((s) => s.approver_id);
@@ -320,14 +357,14 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
     // Attendance Register only: promote an already-autosaved DRAFT row for
     // this requester/month in place, rather than inserting a second row and
     // orphaning the draft - day-by-day progress becomes the real submission.
-    const draft = attendancePeriod
+    const draft = crDraft ?? (attendancePeriod
       ? (await query<{ id: string }>(
           `SELECT id FROM custom_request_submissions
             WHERE requester_id = $1 AND request_type_id = $2 AND status = 'DRAFT' AND data->>'month' LIKE $3
             LIMIT 1`,
           [req.user!.userId, requestType.id, `${attendancePeriod}%`]
         ))[0]
-      : undefined;
+      : undefined);
 
     const submission = draft
       ? (await query<{ id: string }>(
@@ -351,6 +388,15 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [submission.id, file.path, file.originalname, file.mimetype, file.size, req.user!.userId]
       );
+    }
+
+    if (requestType.code === "CHANGE_REQUEST") {
+      const route = chain.map((c) => `${c.position_name} (${c.approver_name || c.approver_email})`).join(" → ");
+      await recordCrRevision({
+        submissionId: submission.id, kind: crDraft ? "SUBMITTED" : "CREATED", actorId: req.user!.userId,
+        actorRole: crDraft ? await crActorRole(crDraft, req.user!) : "CREATOR",
+        summary: `Submitted for approval: ${route}${uploadedFiles.length ? `; ${uploadedFiles.length} attachment(s)` : ""}`
+      }).catch((e) => logger.warn("cr_revision_failed", { submission_id: submission.id, error: serializeError(e) }));
     }
 
     // Respond as soon as the submission itself is durably saved — every
@@ -411,7 +457,7 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
                   assigneeEmail: a.email,
                   assigneeName: a.name
                 });
-              } else if (!a.id && !a.teamId && a.email) {
+              } else if (!a.id && !a.teamId && !a.departmentId && !a.divisionName && a.email) {
                 await notifyCustomRequestUnregisteredAssignee({
                   submissionId: submission.id,
                   requestTypeName: requestType.name,
@@ -552,7 +598,7 @@ customRequestsRouter.get("/assigned-to-me", async (req: AuthedRequest, res, next
       return keys.some((key) => {
         const arr = s.data?.[key];
         return Array.isArray(arr) && arr.some((a: AssigneeEntry) =>
-          a?.id === req.user!.userId || (a?.teamId && req.user!.teamId && a.teamId === req.user!.teamId)
+          assigneeMatches(a, req.user!)
         );
       });
     });
@@ -583,10 +629,12 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
 
     const chain = submission.approval_chain as Array<{ approver_id: string }>;
     const isParticipant = chain.some((s) => s.approver_id === req.user!.userId);
-    const isAssignee = isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
+    const isAssignee = isSubmissionAssignee(submission.data, fields, req.user!);
     const isRecipient = submission.request_type_code === "CHANGE_REQUEST"
       && await hasDistributionAccess("CHANGE_REQUEST", submission.id, req.user!.userId);
-    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !isParticipant && !isAssignee && !isRecipient) {
+    // Owners and co-writers of a Change Request (change-collab.routes.ts).
+    const isCollaborator = submission.request_type_code === "CHANGE_REQUEST" && await isChangeCollaborator(submission, req.user!.userId);
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !isParticipant && !isAssignee && !isRecipient && !isCollaborator) {
       throw forbidden();
     }
 
@@ -595,7 +643,7 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       [submission.id]
     );
 
-    const isOwner = submission.requester_id === req.user!.userId;
+    const isOwner = submission.requester_id === req.user!.userId || isCollaborator;
     const can_view_pdf = await canAccessPdf({
       requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id,
       userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient, action: "view"
@@ -638,12 +686,13 @@ customRequestsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     );
     const chain = submission.approval_chain as Array<{ approver_id: string }>;
     const isParticipant = chain.some((s) => s.approver_id === req.user!.userId);
-    const isAssignee = isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
+    const isAssignee = isSubmissionAssignee(submission.data, fields, req.user!);
     const isOwner = submission.requester_id === req.user!.userId;
     // Someone it was distributed to may always view its PDF, like the owner.
     const isRecipient = await hasDistributionAccess("CHANGE_REQUEST", submission.id, req.user!.userId);
-    if (req.user!.role !== "ADMIN" && !isOwner && !isParticipant && !isAssignee && !isRecipient) throw forbidden();
-    if (!(await canAccessPdf({ requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id, userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient, action: "view" }))) {
+    const isCollaborator = await isChangeCollaborator(submission, req.user!.userId);
+    if (req.user!.role !== "ADMIN" && !isOwner && !isParticipant && !isAssignee && !isRecipient && !isCollaborator) throw forbidden();
+    if (!(await canAccessPdf({ requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id, userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient || isCollaborator, action: "view" }))) {
       throw forbidden();
     }
 
@@ -686,8 +735,9 @@ customRequestsRouter.get("/:id/attachments/:attachmentId", async (req: AuthedReq
     );
     const chain = submission.approval_chain as Array<{ approver_id: string }>;
     const isParticipant = chain.some((s) => s.approver_id === req.user!.userId);
-    const isAssignee = isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
-    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !isParticipant && !isAssignee) {
+    const isAssignee = isSubmissionAssignee(submission.data, fields, req.user!);
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !isParticipant && !isAssignee
+        && !(await isChangeCollaborator(submission, req.user!.userId))) {
       throw forbidden();
     }
 
@@ -751,8 +801,10 @@ const AddAssigneeSchema = z.object({
   id: z.string().uuid().nullish(),
   email: z.string().trim().email().nullish(),
   name: z.string().trim().nullish(),
-  team_id: z.string().uuid().nullish()
-}).refine((d) => d.id || d.email || d.team_id, { message: "Provide a system user id, an email, or a team id" });
+  team_id: z.string().uuid().nullish(),
+  department_id: z.string().uuid().nullish(),
+  division_name: z.string().trim().min(1).nullish()
+}).refine((d) => d.id || d.email || d.team_id || d.department_id || d.division_name, { message: "Provide a person, an email, or a section, department or division" });
 
 // POST /custom-requests/:id/assignees — add another assignee (person or whole
 // team) to a "user_multi" field. Callable by the requester, an existing
@@ -773,12 +825,23 @@ customRequestsRouter.post("/:id/assignees", async (req: AuthedRequest, res, next
     if (!field || field.field_type !== "user_multi") throw badRequest("That field does not accept multiple assignees");
 
     const isOwnerOrAssignee = submission.requester_id === req.user!.userId
-      || isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
-    if (req.user!.role !== "ADMIN" && !isOwnerOrAssignee) throw forbidden("Only the requester or an existing assignee can add another assignee");
+      || isSubmissionAssignee(submission.data, fields, req.user!)
+      || (await crPermissions(submission, req.user!)).edit;
+    if (req.user!.role !== "ADMIN" && !isOwnerOrAssignee) throw forbidden("Only the requester, an owner, a co-writer or an existing assignee can add another assignee");
 
     let entry: AssigneeEntry;
     let teamMemberEmails: string[] = [];
-    if (parsed.data.team_id) {
+    if (parsed.data.department_id) {
+      const d = (await query<{ id: string; name: string }>(`SELECT id, name FROM sections WHERE id = $1 AND active = true`, [parsed.data.department_id]))[0];
+      if (!d) throw badRequest("Selected department is invalid");
+      entry = { id: null, name: null, email: null, teamId: null, teamName: null, departmentId: d.id, departmentName: d.name, confirmed: false, confirmed_at: null, confirmedBy: null };
+      teamMemberEmails = (await query<{ email: string }>(`SELECT email FROM users WHERE section_id = $1 AND is_active = true`, [d.id])).map((m) => m.email);
+    } else if (parsed.data.division_name) {
+      const d = (await query<{ name: string }>(`SELECT name FROM departments WHERE lower(trim(name)) = lower(trim($1)) AND active = true`, [parsed.data.division_name]))[0];
+      if (!d) throw badRequest("Selected division is invalid");
+      entry = { id: null, name: null, email: null, teamId: null, teamName: null, divisionName: d.name, confirmed: false, confirmed_at: null, confirmedBy: null };
+      teamMemberEmails = (await query<{ email: string }>(`SELECT email FROM users WHERE lower(trim(department)) = lower(trim($1)) AND is_active = true`, [d.name])).map((m) => m.email);
+    } else if (parsed.data.team_id) {
       const t = (await query<{ id: string; name: string }>(`SELECT id, name FROM teams WHERE id = $1 AND active = true`, [parsed.data.team_id]))[0];
       if (!t) throw badRequest("Selected section is invalid");
       entry = { id: null, name: null, email: null, teamId: t.id, teamName: t.name, confirmed: false, confirmed_at: null, confirmedBy: null };
@@ -798,13 +861,17 @@ customRequestsRouter.post("/:id/assignees", async (req: AuthedRequest, res, next
     const current: AssigneeEntry[] = Array.isArray(submission.data?.[field.field_key]) ? submission.data[field.field_key] : [];
     const alreadyListed = current.some((a) =>
       (entry.teamId && a.teamId === entry.teamId)
+      || (entry.departmentId && a.departmentId === entry.departmentId)
+      || (entry.divisionName && a.divisionName?.toLowerCase() === entry.divisionName.toLowerCase())
       || (entry.id && a.id === entry.id)
-      || (!entry.id && !entry.teamId && a.email?.toLowerCase() === entry.email?.toLowerCase())
+      || (!entry.id && !entry.teamId && !entry.departmentId && !entry.divisionName && !!entry.email && a.email?.toLowerCase() === entry.email?.toLowerCase())
     );
     if (alreadyListed) throw badRequest("That person or section is already listed as an assignee");
 
     const updatedData = { ...submission.data, [field.field_key]: [...current, entry] };
     await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updatedData), submission.id]);
+    await auditChangeRequest(submission.id, req.user!, "ASSIGNEE_ADDED",
+      `Added ${assigneeLabel(entry)} to ${field.field_label}`);
 
     const requestType = (await query<{ name: string }>(`SELECT name FROM custom_request_types WHERE id = $1`, [submission.request_type_id]))[0];
     if (entry.id && entry.email) {
@@ -816,7 +883,7 @@ customRequestsRouter.post("/:id/assignees", async (req: AuthedRequest, res, next
         assigneeEmail: entry.email,
         assigneeName: entry.name
       });
-    } else if (!entry.id && !entry.teamId && entry.email) {
+    } else if (!entry.id && !entry.teamId && !entry.departmentId && !entry.divisionName && entry.email) {
       void notifyCustomRequestUnregisteredAssignee({
         submissionId: submission.id,
         requestTypeName: requestType?.name ?? "Request",
@@ -824,13 +891,13 @@ customRequestsRouter.post("/:id/assignees", async (req: AuthedRequest, res, next
         fieldLabel: field.field_label,
         assigneeEmail: entry.email
       });
-    } else if (entry.teamId && teamMemberEmails.length) {
+    } else if ((entry.teamId || entry.departmentId || entry.divisionName) && teamMemberEmails.length) {
       void notifyCustomRequestTeamAssigned({
         submissionId: submission.id,
         requestTypeName: requestType?.name ?? "Request",
         requesterName: req.user!.fullName ?? null,
         fieldLabel: field.field_label,
-        teamName: entry.teamName!,
+        teamName: entry.teamName || (entry.departmentName ? `${entry.departmentName} (Department)` : `${entry.divisionName} (Division)`),
         memberEmails: teamMemberEmails
       });
     }
@@ -863,13 +930,15 @@ customRequestsRouter.post("/:id/assignees/confirm", async (req: AuthedRequest, r
 
     const current: AssigneeEntry[] = Array.isArray(submission.data?.[parsed.data.field_key]) ? submission.data[parsed.data.field_key] : [];
     const idx = current.findIndex((a) =>
-      a.id === req.user!.userId || (a.teamId && req.user!.teamId && a.teamId === req.user!.teamId)
+      assigneeMatches(a, req.user!)
     );
     if (idx === -1) throw forbidden("You are not listed as an assignee (or a member of an assigned section) on this field");
 
-    current[idx] = { ...current[idx], confirmed: true, confirmed_at: new Date().toISOString(), confirmedBy: current[idx].teamId ? req.user!.fullName ?? req.user!.userId : current[idx].confirmedBy };
+    current[idx] = { ...current[idx], confirmed: true, confirmed_at: new Date().toISOString(), confirmedBy: (current[idx].teamId || current[idx].departmentId || current[idx].divisionName) ? req.user!.fullName ?? req.user!.userId : current[idx].confirmedBy };
     const updatedData = { ...submission.data, [parsed.data.field_key]: current };
     await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updatedData), submission.id]);
+    await auditChangeRequest(submission.id, req.user!, "ASSIGNEE_CONFIRMED",
+      `Confirmed the implementation plan is ready${current[idx].id ? "" : ` for ${assigneeLabel(current[idx])}`}`);
 
     // Once every assignee across every "user_multi" field has confirmed, the
     // implementation plan is ready — let the current-step approver know now,
@@ -924,15 +993,16 @@ customRequestsRouter.patch("/:id/data", async (req: AuthedRequest, res, next) =>
     if (!submission) throw notFound();
     if (submission.status !== "IN_PROGRESS") throw badRequest("This request can no longer be edited");
 
-    const fields = await query<{ field_key: string; field_type: string }>(
-      `SELECT field_key, field_type FROM request_type_fields WHERE request_type_id = $1 AND is_active = true`,
+    const fields = await query<{ field_key: string; field_type: string; field_label: string }>(
+      `SELECT field_key, field_type, field_label FROM request_type_fields WHERE request_type_id = $1 AND is_active = true`,
       [submission.request_type_id]
     );
     const fieldTypeByKey = new Map(fields.map((f) => [f.field_key, f.field_type]));
 
     const isOwnerOrAssignee = submission.requester_id === req.user!.userId
-      || isSubmissionAssignee(submission.data, fields, { userId: req.user!.userId, teamId: req.user!.teamId });
-    if (req.user!.role !== "ADMIN" && !isOwnerOrAssignee) throw forbidden("Only the requester or an assignee can update this request");
+      || isSubmissionAssignee(submission.data, fields, req.user!)
+      || (await crPermissions(submission, req.user!)).edit;
+    if (req.user!.role !== "ADMIN" && !isOwnerOrAssignee) throw forbidden("Only the requester, an owner, a co-writer with edit rights or an assignee can update this request");
 
     const updates: Record<string, any> = {};
     for (const [key, value] of Object.entries(parsed.data.data)) {
@@ -943,8 +1013,13 @@ customRequestsRouter.patch("/:id/data", async (req: AuthedRequest, res, next) =>
     }
     if (!Object.keys(updates).length) return res.json({ ok: true });
 
+    const changes = diffFields(submission.data || {}, updates, fields);
     const updatedData = { ...submission.data, ...updates };
     await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updatedData), submission.id]);
+    if (changes.length) {
+      const d = describeFieldSave(changes);
+      await auditChangeRequest(submission.id, req.user!, "FIELDS_SAVED", d.summary, { changes, sectionKey: d.sectionKey, sectionTitle: d.sectionTitle });
+    }
 
     return res.json({ ok: true });
   } catch (err) {
@@ -997,7 +1072,7 @@ export async function performCustomRequestAction(
       const assignees = (submission.data?.[f.field_key] ?? []) as AssigneeEntry[];
       const unconfirmed = assignees.filter((a) => !a.confirmed);
       if (unconfirmed.length) {
-        throw badRequest(`All assignees for "${f.field_label}" must confirm the implementation plan is ready before this request can be approved (waiting on: ${unconfirmed.map((a) => (a.teamId ? `Section: ${a.teamName}` : a.name || a.email)).join(", ")})`);
+        throw badRequest(`All assignees for "${f.field_label}" must confirm the implementation plan is ready before this request can be approved (waiting on: ${unconfirmed.map((a) => assigneeLabel(a)).join(", ")})`);
       }
     }
   }
@@ -1027,6 +1102,11 @@ export async function performCustomRequestAction(
       WHERE id = $4`,
     [JSON.stringify(chain), newStepOrder, newStatus, submission.id]
   );
+
+  if (submission.request_type_code === "CHANGE_REQUEST") {
+    await auditChangeRequest(submission.id, actor, "APPROVAL_ACTION",
+      `${step.position_name}: ${step.status === "NOTED" ? "Noted" : step.status === "APPROVED" ? "Approved" : "Rejected"}${comment ? ` — ${comment}` : ""}${newStatus === "APPROVED" ? " (fully approved)" : ""}`);
+  }
 
   // Computer Request specifically hands off to the IT Provisioning back
   // office once fully approved - every other custom request type is
@@ -1210,8 +1290,8 @@ customRequestsRouter.post("/:id/cancel", async (req: AuthedRequest, res, next) =
       [req.params.id]
     ))[0];
     if (!submission) throw notFound();
-    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId) {
-      throw forbidden("Only the requester can cancel this request");
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !(submission.owner_user_ids || []).includes(req.user!.userId)) {
+      throw forbidden("Only the requester (or an owner) can cancel this request");
     }
     if (submission.status !== "IN_PROGRESS") throw badRequest("Only a request that is still pending approval can be cancelled");
 
@@ -1221,6 +1301,7 @@ customRequestsRouter.post("/:id/cancel", async (req: AuthedRequest, res, next) =
         WHERE id = $2`,
       [parsed.data.comment, submission.id]
     );
+    await auditChangeRequest(submission.id, req.user!, "CANCELLED", `Cancelled: ${parsed.data.comment}`);
 
     const chain = submission.approval_chain as Array<{ approver_id: string; approver_name: string | null; approver_email: string | null; position_name: string }>;
     const pendingStep = chain[submission.current_step_order];
@@ -1257,8 +1338,8 @@ customRequestsRouter.post("/:id/close", async (req: AuthedRequest, res, next) =>
     ))[0];
     if (!submission) throw notFound();
     if (submission.status !== "APPROVED") throw badRequest("Only approved requests can be closed");
-    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId) {
-      throw forbidden("Only the requester can close this request");
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !(submission.owner_user_ids || []).includes(req.user!.userId)) {
+      throw forbidden("Only the requester (or an owner) can close this request");
     }
 
     await query(
@@ -1272,6 +1353,8 @@ customRequestsRouter.post("/:id/close", async (req: AuthedRequest, res, next) =>
         WHERE id = $3`,
       [parsed.data.implementation_date, parsed.data.closure_notes ?? null, submission.id]
     );
+    await auditChangeRequest(submission.id, req.user!, "CLOSED",
+      `Closed — implemented ${parsed.data.implementation_date}${parsed.data.closure_notes ? `: ${parsed.data.closure_notes}` : ""}`);
 
     return res.json({ ok: true, status: "CLOSED" });
   } catch (err) {

@@ -59,9 +59,9 @@ export async function tripDetailsForAdvances(advanceIds: string[]): Promise<Map<
   const ids = Array.from(new Set(advanceIds.filter(Boolean)));
   const out = new Map<string, TripDetails>();
   if (!ids.length) return out;
-  const advances = await query<{ id: string; return_date: string | null; airport_city: string | null; airport_country: string | null; origin_city: string | null; origin_country: string | null }>(
+  const advances = await query<{ id: string; return_date: string | null; airport_city: string | null; airport_country: string | null; origin_city: string | null; origin_country: string | null; origin_text: string | null }>(
     `SELECT ar.id, to_char(ar.travel_return_date, 'YYYY-MM-DD') AS return_date, a.city AS airport_city, a.country AS airport_country,
-            o.city AS origin_city, o.country AS origin_country
+            o.city AS origin_city, o.country AS origin_country, nullif(trim(ar.travel_origin_text), '') AS origin_text
        FROM advance_requests ar
        LEFT JOIN airports a ON upper(a.iata_code) = upper(ar.travel_destination_iata)
        LEFT JOIN airports o ON upper(o.iata_code) = upper(ar.travel_origin_iata)
@@ -80,7 +80,7 @@ export async function tripDetailsForAdvances(advanceIds: string[]): Promise<Map<
     out.set(a.id, {
       origin: a.origin_city
         ? [a.origin_city, a.origin_country].filter(Boolean).join(", ")
-        : originFromLines(own.map((l) => l.location || "")),
+        : a.origin_text ?? originFromLines(own.map((l) => l.location || "")),
       destination: a.airport_city
         ? [a.airport_city, a.airport_country].filter(Boolean).join(", ")
         : destinationFromLines(own.map((l) => l.location || "")),

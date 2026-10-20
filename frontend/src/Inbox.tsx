@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
 import Swal from "sweetalert2";
 import { api, getUserFromToken, navigateTabToBlob, openBlankTab, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
@@ -187,7 +188,7 @@ function fmtFileSize(bytes: any) {
 // objects, each either a person or a whole team) field value for display —
 // otherwise these render as a bare "[object Object]" via String(value).
 function fmtAssigneeValue(value: any): string {
-  const label = (a: any) => (a?.teamId ? `Section: ${a.teamName}` : a?.name || a?.email || "—");
+  const label = (a: any) => (a?.teamId ? `Section: ${a.teamName}` : a?.departmentId ? `Department: ${a.departmentName}` : a?.divisionName ? `Division: ${a.divisionName}` : a?.name || a?.email || "—");
   if (Array.isArray(value)) return value.map(label).join(", ") || "—";
   if (value && typeof value === "object") return label(value);
   return String(value ?? "—");
@@ -2700,6 +2701,7 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
   const [error, setError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -2742,10 +2744,20 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
             <h3>Review {detail?.request_type_name || "Request"}</h3>
             <span className={`status-pill ${statusTone(item.status)}`}>{itemStatusLabel(item)}</span>
           </div>
-          <button className="button small-button button-subtle" onClick={props.onClose}>
-            Close
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {detail?.request_type_code === "CHANGE_REQUEST" && (
+              <button className="button small-button" onClick={() => setWorkspaceOpen(true)} title="Comment on it and see who changed what">
+                Comments & history
+              </button>
+            )}
+            <button className="button small-button button-subtle" onClick={props.onClose}>
+              Close
+            </button>
+          </div>
         </div>
+        {workspaceOpen && (
+          <ChangeRequestWorkspace submissionId={item.id} currentUserId={getUserFromToken()?.userId ?? null} directory={[]} onClose={() => setWorkspaceOpen(false)} />
+        )}
 
         {error && <pre className="inbox-error">{error}</pre>}
 

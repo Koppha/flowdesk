@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { assigneeMatches } from "../custom-requests/change-collab.service.js";
 import { AuthedRequest, Role, hasFeatureAccess, requireAuth } from "../../lib/auth.js";
 import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { query } from "../../lib/db.js";
@@ -1077,7 +1078,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         const isAssigneeTask = myFieldKeys.some((key) => {
           const arr = r.data?.[key];
           return Array.isArray(arr) && arr.some((a: any) =>
-            !a.confirmed && (a.id === req.user!.userId || (a.teamId && req.user!.teamId && a.teamId === req.user!.teamId))
+            !a.confirmed && assigneeMatches(a, req.user!)
           );
         });
 

@@ -1,3 +1,5 @@
+export type CrPeopleEntry = { type: string; id?: string | null; name?: string | null; permissions?: string[] };
+
 export const API = (import.meta.env.VITE_API as string) || window.location.origin;
 
 export function getToken() {
@@ -563,9 +565,10 @@ export const api = {
 
   myManager: () => req("/reporting-lines/my-manager"),
   // Sent as multipart/form-data so attachments can ride along with the rest of the wizard.
-  submitCustomRequest: (data: { request_type_id: string; data: Record<string, any>; approval_chain: any[] }, files?: File[]) => {
+  submitCustomRequest: (data: { request_type_id: string; data: Record<string, any>; approval_chain: any[]; draft_id?: string | null }, files?: File[]) => {
     const form = new FormData();
     form.append("request_type_id", data.request_type_id);
+    if (data.draft_id) form.append("draft_id", data.draft_id);
     form.append("data", JSON.stringify(data.data));
     form.append("approval_chain", JSON.stringify(data.approval_chain));
     (files || []).forEach((f) => form.append("files", f));
@@ -592,6 +595,27 @@ export const api = {
     req(`/custom-requests/${id}/assignees/confirm`, { method: "POST", body: JSON.stringify({ field_key }) }),
   updateCustomRequestData: (id: string, data: Record<string, any>) =>
     req(`/custom-requests/${id}/data`, { method: "PATCH", body: JSON.stringify({ data }) }),
+
+  // ── Change Request collaboration (drafts, people, sections, comments, history)
+  createChangeRequestDraft: (data: { data: Record<string, any>; owner_user_ids: string[]; co_writers: CrPeopleEntry[] }) =>
+    req("/custom-requests/change-requests/drafts", { method: "POST", body: JSON.stringify(data) }),
+  changeRequestsCollaborating: () => req("/custom-requests/change-requests/collaborating"),
+  crWorkspace: (id: string) => req(`/custom-requests/${id}/workspace`),
+  crMarkSeen: (id: string) => req(`/custom-requests/${id}/seen`, { method: "POST", body: JSON.stringify({}) }),
+  crSetPeople: (id: string, data: { owner_user_ids: string[]; co_writers: CrPeopleEntry[] }) =>
+    req(`/custom-requests/${id}/people`, { method: "PUT", body: JSON.stringify(data) }),
+  crSaveFields: (id: string, data: Record<string, any>) =>
+    req(`/custom-requests/${id}/fields`, { method: "PATCH", body: JSON.stringify({ data }) }),
+  crAddSection: (id: string, data: { title: string; description?: string | null }) =>
+    req(`/custom-requests/${id}/sections`, { method: "POST", body: JSON.stringify(data) }),
+  crUpdateSection: (id: string, sectionId: string, data: { content?: string; title?: string }) =>
+    req(`/custom-requests/${id}/sections/${sectionId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  crRemoveSection: (id: string, sectionId: string) => req(`/custom-requests/${id}/sections/${sectionId}`, { method: "DELETE" }),
+  crComments: (id: string) => req(`/custom-requests/${id}/comments`),
+  crAddComment: (id: string, data: { body: string; section_key: string | null }) =>
+    req(`/custom-requests/${id}/comments`, { method: "POST", body: JSON.stringify(data) }),
+  crHistory: (id: string) => req(`/custom-requests/${id}/history`),
+  crDiscardDraft: (id: string) => req(`/custom-requests/${id}/draft`, { method: "DELETE" }),
 
   // ── BRS (Business Requirement Specification) ──────────────────────────────
   brsModuleFlag: () => req("/brs-types/module-flag"),

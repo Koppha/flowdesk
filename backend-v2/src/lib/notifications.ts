@@ -2027,6 +2027,40 @@ export async function notifyBrsPeopleAdded(args: {
   }
 }
 
+// Owners and co-writers added to a Change Request (see change-collab.routes.ts).
+export async function notifyChangeRequestPeopleAdded(args: {
+  submissionId: string;
+  title: string;
+  addedBy: string | null;
+  owners: Array<{ email: string; full_name: string | null }>;
+  coWriterEmails: string[];
+}) {
+  try {
+    const who = args.addedBy || "A colleague";
+    for (const owner of args.owners) {
+      if (!owner.email) continue;
+      await sendMail({
+        to: [owner.email],
+        subject: `[Change Request] You are an owner of "${args.title}"`,
+        text: [header("CHANGE REQUEST — YOU ARE AN OWNER"), ``, `Hello ${owner.full_name || ""},`, ``,
+          `${who} made you an owner of the Change Request "${args.title}". As an owner you have full rights: edit it, add or remove people and sections, submit it for approval and distribute it.`,
+          ``, `Open it in FlowDesk: Custom Processes > Change Request > My Requests.`, ``, footer()].join("\n")
+      });
+    }
+    if (args.coWriterEmails.length) {
+      await sendMail({
+        to: args.coWriterEmails,
+        subject: `[Change Request] You were added to "${args.title}"`,
+        text: [header("CHANGE REQUEST — YOU WERE ADDED"), ``, `Hello,`, ``,
+          `${who} added you to the Change Request "${args.title}". You can open it, comment on it and, if you were given edit rights, work on it; every change is kept in its history.`,
+          ``, `Open it in FlowDesk: Custom Processes > Change Request > My Requests.`, ``, footer()].join("\n")
+      });
+    }
+  } catch (error) {
+    logger.warn("change_request_people_added_notification_failed", { submission_id: args.submissionId, error: serializeError(error) });
+  }
+}
+
 // Reviewers of a BRS - comment only, no approval.
 export async function notifyBrsReviewersAdded(args: { documentId: string; brsTitle: string; addedBy: string | null; emails: string[] }) {
   try {

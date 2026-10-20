@@ -83,6 +83,8 @@ const CreateAdvanceSchema = z.object({
   external_start_date: z.string().optional(),
   external_end_date: z.string().optional(),
   travel_origin_iata: z.string().trim().optional(),
+  // Typed starting place ("Traveling by road? Enter manually").
+  travel_origin_text: z.string().trim().max(200).optional(),
   travel_destination_iata: z.string().trim().optional(),
   travel_return_date: z.string().optional(),
   override_chain: z.array(z.object({
@@ -151,6 +153,8 @@ const UpdateAdvanceSchema = z.object({
   external_start_date: z.string().optional(),
   external_end_date: z.string().optional(),
   travel_origin_iata: z.string().trim().optional(),
+  // Typed starting place ("Traveling by road? Enter manually").
+  travel_origin_text: z.string().trim().max(200).optional(),
   travel_destination_iata: z.string().trim().optional(),
   travel_return_date: z.string().optional(),
   salary_month: z.string().optional()

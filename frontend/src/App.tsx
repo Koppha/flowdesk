@@ -19,6 +19,7 @@ import ReportAuditReconciliation from "./ReportAuditReconciliation";
 import ReportDeptDivisionClearance from "./ReportDeptDivisionClearance";
 import VendorContracts from "./VendorContracts";
 import EmployeeContracts from "./EmployeeContracts";
+import AiAssistant from "./components/AiAssistant";
 import ServiceContracts from "./ServiceContracts";
 import ITProvisioning from "./ITProvisioning";
 import Overtime from "./Overtime";
@@ -129,7 +130,8 @@ import {
   X,
   Zap,
   Laptop,
-  GitPullRequest
+  GitPullRequest,
+  Sparkles
 } from "lucide-react";
 
 type ClearanceTripRow = {
@@ -722,6 +724,7 @@ export default function App() {
   // Advances/My Clearances. Silently empty for anyone without the
   // report_advances feature permission (the fetch 403s, same as payments).
   const [reportAdvances, setReportAdvances] = useState<any[]>([]);
+  const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
   const [reportClaims, setReportClaims] = useState<any[]>([]);
   const [dashboardSearch, setDashboardSearch] = useState("");
   const [dashboardSearchLive, setDashboardSearchLive] = useState<{ advances: any[]; claims: any[] }>({ advances: [], claims: [] });
@@ -1406,6 +1409,7 @@ export default function App() {
     overtime_request:       ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     overtime_claim:         ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     employee_contracts:     ["ADMIN"],
+    ai_assistant:           ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
   };
 
   function canAccessFeature(key: string): boolean {
@@ -3583,6 +3587,8 @@ export default function App() {
     // `rows` state set just above, since the synthesizer effect below would
     // otherwise immediately overwrite that same line from these very fields.
     setTripOriginIata(detail.travel_origin_iata || "");
+    setTripOriginText(detail.travel_origin_text || "");
+    setOriginManualEntry(Boolean(detail.travel_origin_text) && !detail.travel_origin_iata);
     setTripDestinationIata(detail.travel_destination_iata || "");
     setTripDeparture(detail.lines?.[0]?.line_date ? normalizeDateInputValue(detail.lines[0].line_date) : "");
     setTripReturn(detail.travel_return_date || "");
@@ -4130,7 +4136,7 @@ export default function App() {
                           <dl className="tracking-detail-list">
                             <div>
                               <dt>Route</dt>
-                              <dd>{origin ? airportLabel(origin) : (advance.travel_origin_iata || "—")} → {destination ? airportLabel(destination) : advance.travel_destination_iata}</dd>
+                              <dd>{origin ? airportLabel(origin) : (advance.travel_origin_iata || advance.travel_origin_text || "—")} → {destination ? airportLabel(destination) : advance.travel_destination_iata}</dd>
                             </div>
                             <div><dt>Destination</dt><dd>{destination ? [destination.city, destination.country].filter(Boolean).join(", ") : "—"}</dd></div>
                             <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
@@ -4154,6 +4160,7 @@ export default function App() {
                             </tbody>
                           </table>
                           <dl className="tracking-detail-list" style={{ marginTop: 10 }}>
+                            {advance.travel_origin_text && <div><dt>Starting place</dt><dd>{advance.travel_origin_text}</dd></div>}
                             <div><dt>Purpose</dt><dd>{advance.purpose || "—"}</dd></div>
                           </dl>
                         </div>
@@ -4895,6 +4902,9 @@ export default function App() {
             <h2>FlowDesk</h2>
           </div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
+          {canAccessFeature("ai_assistant") && (
+            <a href="#" className={navItemClass(aiAssistantOpen)} onClick={(e) => { e.preventDefault(); setAiAssistantOpen((v) => !v); }}><span className="sidebar-nav-icon"><Sparkles size={18} aria-hidden /></span>AI Assistant</a>
+          )}
           <div className={`sidebar-group ${groupOpen("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page)) ? "open" : ""}`}>
             <a href="#" className={navItemClass(["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page)); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advances <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
@@ -5722,6 +5732,7 @@ export default function App() {
                       { key: "overtime_request",       label: "Overtime Request",         group: "Overtime" },
                       { key: "overtime_claim",         label: "Overtime Claim",            group: "Overtime" },
                       { key: "employee_contracts",       label: "Employee Contracts (Interns & Temps)", group: "Contracts" },
+                      { key: "ai_assistant",             label: "AI Assistant",             group: "General" },
                       { key: "vendor_contracts",         label: "Vendor Contracts (View)",   group: "Contracts" },
                       { key: "vendor_contracts_manage",  label: "Vendor Contracts (Manage)", group: "Contracts" },
                       { key: "service_contracts",        label: "Service Contracts (View)",   group: "Contracts" },
@@ -5762,6 +5773,7 @@ export default function App() {
                       overtime_request:       ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       employee_contracts:       ["ADMIN"],
+                      ai_assistant:             ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       vendor_contracts:         ["ADMIN"],
                       vendor_contracts_manage:  ["ADMIN"],
                       service_contracts:        ["ADMIN"],
@@ -8547,6 +8559,10 @@ export default function App() {
                         // the one synthesized line's own date, submitted via
                         // the existing lines endpoint a few lines down.
                         base.travel_origin_iata = tripOriginIata || undefined;
+                        // Typed starting place (travel by road) - saved so
+                        // reports know where the trip began; cleared when an
+                        // airport is picked instead.
+                        base.travel_origin_text = originManualEntry ? tripOriginText.trim() : "";
                         base.travel_destination_iata = tripDestinationIata || undefined;
                         base.travel_return_date = tripReturn || undefined;
                       }
@@ -9606,6 +9622,9 @@ export default function App() {
           )}
           {historyOpen && renderAdvanceTrackingModal()}
           {clearanceTrackOpen && renderClearanceTrackingModal()}
+          {canAccessFeature("ai_assistant") && (
+            <AiAssistant open={aiAssistantOpen} onClose={() => setAiAssistantOpen(false)} onOpenAdvances={() => setPage("MY_ADVANCES")} onOpenClearances={() => setPage("MY_CLEARANCES")} />
+          )}
           </div>
         </div>
       </div>

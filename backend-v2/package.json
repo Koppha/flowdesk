@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@types/nodemailer": "^8.0.0",
     "@types/pdfkit": "^0.17.6",
     "bcrypt": "^5.1.1",

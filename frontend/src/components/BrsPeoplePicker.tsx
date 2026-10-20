@@ -15,15 +15,36 @@ export const BRS_PERMISSION_OPTIONS: Array<{ key: string; label: string; hint: s
   { key: "DISTRIBUTE", label: "Distribute", hint: "Distribute the approved BRS" },
   { key: "AMEND", label: "Amend", hint: "Start an amendment after approval" }
 ];
-const PRESETS: Array<{ key: string; label: string; perms: string[] }> = [
+type PermissionOption = { key: string; label: string; hint: string };
+type Preset = { key: string; label: string; perms: string[] };
+const PRESETS: Preset[] = [
   { key: "VIEW", label: "View only", perms: [] },
   { key: "EDIT", label: "Can edit", perms: ["EDIT"] },
   { key: "EDIT_INVITE", label: "Can edit & invite", perms: ["EDIT", "INVITE"] },
   { key: "FULL", label: "Full access", perms: ["EDIT", "INVITE", "WORKFLOW", "DISTRIBUTE", "AMEND"] }
 ];
-function presetOf(perms: string[]) {
+function presetOf(perms: string[], presets: Preset[] = PRESETS) {
   const sorted = [...perms].sort().join(",");
-  return PRESETS.find((p) => [...p.perms].sort().join(",") === sorted)?.key ?? "CUSTOM";
+  return presets.find((p) => [...p.perms].sort().join(",") === sorted)?.key ?? "CUSTOM";
+}
+
+// The same picker for a Change Request: what a co-writer may do there.
+export const CR_PERMISSION_OPTIONS: PermissionOption[] = [
+  { key: "EDIT", label: "Edit", hint: "Edit the form and its sections" },
+  { key: "INVITE", label: "Invite people", hint: "Add more co-writers (with no more rights than their own)" },
+  { key: "SUBMIT", label: "Submit for approval", hint: "Submit the draft for approval" },
+  { key: "DISTRIBUTE", label: "Distribute", hint: "Distribute the approved Change Request" }
+];
+export const CR_PRESETS: Preset[] = [
+  { key: "VIEW", label: "View & comment", perms: [] },
+  { key: "EDIT", label: "Can edit", perms: ["EDIT"] },
+  { key: "EDIT_INVITE", label: "Can edit & invite", perms: ["EDIT", "INVITE"] },
+  { key: "FULL", label: "Full access", perms: ["EDIT", "INVITE", "SUBMIT", "DISTRIBUTE"] }
+];
+export function describeCrPermissions(perms: string[]) {
+  const preset = CR_PRESETS.find((p) => p.key === presetOf(perms, CR_PRESETS));
+  if (preset) return preset.label;
+  return CR_PERMISSION_OPTIONS.filter((o) => perms.includes(o.key)).map((o) => o.label).join(", ");
 }
 export function describeBrsPermissions(perms: string[]) {
   const preset = PRESETS.find((p) => p.key === presetOf(perms));
@@ -38,8 +59,13 @@ export function BrsPeoplePicker(props: {
   coWriters: OrgEntry[];
   onCoWritersChange: (entries: OrgEntry[]) => void;
   excludeIds?: string[];
+  // Defaults are BRS's; a Change Request passes its own.
+  permissionOptions?: PermissionOption[];
+  presets?: Preset[];
+  // A co-writer allowed to invite can't change owners.
+  ownersLocked?: boolean;
 }) {
-  const { users, ownerIds, onOwnersChange, coWriters, onCoWritersChange, excludeIds = [] } = props;
+  const { users, ownerIds, onOwnersChange, coWriters, onCoWritersChange, excludeIds = [], permissionOptions = BRS_PERMISSION_OPTIONS, presets = PRESETS, ownersLocked = false } = props;
   const [searching, setSearching] = useState(false);
   const [ownerPick, setOwnerPick] = useState("");
   const ownerOptions = users.filter((u) => !excludeIds.includes(u.id) && !ownerIds.includes(u.id));
@@ -64,20 +90,28 @@ export function BrsPeoplePicker(props: {
               return (
                 <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 6px 4px 10px", borderRadius: 99, background: "#ede9fe", color: "#6d28d9", fontSize: 12.5, fontWeight: 600 }}>
                   {u?.full_name || u?.email || "Unknown user"}
-                  <button type="button" aria-label={`Remove ${u?.full_name || "owner"}`} onClick={() => onOwnersChange(ownerIds.filter((x) => x !== id))}
-                    style={{ border: "none", background: "transparent", cursor: "pointer", color: "inherit", display: "inline-flex", padding: 0 }}><X size={13} /></button>
+                  {!ownersLocked && (
+                    <button type="button" aria-label={`Remove ${u?.full_name || "owner"}`} onClick={() => onOwnersChange(ownerIds.filter((x) => x !== id))}
+                      style={{ border: "none", background: "transparent", cursor: "pointer", color: "inherit", display: "inline-flex", padding: 0 }}><X size={13} /></button>
+                  )}
                 </span>
               );
             })}
           </div>
         )}
-        <ApproverCombobox
-          users={ownerOptions}
-          value={ownerPick}
-          onChange={addOwner}
-          placeholder={ownerIds.length ? "Add another owner…" : "Search an owner by name or email…"}
-        />
-        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>A co-writer can be made an owner too — they move from co-writers to owners.</div>
+        {ownersLocked ? (
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>Only the creator or an owner can change owners.</div>
+        ) : (
+          <>
+            <ApproverCombobox
+              users={ownerOptions}
+              value={ownerPick}
+              onChange={addOwner}
+              placeholder={ownerIds.length ? "Add another owner…" : "Search an owner by name or email…"}
+            />
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>A co-writer can be made an owner too — they move from co-writers to owners.</div>
+          </>
+        )}
       </div>
       <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
         <label>Co-writers <span style={{ fontWeight: 400, color: "var(--muted)" }}>— people or whole groups; choose what each may do</span></label>
@@ -86,7 +120,7 @@ export function BrsPeoplePicker(props: {
             {coWriters.map((c) => {
               const perms = c.permissions ?? ["EDIT"];
               const setPerms = (next: string[]) => onCoWritersChange(coWriters.map((x) => (orgEntryKey(x) === orgEntryKey(c) ? { ...x, permissions: next } : x)));
-              const preset = presetOf(perms);
+              const preset = presetOf(perms, presets);
               return (
                 <div key={orgEntryKey(c)} style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -95,10 +129,10 @@ export function BrsPeoplePicker(props: {
                       className="ep-form-select"
                       style={{ width: "auto", fontSize: 12.5, padding: "4px 8px" }}
                       value={preset}
-                      onChange={(e) => { const p = PRESETS.find((x) => x.key === e.target.value); if (p) setPerms(p.perms); }}
+                      onChange={(e) => { const p = presets.find((x) => x.key === e.target.value); if (p) setPerms(p.perms); }}
                       aria-label="Permission level"
                     >
-                      {PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                      {presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
                       {preset === "CUSTOM" && <option value="CUSTOM">Custom</option>}
                     </select>
                     <button
@@ -110,7 +144,7 @@ export function BrsPeoplePicker(props: {
                     </button>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", marginTop: 8 }}>
-                    {BRS_PERMISSION_OPTIONS.map((o) => (
+                    {permissionOptions.map((o) => (
                       <label key={o.key} title={o.hint} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, cursor: "pointer" }}>
                         <input
                           type="checkbox"

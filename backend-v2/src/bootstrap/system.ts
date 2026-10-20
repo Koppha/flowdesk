@@ -4,6 +4,7 @@ import { query } from "../lib/db.js";
 import { ensureStandbySchema } from "../modules/standby/standby.routes.js";
 import { ensureOvertimeSchema } from "../modules/overtime/overtime.routes.js";
 import { ensureReportingLineSyncSchema } from "../lib/reportingLineSync.js";
+import { ensureAssistantSchema } from "../modules/ai/assistant.js";
 import { ensureVendorContractsSchema } from "../modules/vendor-contracts/vendor-contracts.routes.js";
 import { ensureEmployeeContractsSchema } from "../modules/employee-contracts/employee-contracts.routes.js";
 import { ensureServiceContractsSchema } from "../modules/service-contracts/service-contracts.schema.js";
@@ -13,6 +14,7 @@ import { ensureTravelSchema } from "../lib/travel.js";
 import { ensureAirportsSchema } from "../lib/airports.js";
 import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
 import { ensureBrsSchema } from "../modules/brs/brs.schema.js";
+import { ensureChangeCollabSchema } from "../modules/custom-requests/change-collab.service.js";
 import { ensureReportingViewsSchema } from "../modules/reporting/reporting.schema.js";
 import { ensureSignaturesSchema } from "../modules/signatures/signatures.schema.js";
 import { ensureSlaReminderSchema } from "../modules/sla/sla.schema.js";
@@ -38,6 +40,7 @@ export async function bootstrapSystem() {
   await ensurePaAssignmentsSchema();
   await ensureRequestTypesSchema();
   await ensureBrsSchema();
+  await ensureChangeCollabSchema();
   await seedBrsApprovalRequestType();
   await ensureEmploymentTypesSchema();
   await ensureEmailActionTokensSchema();
@@ -59,6 +62,7 @@ export async function bootstrapSystem() {
   await ensureOvertimeSchema();
   await ensureVendorContractsSchema();
   await ensureEmployeeContractsSchema();
+  await ensureAssistantSchema();
   await ensureServiceContractsSchema();
   await ensureSalariesSchema();
   await ensureReportingViewsSchema();
@@ -1949,6 +1953,8 @@ async function ensureExternalPayeesSchema() {
   // advance_lines needs no changes at all. These three columns exist purely
   // so the redesigned screen can read a draft back accurately on re-edit.
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS travel_origin_iata text`);
+  // Where a road trip set off from when typed by hand (no departure airport).
+  await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS travel_origin_text text`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS travel_destination_iata text`);
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS travel_return_date date`);
 }

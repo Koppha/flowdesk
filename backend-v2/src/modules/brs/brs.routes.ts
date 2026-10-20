@@ -57,7 +57,11 @@ type GroupEntry = z.infer<typeof GroupEntrySchema>;
 
 // Validates entries against the org and returns them with display labels.
 async function resolveGroupEntries(entries: GroupEntry[]) {
-  const out: Array<GroupEntry & { label: string; email?: string }> = [];
+  return resolveOrgEntries(entries);
+}
+// Shared with Change Request collaboration (change-collab.routes.ts).
+export async function resolveOrgEntries<E extends { type: GroupEntry["type"]; id?: string | null; name?: string | null }>(entries: E[]) {
+  const out: Array<E & { label: string; email?: string }> = [];
   const seen = new Set<string>();
   for (const e of entries) {
     const key = `${e.type}:${e.type === "division" ? (e.name || "").toLowerCase() : e.id}`;
@@ -85,7 +89,7 @@ async function resolveGroupEntries(entries: GroupEntry[]) {
 }
 
 // Everyone currently in a set of entries, for emailing them.
-async function entryEmails(entries: GroupEntry[]) {
+export async function entryEmails(entries: Array<{ type: GroupEntry["type"]; id?: string | null; name?: string | null }>) {
   const emails = new Set<string>();
   for (const e of entries) {
     const rows = await query<{ email: string }>(
