@@ -105,7 +105,7 @@ async function findOverdueCustomRequests(thresholdHours: number): Promise<Overdu
 
 async function findOverdueSignableDocuments(thresholdHours: number): Promise<OverdueStep[]> {
   const rows = await query<any>(
-    `SELECT d.id, d.current_step_order, d.approval_chain, d.updated_at, d.title
+    `SELECT d.id, d.current_step_order, d.approval_chain, d.updated_at, d.title, d.created_by_id
        FROM signable_documents d
       WHERE d.status = 'OPEN'
         AND jsonb_typeof(d.approval_chain) = 'array'
@@ -117,6 +117,8 @@ async function findOverdueSignableDocuments(thresholdHours: number): Promise<Ove
     const chain = r.approval_chain as any[];
     const step = chain[r.current_step_order];
     if (!step?.approver_id) return [];
+    // No reminder to sign your own document.
+    if (step.approver_id === r.created_by_id) return [];
     return [{
       docId: r.id, stepOrder: r.current_step_order, approverId: step.approver_id,
       approverEmail: null, approverName: step.approver_name ?? null,

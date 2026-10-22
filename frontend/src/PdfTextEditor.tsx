@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { renderPdfPage, type RenderTaskRef } from "./shared/pdfRender";
 import * as pdfjsLib from "pdfjs-dist";
 // @ts-ignore - Vite's ?url suffix resolves to the built worker's asset URL
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -30,6 +31,7 @@ export default function PdfTextEditor() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<any>(null);
+  const renderTaskRef: RenderTaskRef = useRef(null);
   const [pageNum, setPageNum] = useState(1);
   const [numPages, setNumPages] = useState(1);
   const [zoom, setZoom] = useState(1);
@@ -71,17 +73,9 @@ export default function PdfTextEditor() {
     const unscaled = pdfPage.getViewport({ scale: 1 });
     const targetWidth = Math.min(container.clientWidth || 1000, 1500) * (zoomOverride ?? zoom);
     const viewport = pdfPage.getViewport({ scale: targetWidth / unscaled.width });
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    // Pins the rendered CSS box to the canvas's own pixel size - otherwise
-    // the surrounding flex/grid layout can stretch or squeeze it (e.g. a
-    // scrollbar appearing once a tall page overflows), which silently
-    // breaks click-position math since getBoundingClientRect() would then
-    // report a box that doesn't match what was actually rendered.
-    canvas.style.width = `${viewport.width}px`;
-    canvas.style.height = `${viewport.height}px`;
-    const ctx = canvas.getContext("2d")!;
-    await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+    // Also pins the canvas's CSS box to its pixel size (click math needs it),
+    // and stops any drawing still running - overlapping renders flip the page.
+    if (!(await renderPdfPage(pdfPage, canvas, viewport, renderTaskRef))) return;
     setPageNum(page);
   }
 

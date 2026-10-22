@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { renderPdfPage, type RenderTaskRef } from "../shared/pdfRender";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -24,6 +25,7 @@ export default function PdfPlacePicker({ file, widthPct, value, onChange, render
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const pdfRef = useRef<any>(null);
+  const renderTaskRef: RenderTaskRef = useRef(null);
   const [page, setPage] = useState(1);
   const [numPages, setNumPages] = useState(1);
   const [size, setSize] = useState({ width: 0, height: 0, scale: 1 });
@@ -36,10 +38,8 @@ export default function PdfPlacePicker({ file, widthPct, value, onChange, render
     const unscaled = p.getViewport({ scale: 1 });
     const scale = Math.min(wrap.clientWidth || 800, 1100) / unscaled.width;
     const vp = p.getViewport({ scale });
-    canvas.width = vp.width; canvas.height = vp.height;
-    canvas.style.width = `${vp.width}px`; canvas.style.height = `${vp.height}px`;
     setSize({ width: vp.width, height: vp.height, scale });
-    await p.render({ canvasContext: canvas.getContext("2d")!, viewport: vp }).promise;
+    await renderPdfPage(p, canvas, vp, renderTaskRef);
   }
 
   useEffect(() => {

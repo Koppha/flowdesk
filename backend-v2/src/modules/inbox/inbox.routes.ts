@@ -1118,6 +1118,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         for (const r of rows) {
           const chain = r.approval_chain as Array<{ approver_id: string; approver_name: string | null }>;
           const isMyTurn = chain[r.current_step_order]?.approver_id === req.user!.userId;
+          // Your own document waiting on your own signature isn't a request
+          // to you - you sign it from Sign a Document.
+          if (isMyTurn && r.created_by_id === req.user!.userId) continue;
           items.push({
             doc_type: "SIGNABLE_DOCUMENT",
             id: r.id,
@@ -1133,6 +1136,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       const rows = await listSignableDocumentsForUser(req.user!.userId);
       for (const r of rows) {
         if (!r.is_my_turn) continue;
+        if (r.created_by_me) continue; // your own document - not a request to you
         items.push({
           doc_type: "SIGNABLE_DOCUMENT",
           id: r.id,

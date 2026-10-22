@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { renderPdfPage, type RenderTaskRef } from "./shared/pdfRender";
 import * as pdfjsLib from "pdfjs-dist";
 // @ts-ignore - Vite's ?url suffix resolves to the built worker's asset URL
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -139,6 +140,9 @@ export default function SignRoutingDocument() {
   const [tickSizePct, setTickSizePct] = useState(0.022);
   const [tickColor, setTickColor] = useState(TEXT_COLORS[0]);
   const [placingTick, setPlacingTick] = useState(false);
+  // A signature placed but not yet sent stays put while you use the Tick or
+  // Add text tools (or another page), and comes back when you return to Sign.
+  const [parkedSign, setParkedSign] = useState<{ xPct: number; yPct: number; page: number } | null>(null);
   const [textDraft, setTextDraft] = useState("");
   const [textDraftSize, setTextDraftSize] = useState(14);
   const [textDraftColor, setTextDraftColor] = useState(TEXT_COLORS[0]);
@@ -227,6 +231,7 @@ export default function SignRoutingDocument() {
   // ref, so the browser can never silently rescale it out from under the
   // click math, and the ResizeObserver further down re-renders at the
   // correct size if the container's true width ever drifts from that.
+  const renderTaskRef: RenderTaskRef = useRef(null);
   async function renderPage(pdf: any, page: number, zoomOverride?: number) {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -239,21 +244,31 @@ export default function SignRoutingDocument() {
     const targetWidth = Math.min(container.clientWidth || 1000, 1500) * (zoomOverride ?? zoom);
     const scale = targetWidth / unscaled.width;
     const viewport = pdfPage.getViewport({ scale });
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    canvas.style.width = `${viewport.width}px`;
-    canvas.style.height = `${viewport.height}px`;
     setCanvasSize({ width: viewport.width, height: viewport.height });
     setPageScale(scale);
-    const ctx = canvas.getContext("2d")!;
-    await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+    // One drawing at a time - overlapping renders flip the page.
+    if (!(await renderPdfPage(pdfPage, canvas, viewport, renderTaskRef))) return;
     setPageNum(page);
   }
 
   async function goToPage(page: number) {
     if (!pdfDocRef.current || page < 1 || page > numPages) return;
+    if (placeMode === "sign" && pendingClick) setParkedSign({ ...pendingClick, page: pageNum });
     setPendingClick(null);
     await renderPage(pdfDocRef.current, page);
+    if (placeMode === "sign" && parkedSign && parkedSign.page === page) { setPendingClick({ xPct: parkedSign.xPct, yPct: parkedSign.yPct }); setParkedSign(null); }
+  }
+
+  async function switchTool(next: "sign" | "text" | "tick") {
+    if (next === placeMode) return;
+    if (placeMode === "sign" && pendingClick) setParkedSign({ ...pendingClick, page: pageNum });
+    setPendingClick(null);
+    setPlaceMode(next);
+    if (next === "sign" && parkedSign) {
+      if (parkedSign.page !== pageNum && pdfDocRef.current) await renderPage(pdfDocRef.current, parkedSign.page);
+      setPendingClick({ xPct: parkedSign.xPct, yPct: parkedSign.yPct });
+      setParkedSign(null);
+    }
   }
 
   async function changeZoom(next: number) {
@@ -588,20 +603,24 @@ export default function SignRoutingDocument() {
   // boxHeight = boxWidth / 2.6, both converted to canvas pixels via the
   // same scale already used to render the page - removes any gap between
   // what this preview shows and what actually gets stamped.
-  const markBoxStyle: React.CSSProperties | null = pendingClick && canvasSize.width && placeMode === "sign"
+  const sigAt = placeMode === "sign" ? pendingClick : (parkedSign && parkedSign.page === pageNum ? parkedSign : null);
+  const sigParked = placeMode !== "sign";
+  const markBoxStyle: React.CSSProperties | null = sigAt && canvasSize.width
     ? (() => {
         const boxWidthPx = markWidthPct * canvasSize.width;
         const boxHeightPx = boxWidthPx / 2.6;
         return {
           position: "absolute",
-          left: `${pendingClick.xPct * canvasSize.width}px`,
-          top: `${pendingClick.yPct * canvasSize.height}px`,
+          left: `${sigAt.xPct * canvasSize.width}px`,
+          top: `${sigAt.yPct * canvasSize.height}px`,
           width: `${boxWidthPx}px`,
           height: `${boxHeightPx}px`,
           border: "1.5px dashed #3b82f6",
           background: "rgba(255,255,255,0.55)",
           boxShadow: "0 0 0 3px rgba(59,130,246,0.18)",
-          cursor: "grab",
+          cursor: sigParked ? "default" : "grab",
+          opacity: sigParked ? 0.6 : 1,
+          pointerEvents: sigParked ? "none" : "auto",
           touchAction: "none",
           borderRadius: 2,
           overflow: "hidden",
@@ -794,9 +813,9 @@ export default function SignRoutingDocument() {
                 {canAct ? (placeMode === "sign" ? (pendingClick ? "Drag your signature to the right spot, then press Sign & send" : "Click on the page to place your signature") : placeMode === "tick" ? (pendingClick ? "Drag the tick into the box if needed, then press Add tick" : "Click the box you want to tick") : "Click on the page to add text") : doc?.status === "REJECTED" ? "This document was rejected" : doc?.status === "COMPLETED" ? (hasChain ? "Every approver has signed" : "Signing finished") : `Awaiting ${currentApproverName || "the next approver"}'s signature`}
                 {canAct && (
                   <span style={{ display: "flex", gap: 4 }}>
-                    <button onClick={() => { setPlaceMode("sign"); setPendingClick(null); }} title="Sign" style={{ border: placeMode === "sign" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "sign" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "sign" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><PenLine size={13} /></button>
-                    <button onClick={() => { setPlaceMode("tick"); setPendingClick(null); }} title="Tick a box" style={{ border: placeMode === "tick" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "tick" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "tick" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><SquareCheck size={13} /></button>
-                    <button onClick={() => { setPlaceMode("text"); setPendingClick(null); }} title="Add text" style={{ border: placeMode === "text" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "text" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "text" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><Type size={13} /></button>
+                    <button onClick={() => void switchTool("sign")} title="Sign" style={{ border: placeMode === "sign" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "sign" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "sign" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><PenLine size={13} /></button>
+                    <button onClick={() => void switchTool("tick")} title="Tick a box" style={{ border: placeMode === "tick" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "tick" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "tick" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><SquareCheck size={13} /></button>
+                    <button onClick={() => void switchTool("text")} title="Add text" style={{ border: placeMode === "text" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "text" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "text" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><Type size={13} /></button>
                   </span>
                 )}
                 <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
@@ -844,7 +863,7 @@ export default function SignRoutingDocument() {
                     const dateSize = Math.min(dateH * 0.85, 7.5 * pageScale);
                     const name = `${me?.fullName || "Your name"}${onBehalfOf && activeNotation ? ` (${activeNotation === "AI" ? "a.i." : "p.p."})` : ""}`;
                     return (
-                      <div style={markBoxStyle} onPointerDown={startDrag} title="Drag to move your signature">
+                      <div style={markBoxStyle} onPointerDown={sigParked ? undefined : startDrag} title={sigParked ? "Your signature - go back to Sign to move it or send it" : "Drag to move your signature"}>
                         <div style={{ height: nameH, fontFamily: "Helvetica, Arial, sans-serif", fontWeight: 700, fontSize: nameSize, lineHeight: `${nameH}px`, color: "#1c296b", whiteSpace: "nowrap", pointerEvents: "none" }}>{name}</div>
                         <div style={{ height: markH, display: "flex", alignItems: "center", justifyContent: signMode === "draw" ? "center" : "flex-start", pointerEvents: "none" }}>
                           {signMode === "draw"
@@ -912,6 +931,13 @@ export default function SignRoutingDocument() {
             </div>
 
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: 16, position: "sticky", top: 16 }}>
+              {canAct && placeMode !== "sign" && parkedSign && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 10px", marginBottom: 12, borderRadius: 7, background: "#fffbeb", border: "1px solid #fde68a", fontSize: 12, color: "#92400e" }}>
+                  <PenLine size={13} style={{ flexShrink: 0 }} />
+                  <span style={{ flex: 1 }}>Your signature is placed{parkedSign.page !== pageNum ? ` on page ${parkedSign.page}` : ""} but not sent yet.</span>
+                  <button type="button" onClick={() => void switchTool("sign")} style={{ border: "1px solid #f59e0b", background: "#fff", color: "#92400e", borderRadius: 6, padding: "3px 8px", fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}>Back to signing</button>
+                </div>
+              )}
               {!canAct ? (
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
                   {doc?.status === "REJECTED" ? "This document's approval route was rejected — no further action is possible." :
