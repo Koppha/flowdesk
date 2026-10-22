@@ -100,6 +100,7 @@ export default function ViewClearances() {
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
 
   const [sortKey, setSortKey] = useState<SortKey>("vrDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -124,9 +125,23 @@ export default function ViewClearances() {
     return counts;
   }, [items]);
 
+  // Only the statuses these clearances actually have, with how many of each
+  // (within the selected company tab).
+  const statusOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const i of items) {
+      if (companyFilter !== "ALL" && i.division_name !== companyFilter) continue;
+      counts.set(i.status, (counts.get(i.status) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([value, n]) => ({ value, label: STATUS_LABEL[value] || value, n }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [items, companyFilter]);
+
   const filtered = useMemo(() => {
     return items.filter((i) => {
       if (companyFilter !== "ALL" && i.division_name !== companyFilter) return false;
+      if (statusFilter !== "ALL" && i.status !== statusFilter) return false;
       if (dateFrom && (!i.closed_at || i.closed_at < dateFrom)) return false;
       if (dateTo && (!i.closed_at || i.closed_at > dateTo)) return false;
       if (search) {
@@ -143,7 +158,7 @@ export default function ViewClearances() {
       }
       return true;
     });
-  }, [items, companyFilter, dateFrom, dateTo, search]);
+  }, [items, companyFilter, statusFilter, dateFrom, dateTo, search]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
@@ -249,10 +264,19 @@ export default function ViewClearances() {
       <BusinessUnitTabs value={companyFilter} onChange={(v) => { setCompanyFilter(v); setPage(1); }} counts={companyCounts} icon={Building2} allIcon={Users} />
 
       <FinanceFilterBar
-        showReset={Boolean(search || companyFilter !== "ALL" || dateFrom || dateTo)}
-        onReset={() => { setSearch(""); setCompanyFilter("ALL"); setDateFrom(""); setDateTo(""); setPage(1); }}
+        showReset={Boolean(search || companyFilter !== "ALL" || statusFilter !== "ALL" || dateFrom || dateTo)}
+        onReset={() => { setSearch(""); setCompanyFilter("ALL"); setStatusFilter("ALL"); setDateFrom(""); setDateTo(""); setPage(1); }}
       >
         <SearchField label="Search" placeholder="Search name, emp no, division, department, destination, duty station…" value={search} onChange={(v) => { setSearch(v); setPage(1); }} />
+        <FilterField label="Status">
+          <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
+            <option value="ALL">All statuses</option>
+            {statusOptions.map((o) => <option key={o.value} value={o.value}>{o.label} ({o.n})</option>)}
+            {statusFilter !== "ALL" && !statusOptions.some((o) => o.value === statusFilter) && (
+              <option value={statusFilter}>{STATUS_LABEL[statusFilter] || statusFilter} (0)</option>
+            )}
+          </select>
+        </FilterField>
         <FilterField label="Closed From">
           <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
         </FilterField>

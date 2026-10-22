@@ -18,6 +18,7 @@ import { acknowledgeCollection, createProvisioningTaskForSubmission, getProvisio
 import { baselineBrsDocument, recordBrsRevision, returnBrsDocumentToDraft } from "../brs/brs.service.js";
 import { isPeriodLocked } from "../attendance/attendance.routes.js";
 import { assertCanSubmit, assigneeLabel, assigneeMatches, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision } from "./change-collab.service.js";
+import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 
 export const customRequestsRouter = Router();
 customRequestsRouter.use(requireAuth);
@@ -25,7 +26,7 @@ customRequestsRouter.use(requireAuth);
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-const attachmentStorage = multer.diskStorage({
+const attachmentStorage = persistentDiskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });
@@ -777,7 +778,9 @@ customRequestsRouter.get("/:id/attachments/:attachmentId", async (req: AuthedReq
     ))[0];
     if (!attachment) throw notFound();
 
-    return res.download(attachment.file_path, attachment.original_name);
+    const localPath = await ensureLocalFile(attachment.file_path);
+    if (!localPath) throw notFound("This attachment's file is missing");
+    return res.download(localPath, attachment.original_name);
   } catch (err) {
     return next(err);
   }

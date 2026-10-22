@@ -30,6 +30,7 @@ import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveAdvancePdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { buildAdvancePdfFilename, formatPaymentReference } from "../../lib/pdf/pdfHelpers.js";
+import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 
@@ -224,7 +225,7 @@ advancesRouter.use(requireAuth);
 // / custom-requests' attachments elsewhere in this codebase.
 const advanceUploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(advanceUploadDir)) fs.mkdirSync(advanceUploadDir, { recursive: true });
-const advanceAttachmentStorage = multer.diskStorage({
+const advanceAttachmentStorage = persistentDiskStorage({
   destination: (_req, _file, cb) => cb(null, advanceUploadDir),
   filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });
@@ -1197,12 +1198,13 @@ advancesRouter.get("/:id/attachments/:attachmentId/file", async (req: AuthedRequ
       [req.params.attachmentId, req.params.id]
     ))[0];
     if (!attachment) throw notFound();
-    if (!fs.existsSync(attachment.file_path)) throw notFound();
+    const localPath = await ensureLocalFile(attachment.file_path);
+    if (!localPath) throw notFound("This attachment's file is missing");
 
     const disposition = req.query.download === "1" ? "attachment" : "inline";
     res.setHeader("Content-Type", attachment.content_type || "application/octet-stream");
     res.setHeader("Content-Disposition", `${disposition}; filename="${encodeURIComponent(attachment.original_name)}"`);
-    return res.sendFile(path.resolve(attachment.file_path));
+    return res.sendFile(path.resolve(localPath));
   } catch (err) {
     return next(err);
   }

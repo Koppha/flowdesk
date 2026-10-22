@@ -25,6 +25,7 @@ import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.j
 import { getBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { canAccessVendorContracts, canManageVendorContracts } from "../../lib/vendorContractsPermissions.js";
 import { notifyVendorContractExpiring } from "../../lib/notifications.js";
+import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 
 export async function ensureVendorContractsSchema() {
   await query(`
@@ -242,7 +243,7 @@ vendorContractsRouter.use(requireAuth);
 
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-const storage = multer.diskStorage({
+const storage = persistentDiskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });
@@ -544,11 +545,12 @@ vendorContractsRouter.get("/:contractId/documents/:documentId", async (req: Auth
     );
     const doc = rows[0];
     if (!doc) throw notFound();
-    if (!fs.existsSync(doc.file_path)) throw notFound();
+    const localPath = await ensureLocalFile(doc.file_path);
+    if (!localPath) throw notFound("This document's file is missing");
     const disposition = req.query.download === "1" ? "attachment" : "inline";
     res.setHeader("Content-Disposition", `${disposition}; filename="${path.basename(doc.file_name)}"`);
     if (doc.file_type) res.setHeader("Content-Type", doc.file_type);
-    fs.createReadStream(doc.file_path).pipe(res);
+    fs.createReadStream(localPath).pipe(res);
   } catch (err) {
     return next(err);
   }

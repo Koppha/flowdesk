@@ -20,6 +20,19 @@ ln -sf /etc/advance-clearance/.env "$RELEASE_DIR/backend/.env"
 
 (cd "$RELEASE_DIR/backend" && npm ci --omit=dev)
 
+# Uploads (receipts, payback proofs, attachments, signed PDFs) live in one
+# folder outside the releases, so a new release - or deleting an old one -
+# never loses them. Files left inside earlier release folders are gathered
+# into it first (never overwriting). The backend also keeps a copy of each
+# file in the shared database so either PROD server can serve it.
+SHARED_UPLOADS="$APP_DIR/shared/uploads"
+mkdir -p "$SHARED_UPLOADS"
+for old in "$APP_DIR"/releases/*/backend/uploads; do
+  [ -d "$old" ] && [ ! -L "$old" ] && cp -an "$old"/. "$SHARED_UPLOADS"/ 2>/dev/null || true
+done
+rm -rf "$RELEASE_DIR/backend/uploads"
+ln -sfn "$SHARED_UPLOADS" "$RELEASE_DIR/backend/uploads"
+
 ln -sfn "$RELEASE_DIR" "$APP_DIR/current"
 
 pm2 reload "$APP_DIR/ecosystem.config.cjs" --update-env

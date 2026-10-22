@@ -7,6 +7,7 @@ import { stampTextAnnotations, stampTickMarks, type TickMarkInput } from "../../
 import { getStringSystemSetting, setStringSystemSetting, getBooleanSystemSetting, setBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { env } from "../../config/env.js";
 import { notifySignatureTurn, notifySignatureRejected, notifySignatureCompleted } from "../../lib/notifications.js";
+import { readStoredFile, writeStoredFile, ensureLocalFile } from "../../lib/fileStore.js";
 
 export const signatureUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "signatures");
 if (!fs.existsSync(signatureUploadDir)) fs.mkdirSync(signatureUploadDir, { recursive: true });
@@ -97,8 +98,8 @@ export async function performSignDocument(input: SignDocumentInput) {
 
   const originalFilePath = path.join(signatureUploadDir, `${Date.now()}-original-${sanitizeName(input.originalFileName)}`);
   const signedFilePath = path.join(signatureUploadDir, `${Date.now()}-signed-${sanitizeName(input.originalFileName)}`);
-  fs.writeFileSync(originalFilePath, input.originalBuffer);
-  fs.writeFileSync(signedFilePath, signedBuffer);
+  await writeStoredFile(originalFilePath, input.originalBuffer);
+  await writeStoredFile(signedFilePath, signedBuffer);
 
   const row = (await query<{ id: string }>(
     `INSERT INTO document_signatures
@@ -135,9 +136,10 @@ export async function getSignatureByCode(code: string) {
 // Recomputes the hash of whatever is on disk right now and compares it
 // against what was recorded at signing time - the actual tamper check.
 // A mismatch here means the file changed after it was signed.
-export function verifyFileIntegrity(filePath: string, recordedHash: string): boolean {
-  if (!fs.existsSync(filePath)) return false;
-  return hashBuffer(fs.readFileSync(filePath)) === recordedHash;
+export async function verifyFileIntegrity(filePath: string, recordedHash: string): Promise<boolean> {
+  const localPath = await ensureLocalFile(filePath);
+  if (!localPath) return false;
+  return hashBuffer(fs.readFileSync(localPath)) === recordedHash;
 }
 
 export interface SavedSignature {
@@ -202,8 +204,8 @@ export async function createSignableDocument(input: CreateSignableDocumentInput)
 
   const originalFilePath = path.join(signatureUploadDir, `${Date.now()}-routing-original-${sanitizeName(input.originalFileName)}`);
   const currentFilePath = path.join(signatureUploadDir, `${Date.now()}-routing-current-${sanitizeName(input.originalFileName)}`);
-  fs.writeFileSync(originalFilePath, input.originalBuffer);
-  fs.writeFileSync(currentFilePath, stampedBuffer);
+  await writeStoredFile(originalFilePath, input.originalBuffer);
+  await writeStoredFile(currentFilePath, stampedBuffer);
 
   const chain: RoutingChainStep[] = (input.approvalChain || []).map((s) => ({
     approver_id: s.approverId, approver_name: s.approverName, status: "PENDING", comment: null, acted_at: null
@@ -356,7 +358,7 @@ export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
   }
 
   const signedAt = new Date();
-  const currentBuffer = fs.readFileSync(doc.current_file_path);
+  const currentBuffer = await readStoredFile(doc.current_file_path);
   const displayName = input.authorityUserId && notation
     ? `${input.signerName} (${notation === "AI" ? "a.i." : "p.p."})`
     : input.signerName;
@@ -372,7 +374,7 @@ export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
   });
 
   const nextFilePath = path.join(signatureUploadDir, `${Date.now()}-routing-current-${sanitizeName(doc.original_file_name)}`);
-  fs.writeFileSync(nextFilePath, stampedBuffer);
+  await writeStoredFile(nextFilePath, stampedBuffer);
 
   const row = (await query<{ id: string }>(
     `INSERT INTO document_signature_placements
@@ -491,14 +493,14 @@ export async function addTextToDocument(input: AddTextToDocumentInput) {
   const doc = await getSignableDocument(input.documentId);
   assertCanActOnDocument(doc, input.actorId);
 
-  const currentBuffer = fs.readFileSync(doc.current_file_path);
+  const currentBuffer = await readStoredFile(doc.current_file_path);
   const buffer = await stampTextAnnotations(currentBuffer, [{
     pageNumber: input.pageNumber, xPct: input.xPct, yPct: input.yPct,
     text: input.text, fontSize: input.fontSize, color: input.color
   }]);
   const contentHash = hashBuffer(buffer);
   const nextFilePath = path.join(signatureUploadDir, `${Date.now()}-routing-current-${sanitizeName(doc.original_file_name)}`);
-  fs.writeFileSync(nextFilePath, buffer);
+  await writeStoredFile(nextFilePath, buffer);
   await query(
     `UPDATE signable_documents SET current_file_path = $1, current_content_hash = $2, updated_at = now() WHERE id = $3`,
     [nextFilePath, contentHash, input.documentId]
@@ -511,12 +513,12 @@ export async function addTextToDocument(input: AddTextToDocumentInput) {
 export async function addTickToDocument(input: { documentId: string; actorId: string } & TickMarkInput) {
   const doc = await getSignableDocument(input.documentId);
   assertCanActOnDocument(doc, input.actorId);
-  const buffer = await stampTickMarks(fs.readFileSync(doc.current_file_path), [{
+  const buffer = await stampTickMarks(await readStoredFile(doc.current_file_path), [{
     pageNumber: input.pageNumber, xPct: input.xPct, yPct: input.yPct, sizePct: input.sizePct, kind: input.kind, color: input.color
   }]);
   const contentHash = hashBuffer(buffer);
   const nextFilePath = path.join(signatureUploadDir, `${Date.now()}-routing-current-${sanitizeName(doc.original_file_name)}`);
-  fs.writeFileSync(nextFilePath, buffer);
+  await writeStoredFile(nextFilePath, buffer);
   await query(
     `UPDATE signable_documents SET current_file_path = $1, current_content_hash = $2, updated_at = now() WHERE id = $3`,
     [nextFilePath, contentHash, input.documentId]

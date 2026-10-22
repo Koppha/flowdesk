@@ -20,6 +20,7 @@ import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveAccommodationPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { formatPaymentReference } from "../../lib/pdf/pdfHelpers.js";
+import { persistentDiskStorage } from "../../lib/fileStore.js";
 
 const LESOTHO_DISTRICTS = [
   "Butha-Buthe",
@@ -78,7 +79,7 @@ const RejectSchema = z.object({
 const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-const storage = multer.diskStorage({
+const storage = persistentDiskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
     const suffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;

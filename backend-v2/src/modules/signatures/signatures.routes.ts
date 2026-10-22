@@ -11,6 +11,7 @@ import { signatureVerifyLimiter } from "../../middleware/rateLimit.js";
 import { getBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { renderBrandedPage, escapeHtml } from "../../lib/htmlPageTemplate.js";
 import { ensureSignaturesSchema } from "./signatures.schema.js";
+import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 import {
   performSignDocument, getSignatureRecord, getSignatureByCode, verifyFileIntegrity,
   getSignatureNotationPolicy, setSignatureNotationPolicy, signatureUploadDir,
@@ -21,7 +22,7 @@ import {
 } from "./signatures.service.js";
 
 const upload = multer({
-  storage: multer.diskStorage({
+  storage: persistentDiskStorage({
     destination: (_req, _file, cb) => cb(null, signatureUploadDir),
     filename: (_req, file, cb) => cb(null, `${Date.now()}-incoming-${sanitizeUploadFilename(file.originalname)}`)
   }),
@@ -372,11 +373,12 @@ signaturesRouter.post("/documents/:id/annotate-tick", async (req: AuthedRequest,
 signaturesRouter.get("/documents/:id/file", async (req: AuthedRequest, res, next) => {
   try {
     const doc = await getSignableDocument(req.params.id);
-    if (!fs.existsSync(doc.current_file_path)) throw notFound();
+    const localPath = await ensureLocalFile(doc.current_file_path);
+    if (!localPath) throw notFound("This document's file is missing");
     const disposition = req.query.download === "1" ? "attachment" : "inline";
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `${disposition}; filename="${encodeURIComponent(doc.original_file_name)}"`);
-    return res.sendFile(path.resolve(doc.current_file_path));
+    return res.sendFile(path.resolve(localPath));
   } catch (err) {
     return next(err);
   }
@@ -456,11 +458,12 @@ signaturesRouter.get("/:id/file", async (req: AuthedRequest, res, next) => {
   try {
     const record = await getSignatureRecord(req.params.id);
     await assertCanViewSignature(record, req.user!);
-    if (!fs.existsSync(record.signed_file_path)) throw notFound();
+    const signedPath = await ensureLocalFile(record.signed_file_path);
+    if (!signedPath) throw notFound("This document's file is missing");
     const disposition = req.query.download === "1" ? "attachment" : "inline";
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `${disposition}; filename="${encodeURIComponent("signed-" + record.original_file_name)}"`);
-    return res.sendFile(path.resolve(record.signed_file_path));
+    return res.sendFile(path.resolve(signedPath));
   } catch (err) {
     return next(err);
   }
@@ -552,7 +555,7 @@ signatureVerifyRouter.get("/:code", async (req, res, next) => {
         ? (await query<{ full_name: string | null }>(`SELECT full_name FROM users WHERE id = $1`, [record.authority_user_id]))[0]
         : null;
       const signer = (await query<{ full_name: string | null }>(`SELECT full_name FROM users WHERE id = $1`, [record.signer_id]))[0];
-      const valid = record.status === "VALID" && verifyFileIntegrity(record.signed_file_path, record.content_hash);
+      const valid = record.status === "VALID" && (await verifyFileIntegrity(record.signed_file_path, record.content_hash));
 
       return res.type("html").send(renderVerifyPage({
         code, found: true, valid, title: record.title,
@@ -565,7 +568,7 @@ signatureVerifyRouter.get("/:code", async (req, res, next) => {
     const doc = await getSignableDocumentByCode(code);
     if (doc) {
       const placements = await listPlacementsForDocument(doc.id);
-      const valid = verifyFileIntegrity(doc.current_file_path, doc.current_content_hash);
+      const valid = await verifyFileIntegrity(doc.current_file_path, doc.current_content_hash);
       return res.type("html").send(renderVerifyPage({
         code, found: true, valid, title: doc.title,
         signers: placements.map((p) => ({

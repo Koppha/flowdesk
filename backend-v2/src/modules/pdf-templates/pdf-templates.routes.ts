@@ -10,13 +10,14 @@ import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { getFieldCatalogFor, resolvePdfData, pickSampleRecordId, buildDummyPdfData, PDF_REQUEST_TYPES, type PdfRequestType } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead, type PdfTemplateRow } from "../../lib/pdf/genericPdfRenderer.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
+import { persistentDiskStorage } from "../../lib/fileStore.js";
 
 export const pdfTemplatesRouter = Router();
 pdfTemplatesRouter.use(requireAuth);
 
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-const logoStorage = multer.diskStorage({
+const logoStorage = persistentDiskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });

@@ -18,6 +18,7 @@ import { getUserGroups } from "../../lib/permissionGroups.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveClaimPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
+import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 import {
   type ClaimStatus,
   type FinanceDecision,
@@ -78,7 +79,7 @@ const ActionCommentSchema = z.object({
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-const storage = multer.diskStorage({
+const storage = persistentDiskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, `${Date.now()}-${sanitizeUploadFilename(file.originalname)}`)
 });
@@ -502,7 +503,8 @@ claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res
     }
     const receipt = (await query<any>(`SELECT * FROM receipts WHERE id=$1 AND clearance_claim_id=$2`, [req.params.receiptId, req.params.id]))[0];
     if (!receipt) throw notFound();
-    if (!fs.existsSync(receipt.file_path)) throw notFound();
+    const localPath = await ensureLocalFile(receipt.file_path);
+    if (!localPath) throw notFound("This receipt's file is missing");
 
     const ext = path.extname(receipt.file_path).toLowerCase();
     const contentTypes: Record<string, string> = {
@@ -517,7 +519,7 @@ claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res
     const disposition = req.query.download === "1" ? "attachment" : "inline";
     res.setHeader("Content-Type", contentTypes[ext] || "application/octet-stream");
     res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
-    fs.createReadStream(receipt.file_path).pipe(res);
+    fs.createReadStream(localPath).pipe(res);
   } catch (err) {
     return next(err);
   }
@@ -534,7 +536,8 @@ claimsRouter.get("/:id/payback-proof/:proofId/file", async (req: AuthedRequest, 
     }
     const proof = (await query<any>(`SELECT * FROM clearance_payback_proofs WHERE id=$1 AND clearance_claim_id=$2`, [req.params.proofId, req.params.id]))[0];
     if (!proof) throw notFound();
-    if (!fs.existsSync(proof.file_path)) throw notFound();
+    const localPath = await ensureLocalFile(proof.file_path);
+    if (!localPath) throw notFound("This proof's file is missing");
 
     const ext = path.extname(proof.file_path).toLowerCase();
     const contentTypes: Record<string, string> = {
@@ -547,7 +550,7 @@ claimsRouter.get("/:id/payback-proof/:proofId/file", async (req: AuthedRequest, 
     const disposition = req.query.download === "1" ? "attachment" : "inline";
     res.setHeader("Content-Type", contentTypes[ext] || "application/octet-stream");
     res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
-    fs.createReadStream(proof.file_path).pipe(res);
+    fs.createReadStream(localPath).pipe(res);
   } catch (err) {
     return next(err);
   }
