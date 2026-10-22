@@ -6,7 +6,7 @@ import { api, getUserFromToken, downloadBlob } from "./api";
 import { confirmAction } from "./alerts";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { Field, fieldStyle, labelStyle, SignatureCanvas } from "./SignDocument";
-import { Upload, FilePlus2, FolderOpen, ChevronLeft, ChevronRight, MousePointerClick, Share2, CheckCircle2, Users, Plus, Trash2, ArrowUp, ArrowDown, XCircle, Clock3, Ban, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, PenLine, Type } from "lucide-react";
+import { Upload, FilePlus2, FolderOpen, ChevronLeft, ChevronRight, MousePointerClick, Share2, CheckCircle2, Users, Plus, Trash2, ArrowUp, ArrowDown, XCircle, Clock3, Ban, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, PenLine, Type, SquareCheck } from "lucide-react";
 
 const TEXT_COLORS = ["#111827", "#dc2626", "#1d4ed8", "#059669", "#ea580c"];
 
@@ -133,7 +133,12 @@ export default function SignRoutingDocument() {
   // Click mode: place a signature, or drop plain text (e.g. filling in a
   // cell by hand, a note) - same click-to-place mechanics, different form
   // and a different, non-signing endpoint underneath.
-  const [placeMode, setPlaceMode] = useState<"sign" | "text">("sign");
+  const [placeMode, setPlaceMode] = useState<"sign" | "text" | "tick">("sign");
+  // Tick tool: a tick or cross in a box, sized as a fraction of page width.
+  const [tickKind, setTickKind] = useState<"CHECK" | "CROSS">("CHECK");
+  const [tickSizePct, setTickSizePct] = useState(0.022);
+  const [tickColor, setTickColor] = useState(TEXT_COLORS[0]);
+  const [placingTick, setPlacingTick] = useState(false);
   const [textDraft, setTextDraft] = useState("");
   const [textDraftSize, setTextDraftSize] = useState(14);
   const [textDraftColor, setTextDraftColor] = useState(TEXT_COLORS[0]);
@@ -421,7 +426,11 @@ export default function SignRoutingDocument() {
     if (!canAct) return;
     const pt = pctFromClientPoint(e.clientX, e.clientY);
     if (!pt) return;
-    if (placeMode === "sign" && canvasSize.width) {
+    if (placeMode === "tick" && canvasSize.width) {
+      // Centred on the click - you click inside the box you want ticked.
+      const w = tickSizePct, h = (tickSizePct * canvasSize.width) / canvasSize.height;
+      setPendingClick({ xPct: Math.min(Math.max(pt.xPct - w / 2, 0), 1 - w), yPct: Math.min(Math.max(pt.yPct - h / 2, 0), 1 - h) });
+    } else if (placeMode === "sign" && canvasSize.width) {
       const boxH = (markWidthPct * canvasSize.width / 2.6) / canvasSize.height;
       setPendingClick({ xPct: Math.min(pt.xPct, 1 - markWidthPct), yPct: Math.min(pt.yPct, 1 - boxH) });
     } else {
@@ -447,8 +456,9 @@ export default function SignRoutingDocument() {
     // box's corner to it.
     const offset = { x: start.xPct - pendingClick.xPct, y: start.yPct - pendingClick.yPct };
     const signing = placeMode === "sign" && canvasSize.width > 0;
-    const maxX = signing ? 1 - markWidthPct : 1;
-    const maxY = signing ? 1 - (markWidthPct * canvasSize.width / 2.6) / canvasSize.height : 1;
+    const ticking = placeMode === "tick" && canvasSize.width > 0;
+    const maxX = signing ? 1 - markWidthPct : ticking ? 1 - tickSizePct : 1;
+    const maxY = signing ? 1 - (markWidthPct * canvasSize.width / 2.6) / canvasSize.height : ticking ? 1 - (tickSizePct * canvasSize.width) / canvasSize.height : 1;
     draggingRef.current = true;
     const onMove = (ev: PointerEvent) => {
       if (!draggingRef.current) return;
@@ -519,6 +529,24 @@ export default function SignRoutingDocument() {
       setPlaceError(e.message || "Failed to place signature.");
     } finally {
       setPlacing(false);
+    }
+  }
+
+  async function handlePlaceTick() {
+    setPlaceError("");
+    if (!docId || !pendingClick) return;
+    setPlacingTick(true);
+    try {
+      await api.annotateTickSignableDocument(docId, {
+        pageNumber: pageNum, xPct: pendingClick.xPct, yPct: pendingClick.yPct,
+        sizePct: tickSizePct, kind: tickKind, color: tickColor
+      });
+      setPendingClick(null);
+      await refreshCurrentDocument();
+    } catch (e: any) {
+      setPlaceError(e.message || "Failed to add the tick.");
+    } finally {
+      setPlacingTick(false);
     }
   }
 
@@ -763,10 +791,11 @@ export default function SignRoutingDocument() {
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginBottom: 8, flexWrap: "wrap" }}>
                 <MousePointerClick size={13} />
-                {canAct ? (placeMode === "sign" ? (pendingClick ? "Drag your signature to the right spot, then press Sign & send" : "Click on the page to place your signature") : "Click on the page to add text") : doc?.status === "REJECTED" ? "This document was rejected" : doc?.status === "COMPLETED" ? (hasChain ? "Every approver has signed" : "Signing finished") : `Awaiting ${currentApproverName || "the next approver"}'s signature`}
+                {canAct ? (placeMode === "sign" ? (pendingClick ? "Drag your signature to the right spot, then press Sign & send" : "Click on the page to place your signature") : placeMode === "tick" ? (pendingClick ? "Drag the tick into the box if needed, then press Add tick" : "Click the box you want to tick") : "Click on the page to add text") : doc?.status === "REJECTED" ? "This document was rejected" : doc?.status === "COMPLETED" ? (hasChain ? "Every approver has signed" : "Signing finished") : `Awaiting ${currentApproverName || "the next approver"}'s signature`}
                 {canAct && (
                   <span style={{ display: "flex", gap: 4 }}>
                     <button onClick={() => { setPlaceMode("sign"); setPendingClick(null); }} title="Sign" style={{ border: placeMode === "sign" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "sign" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "sign" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><PenLine size={13} /></button>
+                    <button onClick={() => { setPlaceMode("tick"); setPendingClick(null); }} title="Tick a box" style={{ border: placeMode === "tick" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "tick" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "tick" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><SquareCheck size={13} /></button>
                     <button onClick={() => { setPlaceMode("text"); setPendingClick(null); }} title="Add text" style={{ border: placeMode === "text" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "text" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "text" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><Type size={13} /></button>
                   </span>
                 )}
@@ -826,6 +855,19 @@ export default function SignRoutingDocument() {
                       </div>
                     );
                   })()}
+                  {pendingClick && placeMode === "tick" && canvasSize.width > 0 && (() => {
+                    const px = tickSizePct * canvasSize.width;
+                    // Same geometry as stampTickMarks (textAnnotate.ts).
+                    const lines = tickKind === "CHECK" ? "M14 54 L40 80 L88 18" : "M20 20 L80 80 M80 20 L20 80";
+                    return (
+                      <div onPointerDown={startDrag} title="Drag to move the tick"
+                        style={{ position: "absolute", left: pendingClick.xPct * canvasSize.width, top: pendingClick.yPct * canvasSize.height, width: px, height: px, cursor: "grab", touchAction: "none", outline: "1.5px dashed #3b82f6", outlineOffset: 2, zIndex: 2 }}>
+                        <svg viewBox="0 0 100 100" width={px} height={px} style={{ display: "block", pointerEvents: "none" }}>
+                          <path d={lines} fill="none" stroke={tickColor} strokeWidth={13} strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </div>
+                    );
+                  })()}
                   {anchorDotHandleStyle && placeMode === "text" && (
                     <div style={anchorDotHandleStyle} onPointerDown={startDrag} title="Drag to fine-tune">
                       <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", border: "2px solid #fff", boxShadow: "0 0 0 1px #dc2626" }} />
@@ -876,6 +918,43 @@ export default function SignRoutingDocument() {
                    doc?.status === "COMPLETED" && !hasChain ? `Signing was finished${doc.closedByName ? ` by ${doc.closedByName}` : ""}${doc.closedAt ? ` on ${new Date(doc.closedAt).toLocaleDateString("en-GB")}` : ""} — nobody can sign it any more. You can still download a copy.` :
                    doc?.status === "COMPLETED" ? "Every approver has signed. You can still download a copy at any time." :
                    `Waiting on ${currentApproverName || "the next approver"} to sign before this reaches you. They've been emailed.`}
+                </div>
+              ) : placeMode === "tick" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 13 }}><SquareCheck size={14} /> Tick a box</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{pendingClick ? "Drag it into the box if it's not quite there, then press Add tick. Repeat for each box." : "Click the box on the page you want to tick."}</div>
+                  <div>
+                    <label style={labelStyle}>Mark</label>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {(["CHECK", "CROSS"] as const).map((k) => (
+                        <button key={k} type="button" onClick={() => setTickKind(k)} style={{ padding: "5px 12px", borderRadius: 6, fontSize: 13, cursor: "pointer", border: tickKind === k ? "1px solid #3b82f6" : "1px solid var(--border)", background: tickKind === k ? "#eff6ff" : "var(--surface-soft)", color: tickKind === k ? "#1d4ed8" : "var(--text)", fontWeight: 700 }}>
+                          {k === "CHECK" ? "✓ Tick" : "✗ Cross"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <Field label="Size">
+                    <input type="range" min={0.012} max={0.06} step={0.002} value={tickSizePct} onChange={(e) => setTickSizePct(Number(e.target.value))} />
+                  </Field>
+                  <div>
+                    <label style={labelStyle}>Color</label>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {TEXT_COLORS.map((c) => (
+                        <button key={c} onClick={() => setTickColor(c)} style={{ width: 22, height: 22, borderRadius: "50%", background: c, border: tickColor === c ? "2px solid var(--text)" : "1px solid var(--border)", cursor: "pointer" }} />
+                      ))}
+                    </div>
+                  </div>
+                  {placeError && <div style={{ fontSize: 11, color: "#dc2626" }}>{placeError}</div>}
+                  {pendingClick && (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => void handlePlaceTick()} disabled={placingTick} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: placingTick ? 0.7 : 1 }}>
+                        {placingTick ? "Adding…" : tickKind === "CHECK" ? "Add tick" : "Add cross"}
+                      </button>
+                      <button onClick={() => { setPendingClick(null); setPlaceError(""); }} disabled={placingTick} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                        Remove
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : placeMode === "text" && !pendingClick ? (
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>Click a spot on the page to add text there.</div>

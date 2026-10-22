@@ -973,6 +973,8 @@ export const api = {
   }) => req(`/signatures/documents/${id}/sign`, { method: "POST", body: JSON.stringify(data) }),
   rejectSignableDocument: (id: string, comment: string) =>
     req(`/signatures/documents/${id}/reject`, { method: "POST", body: JSON.stringify({ comment }) }),
+  annotateTickSignableDocument: (id: string, data: { pageNumber: number; xPct: number; yPct: number; sizePct: number; kind: "CHECK" | "CROSS"; color: string }) =>
+    req(`/signatures/documents/${id}/annotate-tick`, { method: "POST", body: JSON.stringify(data) }),
   annotateSignableDocument: (id: string, data: { pageNumber: number; xPct: number; yPct: number; text: string; fontSize: number; color: string }) =>
     req(`/signatures/documents/${id}/annotate-text`, { method: "POST", body: JSON.stringify(data) }),
 

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import PdfPlacePicker, { SignatureMarkPreview, type PlacePosition } from "./components/PdfPlacePicker";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { FileSignature, Upload, Eraser, CheckCircle2, Copy, Download, Eye, ShieldCheck, BookmarkCheck, XCircle, Route, PenLine } from "lucide-react";
@@ -152,6 +153,11 @@ export default function SignDocument() {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ id: string; verificationCode: string } | null>(null);
   const [error, setError] = useState("");
+  // Where the signature goes: the usual block at the bottom of the last
+  // page, or wherever the signer clicks and drags it on the document.
+  const [placement, setPlacement] = useState<"bottom" | "custom">("bottom");
+  const [placePos, setPlacePos] = useState<PlacePosition | null>(null);
+  const [markWidthPct, setMarkWidthPct] = useState(0.2);
 
   const [policy, setPolicy] = useState<{ default: "AI" | "PP"; overridable: boolean } | null>(null);
   const [mine, setMine] = useState<SignatureRow[]>([]);
@@ -212,6 +218,7 @@ export default function SignDocument() {
 
   function resetForm() {
     setFile(null);
+    setPlacePos(null);
     setTitle("");
     setConsentChecked(false);
     setOnBehalfOf(false);
@@ -229,6 +236,7 @@ export default function SignDocument() {
     if (signMode === "type" && !typedName.trim()) { setError("Type your name to sign."); return; }
     if (signMode === "draw" && !drawnDataUrl) { setError("Draw your signature."); return; }
     if (onBehalfOf && !authorityUserId) { setError("Choose whose authority you're signing under."); return; }
+    if (placement === "custom" && !placePos) { setError("Click on the document where your signature should go."); return; }
 
     const authority = directory.find((u) => u.id === authorityUserId);
     const consentStatement = `I, ${me?.fullName || "the signer"}, confirm this is my legal signature and I consent to sign this document electronically on ${new Date().toLocaleDateString("en-GB")}.`;
@@ -242,6 +250,12 @@ export default function SignDocument() {
     if (onBehalfOf && authority) {
       form.append("authorityUserId", authority.id);
       if (policy?.overridable) form.append("requestedNotation", requestedNotation);
+    }
+    if (placement === "custom" && placePos) {
+      form.append("pageNumber", String(placePos.pageNumber));
+      form.append("xPct", String(placePos.xPct));
+      form.append("yPct", String(placePos.yPct));
+      form.append("widthPct", String(markWidthPct));
     }
 
     setSubmitting(true);
@@ -279,7 +293,7 @@ export default function SignDocument() {
   const activeNotation = onBehalfOf ? (policy?.overridable ? requestedNotation : policy?.default) : null;
 
   return (
-    <div style={{ padding: 24, maxWidth: mode === "quick" ? 920 : 1500 }}>
+    <div style={{ padding: 24, maxWidth: mode === "quick" ? (placement === "custom" && file ? 1200 : 920) : 1500 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
         <FileSignature size={22} color="#3b82f6" />
         <div style={{ fontWeight: 700, fontSize: 20, color: "var(--text)" }}>Sign a Document</div>
@@ -347,7 +361,7 @@ export default function SignDocument() {
               <span style={{ flex: 1, color: file ? "#065f46" : "inherit", fontWeight: file ? 600 : 400 }}>
                 {file ? `${file.name} (${(file.size / 1024).toFixed(0)} KB) — attached` : "Choose a PDF…"}
               </span>
-              <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
+              <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => { setFile(e.target.files?.[0] || null); setPlacePos(null); }} />
             </label>
           </Field>
         </div>
@@ -416,6 +430,44 @@ export default function SignDocument() {
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
               The signature block will read: "{typedName || me?.fullName}, {activeNotation === "AI" ? "a.i." : "p.p."} for {directory.find((u) => u.id === authorityUserId)?.full_name || "…"}"
             </div>
+          )}
+        </div>
+
+        <div>
+          <label style={labelStyle}>Where to sign</label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {([["bottom", "Bottom of the last page"], ["custom", "Place it myself"]] as const).map(([k, label]) => (
+              <button key={k} type="button" onClick={() => setPlacement(k)}
+                style={{ padding: "6px 14px", borderRadius: 6, fontSize: 12, cursor: "pointer", fontWeight: 600,
+                  border: placement === k ? "1px solid #3b82f6" : "1px solid var(--border)",
+                  background: placement === k ? "#eff6ff" : "var(--surface-soft)", color: placement === k ? "#1d4ed8" : "var(--text)" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {placement === "custom" && (
+            !file ? (
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>Choose the PDF above, then click on it where your signature should go.</div>
+            ) : (
+              <div style={{ marginTop: 10 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 8 }}>
+                  Size
+                  <input type="range" min={0.08} max={0.35} step={0.01} value={markWidthPct} onChange={(e) => setMarkWidthPct(Number(e.target.value))} style={{ width: 160 }} />
+                </label>
+                <PdfPlacePicker
+                  file={file}
+                  widthPct={markWidthPct}
+                  value={placePos}
+                  onChange={setPlacePos}
+                  renderMark={(boxW, boxH, pageScale) => (
+                    <SignatureMarkPreview boxW={boxW} boxH={boxH} pageScale={pageScale}
+                      name={`${me?.fullName || "Your name"}${onBehalfOf && activeNotation ? ` (${activeNotation === "AI" ? "a.i." : "p.p."})` : ""}`}
+                      signMode={signMode} typedName={typedName} drawnDataUrl={drawnDataUrl} />
+                  )}
+                />
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>The verification code goes in the page footer.</div>
+              </div>
+            )
           )}
         </div>
 

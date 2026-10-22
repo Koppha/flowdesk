@@ -3,7 +3,7 @@ import path from "path";
 import { query } from "../../lib/db.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { stampSignature, stampDocumentFooter, stampSignatureMarkAtPosition, generateVerificationCode, hashBuffer } from "../../lib/pdf/signatureStamp.js";
-import { stampTextAnnotations } from "../../lib/pdf/textAnnotate.js";
+import { stampTextAnnotations, stampTickMarks, type TickMarkInput } from "../../lib/pdf/textAnnotate.js";
 import { getStringSystemSetting, setStringSystemSetting, getBooleanSystemSetting, setBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { env } from "../../config/env.js";
 import { notifySignatureTurn, notifySignatureRejected, notifySignatureCompleted } from "../../lib/notifications.js";
@@ -52,6 +52,9 @@ export interface SignDocumentInput {
   requestedNotation?: SignatureNotation | null;
   sourceType?: string | null;
   sourceId?: string | null;
+  // Where the signer placed it (Quick sign "Place it myself"). Without it,
+  // the signature block goes at the bottom of the last page as before.
+  placement?: { pageNumber: number; xPct: number; yPct: number; widthPct: number } | null;
 }
 
 export async function performSignDocument(input: SignDocumentInput) {
@@ -70,7 +73,18 @@ export async function performSignDocument(input: SignDocumentInput) {
   const verificationCode = generateVerificationCode();
   const signedAt = new Date();
 
-  const { buffer: signedBuffer, contentHash } = await stampSignature(input.originalBuffer, {
+  const placed = input.placement
+    ? await (async () => {
+        // The verification code goes in the footer; the signature where they put it.
+        const footer = await stampDocumentFooter(input.originalBuffer, { verificationCode, verificationUrl: verificationUrlFor(verificationCode) });
+        const displayName = input.authorityName && notation ? `${input.signerName} (${notation === "AI" ? "a.i." : "p.p."})` : input.signerName;
+        return stampSignatureMarkAtPosition(footer.buffer, {
+          ...input.placement!, signerName: displayName, signedAt,
+          signatureImageDataUrl: input.signatureImageDataUrl ?? null, typedSignatureText: input.typedSignatureText ?? null
+        });
+      })()
+    : null;
+  const { buffer: signedBuffer, contentHash } = placed ?? await stampSignature(input.originalBuffer, {
     signerName: input.signerName,
     authorityName: input.authorityName ?? null,
     notation,
@@ -481,6 +495,24 @@ export async function addTextToDocument(input: AddTextToDocumentInput) {
   const buffer = await stampTextAnnotations(currentBuffer, [{
     pageNumber: input.pageNumber, xPct: input.xPct, yPct: input.yPct,
     text: input.text, fontSize: input.fontSize, color: input.color
+  }]);
+  const contentHash = hashBuffer(buffer);
+  const nextFilePath = path.join(signatureUploadDir, `${Date.now()}-routing-current-${sanitizeName(doc.original_file_name)}`);
+  fs.writeFileSync(nextFilePath, buffer);
+  await query(
+    `UPDATE signable_documents SET current_file_path = $1, current_content_hash = $2, updated_at = now() WHERE id = $3`,
+    [nextFilePath, contentHash, input.documentId]
+  );
+  return { contentHash };
+}
+
+// A tick or cross (e.g. in a form's checkbox) - same "is it your turn" gate
+// as adding text; doesn't touch the route or signatures.
+export async function addTickToDocument(input: { documentId: string; actorId: string } & TickMarkInput) {
+  const doc = await getSignableDocument(input.documentId);
+  assertCanActOnDocument(doc, input.actorId);
+  const buffer = await stampTickMarks(fs.readFileSync(doc.current_file_path), [{
+    pageNumber: input.pageNumber, xPct: input.xPct, yPct: input.yPct, sizePct: input.sizePct, kind: input.kind, color: input.color
   }]);
   const contentHash = hashBuffer(buffer);
   const nextFilePath = path.join(signatureUploadDir, `${Date.now()}-routing-current-${sanitizeName(doc.original_file_name)}`);

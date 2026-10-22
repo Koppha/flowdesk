@@ -17,7 +17,7 @@ import {
   getSavedSignature, saveSavedSignature, clearSavedSignature,
   createSignableDocument, getSignableDocument, getSignableDocumentByCode,
   listSignableDocumentsForUser, listPlacementsForDocument, addSignaturePlacement,
-  rejectSignableDocument, addTextToDocument, finishSignableDocument
+  rejectSignableDocument, addTextToDocument, finishSignableDocument, addTickToDocument
 } from "./signatures.service.js";
 
 const upload = multer({
@@ -39,6 +39,11 @@ signaturesRouter.use(requireAuth);
 
 const SignSchema = z.object({
   title: z.string().trim().min(1, "A title is required"),
+  // Optional "Place it myself" position (multipart, so numbers arrive as strings).
+  pageNumber: z.coerce.number().int().min(1).optional(),
+  xPct: z.coerce.number().min(0).max(1).optional(),
+  yPct: z.coerce.number().min(0).max(1).optional(),
+  widthPct: z.coerce.number().min(0.02).max(0.6).optional(),
   consentStatement: z.string().trim().min(1),
   typedSignatureText: z.string().trim().optional(),
   signatureImageDataUrl: z.string().trim().optional(),
@@ -86,7 +91,11 @@ signaturesRouter.post("/upload-and-sign", async (req: AuthedRequest, res, next) 
       typedSignatureText: parsed.data.typedSignatureText || null,
       signatureImageDataUrl: parsed.data.signatureImageDataUrl || null,
       authorityUserId: parsed.data.authorityUserId || null,
-      authorityName
+      authorityName,
+      requestedNotation: parsed.data.requestedNotation ?? null,
+      placement: parsed.data.pageNumber && parsed.data.xPct !== undefined && parsed.data.yPct !== undefined
+        ? { pageNumber: parsed.data.pageNumber, xPct: parsed.data.xPct, yPct: parsed.data.yPct, widthPct: parsed.data.widthPct ?? 0.18 }
+        : null
     });
 
     // The freshly-uploaded temp file has now been copied into
@@ -330,6 +339,30 @@ signaturesRouter.post("/documents/:id/annotate-text", async (req: AuthedRequest,
       pageNumber: parsed.data.pageNumber, xPct: parsed.data.xPct, yPct: parsed.data.yPct,
       text: parsed.data.text, fontSize: parsed.data.fontSize, color: parsed.data.color
     });
+    return res.status(201).json(result);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /signatures/documents/:id/annotate-tick - a tick or cross in a box.
+const TickSchema = z.object({
+  pageNumber: z.coerce.number().int().min(1),
+  xPct: z.coerce.number().min(0).max(1),
+  yPct: z.coerce.number().min(0).max(1),
+  sizePct: z.coerce.number().min(0.008).max(0.12),
+  kind: z.enum(["CHECK", "CROSS"]).default("CHECK"),
+  color: z.string().regex(/^#[0-9a-fA-F]{3,6}$/).default("#111827")
+});
+signaturesRouter.post("/documents/:id/annotate-tick", async (req: AuthedRequest, res, next) => {
+  if (!(await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, true))) {
+    return next(forbidden("Electronic signing is currently disabled by admin."));
+  }
+  try {
+    const parsed = TickSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid tick", parsed.error.flatten());
+    await ensureSignaturesSchema();
+    const result = await addTickToDocument({ documentId: req.params.id, actorId: req.user!.userId, ...parsed.data });
     return res.status(201).json(result);
   } catch (err) {
     return next(err);
