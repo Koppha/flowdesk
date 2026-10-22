@@ -3155,6 +3155,7 @@ export async function notifySignatureRejected(args: {
   creatorName: string | null;
   rejectedByName: string | null;
   comment: string;
+  signedEarlier?: boolean;
 }) {
   try {
     if (!args.creatorEmail) return;
@@ -3163,7 +3164,7 @@ export async function notifySignatureRejected(args: {
       ``,
       `Hello ${args.creatorName || ""},`,
       ``,
-      `${args.rejectedByName || "An approver"} rejected "${args.documentTitle}" — its approval route has stopped.`,
+      `${args.rejectedByName || "An approver"} rejected "${args.documentTitle}" — its approval route has stopped${args.signedEarlier ? ". You signed it earlier on the route" : ""}.`,
       ``,
       detailBlock([["Reason", args.comment]]),
       ``,

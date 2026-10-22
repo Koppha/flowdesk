@@ -204,6 +204,7 @@ export async function createSignableDocument(input: CreateSignableDocumentInput)
   ))[0];
 
   const doc = await getSignableDocument(row.id);
+  // No email when the creator signs first - they're already on the document.
   if (chain.length > 0) await notifyStepApprover(doc, chain, 0);
   return doc;
 }
@@ -214,6 +215,9 @@ export async function createSignableDocument(input: CreateSignableDocumentInput)
 async function notifyStepApprover(doc: any, chain: RoutingChainStep[], stepIndex: number) {
   const step = chain[stepIndex];
   if (!step) return;
+  // Never email the creator about a turn on their own document - it's in
+  // their Inbox and they started it.
+  if (step.approver_id === doc.created_by_id) return;
   const user = (await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = $1`, [step.approver_id]))[0];
   if (!user) return;
   await notifySignatureTurn({
@@ -391,7 +395,8 @@ export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
 
     if (nextStatus === "OPEN") {
       await notifyStepApprover(doc, nextChain, nextStepOrder);
-    } else {
+    } else if (doc.created_by_id !== input.signerId) {
+      // The creator signing last already knows it's complete.
       const creator = (await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = $1`, [doc.created_by_id]))[0];
       await notifySignatureCompleted({ documentId: doc.id, documentTitle: doc.title, creatorEmail: creator?.email ?? null, creatorName: creator?.full_name ?? null });
     }
@@ -436,12 +441,20 @@ export async function rejectSignableDocument(input: RejectSignableDocumentInput)
     [JSON.stringify(nextChain), input.documentId]
   );
 
-  const creator = (await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = $1`, [doc.created_by_id]))[0];
-  await notifySignatureRejected({
-    documentId: doc.id, documentTitle: doc.title,
-    creatorEmail: creator?.email ?? null, creatorName: creator?.full_name ?? null,
-    rejectedByName: input.signerName, comment: input.comment
-  });
+  // The reason goes to the creator and to everyone who already signed on
+  // the route - never back to whoever rejected it.
+  const earlierSigners = chain.filter((s, i) => i < doc.current_step_order && s.status === "SIGNED").map((s) => s.approver_id);
+  const recipientIds = [...new Set([doc.created_by_id, ...earlierSigners])].filter((id) => id !== input.signerId);
+  if (!recipientIds.length) return;
+  const people = await query<{ id: string; email: string; full_name: string | null }>(`SELECT id, email, full_name FROM users WHERE id = ANY($1::uuid[])`, [recipientIds]);
+  for (const p of people) {
+    await notifySignatureRejected({
+      documentId: doc.id, documentTitle: doc.title,
+      creatorEmail: p.email, creatorName: p.full_name,
+      rejectedByName: input.signerName, comment: input.comment,
+      signedEarlier: p.id !== doc.created_by_id
+    });
+  }
 }
 
 export interface AddTextToDocumentInput {

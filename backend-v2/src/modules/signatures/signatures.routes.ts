@@ -228,6 +228,13 @@ signaturesRouter.post("/documents", async (req: AuthedRequest, res, next) => {
       }
     }
 
+    // "I'll sign it first": the creator becomes step 1 of the route, signs,
+    // and Sign & send passes it on to the first approver.
+    const signFirst = String(req.body.signFirst || "") === "true";
+    if (signFirst && approvalChain?.length && approvalChain[0].approverId !== req.user!.userId) {
+      approvalChain = [{ approverId: req.user!.userId, approverName: req.user!.fullName || "Unknown" }, ...approvalChain];
+    }
+
     await ensureSignaturesSchema();
     const originalBuffer = fs.readFileSync(req.file.path);
     const doc = await createSignableDocument({
@@ -293,7 +300,7 @@ const RejectSchema = z.object({ comment: z.string().trim().min(1, "Please say wh
 signaturesRouter.post("/documents/:id/reject", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = RejectSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    if (!parsed.success) throw badRequest("Please give a reason for rejecting - it's sent to everyone on the route.", parsed.error.flatten());
     await ensureSignaturesSchema();
     await rejectSignableDocument({ documentId: req.params.id, signerId: req.user!.userId, signerName: req.user!.fullName || "Unknown", comment: parsed.data.comment });
     return res.json({ ok: true });

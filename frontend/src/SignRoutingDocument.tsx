@@ -83,6 +83,8 @@ export default function SignRoutingDocument() {
   // Optional approval route built at creation time - empty means the
   // original free-for-all behavior (anyone with the link signs, any order).
   const [chainDraft, setChainDraft] = useState<ChainStepDraft[]>([]);
+  // Sign it yourself first, then it goes to the route.
+  const [signFirst, setSignFirst] = useState(false);
 
   const [showReject, setShowReject] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
@@ -343,16 +345,19 @@ export default function SignRoutingDocument() {
     if (!newTitle.trim()) { setDocError("Give this document a title."); return; }
     const chain = chainDraft.filter((s) => s.approverId);
     if (chainDraft.some((s) => !s.approverId)) { setDocError("Every approval step needs an approver selected (or remove the empty row)."); return; }
+    if (signFirst && chain.length === 0) { setDocError("Add at least one approver to send it to after you sign."); return; }
     setCreating(true);
     try {
       const form = new FormData();
       form.append("file", newFile);
       form.append("title", newTitle.trim());
       if (chain.length > 0) form.append("approvalChain", JSON.stringify(chain));
+      if (chain.length > 0 && signFirst) form.append("signFirst", "true");
       const resp = await api.createSignableDocument(form);
       setNewTitle("");
       setNewFile(null);
       setChainDraft([]);
+      setSignFirst(false);
       await openDocument(resp.id);
       await loadMyDocs();
     } catch (e: any) {
@@ -628,8 +633,22 @@ export default function SignRoutingDocument() {
                 </label>
               </Field>
 
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 7, background: signFirst ? "#eff6ff" : "var(--surface-soft)", cursor: "pointer", fontSize: 12 }}>
+                <input type="checkbox" checked={signFirst} onChange={(e) => setSignFirst(e.target.checked)} style={{ marginTop: 2 }} />
+                <span>
+                  <strong>I'll sign it first</strong>
+                  <span style={{ display: "block", color: "var(--muted)", fontSize: 11, marginTop: 2 }}>
+                    {signFirst
+                      ? (chainDraft.some((s) => s.approverId)
+                          ? `You sign before anyone else; Sign & send then passes it to ${chainDirectory.find((u) => u.id === chainDraft.find((s) => s.approverId)?.approverId)?.full_name || "the first approver"}.`
+                          : "Now add the people it should go to after you sign, below.")
+                      : "Tick to sign it yourself before it goes to the approvers."}
+                  </span>
+                </span>
+              </label>
+
               <div>
-                <label style={labelStyle}>Approval route (optional)</label>
+                <label style={labelStyle}>Approval route{signFirst ? "" : " (optional)"}</label>
                 <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
                   Leave empty to let anyone with the link sign, in any order. Add approvers to require them to sign in this order — each one can also reject.
                 </div>
@@ -652,7 +671,7 @@ export default function SignRoutingDocument() {
               </div>
 
               <button onClick={handleCreate} disabled={creating} style={{ padding: "9px 16px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, opacity: creating ? 0.7 : 1 }}>
-                {creating ? "Starting…" : "Start & open"}
+                {creating ? "Starting…" : signFirst ? "Start & sign" : "Start & open"}
               </button>
             </div>
           </div>
@@ -690,6 +709,10 @@ export default function SignRoutingDocument() {
                         {d.status === "REJECTED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#dc2626", background: "#fef2f2", padding: "2px 7px", borderRadius: 10 }}>REJECTED</span>}
                         {d.status === "COMPLETED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ecfdf5", padding: "2px 7px", borderRadius: 10 }}>COMPLETED</span>}
                       </div>
+                      {d.status === "REJECTED" && (() => {
+                        const step = (Array.isArray(d.approval_chain) ? d.approval_chain : []).find((x: any) => x.status === "REJECTED");
+                        return step ? <div style={{ fontSize: 11.5, color: "#b91c1c", marginTop: 2 }}>Rejected by {step.approver_name}{step.comment ? `: "${step.comment}"` : ""}</div> : null;
+                      })()}
                       <div style={{ fontSize: 11, color: "var(--muted)" }}>
                         {new Date(d.updated_at).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
                       </div>
@@ -765,6 +788,19 @@ export default function SignRoutingDocument() {
                   )}
                 </span>
               </div>
+              {doc?.status === "REJECTED" && (() => {
+                const step = doc.approvalChain.find((x) => x.status === "REJECTED");
+                if (!step) return null;
+                return (
+                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", marginBottom: 10, border: "1px solid #fecaca", borderRadius: 8, background: "#fef2f2", color: "#7f1d1d" }}>
+                    <Ban size={16} color="#dc2626" style={{ flexShrink: 0, marginTop: 1 }} />
+                    <div style={{ fontSize: 13 }}>
+                      <strong>Rejected by {step.approverName}</strong>{step.actedAt ? ` on ${new Date(step.actedAt).toLocaleDateString("en-GB")}` : ""}
+                      {step.comment && <div style={{ marginTop: 3, whiteSpace: "pre-wrap" }}>Reason: {step.comment}</div>}
+                    </div>
+                  </div>
+                );
+              })()}
               <div ref={containerRef} style={{ position: "relative", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto", maxHeight: isFullscreen ? "100vh" : "80vh", background: "#525659", display: "flex", justifyContent: "center", opacity: pdfBusy || docLoading ? 0.6 : 1 }}>
                 <div style={{ position: "relative" }}>
                   <canvas ref={canvasRef} onClick={handleCanvasClick} style={{ cursor: canAct ? "crosshair" : "default", display: "block" }} />
