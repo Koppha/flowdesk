@@ -1,3 +1,4 @@
+export type RaidDocType = "BRS" | "CHANGE_REQUEST" | "COMPUTER_REQUEST";
 export type CrPeopleEntry = { type: string; id?: string | null; name?: string | null; permissions?: string[] };
 
 export const API = (import.meta.env.VITE_API as string) || window.location.origin;
@@ -565,10 +566,11 @@ export const api = {
 
   myManager: () => req("/reporting-lines/my-manager"),
   // Sent as multipart/form-data so attachments can ride along with the rest of the wizard.
-  submitCustomRequest: (data: { request_type_id: string; data: Record<string, any>; approval_chain: any[]; draft_id?: string | null }, files?: File[]) => {
+  submitCustomRequest: (data: { request_type_id: string; data: Record<string, any>; approval_chain: any[]; draft_id?: string | null; owner_user_ids?: string[] }, files?: File[]) => {
     const form = new FormData();
     form.append("request_type_id", data.request_type_id);
     if (data.draft_id) form.append("draft_id", data.draft_id);
+    if (data.owner_user_ids?.length) form.append("owner_user_ids", JSON.stringify(data.owner_user_ids));
     form.append("data", JSON.stringify(data.data));
     form.append("approval_chain", JSON.stringify(data.approval_chain));
     (files || []).forEach((f) => form.append("files", f));
@@ -616,6 +618,17 @@ export const api = {
     req(`/custom-requests/${id}/comments`, { method: "POST", body: JSON.stringify(data) }),
   crHistory: (id: string) => req(`/custom-requests/${id}/history`),
   crDiscardDraft: (id: string) => req(`/custom-requests/${id}/draft`, { method: "DELETE" }),
+
+  // ── RAID logs (BRS, Change Request, Computer Request) ─────────────────────
+  raidLog: (docType: RaidDocType, docId: string) => req(`/raid/${docType}/${docId}`),
+  addRaidItem: (docType: RaidDocType, docId: string, data: Record<string, any>) =>
+    req(`/raid/${docType}/${docId}`, { method: "POST", body: JSON.stringify(data) }),
+  updateRaidItem: (docType: RaidDocType, docId: string, itemId: string, data: Record<string, any>) =>
+    req(`/raid/${docType}/${docId}/${itemId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteRaidItem: (docType: RaidDocType, docId: string, itemId: string) =>
+    req(`/raid/${docType}/${docId}/${itemId}`, { method: "DELETE" }),
+  raidExportBlob: (docType: RaidDocType, docId: string) => fetchBlob(`/raid/${docType}/${docId}/export.xlsx`),
+  raidRegisterBlob: (docType: RaidDocType, includeClosed: boolean) => fetchBlob(`/raid/register.xlsx?doc_type=${docType}&include_closed=${includeClosed}`),
 
   // ── BRS (Business Requirement Specification) ──────────────────────────────
   brsModuleFlag: () => req("/brs-types/module-flag"),
@@ -951,6 +964,7 @@ export const api = {
   createSignableDocument: (form: FormData) => req("/signatures/documents", { method: "POST", body: form }),
   mySignableDocuments: () => req("/signatures/documents/mine"),
   signableDocument: (id: string) => req(`/signatures/documents/${id}`),
+  finishSignableDocument: (id: string) => req(`/signatures/documents/${id}/finish`, { method: "POST", body: JSON.stringify({}) }),
   signableDocumentFileBlob: (id: string) => fetchBlob(`/signatures/documents/${id}/file`),
   signPlacement: (id: string, data: {
     consentStatement: string; pageNumber: number; xPct: number; yPct: number; widthPct: number;

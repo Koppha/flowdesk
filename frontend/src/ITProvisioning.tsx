@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import {
@@ -300,6 +301,7 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
           <p className="ep-subtitle">CR-{task.submission_id.slice(0, 8).toUpperCase()}</p>
         </div>
         <div className="ep-actions">
+          <RaidLogButton docType="COMPUTER_REQUEST" docId={task.submission_id} title={`Computer Request CR-${task.submission_id.slice(0, 8).toUpperCase()}`} />
           <button className="ep-btn-outline" onClick={onBack}><ArrowLeft size={14} /> Back</button>
         </div>
       </div>

@@ -3657,7 +3657,11 @@ export default function App() {
         ? detail.trips.map((t: any) => ({
             ...emptyClearanceTripRow(normalizeDateInputValue(t.trip_date)),
             from_place: t.from_place || "",
-            lunch: Number(t.lunch || 0),
+            // The form has one Meals column (kept in "lunch"). A clearance
+            // copied from its advance stores breakfast, lunch and dinner
+            // separately - load all three, or reopening and saving it drops
+            // the dinner and makes the employee look like they owe it back.
+            lunch: Number(t.breakfast || 0) + Number(t.lunch || 0) + Number(t.dinner || 0),
             petrol_allowance: Number(t.petrol_allowance || 0),
             other_expenses: Number(t.other_expenses || 0),
             purpose: t.purpose || ""

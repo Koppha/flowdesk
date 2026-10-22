@@ -3,6 +3,7 @@ import * as pdfjsLib from "pdfjs-dist";
 // @ts-ignore - Vite's ?url suffix resolves to the built worker's asset URL
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { api, getUserFromToken, downloadBlob } from "./api";
+import { confirmAction } from "./alerts";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { Field, fieldStyle, labelStyle, SignatureCanvas } from "./SignDocument";
 import { Upload, FilePlus2, FolderOpen, ChevronLeft, ChevronRight, MousePointerClick, Share2, CheckCircle2, Users, Plus, Trash2, ArrowUp, ArrowDown, XCircle, Clock3, Ban, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, PenLine, Type } from "lucide-react";
@@ -44,6 +45,9 @@ type DocDetail = {
   approvalChain: ChainStep[];
   isMyTurn: boolean;
   placements: Placement[];
+  closedAt?: string | null;
+  closedByName?: string | null;
+  canFinish?: boolean;
 };
 
 type ChainStepDraft = { approverId: string };
@@ -96,6 +100,9 @@ export default function SignRoutingDocument() {
   const [pageNum, setPageNum] = useState(1);
   const [numPages, setNumPages] = useState(1);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  // Canvas pixels per PDF point - sizes the signature preview's text the
+  // same as the stamp (signatureStamp.ts works in points).
+  const [pageScale, setPageScale] = useState(1);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -230,6 +237,7 @@ export default function SignRoutingDocument() {
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
     setCanvasSize({ width: viewport.width, height: viewport.height });
+    setPageScale(scale);
     const ctx = canvas.getContext("2d")!;
     await pdfPage.render({ canvasContext: ctx, viewport }).promise;
     setPageNum(page);
@@ -354,6 +362,29 @@ export default function SignRoutingDocument() {
     }
   }
 
+  const [finishing, setFinishing] = useState(false);
+  async function handleFinish() {
+    if (!docId) return;
+    const signedCount = doc?.placements.length ?? 0;
+    const ok = await confirmAction({
+      title: "Finish signing?",
+      text: `${signedCount} signature${signedCount === 1 ? "" : "s"} so far. After this nobody can sign or add to the document — it's completed for good.`,
+      confirmButtonText: "Finish signing"
+    });
+    if (!ok) return;
+    setFinishing(true);
+    try {
+      await api.finishSignableDocument(docId);
+      setPendingClick(null);
+      await refreshCurrentDocument();
+      await loadMyDocs();
+    } catch (e: any) {
+      setPlaceError(e.message || "Couldn't finish signing.");
+    } finally {
+      setFinishing(false);
+    }
+  }
+
   async function handleReject() {
     if (!docId) return;
     if (!rejectComment.trim()) { setPlaceError("Say why you're rejecting this document."); return; }
@@ -385,7 +416,12 @@ export default function SignRoutingDocument() {
     if (!canAct) return;
     const pt = pctFromClientPoint(e.clientX, e.clientY);
     if (!pt) return;
-    setPendingClick(pt);
+    if (placeMode === "sign" && canvasSize.width) {
+      const boxH = (markWidthPct * canvasSize.width / 2.6) / canvasSize.height;
+      setPendingClick({ xPct: Math.min(pt.xPct, 1 - markWidthPct), yPct: Math.min(pt.yPct, 1 - boxH) });
+    } else {
+      setPendingClick(pt);
+    }
     setPlaceError("");
   }
 
@@ -399,11 +435,20 @@ export default function SignRoutingDocument() {
   function startDrag(e: React.PointerEvent) {
     e.stopPropagation();
     e.preventDefault();
+    if (!pendingClick) return;
+    const start = pctFromClientPoint(e.clientX, e.clientY);
+    if (!start) return;
+    // Keep the point you grabbed under the pointer, instead of jumping the
+    // box's corner to it.
+    const offset = { x: start.xPct - pendingClick.xPct, y: start.yPct - pendingClick.yPct };
+    const signing = placeMode === "sign" && canvasSize.width > 0;
+    const maxX = signing ? 1 - markWidthPct : 1;
+    const maxY = signing ? 1 - (markWidthPct * canvasSize.width / 2.6) / canvasSize.height : 1;
     draggingRef.current = true;
     const onMove = (ev: PointerEvent) => {
       if (!draggingRef.current) return;
       const pt = pctFromClientPoint(ev.clientX, ev.clientY);
-      if (pt) setPendingClick(pt);
+      if (pt) setPendingClick({ xPct: Math.min(Math.max(pt.xPct - offset.x, 0), maxX), yPct: Math.min(Math.max(pt.yPct - offset.y, 0), maxY) });
     };
     const onUp = () => {
       draggingRef.current = false;
@@ -412,6 +457,22 @@ export default function SignRoutingDocument() {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  }
+
+  // "Place on page" without clicking: drop it in the middle of what's on screen.
+  function placeInView() {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container || !canvasSize.width) return;
+    const rect = canvas.getBoundingClientRect();
+    const view = container.getBoundingClientRect();
+    const midY = (Math.max(rect.top, view.top) + Math.min(rect.bottom, view.bottom)) / 2;
+    const boxH = (markWidthPct * canvasSize.width / 2.6) / canvasSize.height;
+    setPendingClick({
+      xPct: Math.min(Math.max(0.5 - markWidthPct / 2, 0), 1 - markWidthPct),
+      yPct: Math.min(Math.max((midY - rect.top) / rect.height - boxH / 2, 0), 1 - boxH)
+    });
+    setPlaceError("");
   }
 
   async function handlePlace() {
@@ -504,11 +565,14 @@ export default function SignRoutingDocument() {
           top: `${pendingClick.yPct * canvasSize.height}px`,
           width: `${boxWidthPx}px`,
           height: `${boxHeightPx}px`,
-          border: "2px solid #3b82f6",
-          background: "rgba(59,130,246,0.15)",
+          border: "1.5px dashed #3b82f6",
+          background: "rgba(255,255,255,0.55)",
+          boxShadow: "0 0 0 3px rgba(59,130,246,0.18)",
           cursor: "grab",
           touchAction: "none",
-          borderRadius: 3
+          borderRadius: 2,
+          overflow: "hidden",
+          zIndex: 2
         };
       })()
     : null;
@@ -534,7 +598,8 @@ export default function SignRoutingDocument() {
 
   const activeNotation = onBehalfOf ? (policy?.overridable ? requestedNotation : policy?.default) : null;
   const hasChain = Boolean(doc?.approvalChain?.length);
-  const canAct = Boolean(doc) && (!hasChain || doc!.isMyTurn);
+  // A document with no route is open until its creator finishes it.
+  const canAct = Boolean(doc) && doc!.status === "OPEN" && (!hasChain || doc!.isMyTurn);
   const currentApproverName = hasChain && doc!.status === "OPEN" ? doc!.approvalChain[doc!.currentStepOrder]?.approverName : null;
 
   return (
@@ -659,6 +724,12 @@ export default function SignRoutingDocument() {
               <button onClick={() => { navigator.clipboard?.writeText(shareLink(docId)).catch(() => {}); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
                 <Share2 size={13} /> Copy shareable link
               </button>
+              {doc?.canFinish && (
+                <button onClick={() => void handleFinish()} disabled={finishing} title="Stop anyone else signing; the document is completed"
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "none", borderRadius: 7, background: "#059669", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: finishing ? 0.7 : 1 }}>
+                  <CheckCircle2 size={13} /> {finishing ? "Finishing…" : "Finish signing"}
+                </button>
+              )}
               <button onClick={() => { setDocId(null); setDoc(null); pdfDocRef.current = null; }} style={{ padding: "7px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
                 Back
               </button>
@@ -669,7 +740,7 @@ export default function SignRoutingDocument() {
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginBottom: 8, flexWrap: "wrap" }}>
                 <MousePointerClick size={13} />
-                {canAct ? `Click on the page to ${placeMode === "sign" ? "place your signature" : "add text"}` : doc?.status === "REJECTED" ? "This document was rejected" : doc?.status === "COMPLETED" ? "Every approver has signed" : `Awaiting ${currentApproverName || "the next approver"}'s signature`}
+                {canAct ? (placeMode === "sign" ? (pendingClick ? "Drag your signature to the right spot, then press Sign & send" : "Click on the page to place your signature") : "Click on the page to add text") : doc?.status === "REJECTED" ? "This document was rejected" : doc?.status === "COMPLETED" ? (hasChain ? "Every approver has signed" : "Signing finished") : `Awaiting ${currentApproverName || "the next approver"}'s signature`}
                 {canAct && (
                   <span style={{ display: "flex", gap: 4 }}>
                     <button onClick={() => { setPlaceMode("sign"); setPendingClick(null); }} title="Sign" style={{ border: placeMode === "sign" ? "1px solid #3b82f6" : "1px solid var(--border)", borderRadius: 5, background: placeMode === "sign" ? "#eff6ff" : "var(--surface-soft)", color: placeMode === "sign" ? "#1d4ed8" : "var(--text)", cursor: "pointer", padding: "3px 6px", display: "flex", alignItems: "center" }}><PenLine size={13} /></button>
@@ -697,8 +768,29 @@ export default function SignRoutingDocument() {
               <div ref={containerRef} style={{ position: "relative", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto", maxHeight: isFullscreen ? "100vh" : "80vh", background: "#525659", display: "flex", justifyContent: "center", opacity: pdfBusy || docLoading ? 0.6 : 1 }}>
                 <div style={{ position: "relative" }}>
                   <canvas ref={canvasRef} onClick={handleCanvasClick} style={{ cursor: canAct ? "crosshair" : "default", display: "block" }} />
-                  {markBoxStyle && <div style={markBoxStyle} onPointerDown={startDrag} title="Drag to fine-tune" />}
-                  {anchorDotHandleStyle && (
+                  {markBoxStyle && (() => {
+                    // Same layout as the stamp (signatureStamp.ts): name strip 24%,
+                    // signature 56%, date strip 20%, sizes in PDF points x page scale.
+                    const boxW = markWidthPct * canvasSize.width;
+                    const boxH = boxW / 2.6;
+                    const nameH = boxH * 0.24, dateH = boxH * 0.2, markH = boxH - nameH - dateH;
+                    const nameSize = Math.min(nameH * 0.8, 9 * pageScale);
+                    const sigSize = Math.min(markH * 0.7, 20 * pageScale);
+                    const dateSize = Math.min(dateH * 0.85, 7.5 * pageScale);
+                    const name = `${me?.fullName || "Your name"}${onBehalfOf && activeNotation ? ` (${activeNotation === "AI" ? "a.i." : "p.p."})` : ""}`;
+                    return (
+                      <div style={markBoxStyle} onPointerDown={startDrag} title="Drag to move your signature">
+                        <div style={{ height: nameH, fontFamily: "Helvetica, Arial, sans-serif", fontWeight: 700, fontSize: nameSize, lineHeight: `${nameH}px`, color: "#1c296b", whiteSpace: "nowrap", pointerEvents: "none" }}>{name}</div>
+                        <div style={{ height: markH, display: "flex", alignItems: "center", justifyContent: signMode === "draw" ? "center" : "flex-start", pointerEvents: "none" }}>
+                          {signMode === "draw"
+                            ? (drawnDataUrl ? <img src={drawnDataUrl} alt="" style={{ maxWidth: "100%", maxHeight: "100%" }} draggable={false} /> : <span style={{ fontSize: Math.max(sigSize * 0.5, 9), color: "#64748b" }}>Draw your signature →</span>)
+                            : <span style={{ fontFamily: "Helvetica, Arial, sans-serif", fontWeight: 700, fontSize: sigSize, color: typedName.trim() ? "#1c296b" : "#94a3b8", whiteSpace: "nowrap" }}>{typedName.trim() || "Your signature"}</span>}
+                        </div>
+                        <div style={{ height: dateH, fontFamily: "Helvetica, Arial, sans-serif", fontSize: dateSize, lineHeight: `${dateH}px`, color: "#737373", pointerEvents: "none" }}>{new Date().toLocaleDateString("en-GB")}</div>
+                      </div>
+                    );
+                  })()}
+                  {anchorDotHandleStyle && placeMode === "text" && (
                     <div style={anchorDotHandleStyle} onPointerDown={startDrag} title="Drag to fine-tune">
                       <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", border: "2px solid #fff", boxShadow: "0 0 0 1px #dc2626" }} />
                     </div>
@@ -745,35 +837,12 @@ export default function SignRoutingDocument() {
               {!canAct ? (
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
                   {doc?.status === "REJECTED" ? "This document's approval route was rejected — no further action is possible." :
+                   doc?.status === "COMPLETED" && !hasChain ? `Signing was finished${doc.closedByName ? ` by ${doc.closedByName}` : ""}${doc.closedAt ? ` on ${new Date(doc.closedAt).toLocaleDateString("en-GB")}` : ""} — nobody can sign it any more. You can still download a copy.` :
                    doc?.status === "COMPLETED" ? "Every approver has signed. You can still download a copy at any time." :
                    `Waiting on ${currentApproverName || "the next approver"} to sign before this reaches you. They've been emailed.`}
                 </div>
-              ) : !pendingClick ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ fontSize: 12, color: "var(--muted)" }}>Click a spot on the page to place your signature there.</div>
-                  {hasChain && (
-                    showReject ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
-                        <Field label="Reason for rejecting">
-                          <textarea style={{ ...fieldStyle, minHeight: 60, resize: "vertical" }} value={rejectComment} onChange={(e) => setRejectComment(e.target.value)} placeholder="Explain why you're rejecting this document…" />
-                        </Field>
-                        {placeError && <div style={{ fontSize: 11, color: "#dc2626" }}>{placeError}</div>}
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button onClick={handleReject} disabled={rejecting} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: rejecting ? 0.7 : 1 }}>
-                            {rejecting ? "Rejecting…" : "Confirm rejection"}
-                          </button>
-                          <button onClick={() => { setShowReject(false); setRejectComment(""); setPlaceError(""); }} disabled={rejecting} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button onClick={() => setShowReject(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 12px", border: "1px solid #fecaca", borderRadius: 7, background: "#fef2f2", color: "#dc2626", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
-                        <XCircle size={13} /> Reject this document
-                      </button>
-                    )
-                  )}
-                </div>
+              ) : placeMode === "text" && !pendingClick ? (
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>Click a spot on the page to add text there.</div>
               ) : placeMode === "text" ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 13 }}><Type size={14} /> Add text</div>
@@ -804,7 +873,10 @@ export default function SignRoutingDocument() {
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>Drag the red dot on the page to fine-tune the exact spot before placing.</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 20, height: 20, borderRadius: "50%", background: pendingClick ? "#dcfce7" : "#dbeafe", color: pendingClick ? "#166534" : "#1d4ed8", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{pendingClick ? "✓" : "1"}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>{pendingClick ? "Signature placed — drag it on the page to adjust" : "Set up your signature, then place it on the page"}</span>
+                  </div>
                   <Field label="Mark size">
                     <input type="range" min={0.08} max={0.35} step={0.01} value={markWidthPct} onChange={(e) => setMarkWidthPct(Number(e.target.value))} />
                   </Field>
@@ -859,14 +931,53 @@ export default function SignRoutingDocument() {
 
                   {placeError && <div style={{ fontSize: 11, color: "#dc2626" }}>{placeError}</div>}
 
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={handlePlace} disabled={placing} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: placing ? 0.7 : 1 }}>
-                      {placing ? "Placing…" : "Place my signature"}
-                    </button>
-                    <button onClick={() => setPendingClick(null)} disabled={placing} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
-                      Cancel
-                    </button>
-                  </div>
+                  {!pendingClick ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <button onClick={placeInView} style={{ padding: "8px 12px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                        Place on page
+                      </button>
+                      <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center" }}>…or click the spot on the page where it should go.</div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>Nothing is sent until you press {hasChain ? "Sign & send" : "Sign"}. You can still drag or resize it.</div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={handlePlace} disabled={placing} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#059669", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: placing ? 0.7 : 1 }}>
+                          {placing ? "Sending…" : hasChain ? "Sign & send" : "Sign"}
+                        </button>
+                        <button onClick={() => setPendingClick(null)} disabled={placing} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!pendingClick && (
+                    <div style={{ borderTop: hasChain ? "1px solid var(--border)" : undefined, paddingTop: hasChain ? 10 : 0 }}>
+                      {hasChain && (
+                    showReject ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+                        <Field label="Reason for rejecting">
+                          <textarea style={{ ...fieldStyle, minHeight: 60, resize: "vertical" }} value={rejectComment} onChange={(e) => setRejectComment(e.target.value)} placeholder="Explain why you're rejecting this document…" />
+                        </Field>
+                        {placeError && <div style={{ fontSize: 11, color: "#dc2626" }}>{placeError}</div>}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button onClick={handleReject} disabled={rejecting} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 7, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: rejecting ? 0.7 : 1 }}>
+                            {rejecting ? "Rejecting…" : "Confirm rejection"}
+                          </button>
+                          <button onClick={() => { setShowReject(false); setRejectComment(""); setPlaceError(""); }} disabled={rejecting} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button onClick={() => setShowReject(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 12px", border: "1px solid #fecaca", borderRadius: 7, background: "#fef2f2", color: "#dc2626", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                        <XCircle size={13} /> Reject this document
+                      </button>
+                    )
+                  )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

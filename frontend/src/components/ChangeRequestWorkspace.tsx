@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { RaidLog } from "./RaidLog";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronRight, History, MessageSquare, Pencil, Plus, Send, Trash2, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, History, MessageSquare, Pencil, Plus, Send, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { api } from "../api";
 import { confirmAction, showNotice } from "../alerts";
 import type { DirectoryUser } from "../shared/ApproverCombobox";
@@ -50,7 +51,7 @@ const KIND_LABEL: Record<string, string> = {
   CREATED: "Submitted", DRAFT_CREATED: "Started the draft", SUBMITTED: "Submitted for approval", FIELDS_SAVED: "Edited",
   SECTION_ADDED: "Added a section", SECTION_REMOVED: "Removed a section", SECTION_SAVED: "Edited a section",
   PEOPLE_CHANGED: "People", COMMENTED: "Comment", ASSIGNEE_ADDED: "Assignee added", ASSIGNEE_CONFIRMED: "Assignee confirmed",
-  APPROVAL_ACTION: "Approval", CANCELLED: "Cancelled", CLOSED: "Closed", DISTRIBUTED: "Distributed"
+  APPROVAL_ACTION: "Approval", CANCELLED: "Cancelled", CLOSED: "Closed", DISTRIBUTED: "Distributed", RAID_CHANGED: "RAID log"
 };
 
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
@@ -65,7 +66,7 @@ export default function ChangeRequestWorkspace(props: {
   onClose: () => void;
 }) {
   const { submissionId, currentUserId, directory, renderFieldEditor, onSubmitDraft, onChanged, onClose } = props;
-  const [view, setView] = useState<"WORK" | "COMMENTS" | "HISTORY">("WORK");
+  const [view, setView] = useState<"WORK" | "COMMENTS" | "HISTORY" | "RAID">("WORK");
   const [detail, setDetail] = useState<any>(null);
   const [ws, setWs] = useState<Workspace | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -210,6 +211,9 @@ export default function ChangeRequestWorkspace(props: {
         <button className={`ep-tab ${view === "HISTORY" ? "active" : ""}`} onClick={() => setView("HISTORY")}>
           <History size={13} /> History
         </button>
+        <button className={`ep-tab ${view === "RAID" ? "active" : ""}`} onClick={() => setView("RAID")} title="Risks, assumptions, issues and dependencies">
+          <ShieldAlert size={13} /> RAID log
+        </button>
       </div>
       {ws.status === "DRAFT" && perms.submit && onSubmitDraft && (
         <button className="ep-btn" style={{ marginLeft: "auto", fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }}
@@ -226,10 +230,12 @@ export default function ChangeRequestWorkspace(props: {
   return (
     <Shell onClose={onClose} title={title} sub={<>
       <span className={`custom-status-badge custom-status-${ws.status.toLowerCase().replace(/_/g, "-")}`}>{ws.status.replace(/_/g, " ")}</span>
-      <span style={{ marginLeft: 8 }}>You're here as</span> <BrsRoleBadge role={ws.my_role} />
+      <span style={{ marginLeft: 8 }}>You're here as</span> <CrRoleBadge role={ws.my_role} />
       {detail.requester_name && <span style={{ marginLeft: 8 }}>· Started by {detail.requester_name} on {new Date(detail.created_at).toLocaleDateString()}</span>}
     </>} toolbar={header}>
-      {view === "COMMENTS" ? (
+      {view === "RAID" ? (
+        <RaidLog docType="CHANGE_REQUEST" docId={submissionId} users={directory.length ? directory : undefined} />
+      ) : view === "COMMENTS" ? (
         <CommentsView submissionId={submissionId} sections={[...ws.form_sections.map((s) => ({ key: s.key, title: s.title })), ...ws.custom_sections.map((s) => ({ key: s.id, title: s.title }))]}
           initialSection={commentFor} onPosted={() => void load()} />
       ) : view === "HISTORY" ? (
@@ -269,7 +275,8 @@ export default function ChangeRequestWorkspace(props: {
             {editingPeople ? (
               <>
                 <BrsPeoplePicker users={directory} ownerIds={ownerIds} onOwnersChange={setOwnerIds} coWriters={coWriters} onCoWritersChange={setCoWriters}
-                  excludeIds={ws.creator ? [ws.creator.id] : []} permissionOptions={CR_PERMISSION_OPTIONS} presets={CR_PRESETS} ownersLocked={!perms.manage} />
+                  excludeIds={[...(ws.creator ? [ws.creator.id] : []), ...((detail.approval_chain || []) as any[]).map((st) => st.approver_id)]}
+                  permissionOptions={CR_PERMISSION_OPTIONS} presets={CR_PRESETS} ownersLocked={!perms.manage} ownerWord="co-owner" />
                 <div style={{ display: "flex", gap: 8 }}>
                   <button className="ep-btn" disabled={saving} onClick={() => void savePeople()}>{saving ? "Saving…" : "Save people"}</button>
                   <button className="ep-btn-outline" onClick={() => setEditingPeople(false)}>Cancel</button>
@@ -278,18 +285,18 @@ export default function ChangeRequestWorkspace(props: {
             ) : (
               <div style={{ display: "grid", gap: 8, fontSize: 13 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <BrsRoleBadge role="CREATOR" /> {ws.creator?.full_name || ws.creator?.email || "—"}
+                  <CrRoleBadge role="CREATOR" /> {ws.creator?.full_name || ws.creator?.email || "—"}
                 </div>
                 {ws.owners.map((o) => (
-                  <div key={o.id} style={{ display: "flex", gap: 8, alignItems: "center" }}><BrsRoleBadge role="OWNER" /> {o.full_name || o.email}</div>
+                  <div key={o.id} style={{ display: "flex", gap: 8, alignItems: "center" }}><CrRoleBadge role="OWNER" /> {o.full_name || o.email}</div>
                 ))}
                 {ws.co_writers.map((c) => (
                   <div key={c.entry_id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <BrsRoleBadge role="CO_WRITER" /> <OrgEntryChip entry={{ type: c.type, id: c.id, name: c.name, label: c.label }} />
+                    <CrRoleBadge role="CO_WRITER" /> <OrgEntryChip entry={{ type: c.type, id: c.id, name: c.name, label: c.label }} />
                     <span style={{ color: "var(--muted)", fontSize: 12 }}>{describeCrPermissions(c.permissions)}{c.added_by_name ? ` · added by ${c.added_by_name}` : ""}</span>
                   </div>
                 ))}
-                {!ws.owners.length && !ws.co_writers.length && <div style={{ color: "var(--muted)" }}>No owners or co-writers yet.</div>}
+                {!ws.owners.length && !ws.co_writers.length && <div style={{ color: "var(--muted)" }}>No co-owners or co-writers yet.</div>}
               </div>
             )}
           </div>
@@ -412,6 +419,11 @@ export default function ChangeRequestWorkspace(props: {
   );
 }
 
+// In a Change Request an owner is a co-owner.
+function CrRoleBadge({ role }: { role: string | null | undefined }) {
+  return <BrsRoleBadge role={role} label={role === "OWNER" ? "Co-owner" : undefined} />;
+}
+
 function FragmentRow({ label, value }: { label: string; value: string }) {
   return (
     <>
@@ -487,7 +499,7 @@ function CommentsView({ submissionId, sections, initialSection, onPosted }: {
           {shown.map((c) => (
             <div key={c.id} className="card" style={{ padding: 12 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
-                <strong>{c.author_name || "Someone"}</strong> <BrsRoleBadge role={c.author_role} />
+                <strong>{c.author_name || "Someone"}</strong> <CrRoleBadge role={c.author_role} />
                 <span style={{ color: "var(--muted)", fontSize: 12 }}>on {c.section_title || "the whole request"} · {when(c.created_at)}</span>
               </div>
               <div style={{ marginTop: 6, fontSize: 13.5, whiteSpace: "pre-wrap" }}>{c.body}</div>
@@ -562,7 +574,7 @@ function HistoryView({ submissionId, fieldByKey, formatValue, lastSeen, currentU
                   <div style={{ fontSize: 12, color: "var(--muted)", width: 150, flexShrink: 0 }}>{when(r.created_at)}</div>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      {r.actor_name || "System"} <BrsRoleBadge role={r.actor_role} />
+                      {r.actor_name || "System"} <CrRoleBadge role={r.actor_role} />
                       <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>{KIND_LABEL[r.kind] || r.kind}{r.section_title ? ` · ${r.section_title}` : ""}</span>
                       {isNew && <span style={{ fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 99, background: "#fef3c7", color: "#92400e" }}>NEW</span>}
                     </div>

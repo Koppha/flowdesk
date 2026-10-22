@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { RaidLogButton } from "./components/RaidLog";
 import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
 import Swal from "sweetalert2";
 import { api, getUserFromToken, navigateTabToBlob, openBlankTab, openBlobInNewTab } from "./api";
@@ -2746,9 +2747,12 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             {detail?.request_type_code === "CHANGE_REQUEST" && (
-              <button className="button small-button" onClick={() => setWorkspaceOpen(true)} title="Comment on it and see who changed what">
-                Comments & history
+              <button className="button small-button" onClick={() => setWorkspaceOpen(true)} title="Comment on it, see who changed what, and its RAID log">
+                Comments, history & RAID
               </button>
+            )}
+            {detail?.request_type_code === "COMPUTER_REQUEST" && (
+              <RaidLogButton docType="COMPUTER_REQUEST" docId={item.id} title={`Computer Request CR-${item.id.slice(0, 8).toUpperCase()}`} className="button small-button" />
             )}
             <button className="button small-button button-subtle" onClick={props.onClose}>
               Close

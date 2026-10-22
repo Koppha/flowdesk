@@ -82,6 +82,10 @@ export async function ensureSignaturesSchema() {
   await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS approval_chain jsonb NOT NULL DEFAULT '[]'`);
   await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS current_step_order int NOT NULL DEFAULT 0`);
   await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'OPEN'`);
+  // A document with no route stays open until its creator finishes it
+  // (Finish signing) - then it's COMPLETED and nobody can sign it again.
+  await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS closed_at timestamptz`);
+  await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS closed_by_id uuid REFERENCES users(id) ON DELETE SET NULL`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS document_signature_placements (

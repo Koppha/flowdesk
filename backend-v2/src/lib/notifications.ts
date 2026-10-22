@@ -2041,9 +2041,9 @@ export async function notifyChangeRequestPeopleAdded(args: {
       if (!owner.email) continue;
       await sendMail({
         to: [owner.email],
-        subject: `[Change Request] You are an owner of "${args.title}"`,
-        text: [header("CHANGE REQUEST — YOU ARE AN OWNER"), ``, `Hello ${owner.full_name || ""},`, ``,
-          `${who} made you an owner of the Change Request "${args.title}". As an owner you have full rights: edit it, add or remove people and sections, submit it for approval and distribute it.`,
+        subject: `[Change Request] You are a co-owner of "${args.title}"`,
+        text: [header("CHANGE REQUEST — YOU ARE A CO-OWNER"), ``, `Hello ${owner.full_name || ""},`, ``,
+          `${who} made you a co-owner of the Change Request "${args.title}". As a co-owner you have the same rights as the requester: edit it, add or remove people and sections, submit it, send reminders, cancel or close it, and distribute it. You will also get its approval updates.`,
           ``, `Open it in FlowDesk: Custom Processes > Change Request > My Requests.`, ``, footer()].join("\n")
       });
     }

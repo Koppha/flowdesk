@@ -103,7 +103,7 @@ async function activeUsers(ids: string[]) {
   const rows = await query<{ id: string; full_name: string | null; email: string }>(
     `SELECT id, full_name, email FROM users WHERE id = ANY($1::uuid[]) AND is_active = true`, [ids]
   );
-  if (rows.length !== new Set(ids).size) throw badRequest("One or more selected owners are not active FlowDesk users");
+  if (rows.length !== new Set(ids).size) throw badRequest("One or more selected co-owners are not active FlowDesk users");
   return rows;
 }
 
@@ -135,7 +135,7 @@ changeCollabRouter.post("/change-requests/drafts", async (req: AuthedRequest, re
       [type.id, req.user!.userId, JSON.stringify(data), ownerIds]
     ))[0];
     const added = await writeCoWriters(sub.id, entries, [], req.user!.userId);
-    const people = [...owners.map((o) => `${o.full_name || o.email} (owner)`), ...added.map((e) => `${e.label} (${describePerms(normalizePerms(e.permissions))})`)];
+    const people = [...owners.map((o) => `${o.full_name || o.email} (co-owner)`), ...added.map((e) => `${e.label} (${describePerms(normalizePerms(e.permissions))})`)];
     await recordCrRevision({
       submissionId: sub.id, kind: "DRAFT_CREATED", actorId: req.user!.userId, actorRole: "CREATOR",
       summary: `Started the draft${people.length ? ` with ${people.join(", ")}` : ""}`
@@ -272,7 +272,7 @@ changeCollabRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
     const { sub, fields } = await loadChangeRequest(req.params.id);
     if (["REJECTED", "CANCELLED"].includes(sub.status)) throw badRequest("This Change Request is closed to changes");
     const perms = await crPermissions(sub, req.user!);
-    if (!perms.manage && !perms.invite) throw forbidden("Only the creator, an owner or a co-writer allowed to invite can add people");
+    if (!perms.manage && !perms.invite) throw forbidden("Only the creator, a co-owner or a co-writer allowed to invite can add people");
 
     const existing = await query<CollabRow>(`SELECT * FROM cr_collaborators WHERE submission_id = $1`, [sub.id]);
     const before = crOwnerIds(sub);
@@ -296,6 +296,10 @@ changeCollabRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
       entries = entries.filter((e) => !(e.type === "user" && ownerIds.includes(e.id!)));
     }
 
+    const approverIds = (sub.approval_chain || []).map((st: any) => st.approver_id);
+    if (ownerIds.some((id) => !before.includes(id) && approverIds.includes(id))) {
+      throw badRequest("An approver on this Change Request can't also be a co-owner");
+    }
     const newOwners = await activeUsers(ownerIds.filter((id) => !before.includes(id)));
     if (ownerIds.join(",") !== before.join(",")) {
       await activeUsers(ownerIds);
@@ -314,8 +318,8 @@ changeCollabRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
       ? (await query<{ n: string }>(`SELECT coalesce(full_name, email) AS n FROM users WHERE id = ANY($1::uuid[])`, [ids])).map((r) => r.n) : [];
     const ownersAdded = await nameOf(ownerIds.filter((id) => !before.includes(id)));
     const ownersRemoved = await nameOf(before.filter((id) => !ownerIds.includes(id)));
-    if (ownersAdded.length) lines.push(`Owners added: ${ownersAdded.join(", ")}`);
-    if (ownersRemoved.length) lines.push(`Owners removed: ${ownersRemoved.join(", ")}`);
+    if (ownersAdded.length) lines.push(`Co-owners added: ${ownersAdded.join(", ")}`);
+    if (ownersRemoved.length) lines.push(`Co-owners removed: ${ownersRemoved.join(", ")}`);
     if (added.length) lines.push(`Added: ${added.map((e) => `${e.label} (${describePerms(normalizePerms(e.permissions))})`).join(", ")}`);
     const wanted = new Map(entries.map((e) => [entryKey(e), e]));
     const removed = existing.filter((r) => !wanted.has(entryKey(rowEntry(r))));
@@ -392,7 +396,7 @@ changeCollabRouter.post("/:id/sections", async (req: AuthedRequest, res, next) =
     if (!parsed.success) throw badRequest("Give the section a title (up to 120 characters)");
     const { sub, fields } = await loadChangeRequest(req.params.id);
     if (!EDITABLE_STATUSES.includes(sub.status)) throw badRequest("Sections can no longer be added");
-    if (!(await crPermissions(sub, req.user!)).manage) throw forbidden("Only the creator or an owner can add sections");
+    if (!(await crPermissions(sub, req.user!)).manage) throw forbidden("Only the creator or a co-owner can add sections");
     const nextOrder = (await query<{ n: number }>(`SELECT coalesce(max(sort_order), 0) + 1 AS n FROM cr_custom_sections WHERE submission_id = $1`, [sub.id]))[0].n;
     const row = (await query<{ id: string }>(
       `INSERT INTO cr_custom_sections (submission_id, title, description, sort_order, added_by_id, updated_by_id)
@@ -417,7 +421,7 @@ changeCollabRouter.patch("/:id/sections/:sid", async (req: AuthedRequest, res, n
     if (!EDITABLE_STATUSES.includes(sub.status)) throw badRequest("This Change Request can no longer be edited");
     const perms = await crPermissions(sub, req.user!);
     if (!perms.edit) throw forbidden("You don't have edit rights on this Change Request");
-    if (parsed.data.title !== undefined && !perms.manage) throw forbidden("Only the creator or an owner can rename sections");
+    if (parsed.data.title !== undefined && !perms.manage) throw forbidden("Only the creator or a co-owner can rename sections");
     const section = (await query<any>(`SELECT * FROM cr_custom_sections WHERE id = $1 AND submission_id = $2`, [req.params.sid, sub.id]))[0];
     if (!section) throw notFound("Section not found");
 
@@ -445,7 +449,7 @@ changeCollabRouter.delete("/:id/sections/:sid", async (req: AuthedRequest, res, 
   try {
     const { sub, fields } = await loadChangeRequest(req.params.id);
     if (!EDITABLE_STATUSES.includes(sub.status)) throw badRequest("Sections can no longer be removed");
-    if (!(await crPermissions(sub, req.user!)).manage) throw forbidden("Only the creator or an owner can remove sections");
+    if (!(await crPermissions(sub, req.user!)).manage) throw forbidden("Only the creator or a co-owner can remove sections");
     const section = (await query<any>(`DELETE FROM cr_custom_sections WHERE id = $1 AND submission_id = $2 RETURNING *`, [req.params.sid, sub.id]))[0];
     if (!section) throw notFound("Section not found");
     // Its last text stays in the history, so removing a section loses nothing.
@@ -533,7 +537,7 @@ changeCollabRouter.delete("/:id/draft", async (req: AuthedRequest, res, next) =>
   try {
     const { sub } = await loadChangeRequest(req.params.id);
     if (sub.status !== "DRAFT") throw badRequest("Only a draft can be discarded");
-    if (!(await crPermissions(sub, req.user!)).manage) throw forbidden("Only the creator or an owner can discard this draft");
+    if (!(await crPermissions(sub, req.user!)).manage) throw forbidden("Only the creator or a co-owner can discard this draft");
     await query(`DELETE FROM custom_request_submissions WHERE id = $1 AND status = 'DRAFT'`, [sub.id]);
     return res.json({ ok: true });
   } catch (err) {

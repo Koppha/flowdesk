@@ -21,6 +21,7 @@ import { reportingLinesRouter } from "./modules/reporting-lines/reporting-lines.
 import { requestTypesRouter } from "./modules/request-types/request-types.routes.js";
 import { customRequestsRouter } from "./modules/custom-requests/custom-requests.routes.js";
 import { changeCollabRouter } from "./modules/custom-requests/change-collab.routes.js";
+import { raidRouter } from "./modules/raid/raid.routes.js";
 import { brsRouter } from "./modules/brs/brs.routes.js";
 import { brsAdminRouter } from "./modules/brs/brs-admin.routes.js";
 import { distributionsRouter } from "./modules/distributions/distributions.routes.js";
@@ -132,6 +133,7 @@ export function createApp() {
   // Change Request collaboration routes first; the rest fall through.
   app.use("/custom-requests", changeCollabRouter);
   app.use("/custom-requests", customRequestsRouter);
+  app.use("/raid", raidRouter);
   app.use("/brs", brsRouter);
   app.use("/brs-types", brsAdminRouter);
   app.use("/distributions", distributionsRouter);

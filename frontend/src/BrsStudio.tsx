@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import Swal from "sweetalert2";
 import { api, openBlobInNewTab } from "./api";
 import DistributeDialog from "./components/DistributeDialog";
@@ -701,6 +702,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
           <a href="#" className={`ep-tab ${landingTab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("MINE"); }}>My BRS</a>
           <a href="#" className={`ep-tab ${landingTab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("ASSIGNED"); }}>Assigned to Me</a>
           <a href="#" className={`ep-tab ${landingTab === "SHARED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("SHARED"); }}>Shared with Me <span className="ep-tab-count">{shared.length}</span></a>
+          <span style={{ marginLeft: "auto", alignSelf: "center" }}><RaidRegisterButton docType="BRS" /></span>
         </div>
 
         <FinanceFilterBar showReset={landingShowReset} onReset={landingResetFilters} onApply={() => setPage(1)}>
@@ -822,6 +824,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
               <button className="ep-btn-outline" onClick={() => setShowHistory((v) => !v)}>
                 <History size={14} /> History
               </button>
+              <RaidLogButton docType="BRS" docId={doc.id} title={`${doc.reference_no ? doc.reference_no + " — " : ""}${doc.title}`} users={directorySorted} />
             </>
           )}
           <button onClick={backToLanding} className="ep-btn-outline custom-requests-back"><ArrowLeft size={14} /> All BRS</button>

@@ -6,7 +6,7 @@ import multer from "multer";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder } from "../../lib/notifications.js";
+import { notifyChangeRequestPeopleAdded, notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder } from "../../lib/notifications.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { resolveDirectManagerId } from "../reporting-lines/reporting-lines.routes.js";
@@ -126,7 +126,10 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
   try {
     let bodyData: unknown;
     let bodyChain: unknown;
+    let bodyOwners: unknown;
     try {
+      // Change Request only: co-owners named on the form (full rights, like the requester).
+      bodyOwners = typeof req.body.owner_user_ids === "string" ? JSON.parse(req.body.owner_user_ids) : (req.body.owner_user_ids ?? []);
       bodyData = typeof req.body.data === "string" ? JSON.parse(req.body.data) : (req.body.data ?? {});
       bodyChain = typeof req.body.approval_chain === "string" ? JSON.parse(req.body.approval_chain) : (req.body.approval_chain ?? []);
     } catch {
@@ -301,6 +304,21 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
       throw badRequest("The person who started this Change Request cannot also approve it");
     }
 
+    // Co-owners: from the form on a direct submission, or the draft's own.
+    let coOwnerIds: string[] = crDraft ? (crDraft.owner_user_ids ?? []) : [];
+    if (!crDraft && requestType.code === "CHANGE_REQUEST") {
+      const parsedOwners = z.array(z.string().uuid()).max(20).safeParse(bodyOwners);
+      if (!parsedOwners.success) throw badRequest("Invalid co-owners");
+      coOwnerIds = [...new Set(parsedOwners.data)].filter((id) => id !== req.user!.userId);
+      if (coOwnerIds.length) {
+        const found = await query<{ id: string }>(`SELECT id FROM users WHERE id = ANY($1::uuid[]) AND is_active = true`, [coOwnerIds]);
+        if (found.length !== coOwnerIds.length) throw badRequest("One or more co-owners are not active FlowDesk users");
+      }
+    }
+    if (chainInput.some((s) => coOwnerIds.includes(s.approver_id))) {
+      throw badRequest("A co-owner can't also be an approver on the same Change Request");
+    }
+
     const approverIds = chainInput.map((s) => s.approver_id);
     const approvers = await query<{ id: string; full_name: string | null; email: string; role: string }>(
       `SELECT id, full_name, email, role FROM users WHERE id = ANY($1::uuid[]) AND is_active = true`,
@@ -375,10 +393,10 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
           [JSON.stringify(parsed.data.data), JSON.stringify(chain), draft.id]
         ))[0]
       : (await query<{ id: string }>(
-          `INSERT INTO custom_request_submissions (request_type_id, requester_id, data, approval_chain, current_step_order, status)
-           VALUES ($1, $2, $3, $4, 0, 'IN_PROGRESS')
+          `INSERT INTO custom_request_submissions (request_type_id, requester_id, data, approval_chain, current_step_order, status, owner_user_ids)
+           VALUES ($1, $2, $3, $4, 0, 'IN_PROGRESS', $5)
            RETURNING id`,
-          [requestType.id, req.user!.userId, JSON.stringify(parsed.data.data), JSON.stringify(chain)]
+          [requestType.id, req.user!.userId, JSON.stringify(parsed.data.data), JSON.stringify(chain), coOwnerIds]
         ))[0];
 
     const uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
@@ -398,6 +416,12 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
         summary: `Submitted for approval: ${route}${uploadedFiles.length ? `; ${uploadedFiles.length} attachment(s)` : ""}`
       }).catch((e) => logger.warn("cr_revision_failed", { submission_id: submission.id, error: serializeError(e) }));
     }
+    const newCoOwners = !crDraft && coOwnerIds.length
+      ? await query<{ id: string; full_name: string | null; email: string }>(`SELECT id, full_name, email FROM users WHERE id = ANY($1::uuid[])`, [coOwnerIds])
+      : [];
+    if (newCoOwners.length) {
+      await auditChangeRequest(submission.id, req.user!, "PEOPLE_CHANGED", `Co-owners: ${newCoOwners.map((o) => o.full_name || o.email).join(", ")}`);
+    }
 
     // Respond as soon as the submission itself is durably saved — every
     // notification below is an email/Teams send that can each take seconds,
@@ -409,6 +433,12 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
 
     void (async () => {
       try {
+        if (newCoOwners.length) {
+          await notifyChangeRequestPeopleAdded({
+            submissionId: submission.id, title: String(parsed.data.data.description_of_change || "Change Request").slice(0, 120),
+            addedBy: req.user!.fullName ?? null, owners: newCoOwners, coWriterEmails: []
+          });
+        }
         await notifyCustomRequestStep({
           submissionId: submission.id,
           requestTypeName: requestType.name,
@@ -1136,22 +1166,27 @@ export async function performCustomRequestAction(
   // Email/Teams sends are slow relative to a request-response cycle and
   // already self-log on failure — don't make the caller (the action route,
   // or the one-click email-approval link) wait on them.
+  // Change Request co-owners hear about every decision, like the requester.
+  const coOwners = (submission.owner_user_ids || []).length
+    ? await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = ANY($1::uuid[]) AND is_active`, [submission.owner_user_ids])
+    : [];
+  const requesterAndCoOwners = [{ email: submission.requester_email, full_name: submission.requester_name }, ...coOwners];
   if (action === "REJECT") {
-    void notifyCustomRequestDecision({
+    for (const r of requesterAndCoOwners) void notifyCustomRequestDecision({
       submissionId: submission.id,
       requestTypeName: submission.request_type_name,
-      requesterEmail: submission.requester_email,
-      requesterName: submission.requester_name,
+      requesterEmail: r.email,
+      requesterName: r.full_name,
       decision: "REJECTED",
       decidedBy: actor.fullName ?? null,
       comment: comment ?? null
     });
   } else if (newStatus === "APPROVED") {
-    void notifyCustomRequestDecision({
+    for (const r of requesterAndCoOwners) void notifyCustomRequestDecision({
       submissionId: submission.id,
       requestTypeName: submission.request_type_name,
-      requesterEmail: submission.requester_email,
-      requesterName: submission.requester_name,
+      requesterEmail: r.email,
+      requesterName: r.full_name,
       decision: "APPROVED",
       decidedBy: actor.fullName ?? null,
       comment: comment ?? null,
@@ -1165,11 +1200,11 @@ export async function performCustomRequestAction(
     });
   } else {
     const nextStep = chain[newStepOrder];
-    void notifyCustomRequestProgress({
+    for (const r of requesterAndCoOwners) void notifyCustomRequestProgress({
       submissionId: submission.id,
       requestTypeName: submission.request_type_name,
-      requesterEmail: submission.requester_email,
-      requesterName: submission.requester_name,
+      requesterEmail: r.email,
+      requesterName: r.full_name,
       event: "STEP_APPROVED",
       actedBy: actor.fullName ?? null,
       actedStepLabel: step.position_name,
@@ -1229,8 +1264,8 @@ customRequestsRouter.post("/:id/remind", async (req: AuthedRequest, res, next) =
       [req.params.id]
     ))[0];
     if (!submission) throw notFound();
-    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId) {
-      throw forbidden("Only the requester can send a reminder on this request");
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !(submission.owner_user_ids || []).includes(req.user!.userId)) {
+      throw forbidden("Only the requester (or a co-owner) can send a reminder on this request");
     }
     if (submission.status !== "IN_PROGRESS") throw badRequest("This request is not awaiting approval");
 
@@ -1291,7 +1326,7 @@ customRequestsRouter.post("/:id/cancel", async (req: AuthedRequest, res, next) =
     ))[0];
     if (!submission) throw notFound();
     if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !(submission.owner_user_ids || []).includes(req.user!.userId)) {
-      throw forbidden("Only the requester (or an owner) can cancel this request");
+      throw forbidden("Only the requester (or a co-owner) can cancel this request");
     }
     if (submission.status !== "IN_PROGRESS") throw badRequest("Only a request that is still pending approval can be cancelled");
 
@@ -1339,7 +1374,7 @@ customRequestsRouter.post("/:id/close", async (req: AuthedRequest, res, next) =>
     if (!submission) throw notFound();
     if (submission.status !== "APPROVED") throw badRequest("Only approved requests can be closed");
     if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !(submission.owner_user_ids || []).includes(req.user!.userId)) {
-      throw forbidden("Only the requester (or an owner) can close this request");
+      throw forbidden("Only the requester (or a co-owner) can close this request");
     }
 
     await query(

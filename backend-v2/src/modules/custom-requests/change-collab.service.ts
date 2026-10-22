@@ -226,7 +226,7 @@ export async function canViewChangeRequest(
 export type CrRevisionKind =
   | "CREATED" | "DRAFT_CREATED" | "SUBMITTED" | "FIELDS_SAVED" | "SECTION_ADDED" | "SECTION_REMOVED" | "SECTION_SAVED"
   | "PEOPLE_CHANGED" | "COMMENTED" | "ASSIGNEE_ADDED" | "ASSIGNEE_CONFIRMED" | "APPROVAL_ACTION"
-  | "CANCELLED" | "CLOSED" | "DISTRIBUTED";
+  | "CANCELLED" | "CLOSED" | "DISTRIBUTED" | "RAID_CHANGED";
 
 export type FieldChange = { key: string; label: string; before: unknown; after: unknown };
 

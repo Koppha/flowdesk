@@ -17,7 +17,7 @@ import {
   getSavedSignature, saveSavedSignature, clearSavedSignature,
   createSignableDocument, getSignableDocument, getSignableDocumentByCode,
   listSignableDocumentsForUser, listPlacementsForDocument, addSignaturePlacement,
-  rejectSignableDocument, addTextToDocument
+  rejectSignableDocument, addTextToDocument, finishSignableDocument
 } from "./signatures.service.js";
 
 const upload = multer({
@@ -263,12 +263,27 @@ signaturesRouter.get("/documents/:id", async (req: AuthedRequest, res, next) => 
       status: doc.status, currentStepOrder: doc.current_step_order,
       approvalChain: chain.map((s: any) => ({ approverId: s.approver_id, approverName: s.approver_name, status: s.status, comment: s.comment, actedAt: s.acted_at })),
       isMyTurn: doc.status === "OPEN" && chain.length > 0 && chain[doc.current_step_order]?.approver_id === req.user!.userId,
+      closedAt: doc.closed_at ?? null,
+      closedByName: doc.closed_by_id ? (await query<{ full_name: string | null }>(`SELECT full_name FROM users WHERE id = $1`, [doc.closed_by_id]))[0]?.full_name ?? null : null,
+      canFinish: doc.status === "OPEN" && chain.length === 0 && (doc.created_by_id === req.user!.userId || req.user!.role === "ADMIN"),
       placements: placements.map((p) => ({
         id: p.id, signerName: p.signer_name, authorityName: p.authority_name,
         delegationNotation: p.delegation_notation, pageNumber: p.page_number,
         xPct: Number(p.x_pct), yPct: Number(p.y_pct), signedAt: p.signed_at
       }))
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /signatures/documents/:id/finish - the creator ends signing on a
+// document with no approval route; after this nobody can sign it.
+signaturesRouter.post("/documents/:id/finish", async (req: AuthedRequest, res, next) => {
+  try {
+    await ensureSignaturesSchema();
+    await finishSignableDocument(req.params.id, req.user!);
+    return res.json({ ok: true, status: "COMPLETED" });
   } catch (err) {
     return next(err);
   }

@@ -15,6 +15,7 @@ import { ensureAirportsSchema } from "../lib/airports.js";
 import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
 import { ensureBrsSchema } from "../modules/brs/brs.schema.js";
 import { ensureChangeCollabSchema } from "../modules/custom-requests/change-collab.service.js";
+import { ensureRaidSchema } from "../modules/raid/raid.service.js";
 import { ensureReportingViewsSchema } from "../modules/reporting/reporting.schema.js";
 import { ensureSignaturesSchema } from "../modules/signatures/signatures.schema.js";
 import { ensureSlaReminderSchema } from "../modules/sla/sla.schema.js";
@@ -41,6 +42,7 @@ export async function bootstrapSystem() {
   await ensureRequestTypesSchema();
   await ensureBrsSchema();
   await ensureChangeCollabSchema();
+  await ensureRaidSchema();
   await seedBrsApprovalRequestType();
   await ensureEmploymentTypesSchema();
   await ensureEmailActionTokensSchema();

@@ -24,7 +24,8 @@ const KIND_LABEL: Record<string, string> = {
   SECTION_ADDED: "Section added",
   SECTION_REMOVED: "Section removed",
   REVIEWERS_CHANGED: "Reviewers changed",
-  COMMENTED: "Comment"
+  COMMENTED: "Comment",
+  RAID_CHANGED: "RAID log"
 };
 
 function fmt(ts: string) {

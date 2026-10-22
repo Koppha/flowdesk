@@ -225,12 +225,16 @@ async function notifyStepApprover(doc: any, chain: RoutingChainStep[], stepIndex
 }
 
 // Chain rules: an empty chain means free-for-all (anyone with the link can
-// sign, unchanged from the original design). A non-empty chain restricts
-// action to whoever sits at current_step_order, and only while the
-// document is still OPEN - once REJECTED or COMPLETED, nobody can act.
+// sign) until the creator finishes it - then it's COMPLETED and closed. A
+// non-empty chain restricts action to whoever sits at current_step_order,
+// and only while the document is still OPEN - once REJECTED or COMPLETED,
+// nobody can act.
 export function assertCanActOnDocument(doc: any, userId: string): RoutingChainStep[] {
   const chain: RoutingChainStep[] = Array.isArray(doc.approval_chain) ? doc.approval_chain : [];
-  if (chain.length === 0) return chain;
+  if (chain.length === 0) {
+    if (doc.status !== "OPEN") throw forbidden("Signing on this document has been finished - it can't be signed or changed any more.");
+    return chain;
+  }
   if (doc.status !== "OPEN") throw forbidden(doc.status === "REJECTED" ? "This document was rejected and is no longer open for signing." : "This document's approval route is already complete.");
   const current = chain[doc.current_step_order];
   if (!current || current.approver_id !== userId) {
@@ -394,6 +398,20 @@ export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
   }
 
   return { id: row.id, documentId: input.documentId, contentHash };
+}
+
+// The creator (or an admin) ends signing on a document with no route.
+// A routed document ends on its own when the last approver signs.
+export async function finishSignableDocument(documentId: string, actor: { userId: string; role: string }) {
+  const doc = await getSignableDocument(documentId);
+  const chain = Array.isArray(doc.approval_chain) ? doc.approval_chain : [];
+  if (chain.length) throw badRequest("This document follows an approval route - it finishes when the last approver signs.");
+  if (doc.status !== "OPEN") throw badRequest("Signing on this document has already been finished.");
+  if (actor.role !== "ADMIN" && doc.created_by_id !== actor.userId) throw forbidden("Only the person who started this document can finish signing.");
+  await query(
+    `UPDATE signable_documents SET status = 'COMPLETED', closed_at = now(), closed_by_id = $2, updated_at = now() WHERE id = $1 AND status = 'OPEN'`,
+    [documentId, actor.userId]
+  );
 }
 
 export interface RejectSignableDocumentInput {

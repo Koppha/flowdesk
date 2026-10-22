@@ -64,8 +64,11 @@ export function BrsPeoplePicker(props: {
   presets?: Preset[];
   // A co-writer allowed to invite can't change owners.
   ownersLocked?: boolean;
+  // Change Request calls them co-owners.
+  ownerWord?: string;
 }) {
-  const { users, ownerIds, onOwnersChange, coWriters, onCoWritersChange, excludeIds = [], permissionOptions = BRS_PERMISSION_OPTIONS, presets = PRESETS, ownersLocked = false } = props;
+  const { users, ownerIds, onOwnersChange, coWriters, onCoWritersChange, excludeIds = [], permissionOptions = BRS_PERMISSION_OPTIONS, presets = PRESETS, ownersLocked = false, ownerWord = "owner" } = props;
+  const OwnerWord = ownerWord.charAt(0).toUpperCase() + ownerWord.slice(1);
   const [searching, setSearching] = useState(false);
   const [ownerPick, setOwnerPick] = useState("");
   const ownerOptions = users.filter((u) => !excludeIds.includes(u.id) && !ownerIds.includes(u.id));
@@ -82,7 +85,7 @@ export function BrsPeoplePicker(props: {
   return (
     <div className="ep-form-row">
       <div className="ep-form-group" style={{ gridColumn: "1 / -1" }}>
-        <label>Owners <span style={{ fontWeight: 400, color: "var(--muted)" }}>— full rights, same as the creator; add as many as needed</span></label>
+        <label>{OwnerWord}s <span style={{ fontWeight: 400, color: "var(--muted)" }}>— full rights, same as the creator; add as many as needed</span></label>
         {ownerIds.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
             {ownerIds.map((id) => {
@@ -91,7 +94,7 @@ export function BrsPeoplePicker(props: {
                 <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 6px 4px 10px", borderRadius: 99, background: "#ede9fe", color: "#6d28d9", fontSize: 12.5, fontWeight: 600 }}>
                   {u?.full_name || u?.email || "Unknown user"}
                   {!ownersLocked && (
-                    <button type="button" aria-label={`Remove ${u?.full_name || "owner"}`} onClick={() => onOwnersChange(ownerIds.filter((x) => x !== id))}
+                    <button type="button" aria-label={`Remove ${u?.full_name || ownerWord}`} onClick={() => onOwnersChange(ownerIds.filter((x) => x !== id))}
                       style={{ border: "none", background: "transparent", cursor: "pointer", color: "inherit", display: "inline-flex", padding: 0 }}><X size={13} /></button>
                   )}
                 </span>
@@ -100,16 +103,16 @@ export function BrsPeoplePicker(props: {
           </div>
         )}
         {ownersLocked ? (
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>Only the creator or an owner can change owners.</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>Only the creator or {ownerWord === "owner" ? "an owner" : `a ${ownerWord}`} can change {ownerWord}s.</div>
         ) : (
           <>
             <ApproverCombobox
               users={ownerOptions}
               value={ownerPick}
               onChange={addOwner}
-              placeholder={ownerIds.length ? "Add another owner…" : "Search an owner by name or email…"}
+              placeholder={ownerIds.length ? `Add another ${ownerWord}…` : `Search a ${ownerWord} by name or email…`}
             />
-            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>A co-writer can be made an owner too — they move from co-writers to owners.</div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>A co-writer can be made {ownerWord === "owner" ? "an owner" : `a ${ownerWord}`} too — they move from co-writers to {ownerWord}s.</div>
           </>
         )}
       </div>
@@ -204,12 +207,12 @@ const ROLE_STYLE: Record<string, [string, string]> = {
   APPROVER: ["#fce7f3", "#9d174d"],
   ADMIN: ["#f1f5f9", "#334155"]
 };
-export function BrsRoleBadge({ role }: { role: string | null | undefined }) {
+export function BrsRoleBadge({ role, label }: { role: string | null | undefined; label?: string }) {
   if (!role) return null;
   const [bg, color] = ROLE_STYLE[role] || ["#f1f5f9", "#64748b"];
   return (
     <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>
-      {BRS_ROLE_LABEL[role] || role}
+      {label || BRS_ROLE_LABEL[role] || role}
     </span>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import { createPortal } from "react-dom";
 import { api, openBlobInNewTab } from "./api";
 import DistributeDialog from "./components/DistributeDialog";
@@ -669,6 +670,9 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftDialog, setDraftDialog] = useState<{ ownerIds: string[]; coWriters: OrgEntry[] } | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
+  // Change Request: co-owners named on the form (same rights as the requester).
+  const [coOwnerIds, setCoOwnerIds] = useState<string[]>([]);
+  const [coOwnerPick, setCoOwnerPick] = useState("");
   // Attendance Register only - day-by-day autosave (see attendance.routes.ts)
   // lets the grid be built up over several sessions instead of only ever
   // reaching the database on final Submit.
@@ -1006,9 +1010,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         request_type_id: selectedTypeId,
         data: payloadData,
         approval_chain: submitChain,
-        draft_id: draftId
+        draft_id: draftId,
+        owner_user_ids: isChangeRequestType && !draftId ? coOwnerIds : undefined
       }, attachmentFiles);
       setDraftId(null);
+      setCoOwnerIds([]);
       setValues({});
       setChain(
         fixedChain?.length
@@ -1879,6 +1885,36 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                 </>
               )}
 
+              {isApprovalsStep && isChangeRequestType && !draftId && (
+                <div style={{ marginTop: 8, marginBottom: 18 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Co-owners <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 13 }}>(optional)</span></div>
+                  <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
+                    Co-owners have the same rights as you: they can edit it, add people, send reminders, cancel or close it and distribute it, and they get its approval emails. A co-owner can't also be an approver.
+                  </div>
+                  {coOwnerIds.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                      {coOwnerIds.map((id) => {
+                        const u = companyDirectorySorted.find((x) => x.id === id);
+                        return (
+                          <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 6px 4px 10px", borderRadius: 99, background: "#ede9fe", color: "#6d28d9", fontSize: 12.5, fontWeight: 600 }}>
+                            {u ? u.full_name || u.email : "Unknown user"}
+                            <button type="button" aria-label={`Remove ${u?.full_name || "co-owner"}`} onClick={() => setCoOwnerIds((ids) => ids.filter((x) => x !== id))}
+                              style={{ border: "none", background: "transparent", cursor: "pointer", color: "inherit", display: "inline-flex", padding: 0 }}><X size={13} /></button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div style={{ maxWidth: 460 }}>
+                    <ApproverCombobox
+                      users={companyDirectorySorted.filter((u) => u.id !== profile?.id && !coOwnerIds.includes(u.id) && !chain.some((c) => c.approver_id === u.id))}
+                      value={coOwnerPick}
+                      onChange={(id) => { setCoOwnerPick(""); if (id) setCoOwnerIds((ids) => (ids.includes(id) ? ids : [...ids, id])); }}
+                      placeholder={coOwnerIds.length ? "Add another co-owner…" : "Search a co-owner by name or email…"}
+                    />
+                  </div>
+                </div>
+              )}
               {isApprovalsStep && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Approval Workflow</div>
@@ -2010,8 +2046,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         )
       ) : (
         <div className="ep-panel">
-          <div className="ep-panel-head">
+          <div className="ep-panel-head" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="ep-panel-title">My {selectedType?.name || "Requests"}</div>
+            {(selectedType?.code === "CHANGE_REQUEST" || selectedType?.code === "COMPUTER_REQUEST") && (
+              <span style={{ marginLeft: "auto" }}><RaidRegisterButton docType={selectedType.code as "CHANGE_REQUEST" | "COMPUTER_REQUEST"} /></span>
+            )}
           </div>
           <div className="ep-panel-body">
             {!mine.length ? (
@@ -2025,10 +2064,13 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                         <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || (s.status === "DRAFT" ? "Untitled Change Request" : s.request_type_name)}</div>
                         <div style={{ fontSize: 12, color: "var(--muted)" }}>
                           {s.status === "DRAFT" ? "Draft started" : "Submitted"} {new Date(s.created_at).toLocaleDateString()}
-                          {s.my_role && <> · You're {s.my_role === "OWNER" ? "an owner" : "a co-writer"}{s.requester_name ? ` — started by ${s.requester_name}` : ""}</>}
+                          {s.my_role && <> · You're {s.my_role === "OWNER" ? "a co-owner" : "a co-writer"}{s.requester_name ? ` — started by ${s.requester_name}` : ""}</>}
                         </div>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {s.request_type_code === "COMPUTER_REQUEST" && (
+                          <RaidLogButton docType="COMPUTER_REQUEST" docId={s.id} title={`Computer Request CR-${s.id.slice(0, 8).toUpperCase()}`} users={companyDirectorySorted} small />
+                        )}
                         {s.request_type_code === "CHANGE_REQUEST" && (
                           <button
                             className={s.status === "DRAFT" ? "ep-btn" : "ep-btn-outline"}
@@ -2245,7 +2287,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             <div className="ep-modal-head">
               <div>
                 <h3 className="ep-modal-title">Save as draft</h3>
-                <p className="ep-modal-sub">Add owners and co-writers to finish this Change Request with you. You can add or remove people later.</p>
+                <p className="ep-modal-sub">Add co-owners and co-writers to finish this Change Request with you. You can add or remove people later.</p>
               </div>
             </div>
             <div className="ep-modal-body">
@@ -2258,6 +2300,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                 excludeIds={profile?.id ? [profile.id] : []}
                 permissionOptions={CR_PERMISSION_OPTIONS}
                 presets={CR_PRESETS}
+                ownerWord="co-owner"
               />
               {error && <div className="custom-request-error">{error}</div>}
             </div>
