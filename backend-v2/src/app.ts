@@ -42,6 +42,7 @@ import { approvalMaintenanceRouter } from "./modules/admin/approval-maintenance.
 import { slaSettingsRouter } from "./modules/admin/sla-settings.routes.js";
 import { mobileConfigRouter } from "./modules/admin/mobile-config.routes.js";
 import { mobileAppRouter } from "./modules/mobile-app/mobile-app.routes.js";
+import { mobileSignPageRouter } from "./modules/mobile-app/mobile-sign-page.routes.js";
 import { paAssignmentsRouter } from "./modules/admin/pa-assignments.routes.js";
 import { vendorContractsRouter } from "./modules/vendor-contracts/vendor-contracts.routes.js";
 import { scheduleReportingLineSync } from "./lib/reportingLineSync.js";
@@ -151,6 +152,8 @@ export function createApp() {
   app.use("/admin/approval-maintenance", approvalMaintenanceRouter);
   app.use("/admin/sla-settings", slaSettingsRouter);
   app.use("/admin/mobile-config", mobileConfigRouter);
+  // Public static page - must precede mobileAppRouter (requireAuth).
+  app.use("/mobile-app/sign", mobileSignPageRouter);
   app.use("/mobile-app", mobileAppRouter);
   app.use("/pa-assignments", paAssignmentsRouter);
   app.use("/ai", aiRouter);

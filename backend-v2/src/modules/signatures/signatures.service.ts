@@ -8,6 +8,14 @@ import { getStringSystemSetting, setStringSystemSetting, getBooleanSystemSetting
 import { env } from "../../config/env.js";
 import { notifySignatureTurn, notifySignatureRejected, notifySignatureCompleted } from "../../lib/notifications.js";
 import { readStoredFile, writeStoredFile, ensureLocalFile } from "../../lib/fileStore.js";
+import { sendPushToUser } from "../../lib/push.js";
+
+// FlowDesk Mobile push for a routing document - the url opens the app's
+// signing screen straight on this document (mobile src/app/sign.tsx).
+// Best-effort and alongside the email, never instead of it.
+function pushDocument(userId: string, doc: { id: string }, title: string, body: string) {
+  void sendPushToUser(userId, { title, body, data: { docType: "SIGNABLE_DOCUMENT", docId: doc.id, url: `/sign?doc=${doc.id}` } });
+}
 
 export const signatureUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "signatures");
 if (!fs.existsSync(signatureUploadDir)) fs.mkdirSync(signatureUploadDir, { recursive: true });
@@ -242,6 +250,7 @@ async function notifyStepApprover(doc: any, chain: RoutingChainStep[], stepIndex
     stepLabel: `step ${stepIndex + 1} of ${chain.length}`,
     verificationUrl: verificationUrlFor(doc.verification_code)
   });
+  pushDocument(step.approver_id, doc, "Document awaiting your signature", doc.title);
 }
 
 // Chain rules: an empty chain means free-for-all (anyone with the link can
@@ -416,6 +425,7 @@ export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
       // The creator signing last already knows it's complete.
       const creator = (await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = $1`, [doc.created_by_id]))[0];
       await notifySignatureCompleted({ documentId: doc.id, documentTitle: doc.title, creatorEmail: creator?.email ?? null, creatorName: creator?.full_name ?? null });
+      pushDocument(doc.created_by_id, doc, "Document fully signed", doc.title);
     }
   }
 
@@ -471,6 +481,7 @@ export async function rejectSignableDocument(input: RejectSignableDocumentInput)
       rejectedByName: input.signerName, comment: input.comment,
       signedEarlier: p.id !== doc.created_by_id
     });
+    pushDocument(p.id, doc, "Document rejected", `${doc.title} - ${input.signerName || "an approver"}: ${input.comment}`);
   }
 }
 
