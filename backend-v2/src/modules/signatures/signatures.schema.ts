@@ -85,6 +85,27 @@ export async function ensureSignaturesSchema() {
   // A document with no route stays open until its creator finishes it
   // (Finish signing) - then it's COMPLETED and nobody can sign it again.
   await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS closed_at timestamptz`);
+  // Deleting a document hides it (status DELETED) rather than erasing it;
+  // the who/when/why also goes to audit_log.
+  await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS deleted_at timestamptz`);
+  await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS deleted_by_id uuid REFERENCES users(id) ON DELETE SET NULL`);
+  await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS delete_reason text`);
+  // Each text or tick added is a step that can be undone: it records the
+  // file before the change, so Undo puts that file back.
+  await query(`
+    CREATE TABLE IF NOT EXISTS signable_document_edits (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id uuid NOT NULL REFERENCES signable_documents(id) ON DELETE CASCADE,
+      kind text NOT NULL,
+      actor_id uuid REFERENCES users(id) ON DELETE SET NULL,
+      previous_file_path text NOT NULL,
+      previous_content_hash text NOT NULL,
+      new_file_path text NOT NULL,
+      summary text,
+      undone_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_signable_document_edits_doc ON signable_document_edits(document_id, created_at)`);
   await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS closed_by_id uuid REFERENCES users(id) ON DELETE SET NULL`);
 
   await query(`

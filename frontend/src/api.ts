@@ -964,6 +964,8 @@ export const api = {
   createSignableDocument: (form: FormData) => req("/signatures/documents", { method: "POST", body: form }),
   mySignableDocuments: () => req("/signatures/documents/mine"),
   signableDocument: (id: string) => req(`/signatures/documents/${id}`),
+  undoSignableDocument: (id: string) => req(`/signatures/documents/${id}/undo`, { method: "POST", body: JSON.stringify({}) }),
+  deleteSignableDocument: (id: string, reason: string) => req(`/signatures/documents/${id}`, { method: "DELETE", body: JSON.stringify({ reason }) }),
   finishSignableDocument: (id: string) => req(`/signatures/documents/${id}/finish`, { method: "POST", body: JSON.stringify({}) }),
   signableDocumentFileBlob: (id: string) => fetchBlob(`/signatures/documents/${id}/file`),
   signPlacement: (id: string, data: {

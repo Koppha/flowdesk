@@ -1,13 +1,24 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import SignatureUpload from "./components/SignatureUpload";
 import { renderPdfPage, type RenderTaskRef } from "./shared/pdfRender";
 import * as pdfjsLib from "pdfjs-dist";
 // @ts-ignore - Vite's ?url suffix resolves to the built worker's asset URL
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { api, getUserFromToken, downloadBlob } from "./api";
 import { confirmAction } from "./alerts";
+import Swal from "sweetalert2";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { Field, fieldStyle, labelStyle, SignatureCanvas } from "./SignDocument";
-import { Upload, FilePlus2, FolderOpen, ChevronLeft, ChevronRight, MousePointerClick, Share2, CheckCircle2, Users, Plus, Trash2, ArrowUp, ArrowDown, XCircle, Clock3, Ban, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, PenLine, Type, SquareCheck } from "lucide-react";
+import { Upload, FilePlus2, FolderOpen, ChevronLeft, ChevronRight, MousePointerClick, Share2, CheckCircle2, Users, Plus, Trash2, ArrowUp, ArrowDown, XCircle, Clock3, Ban, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, PenLine, Type, SquareCheck, Undo2 } from "lucide-react";
+
+// Measures typed text the way it's stamped (Helvetica) so the on-page box
+// is exactly as wide as the text will be.
+const measureCtx = typeof document !== "undefined" ? document.createElement("canvas").getContext("2d") : null;
+function textWidthPx(line: string, fontPx: number) {
+  if (!measureCtx) return line.length * fontPx * 0.55;
+  measureCtx.font = `${fontPx}px Helvetica, Arial, sans-serif`;
+  return measureCtx.measureText(line).width;
+}
 
 const TEXT_COLORS = ["#111827", "#dc2626", "#1d4ed8", "#059669", "#ea580c"];
 
@@ -49,6 +60,8 @@ type DocDetail = {
   closedAt?: string | null;
   closedByName?: string | null;
   canFinish?: boolean;
+  canDelete?: boolean;
+  canUndo?: boolean;
 };
 
 type ChainStepDraft = { approverId: string };
@@ -157,9 +170,12 @@ export default function SignRoutingDocument() {
   // anchor dot (see the canvas overlay below) shows exactly that point.
   const [markWidthPct, setMarkWidthPct] = useState(0.1);
   const [consentChecked, setConsentChecked] = useState(false);
-  const [signMode, setSignMode] = useState<"type" | "draw">("type");
+  const [signMode, setSignMode] = useState<"type" | "draw" | "upload">("type");
+  // A picture of the signature someone uploaded (see SignatureUpload).
+  const [uploadedDataUrl, setUploadedDataUrl] = useState<string | null>(null);
   const [typedName, setTypedName] = useState(me?.fullName || "");
   const [drawnDataUrl, setDrawnDataUrl] = useState<string | null>(null);
+  const sigImage = signMode === "draw" ? drawnDataUrl : signMode === "upload" ? uploadedDataUrl : null;
   const [canvasSeed, setCanvasSeed] = useState<string | null>(null);
   const [rememberSignature, setRememberSignature] = useState(true);
   const [onBehalfOf, setOnBehalfOf] = useState(false);
@@ -511,6 +527,7 @@ export default function SignRoutingDocument() {
     if (!consentChecked) { setPlaceError("You must confirm consent to sign electronically."); return; }
     if (signMode === "type" && !typedName.trim()) { setPlaceError("Type your name to sign."); return; }
     if (signMode === "draw" && !drawnDataUrl) { setPlaceError("Draw your signature."); return; }
+    if (signMode === "upload" && !uploadedDataUrl) { setPlaceError("Upload a picture of your signature."); return; }
     if (onBehalfOf && !authorityUserId) { setPlaceError("Choose whose authority you're signing under."); return; }
 
     const consentStatement = `I, ${me?.fullName || "the signer"}, confirm this is my legal signature and I consent to sign this document electronically on ${new Date().toLocaleDateString("en-GB")}.`;
@@ -524,15 +541,15 @@ export default function SignRoutingDocument() {
         yPct: pendingClick.yPct,
         widthPct: markWidthPct,
         typedSignatureText: signMode === "type" ? typedName.trim() : undefined,
-        signatureImageDataUrl: signMode === "draw" && drawnDataUrl ? drawnDataUrl : undefined,
+        signatureImageDataUrl: signMode !== "type" && sigImage ? sigImage : undefined,
         authorityUserId: onBehalfOf ? authorityUserId : undefined,
         requestedNotation: onBehalfOf && policy?.overridable ? requestedNotation : undefined
       });
       if (rememberSignature) {
         await api.saveMySavedSignature({
-          signatureType: signMode,
+          signatureType: signMode === "type" ? "type" : "draw",
           typedName: signMode === "type" ? typedName.trim() : null,
-          imageDataUrl: signMode === "draw" ? drawnDataUrl : null
+          imageDataUrl: signMode === "type" ? null : sigImage
         }).catch(() => {});
       }
       setPendingClick(null);
@@ -565,6 +582,44 @@ export default function SignRoutingDocument() {
     }
   }
 
+  const [undoing, setUndoing] = useState(false);
+  async function handleUndo() {
+    if (!docId) return;
+    setUndoing(true);
+    setPlaceError("");
+    try {
+      await api.undoSignableDocument(docId);
+      await refreshCurrentDocument();
+    } catch (e: any) {
+      setPlaceError(e.message || "Couldn't undo.");
+    } finally {
+      setUndoing(false);
+    }
+  }
+
+  async function handleDelete(id: string, title: string) {
+    const { value: reason, isConfirmed } = await Swal.fire({
+      title: `Delete "${title}"?`,
+      text: "It's removed for everyone on the route and can't be signed any more. It's kept in the audit log with your reason.",
+      input: "textarea",
+      inputPlaceholder: "Why are you deleting it?",
+      inputValidator: (v: string) => (!v || !v.trim() ? "Please give a reason." : undefined),
+      showCancelButton: true,
+      confirmButtonText: "Delete",
+      confirmButtonColor: "#dc2626",
+      reverseButtons: true,
+      focusCancel: true
+    });
+    if (!isConfirmed || !reason) return;
+    try {
+      await api.deleteSignableDocument(id, String(reason).trim());
+      if (docId === id) { setDocId(null); setDoc(null); pdfDocRef.current = null; }
+      await loadMyDocs();
+    } catch (e: any) {
+      void Swal.fire({ icon: "error", title: "Couldn't delete", text: e.message || "Please try again." });
+    }
+  }
+
   async function handlePlaceText() {
     setPlaceError("");
     if (!docId || !pendingClick) return;
@@ -573,7 +628,7 @@ export default function SignRoutingDocument() {
     try {
       await api.annotateSignableDocument(docId, {
         pageNumber: pageNum, xPct: pendingClick.xPct, yPct: pendingClick.yPct,
-        text: textDraft.trim(), fontSize: textDraftSize, color: textDraftColor
+        text: textDraft.replace(/\s+$/, ""), fontSize: textDraftSize, color: textDraftColor
       });
       setPendingClick(null);
       setTextDraft("");
@@ -767,6 +822,11 @@ export default function SignRoutingDocument() {
                     <button onClick={() => void handleDownload(d.id, d.title)} title="Download current copy" style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
                       <Download size={12} />
                     </button>
+                    {d.created_by_me && (
+                      <button onClick={() => void handleDelete(d.id, d.title)} title="Delete this document" style={{ display: "flex", alignItems: "center", padding: "6px 10px", border: "1px solid #fecaca", borderRadius: 6, background: "#fef2f2", color: "#dc2626", cursor: "pointer", fontSize: 12 }}>
+                        <Trash2 size={12} />
+                      </button>
+                    )}
                     <button onClick={() => void openDocument(d.id)} style={{ padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
                       Open
                     </button>
@@ -798,6 +858,18 @@ export default function SignRoutingDocument() {
                 <button onClick={() => void handleFinish()} disabled={finishing} title="Stop anyone else signing; the document is completed"
                   style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "none", borderRadius: 7, background: "#059669", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: finishing ? 0.7 : 1 }}>
                   <CheckCircle2 size={13} /> {finishing ? "Finishing…" : "Finish signing"}
+                </button>
+              )}
+              {doc?.canUndo && (
+                <button onClick={() => void handleUndo()} disabled={undoing} title="Take back your last text or tick"
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12, opacity: undoing ? 0.6 : 1 }}>
+                  <Undo2 size={13} /> {undoing ? "Undoing…" : "Undo"}
+                </button>
+              )}
+              {doc?.canDelete && (
+                <button onClick={() => void handleDelete(doc.id, doc.title)} title="Delete this document"
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid #fecaca", borderRadius: 7, background: "#fef2f2", color: "#dc2626", cursor: "pointer", fontSize: 12 }}>
+                  <Trash2 size={13} /> Delete
                 </button>
               )}
               <button onClick={() => { setDocId(null); setDoc(null); pdfDocRef.current = null; }} style={{ padding: "7px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
@@ -865,9 +937,9 @@ export default function SignRoutingDocument() {
                     return (
                       <div style={markBoxStyle} onPointerDown={sigParked ? undefined : startDrag} title={sigParked ? "Your signature - go back to Sign to move it or send it" : "Drag to move your signature"}>
                         <div style={{ height: nameH, fontFamily: "Helvetica, Arial, sans-serif", fontWeight: 700, fontSize: nameSize, lineHeight: `${nameH}px`, color: "#1c296b", whiteSpace: "nowrap", pointerEvents: "none" }}>{name}</div>
-                        <div style={{ height: markH, display: "flex", alignItems: "center", justifyContent: signMode === "draw" ? "center" : "flex-start", pointerEvents: "none" }}>
-                          {signMode === "draw"
-                            ? (drawnDataUrl ? <img src={drawnDataUrl} alt="" style={{ maxWidth: "100%", maxHeight: "100%" }} draggable={false} /> : <span style={{ fontSize: Math.max(sigSize * 0.5, 9), color: "#64748b" }}>Draw your signature →</span>)
+                        <div style={{ height: markH, display: "flex", alignItems: "center", justifyContent: signMode !== "type" ? "center" : "flex-start", pointerEvents: "none" }}>
+                          {signMode !== "type"
+                            ? (sigImage ? <img src={sigImage} alt="" style={{ maxWidth: "100%", maxHeight: "100%" }} draggable={false} /> : <span style={{ fontSize: Math.max(sigSize * 0.5, 9), color: "#64748b" }}>{signMode === "upload" ? "Upload your signature →" : "Draw your signature →"}</span>)
                             : <span style={{ fontFamily: "Helvetica, Arial, sans-serif", fontWeight: 700, fontSize: sigSize, color: typedName.trim() ? "#1c296b" : "#94a3b8", whiteSpace: "nowrap" }}>{typedName.trim() || "Your signature"}</span>}
                         </div>
                         <div style={{ height: dateH, fontFamily: "Helvetica, Arial, sans-serif", fontSize: dateSize, lineHeight: `${dateH}px`, color: "#737373", pointerEvents: "none" }}>{new Date().toLocaleDateString("en-GB")}</div>
@@ -887,11 +959,39 @@ export default function SignRoutingDocument() {
                       </div>
                     );
                   })()}
-                  {anchorDotHandleStyle && placeMode === "text" && (
-                    <div style={anchorDotHandleStyle} onPointerDown={startDrag} title="Drag to fine-tune">
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", border: "2px solid #fff", boxShadow: "0 0 0 1px #dc2626" }} />
-                    </div>
-                  )}
+                  {pendingClick && placeMode === "text" && canvasSize.width > 0 && (() => {
+                    // Typed straight onto the page, at the size and font it's
+                    // stamped in (textAnnotate.ts), so you can see the page edge.
+                    const fontPx = textDraftSize * pageScale;
+                    const lineH = fontPx * 1.25;
+                    const lines = (textDraft || "").split("\n");
+                    const w = Math.max(...lines.map((l) => textWidthPx(l, fontPx)), textDraft ? 0 : textWidthPx("Type here…", fontPx)) + 4;
+                    const h = Math.max(lines.length, 1) * lineH;
+                    const left = pendingClick.xPct * canvasSize.width;
+                    const top = pendingClick.yPct * canvasSize.height;
+                    const pastEdge = left + w - 4 > canvasSize.width || top + h > canvasSize.height;
+                    const accent = pastEdge ? "#dc2626" : "#3b82f6";
+                    return (
+                      <div style={{ position: "absolute", left, top, zIndex: 3 }}>
+                        <div onPointerDown={startDrag} title="Drag to move the text"
+                          style={{ position: "absolute", left: -2, bottom: "100%", marginBottom: 3, height: 17, padding: "0 7px", background: accent, color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: "4px 4px 0 0", cursor: "grab", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", touchAction: "none", userSelect: "none" }}>
+                          ⠿ Drag{pastEdge ? " · runs past the page edge" : ""}
+                        </div>
+                        <textarea
+                          autoFocus
+                          value={textDraft}
+                          onChange={(e) => setTextDraft(e.target.value)}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handlePlaceText(); } if (e.key === "Escape") { setPendingClick(null); setTextDraft(""); } }}
+                          placeholder="Type here…"
+                          wrap="off"
+                          spellCheck
+                          style={{ display: "block", width: w, height: h, padding: 0, margin: 0, border: "none", outline: `1.5px dashed ${accent}`, outlineOffset: 2, background: "rgba(255,255,255,0.45)", color: textDraftColor, fontFamily: "Helvetica, Arial, sans-serif", fontSize: fontPx, lineHeight: `${lineH}px`, resize: "none", overflow: "hidden", whiteSpace: "pre", boxSizing: "content-box" }}
+                        />
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
               {hasChain ? (
@@ -987,10 +1087,7 @@ export default function SignRoutingDocument() {
               ) : placeMode === "text" ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 13 }}><Type size={14} /> Add text</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>Drag the red dot on the page to fine-tune the exact spot.</div>
-                  <Field label="Text">
-                    <textarea autoFocus style={{ ...fieldStyle, minHeight: 60, resize: "vertical" }} value={textDraft} onChange={(e) => setTextDraft(e.target.value)} placeholder="Type here…" />
-                  </Field>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>Type in the box on the page. Drag it by its tab; it turns red if it runs past the page edge. Ctrl+Enter adds it, Esc cancels.</div>
                   <Field label="Size">
                     <input type="range" min={8} max={36} step={1} value={textDraftSize} onChange={(e) => setTextDraftSize(Number(e.target.value))} />
                   </Field>
@@ -1025,16 +1122,18 @@ export default function SignRoutingDocument() {
                   <div>
                     <label style={labelStyle}>Your signature</label>
                     <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                      {(["type", "draw"] as const).map((m) => (
+                      {(["type", "draw", "upload"] as const).map((m) => (
                         <button key={m} type="button" onClick={() => setSignMode(m)} style={{ padding: "5px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: signMode === m ? "1px solid #3b82f6" : "1px solid var(--border)", background: signMode === m ? "#eff6ff" : "var(--surface-soft)", color: signMode === m ? "#1d4ed8" : "var(--text)", fontWeight: 600 }}>
-                          {m === "type" ? "Type" : "Draw"}
+                          {m === "type" ? "Type" : m === "draw" ? "Draw" : "Upload"}
                         </button>
                       ))}
                     </div>
                     {signMode === "type" ? (
                       <input style={{ ...fieldStyle, fontFamily: "'Brush Script MT', cursive", fontSize: 20 }} value={typedName} onChange={(e) => setTypedName(e.target.value)} placeholder="Your full name" />
-                    ) : (
+                    ) : signMode === "draw" ? (
                       <SignatureCanvas key={canvasSeed ? "seeded" : "blank"} onChange={setDrawnDataUrl} initialDataUrl={canvasSeed} />
+                    ) : (
+                      <SignatureUpload value={uploadedDataUrl} onChange={setUploadedDataUrl} />
                     )}
                     <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--muted)", marginTop: 6, cursor: "pointer" }}>
                       <input type="checkbox" checked={rememberSignature} onChange={(e) => setRememberSignature(e.target.checked)} />

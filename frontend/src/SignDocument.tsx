@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import SignatureUpload from "./components/SignatureUpload";
 import PdfPlacePicker, { SignatureMarkPreview, type PlacePosition } from "./components/PdfPlacePicker";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
@@ -144,7 +145,9 @@ export default function SignDocument() {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [consentChecked, setConsentChecked] = useState(false);
-  const [signMode, setSignMode] = useState<"type" | "draw">("type");
+  const [signMode, setSignMode] = useState<"type" | "draw" | "upload">("type");
+  // A picture of the signature someone uploaded (see SignatureUpload).
+  const [uploadedDataUrl, setUploadedDataUrl] = useState<string | null>(null);
   const [typedName, setTypedName] = useState(me?.fullName || "");
   const [drawnDataUrl, setDrawnDataUrl] = useState<string | null>(null);
   const [onBehalfOf, setOnBehalfOf] = useState(false);
@@ -235,6 +238,7 @@ export default function SignDocument() {
     if (!consentChecked) { setError("You must confirm consent to sign electronically."); return; }
     if (signMode === "type" && !typedName.trim()) { setError("Type your name to sign."); return; }
     if (signMode === "draw" && !drawnDataUrl) { setError("Draw your signature."); return; }
+    if (signMode === "upload" && !uploadedDataUrl) { setError("Upload a picture of your signature."); return; }
     if (onBehalfOf && !authorityUserId) { setError("Choose whose authority you're signing under."); return; }
     if (placement === "custom" && !placePos) { setError("Click on the document where your signature should go."); return; }
 
@@ -247,6 +251,7 @@ export default function SignDocument() {
     form.append("consentStatement", consentStatement);
     if (signMode === "type") form.append("typedSignatureText", typedName.trim());
     if (signMode === "draw" && drawnDataUrl) form.append("signatureImageDataUrl", drawnDataUrl);
+    if (signMode === "upload" && uploadedDataUrl) form.append("signatureImageDataUrl", uploadedDataUrl);
     if (onBehalfOf && authority) {
       form.append("authorityUserId", authority.id);
       if (policy?.overridable) form.append("requestedNotation", requestedNotation);
@@ -264,9 +269,9 @@ export default function SignDocument() {
       setResult({ id: resp.id, verificationCode: resp.verificationCode });
       if (rememberSignature) {
         await api.saveMySavedSignature({
-          signatureType: signMode,
+          signatureType: signMode === "type" ? "type" : "draw",
           typedName: signMode === "type" ? typedName.trim() : null,
-          imageDataUrl: signMode === "draw" ? drawnDataUrl : null
+          imageDataUrl: signMode === "draw" ? drawnDataUrl : signMode === "upload" ? uploadedDataUrl : null
         }).then(() => setHasSavedSignature(true)).catch(() => {});
       }
       resetForm();
@@ -379,7 +384,7 @@ export default function SignDocument() {
             )}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            {(["type", "draw"] as const).map((m) => (
+            {(["type", "draw", "upload"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -391,14 +396,16 @@ export default function SignDocument() {
                   color: signMode === m ? "#1d4ed8" : "var(--text)", fontWeight: 600
                 }}
               >
-                {m === "type" ? "Type my name" : "Draw signature"}
+                {m === "type" ? "Type my name" : m === "draw" ? "Draw signature" : "Upload signature"}
               </button>
             ))}
           </div>
           {signMode === "type" ? (
             <input style={{ ...fieldStyle, maxWidth: 420, fontFamily: "'Brush Script MT', cursive", fontSize: 22 }} value={typedName} onChange={(e) => setTypedName(e.target.value)} placeholder="Your full name" />
-          ) : (
+          ) : signMode === "draw" ? (
             <SignatureCanvas key={canvasSeed ? "seeded" : "blank"} onChange={setDrawnDataUrl} initialDataUrl={canvasSeed} />
+          ) : (
+            <SignatureUpload value={uploadedDataUrl} onChange={setUploadedDataUrl} />
           )}
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--muted)", marginTop: 8, cursor: "pointer" }}>
             <input type="checkbox" checked={rememberSignature} onChange={(e) => setRememberSignature(e.target.checked)} />
@@ -462,7 +469,7 @@ export default function SignDocument() {
                   renderMark={(boxW, boxH, pageScale) => (
                     <SignatureMarkPreview boxW={boxW} boxH={boxH} pageScale={pageScale}
                       name={`${me?.fullName || "Your name"}${onBehalfOf && activeNotation ? ` (${activeNotation === "AI" ? "a.i." : "p.p."})` : ""}`}
-                      signMode={signMode} typedName={typedName} drawnDataUrl={drawnDataUrl} />
+                      signMode={signMode === "type" ? "type" : "draw"} typedName={typedName} drawnDataUrl={signMode === "upload" ? uploadedDataUrl : drawnDataUrl} />
                   )}
                 />
                 <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>The verification code goes in the page footer.</div>

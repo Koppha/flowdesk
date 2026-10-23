@@ -18,7 +18,8 @@ import {
   getSavedSignature, saveSavedSignature, clearSavedSignature,
   createSignableDocument, getSignableDocument, getSignableDocumentByCode,
   listSignableDocumentsForUser, listPlacementsForDocument, addSignaturePlacement,
-  rejectSignableDocument, addTextToDocument, finishSignableDocument, addTickToDocument
+  rejectSignableDocument, addTextToDocument, finishSignableDocument, addTickToDocument,
+  undoLastEdit, undoableEditCount, deleteSignableDocument
 } from "./signatures.service.js";
 
 const upload = multer({
@@ -26,7 +27,9 @@ const upload = multer({
     destination: (_req, _file, cb) => cb(null, signatureUploadDir),
     filename: (_req, file, cb) => cb(null, `${Date.now()}-incoming-${sanitizeUploadFilename(file.originalname)}`)
   }),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  // fieldSize: a drawn or uploaded signature arrives as a data URL form
+  // field, which can be over multer's 1 MB default.
+  limits: { fileSize: 25 * 1024 * 1024, fieldSize: 6 * 1024 * 1024 },
   fileFilter: fileExtensionFilter(["pdf"])
 });
 
@@ -272,6 +275,7 @@ signaturesRouter.get("/documents/:id", async (req: AuthedRequest, res, next) => 
   try {
     await ensureSignaturesSchema();
     const doc = await getSignableDocument(req.params.id);
+    if (doc.status === "DELETED" && req.user!.role !== "ADMIN") throw notFound("This document was deleted.");
     const placements = await listPlacementsForDocument(doc.id);
     const chain = Array.isArray(doc.approval_chain) ? doc.approval_chain : [];
     return res.json({
@@ -283,12 +287,38 @@ signaturesRouter.get("/documents/:id", async (req: AuthedRequest, res, next) => 
       closedAt: doc.closed_at ?? null,
       closedByName: doc.closed_by_id ? (await query<{ full_name: string | null }>(`SELECT full_name FROM users WHERE id = $1`, [doc.closed_by_id]))[0]?.full_name ?? null : null,
       canFinish: doc.status === "OPEN" && chain.length === 0 && (doc.created_by_id === req.user!.userId || req.user!.role === "ADMIN"),
+      canDelete: doc.status !== "DELETED" && (doc.created_by_id === req.user!.userId || req.user!.role === "ADMIN"),
+      canUndo: doc.status === "OPEN" && (await undoableEditCount(doc, req.user!.userId)) > 0,
       placements: placements.map((p) => ({
         id: p.id, signerName: p.signer_name, authorityName: p.authority_name,
         delegationNotation: p.delegation_notation, pageNumber: p.page_number,
         xPct: Number(p.x_pct), yPct: Number(p.y_pct), signedAt: p.signed_at
       }))
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /signatures/documents/:id/undo - takes back your latest text or tick.
+signaturesRouter.post("/documents/:id/undo", async (req: AuthedRequest, res, next) => {
+  try {
+    await ensureSignaturesSchema();
+    return res.json(await undoLastEdit(req.params.id, req.user!.userId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// DELETE /signatures/documents/:id - the creator removes a document, with a
+// reason; kept on record and in audit_log.
+signaturesRouter.delete("/documents/:id", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = z.object({ reason: z.string().trim().min(1).max(1000) }).safeParse(req.body);
+    if (!parsed.success) throw badRequest("Please say why you're deleting this document - it's kept in the audit log.");
+    await ensureSignaturesSchema();
+    await deleteSignableDocument(req.params.id, req.user!, parsed.data.reason);
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }
@@ -373,6 +403,7 @@ signaturesRouter.post("/documents/:id/annotate-tick", async (req: AuthedRequest,
 signaturesRouter.get("/documents/:id/file", async (req: AuthedRequest, res, next) => {
   try {
     const doc = await getSignableDocument(req.params.id);
+    if (doc.status === "DELETED" && req.user!.role !== "ADMIN") throw notFound("This document was deleted.");
     const localPath = await ensureLocalFile(doc.current_file_path);
     if (!localPath) throw notFound("This document's file is missing");
     const disposition = req.query.download === "1" ? "attachment" : "inline";

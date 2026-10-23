@@ -252,10 +252,10 @@ async function notifyStepApprover(doc: any, chain: RoutingChainStep[], stepIndex
 export function assertCanActOnDocument(doc: any, userId: string): RoutingChainStep[] {
   const chain: RoutingChainStep[] = Array.isArray(doc.approval_chain) ? doc.approval_chain : [];
   if (chain.length === 0) {
-    if (doc.status !== "OPEN") throw forbidden("Signing on this document has been finished - it can't be signed or changed any more.");
+    if (doc.status !== "OPEN") throw forbidden(doc.status === "DELETED" ? "This document was deleted." : "Signing on this document has been finished - it can't be signed or changed any more.");
     return chain;
   }
-  if (doc.status !== "OPEN") throw forbidden(doc.status === "REJECTED" ? "This document was rejected and is no longer open for signing." : "This document's approval route is already complete.");
+  if (doc.status !== "OPEN") throw forbidden(doc.status === "DELETED" ? "This document was deleted." : doc.status === "REJECTED" ? "This document was rejected and is no longer open for signing." : "This document's approval route is already complete.");
   const current = chain[doc.current_step_order];
   if (!current || current.approver_id !== userId) {
     throw forbidden("It isn't your turn to act on this document yet.");
@@ -287,9 +287,10 @@ export async function listSignableDocumentsForUser(userId: string) {
        FROM signable_documents d
        JOIN users cb ON cb.id = d.created_by_id
        LEFT JOIN document_signature_placements p ON p.document_id = d.id AND p.signer_id = $1
-      WHERE d.created_by_id = $1
+      WHERE d.status <> 'DELETED'
+        AND (d.created_by_id = $1
          OR p.id IS NOT NULL
-         OR EXISTS (SELECT 1 FROM jsonb_array_elements(d.approval_chain) elem WHERE elem->>'approver_id' = $1::text)
+         OR EXISTS (SELECT 1 FROM jsonb_array_elements(d.approval_chain) elem WHERE elem->>'approver_id' = $1::text))
       ORDER BY d.updated_at DESC`,
     [userId]
   );
@@ -505,6 +506,7 @@ export async function addTextToDocument(input: AddTextToDocumentInput) {
     `UPDATE signable_documents SET current_file_path = $1, current_content_hash = $2, updated_at = now() WHERE id = $3`,
     [nextFilePath, contentHash, input.documentId]
   );
+  await recordEdit(doc, input.actorId, "TEXT", nextFilePath, `text "${input.text.slice(0, 40)}"`);
   return { contentHash };
 }
 
@@ -523,5 +525,64 @@ export async function addTickToDocument(input: { documentId: string; actorId: st
     `UPDATE signable_documents SET current_file_path = $1, current_content_hash = $2, updated_at = now() WHERE id = $3`,
     [nextFilePath, contentHash, input.documentId]
   );
+  await recordEdit(doc, input.actorId, "TICK", nextFilePath, input.kind === "CHECK" ? "tick" : "cross");
   return { contentHash };
+}
+
+// Records a text/tick change so it can be undone (see undoLastEdit).
+async function recordEdit(doc: any, actorId: string, kind: "TEXT" | "TICK", newFilePath: string, summary: string) {
+  await query(
+    `INSERT INTO signable_document_edits (document_id, kind, actor_id, previous_file_path, previous_content_hash, new_file_path, summary)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [doc.id, kind, actorId, doc.current_file_path, doc.current_content_hash, newFilePath, summary]
+  );
+}
+
+// Undo: puts back the file from before the actor's latest text or tick -
+// only while that change is still the document's latest (nothing signed or
+// added since) and it's still their turn. Signatures can't be undone.
+export async function undoLastEdit(documentId: string, actorId: string) {
+  const doc = await getSignableDocument(documentId);
+  assertCanActOnDocument(doc, actorId);
+  const last = (await query<any>(
+    `SELECT * FROM signable_document_edits WHERE document_id = $1 AND undone_at IS NULL ORDER BY created_at DESC LIMIT 1`, [documentId]
+  ))[0];
+  if (!last || last.new_file_path !== doc.current_file_path) throw badRequest("There's nothing to undo - the last change was a signature, or nothing has been added yet.");
+  if (last.actor_id !== actorId) throw forbidden("You can only undo your own changes.");
+  await query(
+    `UPDATE signable_documents SET current_file_path = $1, current_content_hash = $2, updated_at = now() WHERE id = $3`,
+    [last.previous_file_path, last.previous_content_hash, documentId]
+  );
+  await query(`UPDATE signable_document_edits SET undone_at = now() WHERE id = $1`, [last.id]);
+  return { undone: last.summary as string | null };
+}
+
+// How many of this person's text/tick changes can be undone right now.
+export async function undoableEditCount(doc: any, actorId: string) {
+  const rows = await query<any>(
+    `SELECT actor_id, new_file_path FROM signable_document_edits WHERE document_id = $1 AND undone_at IS NULL ORDER BY created_at DESC LIMIT 1`, [doc.id]
+  );
+  return rows[0] && rows[0].actor_id === actorId && rows[0].new_file_path === doc.current_file_path ? 1 : 0;
+}
+
+// Delete: the creator (or an admin) removes a document. It's hidden from
+// every list and the Inbox and can't be signed; the record, its files and
+// an audit_log entry (who, when, why, and its state at the time) are kept.
+export async function deleteSignableDocument(documentId: string, actor: { userId: string; role: string }, reason: string) {
+  const doc = await getSignableDocument(documentId);
+  if (doc.status === "DELETED") throw badRequest("This document has already been deleted.");
+  if (actor.role !== "ADMIN" && doc.created_by_id !== actor.userId) throw forbidden("Only the person who started this document can delete it.");
+  const signatures = await query<{ n: number }>(`SELECT count(*)::int AS n FROM document_signature_placements WHERE document_id = $1`, [documentId]);
+  await query(
+    `UPDATE signable_documents SET status = 'DELETED', deleted_at = now(), deleted_by_id = $2, delete_reason = $3, updated_at = now() WHERE id = $1`,
+    [documentId, actor.userId, reason]
+  );
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json)
+     VALUES ($1, 'SIGNABLE_DOCUMENT_DELETED', 'signable_document', $2, $3, $4)`,
+    [actor.userId, documentId,
+     JSON.stringify({ title: doc.title, status: doc.status, verification_code: doc.verification_code, approval_chain: doc.approval_chain,
+       current_step_order: doc.current_step_order, signatures: signatures[0]?.n ?? 0, current_file_path: doc.current_file_path, created_at: doc.created_at }),
+     JSON.stringify({ status: "DELETED", reason })]
+  );
 }
