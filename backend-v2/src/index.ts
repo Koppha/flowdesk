@@ -8,6 +8,7 @@ import { startReportingLineSyncWorker } from "./lib/reportingLineSync.js";
 import { startEmployeeContractReminderWorker } from "./modules/employee-contracts/employee-contracts.routes.js";
 import { startSlaReminderWorker } from "./modules/sla/sla.service.js";
 import { reassignAllPendingApprovals } from "./lib/approvalReassignment.js";
+import { sendCollectionReminders } from "./modules/it-provisioning/it-provisioning.service.js";
 
 await bootstrapSystem();
 
@@ -21,6 +22,19 @@ async function runFollowUpScheduler() {
 }
 runFollowUpScheduler();
 setInterval(runFollowUpScheduler, 24 * 60 * 60 * 1000);
+
+// Computer Requests: remind requesters to confirm collecting their computer
+// (every 2 days, IT officer told from the 3rd reminder). Checked every 6 h.
+async function runCollectionReminders() {
+  try {
+    const { sent } = await sendCollectionReminders();
+    if (sent) logger.info("it_collection_reminders_sent", { sent });
+  } catch (err) {
+    logger.warn("it_collection_reminders_failed", { error: String(err) });
+  }
+}
+runCollectionReminders();
+setInterval(runCollectionReminders, 6 * 60 * 60 * 1000);
 
 // Automatic sweep disabled per explicit request (stopped 2026-09-07) - was:
 // run once at startup then every 24h, re-checking every pending advance/

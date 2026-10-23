@@ -1,7 +1,8 @@
 import { query } from "../../lib/db.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { getStringSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
-import { notifyItProvisioningOfficers, notifyItProvisioningRequester } from "../../lib/notifications.js";
+import { notifyItCollectionUnconfirmed, notifyItProvisioningOfficers, notifyItProvisioningRequester } from "../../lib/notifications.js";
+import { sendPushToUser } from "../../lib/push.js";
 
 // The IT Manager's one-time "who provisions Computer Requests" setting: whole
 // teams and/or individual people. Stored as {user_ids, team_ids}; the older
@@ -189,4 +190,53 @@ export async function applyOldDeviceDisposition(args: {
       [asset, args.computerType, status, assignee, "Recorded from a replacement request"]
     );
   }
+}
+
+// RAID Computer Request R3: a computer marked ready or handed over that the
+// requester never confirms collecting. Every REMIND_EVERY_DAYS the requester
+// is reminded (email + mobile push); from the ESCALATE_AFTER-th reminder the
+// IT officer is told too. Each reminder is claimed in sla_reminder_log first,
+// so the two PROD servers never both send it.
+const REMIND_EVERY_DAYS = 2;
+const ESCALATE_AFTER = 3;
+export async function sendCollectionReminders(now = new Date()) {
+  const tasks = await query<any>(
+    `SELECT t.id, t.status, coalesce(t.handed_over_at, t.ready_for_collection_at) AS since,
+            d.asset_number, ito.full_name AS officer_name, ito.email AS officer_email,
+            u.id AS requester_id, u.full_name AS requester_name, u.email AS requester_email,
+            (SELECT count(*)::int FROM sla_reminder_log l WHERE l.doc_type = 'IT_COLLECTION' AND l.doc_id = t.id) AS sent,
+            (SELECT max(l.reminded_at) FROM sla_reminder_log l WHERE l.doc_type = 'IT_COLLECTION' AND l.doc_id = t.id) AS last_sent
+       FROM it_provisioning_tasks t
+       JOIN custom_request_submissions s ON s.id = t.submission_id
+       JOIN users u ON u.id = s.requester_id
+       LEFT JOIN users ito ON ito.id = t.assigned_to_id
+       LEFT JOIN it_devices d ON d.id = t.device_id
+      WHERE t.status IN ('READY_FOR_COLLECTION', 'HANDED_OVER') AND t.collection_acknowledged_at IS NULL`
+  );
+  let sent = 0;
+  for (const t of tasks) {
+    const from = t.last_sent || t.since;
+    if (!from || now.getTime() - new Date(from).getTime() < REMIND_EVERY_DAYS * 86_400_000) continue;
+    const n = Number(t.sent) + 1;
+    const claimed = await query(
+      `INSERT INTO sla_reminder_log (doc_type, doc_id, step_order) VALUES ('IT_COLLECTION', $1, $2) ON CONFLICT DO NOTHING RETURNING id`, [t.id, n]
+    );
+    if (!claimed.length) continue;
+    await notifyItProvisioningRequester({
+      taskId: t.id, requesterEmail: t.requester_email, requesterName: t.requester_name,
+      stage: t.status, officerName: t.officer_name, assetNumber: t.asset_number, reminder: n
+    });
+    void sendPushToUser(t.requester_id, {
+      title: "Please confirm you've collected your computer",
+      body: t.status === "READY_FOR_COLLECTION" ? "It's ready at IT - collect it, then confirm in FlowDesk." : "IT handed it over - confirm in FlowDesk that you have it."
+    });
+    if (n >= ESCALATE_AFTER) {
+      await notifyItCollectionUnconfirmed({
+        taskId: t.id, officerEmail: t.officer_email, officerName: t.officer_name, requesterName: t.requester_name,
+        assetNumber: t.asset_number, since: t.since, reminders: n
+      });
+    }
+    sent++;
+  }
+  return { sent };
 }

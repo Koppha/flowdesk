@@ -2762,6 +2762,32 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
         {workspaceOpen && (
           <ChangeRequestWorkspace submissionId={item.id} currentUserId={getUserFromToken()?.userId ?? null} directory={[]} onClose={() => setWorkspaceOpen(false)} />
         )}
+        {Array.isArray(detail?.changes_during_approval) && detail.changes_during_approval.length > 0 && (() => {
+          // RAID BRS R3 / CR R1: edits made after it was sent for approval.
+          const list: any[] = detail.changes_during_approval;
+          const sinceMine = list.filter((c) => c.after_my_approval).length;
+          return (
+            <div style={{ margin: "0 0 14px", padding: "10px 14px", border: "1px solid #fcd34d", borderRadius: 10, background: "#fffbeb", color: "#78350f" }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>
+                Changed since it was sent for approval — {list.length} change{list.length === 1 ? "" : "s"}
+                {sinceMine > 0 && <span style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 99, background: "#dc2626", color: "#fff", fontSize: 11 }}>{sinceMine} after you approved</span>}
+              </div>
+              <div style={{ fontSize: 12.5, marginTop: 6, display: "grid", gap: 4, maxHeight: 180, overflowY: "auto" }}>
+                {list.map((c, i) => (
+                  <div key={i} style={{ fontWeight: c.after_my_approval ? 700 : 400 }}>
+                    {new Date(c.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · {c.actor_name || "Someone"} — {c.summary}
+                    {Array.isArray(c.changes) && c.changes.slice(0, 3).map((ch: any, k: number) => (
+                      <div key={k} style={{ fontWeight: 400, marginLeft: 14, color: "#92400e" }}>
+                        {ch.label}: <s>{String(ch.before ?? "—").slice(0, 60)}</s> → {String(ch.after ?? "—").slice(0, 60)}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              {detail.request_type_code === "CHANGE_REQUEST" && <div style={{ fontSize: 11.5, marginTop: 6 }}>Full before/after in <strong>Comments, history &amp; RAID</strong>.</div>}
+            </div>
+          );
+        })()}
 
         {error && <pre className="inbox-error">{error}</pre>}
 

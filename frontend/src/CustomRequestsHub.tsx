@@ -681,6 +681,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
 
   const selectedType = types.find((t) => t.id === selectedTypeId) || null;
   const isChangeRequestType = selectedType?.code === "CHANGE_REQUEST";
+  // Change Request: a Back-out Plan is required once Impact is Significant
+  // or Major (RAID CR R3) - the server enforces the same rule.
+  const isFieldRequired = (f: RequestField) =>
+    f.is_required || (isChangeRequestType && f.field_key === "back_out_plan" && ["SIGNIFICANT", "MAJOR"].includes(String(values.impact || "").toUpperCase()));
 
   // Group fields into wizard pages by their configured wizard_step, then
   // append one implicit final page for the approval chain / change control.
@@ -951,7 +955,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
     }
 
     for (const f of fields) {
-      if (f.is_required) {
+      if (isFieldRequired(f)) {
         const v = values[f.field_key];
         const isEmpty = f.field_type === "table"
           ? !v?.rows?.length
@@ -1036,7 +1040,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   function goToNextStep() {
     setError(null);
     for (const f of currentStepFields) {
-      if (!f.is_required) continue;
+      if (!isFieldRequired(f)) continue;
       const v = values[f.field_key];
       const isEmpty = f.field_type === "table"
         ? !v?.rows?.length
@@ -1811,7 +1815,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                           key={f.field_key}
                         >
                           {f.field_type !== "checkbox" && (
-                            <label>{f.field_label}{f.is_required && <span className="ep-required"> *</span>}</label>
+                            <label>{f.field_label}{isFieldRequired(f) && <span className="ep-required"> *</span>}{isChangeRequestType && f.field_key === "back_out_plan" && isFieldRequired(f) && !f.is_required && <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 11.5 }}> — required for {String(values.impact).toUpperCase() === "MAJOR" ? "Major" : "Significant"} impact</span>}</label>
                           )}
                           {f.field_key === "attendance_grid" && isAttendanceRegisterSelected && (
                             attendancePeriodLocked ? (

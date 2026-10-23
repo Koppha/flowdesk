@@ -7,7 +7,7 @@ import { notifyChangeRequestPeopleAdded } from "../../lib/notifications.js";
 import { brsActorOrg, brsMemberMatch, brsMemberParams } from "../brs/brs.service.js";
 import { entryEmails, resolveOrgEntries as resolveGroupEntries } from "../brs/brs.routes.js";
 import {
-  CR_FORM_SECTIONS, CR_OTHER_SECTION, CR_PERMISSIONS, assertCanSubmit, canViewChangeRequest, crActorRole,
+  CR_FORM_SECTIONS, CR_OTHER_SECTION, CR_PERMISSIONS, assertBackOutPlan, assertCanSubmit, canViewChangeRequest, crActorRole,
   crCoWriterPermissions, crOwnerIds, crPermissions, describeFieldSave, diffFields, formSectionOf,
   isSubmissionAssignee, recordCrRevision
 } from "./change-collab.service.js";
@@ -374,6 +374,8 @@ changeCollabRouter.patch("/:id/fields", async (req: AuthedRequest, res, next) =>
     }
     const changes = diffFields(sub.data || {}, updates, fields);
     if (!changes.length) return res.json({ ok: true, unchanged: true });
+    // Drafts can be incomplete; once submitted, the plan can't be dropped.
+    if (sub.status !== "DRAFT") assertBackOutPlan({ ...sub.data, ...updates });
 
     await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify({ ...sub.data, ...updates }), sub.id]);
     const d = describeFieldSave(changes);

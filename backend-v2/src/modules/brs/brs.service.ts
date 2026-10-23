@@ -1,4 +1,5 @@
 import { query } from "../../lib/db.js";
+import { notifyEarlierApprovers } from "../../lib/approvalChanges.js";
 import { notifyBrsReturnedToDraft } from "../../lib/notifications.js";
 
 export type BrsSectionRow = {
@@ -163,6 +164,16 @@ export async function recordBrsRevision(args: {
     [args.documentId, args.kind, args.sectionId ?? null, args.sectionTitle ?? null, args.contentHtml ?? null,
      args.intakeData === undefined ? null : JSON.stringify(args.intakeData), args.summary, phase, args.actorId, args.actorRole]
   );
+  // Edited while out for approval: tell anyone who already approved.
+  if (phase === "APPROVAL" && ["SECTION_SAVED", "INTAKE_SAVED", "SECTION_ADDED", "SECTION_REMOVED"].includes(args.kind)) {
+    const doc = (await query<any>(
+      `SELECT d.title, s.approval_chain FROM brs_documents d JOIN custom_request_submissions s ON s.id = d.brs_approval_submission_id WHERE d.id = $1`,
+      [args.documentId]
+    ))[0];
+    if (doc) {
+      void notifyEarlierApprovers({ docType: "BRS", docId: args.documentId, title: doc.title, chain: doc.approval_chain || [], actorId: args.actorId, summary: args.summary });
+    }
+  }
 }
 
 // An approved BRS reopened for amendment: back to Draft, the approved

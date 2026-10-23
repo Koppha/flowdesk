@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import OrgGaps from "./OrgGaps";
 import { useStaffDirectory, refreshStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
 import Inbox, { isCaptureItem, isCapturePendingItem, isPaymentItem, needsAccommodationBooking } from "./Inbox";
@@ -456,7 +457,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "GET_THE_APP";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "GET_THE_APP" | "ORG_GAPS";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -1410,6 +1411,7 @@ export default function App() {
     overtime_claim:         ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
     employee_contracts:     ["ADMIN"],
     ai_assistant:           ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"],
+    org_data_gaps:          ["ADMIN"],
   };
 
   function canAccessFeature(key: string): boolean {
@@ -1985,7 +1987,7 @@ export default function App() {
     }
   }, [token, page, role]);
 
-  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "TEAM_ROSTER", "PDF_DESIGNER", "MOBILE_APP_CONFIG"] as const;
+  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "ORG_GAPS", "TEAM_ROSTER", "PDF_DESIGNER", "MOBILE_APP_CONFIG"] as const;
 
   useEffect(() => {
     if (ORG_PAGES.includes(page as any)) setOrgNavOpen(true);
@@ -5084,11 +5086,12 @@ export default function App() {
           {role === "ADMIN" && (
             <a href="#" className={navItemClass(page === "BRS_ADMIN")} onClick={(e) => { e.preventDefault(); setPage("BRS_ADMIN"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>BRS Templates</a>
           )}
-          {(canAccessFeature("org_structure") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines") || canAccessFeature("pdf_designer")) && (
+          {(canAccessFeature("org_structure") || canAccessFeature("org_data_gaps") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines") || canAccessFeature("pdf_designer")) && (
             <div className={`sidebar-group ${orgNavOpen ? "open" : ""}`}>
               <a href="#" className={navItemClass(ORG_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setOrgNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong>{orgNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
               <div className="sidebar-subnav">
                 {canAccessFeature("org_structure") && <a href="#" className={navItemClass(page === "ORG_STRUCTURE")} onClick={(e) => { e.preventDefault(); setPage("ORG_STRUCTURE"); }}><Network size={14} aria-hidden />Org Structure</a>}
+                {canAccessFeature("org_data_gaps") && <a href="#" className={navItemClass(page === "ORG_GAPS")} onClick={(e) => { e.preventDefault(); setPage("ORG_GAPS"); }}><Users size={14} aria-hidden />Missing Department</a>}
                 {canAccessFeature("team_roster") && <a href="#" className={navItemClass(page === "TEAM_ROSTER")} onClick={(e) => { e.preventDefault(); setPage("TEAM_ROSTER"); }}><Users size={14} aria-hidden />Section Roster</a>}
                 {canAccessFeature("ceo_management") && <a href="#" className={navItemClass(page === "CEO_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("CEO_MANAGEMENT"); }}><ShieldCheck size={14} aria-hidden />CEO</a>}
                 {canAccessFeature("employees") && <a href="#" className={navItemClass(page === "EMPLOYEES")} onClick={(e) => { e.preventDefault(); setPage("EMPLOYEES"); }}><Users size={14} aria-hidden />Employees</a>}
@@ -5258,6 +5261,8 @@ export default function App() {
             <ServiceContracts />
           ) : page === "ORG_STRUCTURE" ? (
             <OrgStructure />
+          ) : page === "ORG_GAPS" ? (
+            <OrgGaps />
           ) : page === "TEAM_ROSTER" ? (
             <TeamRoster />
           ) : page === "REQUEST_TYPES" ? (
@@ -5737,6 +5742,7 @@ export default function App() {
                       { key: "overtime_claim",         label: "Overtime Claim",            group: "Overtime" },
                       { key: "employee_contracts",       label: "Employee Contracts (Interns & Temps)", group: "Contracts" },
                       { key: "ai_assistant",             label: "AI Assistant",             group: "General" },
+                      { key: "org_data_gaps",            label: "Missing Department (HR fix list)", group: "Org Structure" },
                       { key: "vendor_contracts",         label: "Vendor Contracts (View)",   group: "Contracts" },
                       { key: "vendor_contracts_manage",  label: "Vendor Contracts (Manage)", group: "Contracts" },
                       { key: "service_contracts",        label: "Service Contracts (View)",   group: "Contracts" },
@@ -5778,6 +5784,7 @@ export default function App() {
                       overtime_claim:         ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
                       employee_contracts:       ["ADMIN"],
                       ai_assistant:             ["ADMIN","MANAGER","HOD","EXCO","FINANCE","CEO","EMPLOYEE"],
+                      org_data_gaps:            ["ADMIN"],
                       vendor_contracts:         ["ADMIN"],
                       vendor_contracts_manage:  ["ADMIN"],
                       service_contracts:        ["ADMIN"],

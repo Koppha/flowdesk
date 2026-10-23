@@ -17,7 +17,8 @@ import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfR
 import { acknowledgeCollection, createProvisioningTaskForSubmission, getProvisioningStatusForSubmission } from "../it-provisioning/it-provisioning.service.js";
 import { baselineBrsDocument, recordBrsRevision, returnBrsDocumentToDraft } from "../brs/brs.service.js";
 import { isPeriodLocked } from "../attendance/attendance.routes.js";
-import { assertCanSubmit, assigneeLabel, assigneeMatches, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision } from "./change-collab.service.js";
+import { getChangesDuringApproval } from "../../lib/approvalChanges.js";
+import { assertBackOutPlan, assertCanSubmit, assigneeLabel, assigneeMatches, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision } from "./change-collab.service.js";
 import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 
 export const customRequestsRouter = Router();
@@ -191,6 +192,8 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
         }
       }
     }
+
+    if (requestType.code === "CHANGE_REQUEST") assertBackOutPlan(parsed.data.data);
 
     // Resolve "user_multi" fields (e.g. Change Assignee) into full assignee
     // records: matched system users get their id/name/email snapshotted;
@@ -684,7 +687,11 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const it_provisioning = submission.request_type_code === "COMPUTER_REQUEST"
       ? await getProvisioningStatusForSubmission(submission.id)
       : null;
-    return res.json({ ...submission, fields, attachments, can_view_pdf, it_provisioning });
+    // Changes made while out for approval (RAID BRS R3 / CR R1).
+    const changes_during_approval = ["CHANGE_REQUEST", "BRS_APPROVAL"].includes(submission.request_type_code)
+      ? await getChangesDuringApproval(submission, req.user!.userId)
+      : [];
+    return res.json({ ...submission, fields, attachments, can_view_pdf, it_provisioning, changes_during_approval });
   } catch (err) {
     return next(err);
   }
@@ -1048,6 +1055,9 @@ customRequestsRouter.patch("/:id/data", async (req: AuthedRequest, res, next) =>
 
     const changes = diffFields(submission.data || {}, updates, fields);
     const updatedData = { ...submission.data, ...updates };
+    if (submission.request_type_id && (await query<{ code: string }>(`SELECT code FROM custom_request_types WHERE id = $1`, [submission.request_type_id]))[0]?.code === "CHANGE_REQUEST") {
+      assertBackOutPlan(updatedData);
+    }
     await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updatedData), submission.id]);
     if (changes.length) {
       const d = describeFieldSave(changes);

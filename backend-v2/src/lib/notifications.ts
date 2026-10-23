@@ -1856,6 +1856,8 @@ export async function notifyItProvisioningRequester(args: {
   stage: "ASSIGNED" | "READY_FOR_COLLECTION" | "HANDED_OVER" | "COMPLETED";
   officerName?: string | null;
   assetNumber?: string | null;
+  // Set for a follow-up reminder (1, 2, ...) about collecting/confirming.
+  reminder?: number;
 }) {
   try {
     if (!args.requesterEmail) return;
@@ -1884,13 +1886,35 @@ export async function notifyItProvisioningRequester(args: {
       }
     };
     const msg = body[args.stage];
+    const reminderLine = args.reminder ? [`This is reminder ${args.reminder} - IT still has no confirmation that you've collected it.`, ``] : [];
     await sendMail({
       to: [args.requesterEmail],
-      subject: msg.subject,
-      text: [header(msg.title), ``, `Hello ${args.requesterName || ""},`, ``, ...msg.text, ``, footer()].join("\n")
+      subject: args.reminder ? msg.subject.replace("[Action Required]", "[Reminder]") : msg.subject,
+      text: [header(msg.title), ``, `Hello ${args.requesterName || ""},`, ``, ...reminderLine, ...msg.text, ``, footer()].join("\n")
     });
   } catch (error) {
     logger.warn("it_provisioning_requester_notification_failed", { task_id: args.taskId, error: serializeError(error) });
+  }
+}
+
+// The IT officer on a Computer Request whose requester still hasn't
+// confirmed collection after several reminders - follow up in person.
+export async function notifyItCollectionUnconfirmed(args: {
+  taskId: string; officerEmail: string | null; officerName: string | null; requesterName: string | null;
+  assetNumber: string | null; since: string | null; reminders: number;
+}) {
+  try {
+    if (!args.officerEmail) return;
+    await sendMail({
+      to: [args.officerEmail],
+      subject: `[Follow up] ${args.requesterName || "A requester"} hasn't confirmed collecting their computer`,
+      text: [header("COMPUTER REQUEST — COLLECTION NOT CONFIRMED"), ``, `Hello ${args.officerName || ""},`, ``,
+        `${args.requesterName || "The requester"} still hasn't confirmed collecting their computer${args.assetNumber ? ` (asset ${args.assetNumber})` : ""}${args.since ? `, ready since ${new Date(args.since).toLocaleDateString("en-GB")}` : ""}, after ${args.reminders} reminders.`,
+        ``, `Please follow up with them - or, if they have it, ask them to click "I've collected my computer" in FlowDesk (Custom Requests > My Requests).`,
+        ``, footer()].join("\n")
+    });
+  } catch (error) {
+    logger.warn("it_collection_unconfirmed_notification_failed", { task_id: args.taskId, error: serializeError(error) });
   }
 }
 
@@ -2024,6 +2048,28 @@ export async function notifyBrsPeopleAdded(args: {
     }
   } catch (error) {
     logger.warn("brs_people_added_notification_failed", { document_id: args.documentId, error: serializeError(error) });
+  }
+}
+
+// Someone who already approved a Change Request / BRS: it was edited after
+// they approved (lib/approvalChanges.ts).
+export async function notifyApprovedItemChanged(args: {
+  docId: string; itemLabel: string; title: string; approverEmail: string | null; approverName: string | null;
+  changedBy: string | null; summary: string;
+}) {
+  try {
+    if (!args.approverEmail) return;
+    await sendMail({
+      to: [args.approverEmail],
+      subject: `[Changed after your approval] ${args.itemLabel}: ${args.title}`,
+      text: [header(`${args.itemLabel.toUpperCase()} — CHANGED AFTER YOU APPROVED`), ``, `Hello ${args.approverName || ""},`, ``,
+        `You approved the ${args.itemLabel} "${args.title}". ${args.changedBy || "Someone"} has changed it since:`, ``,
+        `  ${args.summary}`, ``,
+        `Open it in FlowDesk to review - its History shows exactly what changed, before and after. If the change affects your approval, raise it with the requester or comment on it.`,
+        ``, footer()].join("\n")
+    });
+  } catch (error) {
+    logger.warn("approved_item_changed_notification_failed", { doc_id: args.docId, error: serializeError(error) });
   }
 }
 

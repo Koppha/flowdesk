@@ -1,5 +1,6 @@
 import { query } from "../../lib/db.js";
-import { forbidden } from "../../lib/errors.js";
+import { notifyEarlierApprovers } from "../../lib/approvalChanges.js";
+import { badRequest, forbidden } from "../../lib/errors.js";
 import { brsActorOrg, brsMemberMatch, brsMemberParams } from "../brs/brs.service.js";
 import { hasDistributionAccess } from "../distributions/distributions.routes.js";
 
@@ -247,6 +248,16 @@ export async function recordCrRevision(args: {
     [args.submissionId, args.kind, args.summary, args.sectionKey ?? null, args.sectionTitle ?? null,
      args.changes ? JSON.stringify(args.changes) : null, status, args.actorId, args.actorRole]
   );
+  // Edited while out for approval: tell anyone who already approved.
+  if (status === "IN_PROGRESS" && ["FIELDS_SAVED", "SECTION_SAVED", "SECTION_ADDED", "SECTION_REMOVED"].includes(args.kind)) {
+    const sub = (await query<any>(`SELECT approval_chain, data FROM custom_request_submissions WHERE id = $1`, [args.submissionId]))[0];
+    if (sub) {
+      void notifyEarlierApprovers({
+        docType: "CHANGE_REQUEST", docId: args.submissionId, title: String(sub.data?.description_of_change || "Change Request").slice(0, 120),
+        chain: sub.approval_chain || [], actorId: args.actorId, summary: args.summary
+      });
+    }
+  }
 }
 
 function sameValue(a: unknown, b: unknown) {
@@ -275,4 +286,14 @@ export function describeFieldSave(changes: FieldChange[]) {
   const labels = changes.map((c) => c.label);
   const summary = `Edited ${labels.length <= 3 ? labels.join(", ") : `${labels.slice(0, 3).join(", ")} and ${labels.length - 3} more`}`;
   return { summary, sectionKey: sections.length === 1 ? sections[0].key : null, sectionTitle: sections.map((s) => s.title).join(", ") };
+}
+
+// RAID CR R3: a change with Significant or Major impact must say how it
+// will be backed out if it goes wrong.
+export const BACK_OUT_REQUIRED_IMPACTS = ["SIGNIFICANT", "MAJOR"];
+export function assertBackOutPlan(data: Record<string, any> | null | undefined) {
+  const impact = String(data?.impact || "").toUpperCase();
+  if (BACK_OUT_REQUIRED_IMPACTS.includes(impact) && !String(data?.back_out_plan || "").trim()) {
+    throw badRequest(`A Back-out Plan is required when Impact is ${impact === "MAJOR" ? "Major" : "Significant"} - say how the change will be undone if it goes wrong.`);
+  }
 }
