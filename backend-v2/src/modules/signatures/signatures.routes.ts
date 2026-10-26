@@ -577,6 +577,11 @@ function fmtDate(d: string | Date) {
 
 signatureVerifyRouter.get("/:code", async (req, res, next) => {
   try {
+    // The page's "look up another code" form submits ?code= to this URL.
+    // Redirects are relative so they keep any proxy prefix (PROD serves this
+    // page under /api/).
+    const asked = typeof req.query.code === "string" ? req.query.code.trim() : "";
+    if (asked && asked.toUpperCase() !== req.params.code.toUpperCase()) return res.redirect(`./${encodeURIComponent(asked)}`);
     await ensureSignaturesSchema();
     const code = req.params.code;
 
@@ -619,6 +624,6 @@ signatureVerifyRouter.get("/:code", async (req, res, next) => {
 // Bare /signatures/verify (no code yet) - just the lookup form.
 signatureVerifyRouter.get("/", async (req, res) => {
   const code = typeof req.query.code === "string" ? req.query.code : undefined;
-  if (code) return res.redirect(`/signatures/verify/${encodeURIComponent(code)}`);
+  if (code) return res.redirect(`verify/${encodeURIComponent(code)}`); // relative: keeps a proxy prefix
   return res.type("html").send(renderVerifyPage({ found: false }));
 });
