@@ -19,7 +19,7 @@ import {
   createSignableDocument, getSignableDocument, getSignableDocumentByCode,
   listSignableDocumentsForUser, listPlacementsForDocument, addSignaturePlacement,
   rejectSignableDocument, addTextToDocument, finishSignableDocument, addTickToDocument,
-  undoLastEdit, undoableEditCount, deleteSignableDocument
+  undoLastEdit, undoableEditCount, deleteSignableDocument, assertCanSeeDocument
 } from "./signatures.service.js";
 
 const upload = multer({
@@ -276,6 +276,7 @@ signaturesRouter.get("/documents/:id", async (req: AuthedRequest, res, next) => 
     await ensureSignaturesSchema();
     const doc = await getSignableDocument(req.params.id);
     if (doc.status === "DELETED" && req.user!.role !== "ADMIN") throw notFound("This document was deleted.");
+    await assertCanSeeDocument(doc, req.user!);
     const placements = await listPlacementsForDocument(doc.id);
     const chain = Array.isArray(doc.approval_chain) ? doc.approval_chain : [];
     return res.json({
@@ -404,6 +405,7 @@ signaturesRouter.get("/documents/:id/file", async (req: AuthedRequest, res, next
   try {
     const doc = await getSignableDocument(req.params.id);
     if (doc.status === "DELETED" && req.user!.role !== "ADMIN") throw notFound("This document was deleted.");
+    await assertCanSeeDocument(doc, req.user!);
     const localPath = await ensureLocalFile(doc.current_file_path);
     if (!localPath) throw notFound("This document's file is missing");
     const disposition = req.query.download === "1" ? "attachment" : "inline";
@@ -605,9 +607,23 @@ signatureVerifyRouter.get("/:code", async (req, res, next) => {
     if (doc) {
       const placements = await listPlacementsForDocument(doc.id);
       const valid = await verifyFileIntegrity(doc.current_file_path, doc.current_content_hash);
+      // Routed documents: signers in route order (the order they were listed
+      // when it was sent) - a server's clock can't reorder them. Anyone not on
+      // the route, or a document with no route, follows by signing time.
+      const chain: Array<{ approver_id: string }> = Array.isArray(doc.approval_chain) ? doc.approval_chain : [];
+      const used = new Set<number>();
+      const routePos = (signerId: string) => {
+        const i = chain.findIndex((st, k) => !used.has(k) && st.approver_id === signerId);
+        if (i >= 0) used.add(i);
+        return i >= 0 ? i : Number.MAX_SAFE_INTEGER;
+      };
+      const ordered = placements
+        .map((p: any, k: number) => ({ p, pos: routePos(p.signer_id), k }))
+        .sort((a, b) => a.pos - b.pos || a.k - b.k)
+        .map((x) => x.p);
       return res.type("html").send(renderVerifyPage({
         code, found: true, valid, title: doc.title,
-        signers: placements.map((p) => ({
+        signers: ordered.map((p: any) => ({
           name: p.signer_name,
           authorityLine: p.authority_name ? `${p.delegation_notation === "AI" ? "a.i." : "p.p."} for ${p.authority_name}` : null,
           signedAt: fmtDate(p.signed_at)

@@ -17,6 +17,14 @@ function pushDocument(userId: string, doc: { id: string }, title: string, body: 
   void sendPushToUser(userId, { title, body, data: { docType: "SIGNABLE_DOCUMENT", docId: doc.id, url: `/sign?doc=${doc.id}` } });
 }
 
+// Signing times come from the database server's clock, which both PROD
+// servers share - one server's clock running fast (PROD2 was 2 h ahead in
+// Oct 2026) must not make signatures look out of order.
+async function dbNow(): Promise<Date> {
+  const row = (await query<{ now: Date }>(`SELECT now() AS now`))[0];
+  return row ? new Date(row.now) : new Date();
+}
+
 export const signatureUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "signatures");
 if (!fs.existsSync(signatureUploadDir)) fs.mkdirSync(signatureUploadDir, { recursive: true });
 
@@ -80,7 +88,7 @@ export async function performSignDocument(input: SignDocumentInput) {
   }
 
   const verificationCode = generateVerificationCode();
-  const signedAt = new Date();
+  const signedAt = await dbNow();
 
   const placed = input.placement
     ? await (async () => {
@@ -299,7 +307,9 @@ export async function listSignableDocumentsForUser(userId: string) {
       WHERE d.status <> 'DELETED'
         AND (d.created_by_id = $1
          OR p.id IS NOT NULL
-         OR EXISTS (SELECT 1 FROM jsonb_array_elements(d.approval_chain) elem WHERE elem->>'approver_id' = $1::text))
+         -- on the route: only once it has reached their step (or it's completed)
+         OR EXISTS (SELECT 1 FROM jsonb_array_elements(d.approval_chain) WITH ORDINALITY AS elem(e, ord)
+                     WHERE elem.e->>'approver_id' = $1::text AND (d.status = 'COMPLETED' OR elem.ord - 1 <= d.current_step_order)))
       ORDER BY d.updated_at DESC`,
     [userId]
   );
@@ -367,7 +377,7 @@ export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
     notation = policy.overridable && input.requestedNotation ? input.requestedNotation : policy.default;
   }
 
-  const signedAt = new Date();
+  const signedAt = await dbNow();
   const currentBuffer = await readStoredFile(doc.current_file_path);
   const displayName = input.authorityUserId && notation
     ? `${input.signerName} (${notation === "AI" ? "a.i." : "p.p."})`
@@ -461,7 +471,7 @@ export async function rejectSignableDocument(input: RejectSignableDocumentInput)
   const chain = assertCanActOnDocument(doc, input.signerId);
   if (chain.length === 0) throw badRequest("This document has no approval route to reject - it's open for anyone to sign freely.");
 
-  const actedAt = new Date().toISOString();
+  const actedAt = (await dbNow()).toISOString();
   const nextChain = chain.map((s, i) => i === doc.current_step_order ? { ...s, status: "REJECTED" as const, comment: input.comment, acted_at: actedAt } : s);
   await query(
     `UPDATE signable_documents SET approval_chain = $1, status = 'REJECTED', updated_at = now() WHERE id = $2`,
@@ -596,4 +606,24 @@ export async function deleteSignableDocument(documentId: string, actor: { userId
        current_step_order: doc.current_step_order, signatures: signatures[0]?.n ?? 0, current_file_path: doc.current_file_path, created_at: doc.created_at }),
      JSON.stringify({ status: "DELETED", reason })]
   );
+}
+
+// Routed documents are revealed in order: someone on the route sees it only
+// once it reaches their step (or after they've signed). The creator and
+// admins always can; once completed, everyone on the route can. Documents
+// with no route are open to anyone with the link, as before.
+export async function assertCanSeeDocument(doc: any, actor: { userId: string; role: string }) {
+  const chain: RoutingChainStep[] = Array.isArray(doc.approval_chain) ? doc.approval_chain : [];
+  if (!chain.length || actor.role === "ADMIN" || doc.created_by_id === actor.userId) return;
+  const myStep = chain.findIndex((s) => s.approver_id === actor.userId);
+  if (myStep >= 0 && (doc.status === "COMPLETED" || myStep <= doc.current_step_order)) return;
+  const signed = (await query(`SELECT 1 FROM document_signature_placements WHERE document_id = $1 AND signer_id = $2 LIMIT 1`, [doc.id, actor.userId]))[0];
+  if (signed) return;
+  if (myStep >= 0) {
+    const waitingOn = chain[doc.current_step_order]?.approver_name;
+    throw forbidden(doc.status === "OPEN"
+      ? `This document hasn't reached you yet - it comes to you after ${waitingOn || "the people before you"} sign${waitingOn ? "s" : ""}.`
+      : "This document didn't reach your step.");
+  }
+  throw forbidden("This document follows an approval route you're not on.");
 }
