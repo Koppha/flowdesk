@@ -1635,6 +1635,15 @@ export default function App() {
     return () => { cancelled = true; };
   }, [page, profile?.department, profile?.division_name, profile?.section_name, profile?.team_name, advanceType, role, requestForUserId, myPaPrincipals]);
 
+  // The advance form decides the approval route from the profile, which is
+  // otherwise loaded once at startup - reload it when the form opens so an
+  // old tab can't carry a stale Division/Department (Oct 2026: a stale
+  // profile made the form ask an employee to pick his own approvers).
+  useEffect(() => {
+    if (page !== "ADVANCE") return;
+    api.me().then((me: any) => { if (me) setProfile(me); }).catch(() => {});
+  }, [page]);
+
   async function refresh() {
     setError(null);
     const meResp = await withStartupTimeout(api.me(), "Profile");
@@ -8152,7 +8161,9 @@ export default function App() {
                 // e.g. HOD -> EXCO Member -> ... shown in the Request Summary)
                 // is used as-is, same as everyone else's; nobody hand-picks a
                 // countersigner/approver when there's already a real one.
-                return advanceWorkflowFound === false && !!advanceType;
+                // Employees never pick their own approvers: their route always
+                // comes from their org structure, resolved when they submit.
+                return advanceWorkflowFound === false && !!advanceType && ["CEO", "EXCO", "MANAGER"].includes(role);
               })() && (
                 <div className="form-section" style={{ marginTop: 24, border: "1px solid #e2c96e", borderRadius: 8, padding: "16px 18px", background: "#fffdf0" }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>
@@ -8529,7 +8540,7 @@ export default function App() {
                         }
                       }
 
-                      if (advanceWorkflowFound === false && customApprovalChain.length === 0) {
+                      if (advanceWorkflowFound === false && ["CEO", "EXCO", "MANAGER"].includes(role) && customApprovalChain.length === 0) {
                         alert("Please add at least one approver to the custom approval chain.");
                         return;
                       }
@@ -8543,7 +8554,7 @@ export default function App() {
                       if (isOnBehalfRequest) {
                         base.beneficiary_user_id = requestForUserId;
                       }
-                      if (advanceWorkflowFound === false && customApprovalChain.length > 0) {
+                      if (advanceWorkflowFound === false && ["CEO", "EXCO", "MANAGER"].includes(role) && customApprovalChain.length > 0) {
                         base.override_chain = customApprovalChain;
                       }
                       if (paymentMethod === "ECOCASH") {
@@ -8726,7 +8737,7 @@ export default function App() {
                         ) : advanceWorkflowFound === null ? (
                           <span style={{ color: "#aaa", fontSize: 12 }}>Loading…</span>
                         ) : (
-                          <span style={{ color: "#b45309", fontSize: 12 }}>No workflow — define below</span>
+                          <span style={{ color: "#b45309", fontSize: 12 }}>{["CEO", "EXCO", "MANAGER"].includes(role) ? "No workflow — define below" : "Set from your org structure when you submit"}</span>
                         )}
                       </dd>
                     </div>

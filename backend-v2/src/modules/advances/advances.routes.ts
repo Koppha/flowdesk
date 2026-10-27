@@ -1744,6 +1744,14 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       // steps every real workflow uses. Named approvers must hold
       // Manager/HOD/EXCO standing in the requester's own section or
       // department (or be EXCO) - the same pool the picker itself offers.
+      // Employees don't pick their own approvers (the form no longer offers
+      // it) - without a workflow there's nothing to route through.
+      if (!["CEO", "EXCO", "MANAGER"].includes(requester.role)) {
+        throw badRequest(
+          "No approval route is set up for your Division and Department yet, so this can't be submitted. " +
+          "Ask HR or the FlowDesk admin to check your Division/Department and the advance workflow for it."
+        );
+      }
       if (!overrideChainInput || overrideChainInput.length !== 2) {
         throw badRequest(
           "No active approval workflow is configured for this request type and department. " +
