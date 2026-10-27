@@ -31,6 +31,7 @@ import { resolveAdvancePdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFiel
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { buildAdvancePdfFilename, formatPaymentReference } from "../../lib/pdf/pdfHelpers.js";
 import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
+import { logger } from "../../lib/logger.js";
 
 const ECOCASH_NUMBER_MESSAGE = "Invalid EcoCash number format. Use 7-15 digits, with optional + country code.";
 
@@ -412,7 +413,8 @@ async function countOutstandingTravelAdvances(requesterId: string, client?: Pool
        FROM advance_requests ar
       WHERE ar.requester_id = $1
         AND ar.type NOT IN ('SALARY','LOAN')
-        AND ar.status NOT IN ('REJECTED','CANCELLED')
+        -- unsent drafts don't count (the limit is checked again at submit)
+        AND ar.status NOT IN ('REJECTED','CANCELLED','DRAFT')
         AND NOT EXISTS (
           SELECT 1 FROM clearance_claims cc
            WHERE cc.linked_advance_id = ar.id AND cc.status NOT IN ('DRAFT','REJECTED','CANCELLED')
@@ -1595,6 +1597,12 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     if (!adv) throw notFound();
     if (adv.created_by_id !== req.user!.userId) throw forbidden("Only the creator can submit");
     if (!String(adv.purpose || "").trim()) throw badRequest("purpose is required");
+    // Drafts don't count towards the outstanding-advance limit, so it's
+    // checked here, when a draft would become a live request.
+    if (adv.status === "DRAFT" && !adv.external_beneficiary_id) {
+      const owner = await getUserAccountState(adv.requester_id);
+      await assertSingleOutstandingTravelAdvance(owner, adv.type);
+    }
     if (!String(adv.payment_account || "").trim()) throw badRequest("payment_account is required");
     let needsAccommodation = false;
     if (adv.external_beneficiary_id) {
@@ -1688,7 +1696,13 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
       // A real workflow exists - only CEO/EXCO/MANAGER may override its
       // Counter-Sign/Approve step, from a role-appropriate pool.
       let overrideChain: { label: string; user_id: string; user_name?: string }[] | undefined;
-      if (overrideChainInput) {
+      // An employee's form only offers approver picking when it couldn't find
+      // their workflow (it looks up less than this does - e.g. no reporting
+      // line). The real workflow wins: use it instead of refusing the request,
+      // which used to leave each retry behind as a draft (Oct 2026).
+      if (overrideChainInput && !["CEO", "EXCO", "MANAGER"].includes(requester.role)) {
+        logger.info("advance_override_ignored_workflow_found", { advance_id: adv.id, requester_id: adv.requester_id });
+      } else if (overrideChainInput) {
         const isEligible = (u: { id: string; role: string; section_id: string | null; department: string | null } | undefined) => {
           if (!u) return false;
           if (u.id === adv.requester_id) return false;
@@ -1702,9 +1716,6 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
           }
           return false;
         };
-        if (!["CEO", "EXCO", "MANAGER"].includes(requester.role)) {
-          throw badRequest("Only CEO, Exco, or Manager requesters may choose their own countersigner/approver");
-        }
         for (const o of overrideChainInput) {
           const u = overrideUsers.find((x) => x.id === o.user_id);
           if (!isEligible(u)) throw badRequest(`Selected approver for "${o.label}" is not eligible for this role`);
