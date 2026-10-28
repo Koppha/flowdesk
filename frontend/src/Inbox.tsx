@@ -74,6 +74,8 @@ type InboxItem =
       // True if the viewer is an unconfirmed assignee (e.g. Change Assignee)
       // on this request — distinct from being the current-step approver.
       is_assignee_task?: boolean;
+      assignee_field_keys?: string[];
+      assignee_labels?: string[];
       is_delegated?: boolean;
       delegated_from_manager_name?: string | null;
       created_at: string;
@@ -554,6 +556,13 @@ export function isCapturePendingItem(item: any) {
   return isCaptureItem(item) && item.current_step_actionable_by_me === true;
 }
 
+// Waiting on this user right now: their approval step, or a Change Request
+// (or other custom request) where they're an assignee still to confirm -
+// that comes before any approver, so it belongs in Pending and the badge.
+export function isAwaitingMyAction(item: any) {
+  return item.current_step_actionable_by_me === true || (item.doc_type === "CUSTOM_REQUEST" && item.is_assignee_task === true);
+}
+
 // Accommodation-related items Admin needs to see in the general Approval
 // Inbox as well as Capture, not exclusively routed to Capture:
 //  - An advance still needing an accommodation booking (it usually carries a
@@ -691,7 +700,7 @@ export default function Inbox(props: {
   const [approvalStatusFilter, setApprovalStatusFilter] = useState<"PENDING" | "APPROVED">("PENDING");
   const approvalStatusCounts = useMemo(() => {
     if (mode === "capture") return { pending: 0, approved: 0 };
-    const pending = items.filter((it: any) => it.current_step_actionable_by_me === true).length;
+    const pending = items.filter(isAwaitingMyAction).length;
     return { pending, approved: items.length - pending };
   }, [items, mode]);
 
@@ -711,7 +720,7 @@ export default function Inbox(props: {
     // (DEPT_CLOSE, or a workflow whose final step is tagged COUNTER_SIGN -
     // see isDeptCloseStep's own comment further down this file).
     if (mode === "capture") result = result.filter((it: any) => it.doc_type !== "CLAIM" || ["DEPT_CLOSE", "COUNTER_SIGN"].includes(it.current_step_action_type));
-    if (mode !== "capture") result = result.filter((it: any) => (approvalStatusFilter === "PENDING") === (it.current_step_actionable_by_me === true));
+    if (mode !== "capture") result = result.filter((it: any) => (approvalStatusFilter === "PENDING") === isAwaitingMyAction(it));
     return result;
   }, [items, delegationScope, mode, divisionFilter, captureStatusFilter, approvalStatusFilter]);
 
@@ -2733,6 +2742,23 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
     }
   }
 
+  // An assignee's turn: confirm they're ready (e.g. the implementation plan
+  // is in place). The approver gets it once every assignee has confirmed.
+  async function confirmReady() {
+    setBusy(true);
+    setError(null);
+    try {
+      for (const key of (item.doc_type === "CUSTOM_REQUEST" && item.assignee_field_keys) || []) {
+        await api.confirmCustomRequestAssignee(item.id, key);
+      }
+      await props.onDone();
+    } catch (e: any) {
+      setError(String(e.message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const canAct = item.doc_type === "CUSTOM_REQUEST" && item.current_step_actionable_by_me && item.status === "IN_PROGRESS";
   const isAssigneeTask = item.doc_type === "CUSTOM_REQUEST" && !!item.is_assignee_task;
 
@@ -2983,8 +3009,23 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
               )}
 
               {!canAct && isAssigneeTask && (
-                <div className="review-empty-note" style={{ padding: "0 14px 16px" }}>
-                  You've been named as an assignee on this request — go to Custom Processes &rsaquo; Assigned to Me to fill in implementation details and confirm.
+                <div style={{ padding: "0 14px 16px" }}>
+                  {(() => {
+                    const groups = (item.assignee_labels || []).filter((l) => l !== "You");
+                    return (
+                      <div className="review-empty-note" style={{ marginBottom: 10 }}>
+                        {groups.length
+                          ? <>Assigned to <strong>{groups.join(", ")}</strong> — any one member confirms for the whole group, so once you do, the others don't need to.</>
+                          : <>You're an assignee on this request, so it's your turn before the approvers.</>}
+                        {" "}It goes to the first approver when every assignee has confirmed. To fill in implementation details first, use Custom Processes &rsaquo; Assigned to Me.
+                      </div>
+                    );
+                  })()}
+                  {!!item.assignee_field_keys?.length && (
+                    <button className="button small-button" disabled={busy} onClick={() => void confirmReady()}>
+                      {busy ? "Confirming…" : (item.assignee_labels || []).some((l) => l !== "You") ? `Confirm for ${(item.assignee_labels || []).filter((l) => l !== "You").join(", ")}` : "Confirm I'm ready"}
+                    </button>
+                  )}
                 </div>
               )}
               {!canAct && !isAssigneeTask && <div className="review-empty-note" style={{ padding: "0 14px 16px" }}>This request is not awaiting your action.</div>}

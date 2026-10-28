@@ -5,8 +5,8 @@ import fs from "fs";
 import multer from "multer";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
-import { query } from "../../lib/db.js";
-import { notifyChangeRequestPeopleAdded, notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder } from "../../lib/notifications.js";
+import { query, withTransaction } from "../../lib/db.js";
+import { notifyChangeRequestPeopleAdded, notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder, notifyCustomRequestAssigneeReminder } from "../../lib/notifications.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { resolveDirectManagerId } from "../reporting-lines/reporting-lines.routes.js";
@@ -18,7 +18,7 @@ import { acknowledgeCollection, createProvisioningTaskForSubmission, getProvisio
 import { baselineBrsDocument, recordBrsRevision, returnBrsDocumentToDraft } from "../brs/brs.service.js";
 import { isPeriodLocked } from "../attendance/attendance.routes.js";
 import { getChangesDuringApproval } from "../../lib/approvalChanges.js";
-import { assertBackOutPlan, assertCanSubmit, assigneeLabel, assigneeMatches, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision } from "./change-collab.service.js";
+import { assertBackOutPlan, assertCanSubmit, assigneeLabel, assigneeMatches, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision, unconfirmedAssignees, assigneeEmails } from "./change-collab.service.js";
 import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 
 export const customRequestsRouter = Router();
@@ -443,16 +443,21 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
             addedBy: req.user!.fullName ?? null, owners: newCoOwners, coWriterEmails: []
           });
         }
-        await notifyCustomRequestStep({
-          submissionId: submission.id,
-          requestTypeName: requestType.name,
-          requesterName: req.user!.fullName ?? null,
-          approverEmail: chain[0].approver_email,
-          approverName: chain[0].approver_name,
-          approverId: chain[0].approver_id,
-          stepLabel: chain[0].position_name,
-          stepOrder: 0
-        });
+        // With assignees still to confirm, it's their turn first - the first
+        // approver is emailed when the last one confirms (assignees/confirm).
+        const pending = await unconfirmedAssignees(requestType.id, parsed.data.data);
+        if (!pending.length) {
+          await notifyCustomRequestStep({
+            submissionId: submission.id,
+            requestTypeName: requestType.name,
+            requesterName: req.user!.fullName ?? null,
+            approverEmail: chain[0].approver_email,
+            approverName: chain[0].approver_name,
+            approverId: chain[0].approver_id,
+            stepLabel: chain[0].position_name,
+            stepOrder: 0
+          });
+        }
         const requester = (await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = $1`, [req.user!.userId]))[0];
         await notifyCustomRequestProgress({
           submissionId: submission.id,
@@ -461,7 +466,8 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
           requesterName: requester?.full_name ?? null,
           event: "SUBMITTED",
           nextApproverName: chain[0].approver_name,
-          nextStepLabel: chain[0].position_name
+          nextStepLabel: chain[0].position_name,
+          waitingOnAssignees: pending.map((p) => assigneeLabel(p.entry))
         });
 
         // "user"/"user_multi" fields (e.g. Change Assignee) can be filled in with
@@ -958,56 +964,74 @@ customRequestsRouter.post("/:id/assignees/confirm", async (req: AuthedRequest, r
     const parsed = ConfirmAssigneeSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
 
-    const submission = (await query<any>(
-      `SELECT s.*, rt.name AS request_type_name, u.full_name AS requester_name
-         FROM custom_request_submissions s
-         JOIN custom_request_types rt ON rt.id = s.request_type_id
-         JOIN users u ON u.id = s.requester_id
-        WHERE s.id = $1`,
-      [req.params.id]
-    ))[0];
-    if (!submission) throw notFound();
+    // Row-locked so two assignees confirming at once can't overwrite each
+    // other's confirmation (each rewrites the whole data column).
+    const { submission, confirmedNow } = await withTransaction(async (client) => {
+      const submission = (await client.query<any>(
+        `SELECT s.*, rt.name AS request_type_name, u.full_name AS requester_name
+           FROM custom_request_submissions s
+           JOIN custom_request_types rt ON rt.id = s.request_type_id
+           JOIN users u ON u.id = s.requester_id
+          WHERE s.id = $1
+          FOR UPDATE OF s`,
+        [req.params.id]
+      )).rows[0];
+      if (!submission) throw notFound();
 
-    const current: AssigneeEntry[] = Array.isArray(submission.data?.[parsed.data.field_key]) ? submission.data[parsed.data.field_key] : [];
-    const idx = current.findIndex((a) =>
-      assigneeMatches(a, req.user!)
-    );
-    if (idx === -1) throw forbidden("You are not listed as an assignee (or a member of an assigned section) on this field");
+      const current: AssigneeEntry[] = Array.isArray(submission.data?.[parsed.data.field_key]) ? submission.data[parsed.data.field_key] : [];
+      if (!current.some((a) => assigneeMatches(a, req.user!))) throw forbidden("You are not listed as an assignee (or a member of an assigned section) on this field");
 
-    current[idx] = { ...current[idx], confirmed: true, confirmed_at: new Date().toISOString(), confirmedBy: (current[idx].teamId || current[idx].departmentId || current[idx].divisionName) ? req.user!.fullName ?? req.user!.userId : current[idx].confirmedBy };
-    const updatedData = { ...submission.data, [parsed.data.field_key]: current };
-    await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(updatedData), submission.id]);
-    await auditChangeRequest(submission.id, req.user!, "ASSIGNEE_CONFIRMED",
-      `Confirmed the implementation plan is ready${current[idx].id ? "" : ` for ${assigneeLabel(current[idx])}`}`);
-
-    // Once every assignee across every "user_multi" field has confirmed, the
-    // implementation plan is ready — let the current-step approver know now,
-    // since they may have been notified back at submission time, well before
-    // assignees finished (and were therefore blocked from acting until now).
-    if (submission.status === "IN_PROGRESS") {
-      const multiFields = await query<{ field_key: string }>(
-        `SELECT field_key FROM request_type_fields WHERE request_type_id = $1 AND field_type = 'user_multi' AND is_active = true`,
-        [submission.request_type_id]
-      );
-      const allConfirmed = multiFields.every((f) => {
-        const arr: AssigneeEntry[] | undefined = f.field_key === parsed.data.field_key ? current : updatedData[f.field_key];
-        return Array.isArray(arr) && arr.length > 0 && arr.every((a) => a.confirmed);
+      // Confirms every entry this user answers for (themselves and any group they're in).
+      const confirmedNow: AssigneeEntry[] = [];
+      const updated = current.map((a) => {
+        if (a.confirmed || !assigneeMatches(a, req.user!)) return a;
+        const next = { ...a, confirmed: true, confirmed_at: new Date().toISOString(), confirmedBy: (a.teamId || a.departmentId || a.divisionName) ? req.user!.fullName ?? req.user!.userId : a.confirmedBy };
+        confirmedNow.push(next);
+        return next;
       });
-      if (allConfirmed) {
-        const chain = submission.approval_chain as Array<{ approver_id: string; approver_name: string | null; approver_email: string | null; position_name: string }>;
-        const step = chain[submission.current_step_order];
-        if (step) {
-          void notifyCustomRequestStep({
-            submissionId: submission.id,
-            requestTypeName: submission.request_type_name,
-            requesterName: submission.requester_name,
-            approverEmail: step.approver_email,
-            approverName: step.approver_name,
-            approverId: step.approver_id,
-            stepLabel: step.position_name,
-            stepOrder: submission.current_step_order
-          });
-        }
+      if (confirmedNow.length) {
+        submission.data = { ...submission.data, [parsed.data.field_key]: updated };
+        await client.query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(submission.data), submission.id]);
+      }
+      return { submission, confirmedNow };
+    });
+    if (!confirmedNow.length) return res.json({ ok: true });
+
+    for (const a of confirmedNow) {
+      await auditChangeRequest(submission.id, req.user!, "ASSIGNEE_CONFIRMED",
+        `Confirmed the implementation plan is ready${a.id ? "" : ` for ${assigneeLabel(a)}`}`);
+    }
+
+    // The last assignee to confirm hands it to the current-step approver,
+    // who wasn't emailed at submission (see POST /) - tell them now, and
+    // let the requester and co-owners know it has moved on.
+    if (submission.status === "IN_PROGRESS" && !(await unconfirmedAssignees(submission.request_type_id, submission.data)).length) {
+      const chain = submission.approval_chain as Array<{ approver_id: string; approver_name: string | null; approver_email: string | null; position_name: string }>;
+      const step = chain[submission.current_step_order];
+      if (step) {
+        void notifyCustomRequestStep({
+          submissionId: submission.id,
+          requestTypeName: submission.request_type_name,
+          requesterName: submission.requester_name,
+          approverEmail: step.approver_email,
+          approverName: step.approver_name,
+          approverId: step.approver_id,
+          stepLabel: step.position_name,
+          stepOrder: submission.current_step_order
+        });
+        const owners = await query<{ email: string; full_name: string | null }>(
+          `SELECT email, full_name FROM users WHERE id = $1 OR id = ANY($2::uuid[])`,
+          [submission.requester_id, submission.owner_user_ids || []]
+        );
+        for (const o of owners) void notifyCustomRequestProgress({
+          submissionId: submission.id,
+          requestTypeName: submission.request_type_name,
+          requesterEmail: o.email,
+          requesterName: o.full_name,
+          event: "ASSIGNEES_CONFIRMED",
+          nextApproverName: step.approver_name,
+          nextStepLabel: step.position_name
+        });
       }
     }
 
@@ -1292,6 +1316,30 @@ customRequestsRouter.post("/:id/remind", async (req: AuthedRequest, res, next) =
     ))[0];
     if (existing && new Date(existing.reminded_at).getTime() > Date.now() - MANUAL_REMINDER_COOLDOWN_HOURS * 3_600_000) {
       throw badRequest("A reminder was already sent recently for this step — please wait before sending another.");
+    }
+
+    // Still waiting on assignees: they're the ones holding it up, and the
+    // approver can't act yet - remind them instead.
+    const pending = await unconfirmedAssignees(submission.request_type_id, submission.data);
+    if (pending.length) {
+      for (const p of pending) {
+        await notifyCustomRequestAssigneeReminder({
+          submissionId: submission.id,
+          requestTypeName: submission.request_type_name,
+          requesterName: submission.requester_name,
+          fieldLabel: p.field_label,
+          assigneeLabel: assigneeLabel(p.entry),
+          isGroup: Boolean(p.entry.teamId || p.entry.departmentId || p.entry.divisionName),
+          recipientEmails: await assigneeEmails(p.entry),
+          hoursPending: (Date.now() - new Date(submission.created_at).getTime()) / 3_600_000
+        });
+      }
+      await query(
+        `INSERT INTO sla_reminder_log (doc_type, doc_id, step_order, reminded_at) VALUES ('CUSTOM_REQUEST',$1,$2,now())
+         ON CONFLICT (doc_type, doc_id, step_order) DO UPDATE SET reminded_at = now()`,
+        [submission.id, submission.current_step_order]
+      );
+      return res.json({ ok: true, approver_name: pending.map((p) => assigneeLabel(p.entry)).join(", "), reminded: "ASSIGNEES" });
     }
 
     let approverEmail = step.approver_email;

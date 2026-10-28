@@ -1,8 +1,9 @@
 import { query } from "../../lib/db.js";
 import { logger, serializeError } from "../../lib/logger.js";
-import { notifySlaReminder } from "../../lib/notifications.js";
+import { notifyCustomRequestAssigneeReminder, notifySlaReminder } from "../../lib/notifications.js";
 import { getBooleanSystemSetting, getNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { ensureSlaReminderSchema } from "./sla.schema.js";
+import { assigneeEmails, assigneeLabel, unconfirmedAssignees } from "../custom-requests/change-collab.service.js";
 
 // A reminder-only SLA nudge across the three chain-based approval surfaces
 // in FlowDesk (Advances/Claims, Custom Requests - including BRS Approval and
@@ -77,9 +78,11 @@ async function findOverdueClaims(thresholdHours: number): Promise<OverdueStep[]>
   });
 }
 
-async function findOverdueCustomRequests(thresholdHours: number): Promise<OverdueStep[]> {
+type AssigneeHold = { row: any; pending: Awaited<ReturnType<typeof unconfirmedAssignees>> };
+
+async function findOverdueCustomRequests(thresholdHours: number): Promise<{ steps: OverdueStep[]; assigneeHolds: AssigneeHold[] }> {
   const rows = await query<any>(
-    `SELECT s.id, s.current_step_order, s.approval_chain, s.updated_at,
+    `SELECT s.id, s.current_step_order, s.approval_chain, s.updated_at, s.created_at, s.data, s.request_type_id,
             rt.name AS request_type_name, u.full_name AS requester_name
        FROM custom_request_submissions s
        JOIN custom_request_types rt ON rt.id = s.request_type_id
@@ -90,17 +93,52 @@ async function findOverdueCustomRequests(thresholdHours: number): Promise<Overdu
         AND s.updated_at < now() - ($1 || ' hours')::interval`,
     [thresholdHours]
   );
-  return rows.flatMap((r) => {
+  const steps: OverdueStep[] = [];
+  const assigneeHolds: AssigneeHold[] = [];
+  for (const r of rows) {
     const chain = r.approval_chain as any[];
     const step = chain[r.current_step_order];
-    if (!step?.approver_id) return [];
-    return [{
+    if (!step?.approver_id) continue;
+    // Assignees still to confirm: the approver can't act yet, so it's the
+    // assignees who get reminded (remindPendingAssignees), not the approver.
+    const pending = await unconfirmedAssignees(r.request_type_id, r.data);
+    if (pending.length) { assigneeHolds.push({ row: r, pending }); continue; }
+    steps.push({
       docId: r.id, stepOrder: r.current_step_order, approverId: step.approver_id,
       approverEmail: step.approver_email ?? null, approverName: step.approver_name ?? null,
       reference: `${r.request_type_name || "Custom Request"} — ${r.requester_name || "Unknown"}`,
       hoursPending: (Date.now() - new Date(r.updated_at).getTime()) / 3_600_000
-    }];
-  });
+    });
+  }
+  return { steps, assigneeHolds };
+}
+
+// Shares the step's sla_reminder_log row with the approver reminder (and the
+// requester's Remind button), claimed atomically so both PROD nodes running
+// this sweep don't each send it.
+async function remindPendingAssignees(holds: AssigneeHold[], thresholdHours: number) {
+  for (const { row: r, pending } of holds) {
+    const claimed = await query(
+      `INSERT INTO sla_reminder_log (doc_type, doc_id, step_order, reminded_at) VALUES ('CUSTOM_REQUEST',$1,$2,now())
+       ON CONFLICT (doc_type, doc_id, step_order) DO UPDATE SET reminded_at = now()
+         WHERE sla_reminder_log.reminded_at < now() - ($3 || ' hours')::interval
+       RETURNING reminded_at`,
+      [r.id, r.current_step_order, String(thresholdHours)]
+    );
+    if (!claimed.length) continue;
+    for (const p of pending) {
+      await notifyCustomRequestAssigneeReminder({
+        submissionId: r.id,
+        requestTypeName: r.request_type_name || "Custom Request",
+        requesterName: r.requester_name ?? null,
+        fieldLabel: p.field_label,
+        assigneeLabel: assigneeLabel(p.entry),
+        isGroup: Boolean(p.entry.teamId || p.entry.departmentId || p.entry.divisionName),
+        recipientEmails: await assigneeEmails(p.entry),
+        hoursPending: (Date.now() - new Date(r.created_at).getTime()) / 3_600_000
+      });
+    }
+  }
 }
 
 async function findOverdueSignableDocuments(thresholdHours: number): Promise<OverdueStep[]> {
@@ -169,7 +207,9 @@ export async function runSlaReminderCycle() {
   try {
     await sendRemindersFor("ADVANCE", "Advance Request", await findOverdueAdvances(thresholdHours), thresholdHours);
     await sendRemindersFor("CLAIM", "Clearance", await findOverdueClaims(thresholdHours), thresholdHours);
-    await sendRemindersFor("CUSTOM_REQUEST", "Request", await findOverdueCustomRequests(thresholdHours), thresholdHours);
+    const customRequests = await findOverdueCustomRequests(thresholdHours);
+    await sendRemindersFor("CUSTOM_REQUEST", "Request", customRequests.steps, thresholdHours);
+    await remindPendingAssignees(customRequests.assigneeHolds, thresholdHours);
     await sendRemindersFor("SIGNABLE_DOCUMENT", "Routing Document", await findOverdueSignableDocuments(thresholdHours), thresholdHours);
   } catch (err) {
     logger.warn("sla_reminder_cycle_failed", { error: serializeError(err) });

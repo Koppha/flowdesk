@@ -1606,9 +1606,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
 
                       {multiFields.map((f) => {
                         const entries: AssigneeEntry[] = Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : [];
-                        const mine = entries.find((a) =>
-                          assigneeIsMe(a, profile)
-                        );
+                        const mine = entries.find((a) => !a.confirmed && assigneeIsMe(a, profile)) ?? entries.find((a) => assigneeIsMe(a, profile));
                         return (
                           <div key={f.field_key} style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{f.field_label}</div>
@@ -1627,7 +1625,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                             </div>
                             {mine && !mine.confirmed && s.status === "IN_PROGRESS" && (
                               <button className="ep-btn" style={{ fontSize: 12, padding: "5px 12px", marginRight: 8 }} onClick={() => confirmAssignee(s.id, f.field_key)}>
-                                Confirm Ready
+                                {isGroupAssignee(mine) ? `Confirm Ready for ${assigneeLabel(mine)}` : "Confirm Ready"}
                               </button>
                             )}
                             {s.status === "IN_PROGRESS" && (
@@ -1658,8 +1656,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                         // plan also confirms them — filling it in IS their "I'm done" signal.
                         const myUnconfirmedField = multiFields.find((f) => {
                           const entries: AssigneeEntry[] = Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : [];
-                          const mine = entries.find((a) => assigneeIsMe(a, profile));
-                          return mine && !mine.confirmed;
+                          return entries.some((a) => !a.confirmed && assigneeIsMe(a, profile));
                         });
                         return (
                           <div className="cr-impl-card">
@@ -2214,7 +2211,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                               <div style={{ display: "grid", gap: 6 }}>
                                 {entries.map((a, i) => (
                                   <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
-                                    <div>{assigneeLabel(a)}</div>
+                                    <div>
+                                      {assigneeLabel(a)}
+                                      {isGroupAssignee(a) && !a.confirmed && <span style={{ color: "var(--muted)" }}> · any one member can confirm</span>}
+                                      {a.confirmed && a.confirmedBy && <span style={{ color: "var(--muted)" }}> · confirmed by {a.confirmedBy}</span>}
+                                    </div>
                                     {statusBadge(a.confirmed ? "APPROVED" : "PENDING")}
                                   </div>
                                 ))}
@@ -2222,6 +2223,20 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                             </div>
                           );
                         })}
+                        {(() => {
+                          // Assignees confirm first; the approver isn't asked until they all have.
+                          const all = fields.filter((f) => f.field_type === "user_multi").flatMap((f) => (Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : []) as AssigneeEntry[]);
+                          const waiting = all.filter((a) => !a.confirmed);
+                          if (s.status !== "IN_PROGRESS" || !waiting.length) return null;
+                          const next = s.approval_chain[s.current_step_order];
+                          return (
+                            <div className="custom-request-note" style={{ marginBottom: 12, fontSize: 13 }}>
+                              <strong>Waiting on the assignees to confirm ({all.length - waiting.length} of {all.length} done)</strong>: {waiting.map(assigneeLabel).join(", ")}.
+                              {waiting.some(isGroupAssignee) && <> For a section, department or division, any one member confirms for all of them.</>}
+                              {next && <> It goes to {next.approver_name || next.position_name} once they all have.</>}
+                            </div>
+                          );
+                        })()}
                         <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Approval Chain</div>
                         <div style={{ display: "grid", gap: 6 }}>
                           {s.approval_chain.map((step, i) => {
@@ -2232,9 +2247,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                             // it reads as "Waiting" instead of a misleading
                             // "Pending" that makes every approver look like
                             // they're up right now regardless of turn order.
+                            const assigneesPending = fields.some((f) => f.field_type === "user_multi" && Array.isArray(s.data?.[f.field_key]) && s.data[f.field_key].some((a: AssigneeEntry) => !a.confirmed));
                             const displayStatus = step.acted_at
                               ? step.status
-                              : i === s.current_step_order && s.status === "IN_PROGRESS"
+                              : i === s.current_step_order && s.status === "IN_PROGRESS" && !assigneesPending
                                 ? "PENDING"
                                 : "WAITING";
                             return (

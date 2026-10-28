@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import OrgGaps from "./OrgGaps";
 import { useStaffDirectory, refreshStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
-import Inbox, { isCaptureItem, isCapturePendingItem, isPaymentItem, needsAccommodationBooking } from "./Inbox";
+import Inbox, { isAwaitingMyAction, isCaptureItem, isCapturePendingItem, isPaymentItem, needsAccommodationBooking } from "./Inbox";
 import Payments from "./Payments";
 import Deductions from "./Deductions";
 import ViewClearances from "./ViewClearances";
@@ -1710,7 +1710,7 @@ export default function App() {
     // the badge count must only reflect items actually waiting on YOUR
     // action right now - otherwise it stays inflated with things already
     // approved by you or not yet reached your step.
-    const inboxItemCount = nonSplitInboxItems.filter((it) => it.current_step_actionable_by_me === true).length;
+    const inboxItemCount = nonSplitInboxItems.filter(isAwaitingMyAction).length;
     setInboxCount(inboxItemCount);
     setInboxItems(nonSplitInboxItems);
     setCaptureCount(rawInboxItems.filter(isCapturePendingItem).length);
@@ -1819,7 +1819,7 @@ export default function App() {
         const nonSplitItems = rawItems.filter((it) => (!isCaptureItem(it) || needsAccommodationBooking(it)) && !isPaymentItem(it));
         // Same fix as the initial load: only count items actually actionable
         // by you right now, not everything you're peripherally relevant to.
-        const fresh = nonSplitItems.filter((it) => it.current_step_actionable_by_me === true).length;
+        const fresh = nonSplitItems.filter(isAwaitingMyAction).length;
         setCaptureCount(rawItems.filter(isCapturePendingItem).length);
         const prev = knownInboxCount.current;
         if (fresh > prev) {

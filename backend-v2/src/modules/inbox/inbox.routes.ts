@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { assigneeMatches } from "../custom-requests/change-collab.service.js";
+import { assigneeLabel, assigneeMatches } from "../custom-requests/change-collab.service.js";
 import { AuthedRequest, Role, hasFeatureAccess, requireAuth } from "../../lib/auth.js";
 import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { query } from "../../lib/db.js";
@@ -1075,12 +1075,20 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         const isStepApprover = !!step && (step.approver_id === req.user!.userId || isDelegatedCustomMatch);
         const actionable = isStepApprover && !hasUnconfirmedAssignees;
 
-        const isAssigneeTask = myFieldKeys.some((key) => {
+        // The fields this user still has to confirm on - their turn comes
+        // before the approver's (who doesn't see it until all have confirmed).
+        const assigneeFieldKeys = myFieldKeys.filter((key) => {
           const arr = r.data?.[key];
           return Array.isArray(arr) && arr.some((a: any) =>
             !a.confirmed && assigneeMatches(a, req.user!)
           );
         });
+        const isAssigneeTask = assigneeFieldKeys.length > 0;
+        // What they'd be confirming for: themselves, or a whole group (any
+        // one member confirms for it, and it then drops off the others' inbox).
+        const assigneeLabels = assigneeFieldKeys.flatMap((key) =>
+          (r.data[key] as any[]).filter((a) => !a.confirmed && assigneeMatches(a, req.user!)).map((a) => (a.id ? "You" : assigneeLabel(a)))
+        );
 
         if (!actionable && !isAssigneeTask) continue;
         items.push({
@@ -1093,6 +1101,8 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           current_step_position_name: step?.position_name ?? null,
           current_step_actionable_by_me: actionable,
           is_assignee_task: isAssigneeTask,
+          assignee_field_keys: assigneeFieldKeys,
+          assignee_labels: assigneeLabels,
           is_delegated: actionable && isDelegatedCustomMatch,
           delegated_from_manager_name: (actionable && isDelegatedCustomMatch && step?.approver_id) ? delegatingManagerNames.get(step.approver_id) ?? null : null,
           created_at: r.created_at

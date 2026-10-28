@@ -1642,7 +1642,7 @@ export async function notifyCustomRequestAssigneeAssigned(args: {
       ``,
       `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and listed you as "${args.fieldLabel}".`,
       ``,
-      `Log in to FlowDesk to confirm once you're ready — approval can't proceed until every assignee has confirmed.`,
+      `It's in your Approval Inbox in FlowDesk — confirm there once you're ready. It only goes to the approvers after every assignee has confirmed.`,
       ``,
       footer()
     ].join("\n");
@@ -1674,13 +1674,13 @@ export async function notifyCustomRequestTeamAssigned(args: {
     if (!args.memberEmails.length) return;
 
     const body = [
-      header(`${args.requestTypeName.toUpperCase()} — YOUR SECTION HAS BEEN ASSIGNED`),
+      header(`${args.requestTypeName.toUpperCase()} — YOUR TEAM HAS BEEN ASSIGNED`),
       ``,
       `Hello,`,
       ``,
-      `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and assigned it to your section, "${args.teamName}" (${args.fieldLabel}).`,
+      `${args.requesterName || "An employee"} submitted a ${args.requestTypeName.toLowerCase()} and assigned it to "${args.teamName}" (${args.fieldLabel}), which you're part of.`,
       ``,
-      `Any one member of the section can confirm in FlowDesk once it's ready — approval can't proceed until then.`,
+      `Only one of you needs to confirm - whoever confirms from their Approval Inbox in FlowDesk does it for everyone, and it drops off the others' inbox. It only goes to the approvers after that.`,
       ``,
       footer()
     ].join("\n");
@@ -1694,6 +1694,44 @@ export async function notifyCustomRequestTeamAssigned(args: {
     logger.warn("custom_request_team_assigned_notification_failed", {
       submission_id: args.submissionId, error: serializeError(error)
     });
+  }
+}
+
+// A nudge to an assignee (or group) who still hasn't confirmed - sent by the
+// requester's Remind button or the SLA sweep instead of reminding the
+// approver, who can't act until every assignee has confirmed.
+export async function notifyCustomRequestAssigneeReminder(args: {
+  submissionId: string;
+  requestTypeName: string;
+  requesterName: string | null;
+  fieldLabel: string;
+  assigneeLabel: string;
+  // A section/department/division: any one member confirms for all of them.
+  isGroup?: boolean;
+  recipientEmails: string[];
+  hoursPending: number;
+}) {
+  try {
+    if (!args.recipientEmails.length) return;
+    const days = Math.floor(args.hoursPending / 24);
+    const body = [
+      header(`${args.requestTypeName.toUpperCase()} — REMINDER: PLEASE CONFIRM`),
+      ``,
+      `Hello,`,
+      ``,
+      `${args.requesterName || "An employee"}'s ${args.requestTypeName.toLowerCase()} is waiting on you (${args.assigneeLabel}, ${args.fieldLabel})${days >= 1 ? ` - pending for ${days} day${days === 1 ? "" : "s"}` : ""}.`,
+      ``,
+      `Open it from your Approval Inbox in FlowDesk and confirm once you're ready.${args.isGroup ? ` Only one of you needs to - whoever confirms does it for the whole ${args.assigneeLabel.split(":")[0].toLowerCase()}.` : ""} It can't go to the approvers until every assignee has confirmed.`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({
+      to: args.recipientEmails,
+      subject: `[Reminder] ${args.requestTypeName} — ${args.fieldLabel}`,
+      text: body
+    });
+  } catch (error) {
+    logger.warn("custom_request_assignee_reminder_failed", { submission_id: args.submissionId, error: serializeError(error) });
   }
 }
 
@@ -1812,17 +1850,22 @@ export async function notifyCustomRequestProgress(args: {
   requestTypeName: string;
   requesterEmail: string | null;
   requesterName: string | null;
-  event: "SUBMITTED" | "STEP_APPROVED";
+  event: "SUBMITTED" | "STEP_APPROVED" | "ASSIGNEES_CONFIRMED";
   actedBy?: string | null;
   actedStepLabel?: string | null;
   comment?: string | null;
   nextApproverName: string | null;
   nextStepLabel: string;
+  // Assignees still to confirm - the approver isn't asked until they have.
+  waitingOnAssignees?: string[];
 }) {
   try {
     if (!args.requesterEmail) return;
     const type = args.requestTypeName.toLowerCase();
-    const waiting = `It is now waiting for ${args.nextApproverName || "the next approver"} (${args.nextStepLabel}).`;
+    const approver = `${args.nextApproverName || "the next approver"} (${args.nextStepLabel})`;
+    const waiting = args.waitingOnAssignees?.length
+      ? `It is now waiting for the assignees to confirm they're ready: ${args.waitingOnAssignees.join(", ")}. Once they all have, it goes to ${approver}.`
+      : `It is now waiting for ${approver}.`;
     const lines = [
       header(`${args.requestTypeName.toUpperCase()} — ${args.event === "SUBMITTED" ? "SUBMITTED" : "UPDATE"}`),
       ``,
@@ -1830,6 +1873,8 @@ export async function notifyCustomRequestProgress(args: {
       ``,
       args.event === "SUBMITTED"
         ? `Your ${type} has been submitted. ${waiting}`
+        : args.event === "ASSIGNEES_CONFIRMED"
+        ? `Every assignee on your ${type} has confirmed. ${waiting}`
         : `Your ${type} was approved by ${args.actedBy || "an approver"}${args.actedStepLabel ? ` (${args.actedStepLabel})` : ""}. ${waiting}`
     ];
     if (args.comment) lines.push(``, `Comment: ${args.comment}`);

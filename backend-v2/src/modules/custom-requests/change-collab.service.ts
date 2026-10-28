@@ -135,6 +135,32 @@ export function isSubmissionAssignee(
   });
 }
 
+// Assignees who haven't confirmed yet, across every "user_multi" field.
+// While any are left the request is theirs, not the current approver's:
+// approval is blocked (performCustomRequestAction), so the approver isn't
+// emailed or reminded until the last one confirms.
+export async function unconfirmedAssignees(requestTypeId: string, data: Record<string, any>) {
+  const fields = await query<{ field_key: string; field_label: string }>(
+    `SELECT field_key, field_label FROM request_type_fields WHERE request_type_id = $1 AND field_type = 'user_multi' AND is_active = true`,
+    [requestTypeId]
+  );
+  return fields.flatMap((f) => {
+    const arr = data?.[f.field_key];
+    return Array.isArray(arr) ? arr.filter((a: any) => !a.confirmed).map((a: any) => ({ field_label: f.field_label, entry: a })) : [];
+  });
+}
+
+// Who to email about an unconfirmed assignee: the person, or every active
+// member of the group (any one of them can confirm for it).
+export async function assigneeEmails(a: any): Promise<string[]> {
+  if (a.teamId) return (await query<{ email: string }>(`SELECT email FROM users WHERE team_id = $1 AND is_active = true`, [a.teamId])).map((u) => u.email);
+  if (a.departmentId) return (await query<{ email: string }>(`SELECT email FROM users WHERE section_id = $1 AND is_active = true`, [a.departmentId])).map((u) => u.email);
+  if (a.divisionName) return (await query<{ email: string }>(`SELECT email FROM users WHERE lower(trim(department)) = lower(trim($1)) AND is_active = true`, [a.divisionName])).map((u) => u.email);
+  if (a.email) return [a.email];
+  if (a.id) return (await query<{ email: string }>(`SELECT email FROM users WHERE id = $1 AND is_active = true`, [a.id])).map((u) => u.email);
+  return [];
+}
+
 export async function assertCanSubmit(userId: string, role: string, department: string | null, employmentType: string | null, requestTypeId: string) {
   if (role === "ADMIN") return;
   const perm = await query<{ id: string }>(
