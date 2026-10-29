@@ -62,7 +62,7 @@ export default function SlaReminderSettings({ isAdmin }: { isAdmin?: boolean }) 
             onChange={(e) => setThresholdHours(e.target.value)}
             style={{ width: 64, padding: "4px 6px", fontSize: 13, border: "1px solid var(--border)", borderRadius: 6 }}
           />
-          hours with no action (repeating every {thresholdHours} hours until they act), on Advances, Clearances, Custom Processes (including BRS and Change Requests), and Sign a Document routing documents.
+          hours with no action (repeating every {thresholdHours} hours until they act), on Advances, Clearances, Custom Processes (including BRS and Change Requests), and Sign a Document signature requests.
         </label>
         {isAdmin && (
           <button onClick={save} disabled={saving} style={{ padding: "7px 14px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: saving ? 0.7 : 1 }}>

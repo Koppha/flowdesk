@@ -3,7 +3,7 @@ import SignatureUpload from "./components/SignatureUpload";
 import PdfPlacePicker, { SignatureMarkPreview, type PlacePosition } from "./components/PdfPlacePicker";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
-import { FileSignature, Upload, Eraser, CheckCircle2, Copy, Download, Eye, ShieldCheck, BookmarkCheck, XCircle, Route, PenLine } from "lucide-react";
+import { FileSignature, Upload, Eraser, CheckCircle2, Copy, Download, Eye, ShieldCheck, BookmarkCheck, XCircle, Send, PenLine } from "lucide-react";
 import SignRoutingDocument from "./SignRoutingDocument";
 import PdfTextEditor from "./PdfTextEditor";
 
@@ -307,7 +307,7 @@ export default function SignDocument() {
         {mode === "quick"
           ? "Upload a PDF, sign it electronically, and get back a stamped copy with a public verification code anyone can check — no FlowDesk account required to verify."
           : mode === "routing"
-          ? "Start a document that several people sign in turn, each placing their mark exactly where it belongs on the page — for routing sheets like a multi-manager sign-off form."
+          ? "Ask several people to sign a document in turn, each placing their mark exactly where it belongs on the page — for example a multi-manager sign-off form."
           : "Add text anywhere on a PDF before signing or sending it — no signing, no sharing, just a quick fix."}
       </div>
 
@@ -316,7 +316,7 @@ export default function SignDocument() {
           <FileSignature size={13} /> Quick Sign
         </button>
         <button type="button" onClick={() => setMode("routing")} style={{ padding: "7px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer", border: mode === "routing" ? "1px solid #3b82f6" : "1px solid var(--border)", background: mode === "routing" ? "#eff6ff" : "var(--surface-soft)", color: mode === "routing" ? "#1d4ed8" : "var(--text)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-          <Route size={13} /> Routing Document (multi-signer)
+          <Send size={13} /> Request Signature (multi-signer)
         </button>
         <button type="button" onClick={() => setMode("annotate")} style={{ padding: "7px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer", border: mode === "annotate" ? "1px solid #3b82f6" : "1px solid var(--border)", background: mode === "annotate" ? "#eff6ff" : "var(--surface-soft)", color: mode === "annotate" ? "#1d4ed8" : "var(--text)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
           <PenLine size={13} /> Add Text to PDF

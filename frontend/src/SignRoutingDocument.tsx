@@ -715,7 +715,7 @@ export default function SignRoutingDocument() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
-              <FilePlus2 size={16} /> Start a routing document
+              <FilePlus2 size={16} /> Request a signature
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <Field label="Title">
@@ -795,7 +795,7 @@ export default function SignRoutingDocument() {
           {docError && <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "#dc2626" }}>{docError}</div>}
 
           <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 10 }}>Your routing documents</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 10 }}>Your signature requests</div>
             {loadingMyDocs ? (
               <div style={{ fontSize: 12, color: "var(--muted)" }}>Loading…</div>
             ) : myDocs.length === 0 ? (

@@ -210,7 +210,7 @@ export async function runSlaReminderCycle() {
     const customRequests = await findOverdueCustomRequests(thresholdHours);
     await sendRemindersFor("CUSTOM_REQUEST", "Request", customRequests.steps, thresholdHours);
     await remindPendingAssignees(customRequests.assigneeHolds, thresholdHours);
-    await sendRemindersFor("SIGNABLE_DOCUMENT", "Routing Document", await findOverdueSignableDocuments(thresholdHours), thresholdHours);
+    await sendRemindersFor("SIGNABLE_DOCUMENT", "Signature Request", await findOverdueSignableDocuments(thresholdHours), thresholdHours);
   } catch (err) {
     logger.warn("sla_reminder_cycle_failed", { error: serializeError(err) });
   }

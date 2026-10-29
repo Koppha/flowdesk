@@ -3229,7 +3229,7 @@ export async function notifySignatureTurn(args: {
       ``,
       detailBlock([["Document", args.documentTitle], ["Verify code", args.verificationUrl]]),
       ``,
-      `Log in to FlowDesk, open Sign a Document → Routing Document, and open this document to add your signature.`,
+      `Log in to FlowDesk, open Sign a Document → Request Signature, and open this document to add your signature.`,
       ``,
       footer()
     ].join("\n");
@@ -3295,7 +3295,7 @@ export async function notifySignatureCompleted(args: {
 export async function notifySlaReminder(args: {
   docType: string;
   docId: string;
-  itemLabel: string; // e.g. "Advance Request", "Clearance", "Change Request", "Routing Document"
+  itemLabel: string; // e.g. "Advance Request", "Clearance", "Change Request", "Signature Request"
   reference: string; // a title or number the approver will recognize
   approverEmail: string | null;
   approverName: string | null;
