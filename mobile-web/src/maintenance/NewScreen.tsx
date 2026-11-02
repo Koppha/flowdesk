@@ -143,7 +143,7 @@ export default function MaintenanceNew() {
         </label>
         <label className="field">
           <span>Phone</span>
-          <input type="tel" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} autoComplete="tel" placeholder="+266 6312 3456" />
+          <input type="tel" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} autoComplete="tel" placeholder="+266 6222 1234" />
         </label>
       </section>
 
