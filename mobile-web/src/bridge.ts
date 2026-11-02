@@ -5,7 +5,15 @@
 
 export type Section = "sign" | "maintenance";
 
-type Injected = { token?: string; theme?: "light" | "dark"; section?: Section; docId?: string; requestId?: string };
+type Injected = {
+  token?: string;
+  theme?: "light" | "dark";
+  section?: Section;
+  docId?: string;
+  requestId?: string;
+  /** What this app build can do for the page, e.g. "headerAction" (1.0.8+). */
+  capabilities?: string[];
+};
 
 // Read fresh every time, never cached at load: on Android the app's
 // injected script can land a moment AFTER this page's own script starts
@@ -22,7 +30,14 @@ export type AppMessage =
   | { type: "signed"; title: string }
   | { type: "sessionExpired" }
   /** The app downloads it with the session and opens the share sheet. */
-  | { type: "sharePdf"; path: string; title: string };
+  | { type: "sharePdf"; path: string; title: string }
+  /** A button in the app's own header (label null = none); tapping it opens `hash` here. */
+  | { type: "headerAction"; label: string | null; hash?: string };
+
+/** Whether this app build supports a given page feature (older builds support none). */
+export function appCan(capability: string) {
+  return inApp && (injectedNow().capabilities || []).includes(capability);
+}
 
 export function postToApp(msg: AppMessage) {
   (window as any).ReactNativeWebView?.postMessage(JSON.stringify(msg));

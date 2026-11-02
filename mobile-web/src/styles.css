@@ -201,7 +201,9 @@ input[type="tel"], input[type="date"], input[inputmode] {
 .pill.info { background: var(--accent-soft); color: var(--accent); }
 .pill.accent-soft { background: var(--accent-soft); color: var(--accent); }
 /* Matches the app's header "+ New" (my-advances.tsx newButton/newLabel). */
-.new-btn { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-weight: 700; font-size: 15px; padding: 6px 0 6px 10px; }
+.new-btn { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-weight: 700; font-size: 15px; padding: 4px 0 4px 10px; }
+/* Right under the app's header: pulled up into the page's top padding. */
+.top-actions { display: flex; justify-content: flex-end; margin: -12px 0 -8px; }
 /* Sections without a bottom tab bar (Maintenance). */
 .app.no-tabs .content { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 .app.no-tabs .sticky-actions { bottom: env(safe-area-inset-bottom); }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { mApi, type Meta, type Scope, type StatusFilter, type Summary } from "./api";
 import { MPriority, MStatus, useMeta } from "./shared";
 import { href } from "../router";
+import { appCan, postToApp } from "../bridge";
 import { formatDate } from "../ui";
 
 const SCOPE_KEY = "flowdesk.maintenance.scope";
@@ -50,17 +51,24 @@ export default function MaintenanceList() {
     mApi.list(scope, status).then(setItems).catch((e) => setError(e.message));
   }, [scope, status]);
 
+  const canCreate = Boolean(meta?.enabled && meta?.has_route);
+  // App 1.0.8+ shows "+ New" in its own header (exactly like My Advances /
+  // My Clearances); older builds get the page's own button below.
+  const headerButton = appCan("headerAction");
+  useEffect(() => {
+    if (!headerButton || !meta) return;
+    postToApp(canCreate ? { type: "headerAction", label: "New", hash: href({ name: "mnew" }) } : { type: "headerAction", label: null });
+    return () => postToApp({ type: "headerAction", label: null });
+  }, [headerButton, meta, canCreate]);
+
   if (metaError) return <p className="error">{metaError}</p>;
   if (!meta || !scope) return <p className="muted center">Loading…</p>;
 
-  const canCreate = meta.enabled && meta.has_route;
-
+  // The app's header already says "Maintenance", so the page has no title.
   return (
     <div className="stack">
-      <div className="row space">
-        <h1>Maintenance</h1>
-        {canCreate && (
-          // Same as the app's "+ New" on My Advances / My Clearances.
+      {canCreate && !headerButton && (
+        <div className="top-actions">
           <a className="new-btn" href={href({ name: "mnew" })} aria-label="New maintenance request">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M5 12h14" />
@@ -68,8 +76,8 @@ export default function MaintenanceList() {
             </svg>
             New
           </a>
-        )}
-      </div>
+        </div>
+      )}
       {!meta.enabled && <p className="muted small">New maintenance requests are switched off right now. Requests already open can still be finished.</p>}
       {meta.enabled && !meta.has_route && <p className="muted small">There's no maintenance route for your division yet, so you can't log a request. Ask an administrator to set one up.</p>}
 
