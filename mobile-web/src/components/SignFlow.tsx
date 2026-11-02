@@ -23,7 +23,7 @@ export default function SignFlow({ data, placements, submitLabel = "Sign", onSub
   const [error, setError] = useState("");
 
   const missing = !isComplete(choice)
-    ? choice.mode === "draw" ? "Draw your signature." : "Type your signature."
+    ? choice.mode === "draw" ? "Draw your signature." : choice.mode === "upload" ? "Upload a picture of your signature." : "Type your signature."
     : !position ? "Tap the page where your signature goes." : !consent ? "Tick the consent box." : "";
 
   async function submit() {

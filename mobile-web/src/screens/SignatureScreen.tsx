@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { api, currentUser } from "../api";
-import SignatureChooser, { isComplete, useSignatureChoice } from "../components/SignatureChooser";
+import SignatureChooser, { isComplete, toSaved, useSignatureChoice } from "../components/SignatureChooser";
 
-// My saved signature - the same one the web portal prefills from.
+// My saved signature - the same one the web portal prefills from (typed,
+// drawn or uploaded there or here).
 export default function SignatureScreen() {
-  const { choice, setChoice, saved } = useSignatureChoice(currentUser()?.fullName || "");
+  const { choice, setChoice, saved, setSaved } = useSignatureChoice(currentUser()?.fullName || "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -14,11 +15,9 @@ export default function SignatureScreen() {
     setError("");
     setMessage("");
     try {
-      await api.saveSignature(
-        choice.mode === "draw"
-          ? { signatureType: "draw", typedName: null, imageDataUrl: choice.drawn }
-          : { signatureType: "type", typedName: choice.typed.trim(), imageDataUrl: null }
-      );
+      const next = toSaved(choice);
+      await api.saveSignature(next);
+      setSaved(next);
       setMessage("Saved. It'll be filled in for you next time you sign, here and on the web.");
     } catch (e: any) {
       setError(e.message);
@@ -31,6 +30,7 @@ export default function SignatureScreen() {
     if (!confirm("Remove your saved signature?")) return;
     try {
       await api.clearSignature();
+      setSaved(null);
       setMessage("Removed.");
     } catch (e: any) {
       setError(e.message);
