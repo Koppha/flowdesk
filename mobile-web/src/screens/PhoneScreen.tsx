@@ -33,7 +33,7 @@ export default function PhoneScreen() {
 
   async function save() {
     const value = phone.trim();
-    if (!validPhone(value)) return setError("Enter a phone number with 8 to 15 digits, e.g. +266 5812 3456.");
+    if (!validPhone(value)) return setError("Enter a phone number with 8 to 15 digits, e.g. +266 6312 3456.");
     setBusy(true);
     setError("");
     try {
@@ -71,7 +71,7 @@ export default function PhoneScreen() {
       </p>
       <label className="field">
         <span>Mobile number</span>
-        <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+266 5812 3456" />
+        <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+266 6312 3456" />
       </label>
       {error && <p className="error">{error}</p>}
       <div className="sticky-actions">
