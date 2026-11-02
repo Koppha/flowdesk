@@ -68,6 +68,8 @@ export type MobileAppUserRow = {
   requests30d: number;
   requestsTotal: number;
   online: boolean;
+  /** Latest phone, e.g. "Samsung SM-A556E · Android 16". */
+  device: string | null;
 };
 
 export type MobileAppAnalytics = {
@@ -78,6 +80,8 @@ export type MobileAppAnalytics = {
   onlineNow: { userId: string; fullName: string | null; lastSeen: string }[];
   onlineWindowMinutes: number;
   requestsToday: number;
+  /** Phone models in use (each person on their latest phone). */
+  devices: { model: string; brand: string | null; os: string | null; users: number }[];
   /** Distinct people who signed in or opened the app in the window. */
   active: { today: number; last7Days: number; last30Days: number };
   pushEnabledUsers: number;
@@ -166,6 +170,7 @@ export async function getMobileAppAnalytics(): Promise<MobileAppAnalytics> {
     onlineNow: live.onlineNow,
     onlineWindowMinutes: ONLINE_WINDOW_MINUTES,
     requestsToday: live.requestsToday,
+    devices: live.devices,
     active: { today: Number(active?.today || 0), last7Days: Number(active?.d7 || 0), last30Days: Number(active?.d30 || 0) },
     pushEnabledUsers: Number(push?.n || 0),
     daily: daily.map((d) => ({ day: d.day, users: Number(d.users) })),
@@ -176,7 +181,8 @@ export async function getMobileAppAnalytics(): Promise<MobileAppAnalytics> {
       logins: Number(u.logins), opens: Number(u.opens), version: u.version, push: Boolean(u.push),
       requests30d: live.byUser.get(u.user_id)?.last30Days ?? 0,
       requestsTotal: live.byUser.get(u.user_id)?.total ?? 0,
-      online: onlineIds.has(u.user_id)
+      online: onlineIds.has(u.user_id),
+      device: (() => { const d = live.deviceByUser.get(u.user_id); return d ? [[d.brand, d.model].filter(Boolean).join(" "), d.os].filter(Boolean).join(" · ") : null; })()
     })),
     recentDownloads: recentDownloads.map((r) => ({ createdAt: r.created_at, fullName: r.full_name, version: r.version })),
     recentLogins: recentLogins.map((r) => ({ createdAt: r.created_at, fullName: r.full_name }))

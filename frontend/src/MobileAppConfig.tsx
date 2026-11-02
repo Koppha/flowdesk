@@ -19,12 +19,13 @@ type Analytics = {
   onlineNow?: { userId: string; fullName: string | null; lastSeen: string }[];
   onlineWindowMinutes?: number;
   requestsToday?: number;
+  devices?: { model: string; brand: string | null; os: string | null; users: number }[];
   daily?: { day: string; users: number }[];
   versions?: { version: string; users: number }[];
   users?: {
     userId: string; fullName: string | null; department: string | null; firstSeen: string; lastActive: string;
     logins: number; opens: number; version: string | null; push: boolean;
-    requests30d?: number; requestsTotal?: number; online?: boolean;
+    requests30d?: number; requestsTotal?: number; online?: boolean; device?: string | null;
   }[];
   recentDownloads: { createdAt: string; fullName: string | null; version: string | null }[];
   recentLogins: { createdAt: string; fullName: string | null }[];
@@ -796,6 +797,19 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
                     </div>
                   )}
 
+                  {analytics.devices && analytics.devices.length > 0 && (
+                    <div style={{ marginBottom: 18 }}>
+                      <div style={sectionLabel}>Devices in use</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {analytics.devices.map((d) => (
+                          <span key={(d.brand || "") + d.model} style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "4px 10px", fontSize: 12 }}>
+                            {[d.brand, d.model].filter(Boolean).join(" ")}{d.os ? <span style={{ color: "var(--muted)" }}> · {d.os}</span> : null} · <b>{d.users}</b>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {analytics.users && (
                     <div style={{ marginBottom: 18 }}>
                       <div style={sectionLabel}>People using the app ({analytics.users.length})</div>
@@ -803,14 +817,14 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                           <thead>
                             <tr style={{ textAlign: "left", color: "var(--muted)", position: "sticky", top: 0, background: "var(--surface, #fff)" }}>
-                              {["Name", "Last used", "First used", "Requests (30 days)", "Sign-ins", "Opens", "Version", "Push"].map((h) => (
+                              {["Name", "Last used", "First used", "Requests (30 days)", "Sign-ins", "Opens", "Version", "Device", "Push"].map((h) => (
                                 <th key={h} style={{ padding: "8px 10px", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody>
                             {analytics.users.length === 0 && (
-                              <tr><td colSpan={8} style={{ padding: 12, color: "var(--muted)" }}>Nobody yet</td></tr>
+                              <tr><td colSpan={9} style={{ padding: 12, color: "var(--muted)" }}>Nobody yet</td></tr>
                             )}
                             {analytics.users.map((u) => (
                               <tr key={u.userId} style={{ borderTop: "1px solid var(--border)" }}>
@@ -827,6 +841,7 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
                                 <td style={{ padding: "7px 10px" }}>{u.logins}</td>
                                 <td style={{ padding: "7px 10px" }}>{u.opens}</td>
                                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.version ? `v${u.version}` : "–"}</td>
+                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.device || "–"}</td>
                                 <td style={{ padding: "7px 10px" }}>{u.push ? "On" : "–"}</td>
                               </tr>
                             ))}
