@@ -651,11 +651,9 @@ async function ensureFeatureSchema() {
 
   await query(`ALTER TABLE advance_requests ADD COLUMN IF NOT EXISTS override_chain jsonb`);
 
-  // Force-clear sessions so users must login from scratch
-  await query(
-    `INSERT INTO system_state (key, value) VALUES ('sessions_cleared_at', now()::timestamptz::text)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`
-  );
+  // Sessions are NOT cleared on startup: doing so signed every web and
+  // mobile user out on each deploy or restart. Admins clear them on purpose
+  // (auth.routes.ts sign-everyone-out, Data Cleanup) via sessions_cleared_at.
 }
 
 // A "vacant position" — a Manager/HOD/EXCO/CEO seat an admin has earmarked
