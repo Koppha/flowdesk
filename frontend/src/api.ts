@@ -617,6 +617,7 @@ export const api = {
   crAddComment: (id: string, data: { body: string; section_key: string | null }) =>
     req(`/custom-requests/${id}/comments`, { method: "POST", body: JSON.stringify(data) }),
   crHistory: (id: string) => req(`/custom-requests/${id}/history`),
+  crCommentsHistoryPdf: (id: string) => fetchBlob(`/custom-requests/${id}/comments-history.pdf`),
   orgGaps: () => req("/admin/org-gaps"),
   setOrgGapDepartment: (userId: string, sectionId: string) =>
     req(`/admin/org-gaps/${userId}`, { method: "POST", body: JSON.stringify({ section_id: sectionId }) }),

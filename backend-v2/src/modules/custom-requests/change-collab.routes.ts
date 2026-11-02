@@ -4,6 +4,8 @@ import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { notifyChangeRequestPeopleAdded } from "../../lib/notifications.js";
+import { renderChangeRequestRecordPdf } from "../../lib/pdf/changeRequestRecordPdf.js";
+import type { PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { brsActorOrg, brsMemberMatch, brsMemberParams } from "../brs/brs.service.js";
 import { entryEmails, resolveOrgEntries as resolveGroupEntries } from "../brs/brs.routes.js";
 import {
@@ -98,6 +100,23 @@ async function writeCoWriters(submissionId: string, entries: Array<Entry & { lab
   return added;
 }
 
+async function listCoWriters(submissionId: string) {
+  return query<any>(
+    `SELECT c.id AS entry_id, c.permissions, c.added_by_id, c.created_at, ab.full_name AS added_by_name,
+            CASE WHEN c.user_id IS NOT NULL THEN 'user' WHEN c.section_ref_id IS NOT NULL THEN 'department'
+                 WHEN c.team_ref_id IS NOT NULL THEN 'section' ELSE 'division' END AS type,
+            coalesce(c.user_id, c.section_ref_id, c.team_ref_id) AS id, c.division_name AS name,
+            coalesce(u.full_name, u.email, sec.name || ' (Department)', t.name || ' (Section)', c.division_name || ' (Division)') AS label
+       FROM cr_collaborators c
+       LEFT JOIN users u ON u.id = c.user_id
+       LEFT JOIN sections sec ON sec.id = c.section_ref_id
+       LEFT JOIN teams t ON t.id = c.team_ref_id
+       LEFT JOIN users ab ON ab.id = c.added_by_id
+      WHERE c.submission_id = $1 ORDER BY c.created_at`,
+    [submissionId]
+  );
+}
+
 async function activeUsers(ids: string[]) {
   if (!ids.length) return [];
   const rows = await query<{ id: string; full_name: string | null; email: string }>(
@@ -187,20 +206,7 @@ changeCollabRouter.get("/:id/workspace", async (req: AuthedRequest, res, next) =
     const owners = crOwnerIds(sub).length
       ? await query(`SELECT id, full_name, email FROM users WHERE id = ANY($1::uuid[]) ORDER BY full_name`, [crOwnerIds(sub)])
       : [];
-    const coWriters = await query<any>(
-      `SELECT c.id AS entry_id, c.permissions, c.added_by_id, c.created_at, ab.full_name AS added_by_name,
-              CASE WHEN c.user_id IS NOT NULL THEN 'user' WHEN c.section_ref_id IS NOT NULL THEN 'department'
-                   WHEN c.team_ref_id IS NOT NULL THEN 'section' ELSE 'division' END AS type,
-              coalesce(c.user_id, c.section_ref_id, c.team_ref_id) AS id, c.division_name AS name,
-              coalesce(u.full_name, u.email, sec.name || ' (Department)', t.name || ' (Section)', c.division_name || ' (Division)') AS label
-         FROM cr_collaborators c
-         LEFT JOIN users u ON u.id = c.user_id
-         LEFT JOIN sections sec ON sec.id = c.section_ref_id
-         LEFT JOIN teams t ON t.id = c.team_ref_id
-         LEFT JOIN users ab ON ab.id = c.added_by_id
-        WHERE c.submission_id = $1 ORDER BY c.created_at`,
-      [sub.id]
-    );
+    const coWriters = await listCoWriters(sub.id);
     const customSections = await query(
       `SELECT cs.*, ab.full_name AS added_by_name, ub.full_name AS updated_by_name
          FROM cr_custom_sections cs
@@ -529,6 +535,108 @@ changeCollabRouter.get("/:id/history", async (req: AuthedRequest, res, next) => 
       [sub.id]
     );
     return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+type FieldDef = { field_key: string; field_type: string; options: any };
+
+// A stored value as the workspace shows it: names for people, labels for choices.
+function displayValue(f: FieldDef | undefined, v: any, names: Map<string, string>): string {
+  if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) return "—";
+  if (!f) return typeof v === "string" ? v : JSON.stringify(v);
+  if (f.field_type === "checkbox") return v ? "Yes" : "No";
+  if (f.field_type === "user") return names.get(String(v)) || String(v);
+  if (f.field_type === "select") return (Array.isArray(f.options) ? f.options : []).find((o: any) => o.value === v)?.label || String(v);
+  if (f.field_type === "user_multi" && Array.isArray(v)) {
+    return v.map((a: any) => (a.teamName ? `${a.teamName} (Section)` : a.departmentName ? `${a.departmentName} (Department)` : a.divisionName ? `${a.divisionName} (Division)`
+      : a.name || a.email || (a.id && names.get(a.id)) || "—") + (a.confirmed ? " (confirmed)" : "")).join(", ");
+  }
+  if (f.field_type === "date") return String(v).slice(0, 10);
+  return typeof v === "string" ? v : JSON.stringify(v);
+}
+
+const ACCESS_PRESET: Record<string, string> = { "": "View & comment", EDIT: "Can edit", "EDIT,INVITE": "Can edit & invite", "DISTRIBUTE,EDIT,INVITE,SUBMIT": "Full access" };
+function describeAccess(p?: string[] | null) {
+  const perms = normalizePerms(p);
+  const preset = ACCESS_PRESET[[...perms].sort().join(",")];
+  if (preset) return preset;
+  const list = describePerms(perms);
+  return list.charAt(0).toUpperCase() + list.slice(1);
+}
+
+// GET /custom-requests/:id/comments-history.pdf - every comment and the full
+// history as one PDF to keep, oldest first. Anyone who can open the request
+// can download it, as they can read both tabs.
+changeCollabRouter.get("/:id/comments-history.pdf", async (req: AuthedRequest, res, next) => {
+  try {
+    const { sub, fields } = await loadChangeRequest(req.params.id);
+    await assertView(sub, fields, req);
+
+    const comments = await query<any>(
+      `SELECT c.section_title, c.body, c.author_role, c.created_at, coalesce(u.full_name, u.email) AS author_name
+         FROM cr_comments c LEFT JOIN users u ON u.id = c.author_id
+        WHERE c.submission_id = $1 ORDER BY c.created_at`,
+      [sub.id]
+    );
+    const revisions = await query<any>(
+      `SELECT r.kind, r.summary, r.section_title, r.changes, r.actor_role, r.created_at, coalesce(u.full_name, u.email) AS actor_name
+         FROM cr_revisions r LEFT JOIN users u ON u.id = r.actor_id
+        WHERE r.submission_id = $1 ORDER BY r.created_at`,
+      [sub.id]
+    );
+    // Every field the form has had (active last, so it wins), so values of a
+    // since-removed field still read properly.
+    const allFields = await query<FieldDef>(
+      `SELECT field_key, field_type, options FROM request_type_fields WHERE request_type_id = $1 ORDER BY is_active`, [sub.request_type_id]
+    );
+    const fieldByKey = new Map(allFields.map((f) => [f.field_key, f]));
+
+    // Names for the creator, co-owners and anyone picked in a people field.
+    const ids = new Set<string>([sub.requester_id, ...crOwnerIds(sub)]);
+    for (const r of revisions) {
+      for (const c of r.changes || []) {
+        const f = fieldByKey.get(c.key);
+        for (const v of [c.before, c.after]) {
+          if (f?.field_type === "user" && v) ids.add(String(v));
+          if (f?.field_type === "user_multi" && Array.isArray(v)) for (const a of v) if (a?.id) ids.add(String(a.id));
+        }
+      }
+    }
+    const names = new Map((await query<{ id: string; name: string }>(
+      `SELECT id, coalesce(full_name, email) AS name FROM users WHERE id = ANY($1::uuid[])`,
+      [[...ids].filter((id) => z.string().uuid().safeParse(id).success)]
+    )).map((u) => [u.id, u.name]));
+
+    const letterhead = (await query<PdfLetterhead>(
+      `SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`
+    ))[0] || { logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null };
+
+    // Same reference as the RAID log.
+    const reference = `CHG-${String(sub.id).slice(0, 8).toUpperCase()}`;
+    const doc = renderChangeRequestRecordPdf(letterhead, {
+      reference,
+      title: titleOf(sub),
+      status: sub.status,
+      creator: names.get(sub.requester_id) ?? null,
+      created_at: sub.created_at,
+      owners: crOwnerIds(sub).map((id) => names.get(id)).filter((n): n is string => !!n).sort(),
+      co_writers: (await listCoWriters(sub.id)).map((c) => ({ label: c.label, access: describeAccess(c.permissions) })),
+      downloaded_by: req.user!.fullName ?? null,
+      comments: comments.map((c) => ({ author: c.author_name || "Someone", role: c.author_role, section: c.section_title, body: c.body, created_at: c.created_at })),
+      history: revisions.map((r) => ({
+        actor: r.actor_name || "System", role: r.actor_role, kind: r.kind, section: r.section_title, summary: r.summary, created_at: r.created_at,
+        changes: (r.changes || []).map((c: any) => {
+          const f = fieldByKey.get(c.key);
+          return { label: c.label || c.key, before: displayValue(f, c.before, names), after: displayValue(f, c.after, names) };
+        })
+      }))
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${reference}-comments-and-history.pdf"`);
+    doc.pipe(res);
+    doc.end();
   } catch (err) {
     return next(err);
   }

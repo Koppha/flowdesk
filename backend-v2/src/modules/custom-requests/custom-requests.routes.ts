@@ -683,7 +683,9 @@ customRequestsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
       [submission.id]
     );
 
-    const isOwner = submission.requester_id === req.user!.userId || isCollaborator;
+    // Everyone named on a Change Request may download its PDF (see GET /:id/pdf).
+    const isOwner = submission.requester_id === req.user!.userId || isCollaborator
+      || (submission.request_type_code === "CHANGE_REQUEST" && (isAssignee || isParticipant));
     const can_view_pdf = await canAccessPdf({
       requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id,
       userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient, action: "view"
@@ -721,7 +723,10 @@ customRequestsRouter.post("/:id/acknowledge-collection", async (req: AuthedReque
 
 customRequestsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
   try {
-    const submission = (await query<any>(`SELECT * FROM custom_request_submissions WHERE id = $1`, [req.params.id]))[0];
+    const submission = (await query<any>(
+      `SELECT s.*, rt.code AS request_type_code FROM custom_request_submissions s JOIN custom_request_types rt ON rt.id = s.request_type_id WHERE s.id = $1`,
+      [req.params.id]
+    ))[0];
     if (!submission) throw notFound();
 
     const fields = await query<{ field_key: string; field_label: string; field_type: string }>(
@@ -736,7 +741,11 @@ customRequestsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     const isRecipient = await hasDistributionAccess("CHANGE_REQUEST", submission.id, req.user!.userId);
     const isCollaborator = await isChangeCollaborator(submission, req.user!.userId);
     if (req.user!.role !== "ADMIN" && !isOwner && !isParticipant && !isAssignee && !isRecipient && !isCollaborator) throw forbidden();
-    if (!(await canAccessPdf({ requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id, userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient || isCollaborator, action: "view" }))) {
+    // Everyone named on a Change Request - assignees (a person, or anyone in an
+    // assigned section, department or division) and approvers too - may
+    // download it without a separate PDF grant.
+    const isNamedOnChangeRequest = submission.request_type_code === "CHANGE_REQUEST" && (isAssignee || isParticipant);
+    if (!(await canAccessPdf({ requestType: "CUSTOM_REQUEST", customRequestTypeId: submission.request_type_id, userId: req.user!.userId, role: req.user!.role, isOwner: isOwner || isRecipient || isCollaborator || isNamedOnChangeRequest, action: "view" }))) {
       throw forbidden();
     }
 

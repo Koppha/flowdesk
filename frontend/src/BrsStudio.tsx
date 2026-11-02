@@ -824,6 +824,10 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
               <button className="ep-btn-outline" onClick={() => setShowHistory((v) => !v)}>
                 <History size={14} /> History
               </button>
+              {/* Anyone named on the BRS can download it at any stage, not only once approved. */}
+              <button className="ep-btn-outline" onClick={() => { void openBlobInNewTab(() => api.brsPdfBlob(doc.id)).catch((e: any) => showNotice(e?.message || "Couldn't generate the PDF.")); }}>
+                <Download size={14} /> Download PDF
+              </button>
               <RaidLogButton docType="BRS" docId={doc.id} title={`${doc.reference_no ? doc.reference_no + " — " : ""}${doc.title}`} users={directorySorted} />
             </>
           )}

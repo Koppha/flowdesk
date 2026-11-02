@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { RaidLog } from "./RaidLog";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronRight, History, MessageSquare, Pencil, Plus, Send, ShieldAlert, Trash2, Users, X } from "lucide-react";
-import { api } from "../api";
+import { ChevronDown, ChevronRight, Download, FileText, History, MessageSquare, Pencil, Plus, Send, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { api, downloadBlob, openBlobInNewTab } from "../api";
 import { confirmAction, showNotice } from "../alerts";
 import type { DirectoryUser } from "../shared/ApproverCombobox";
 import { BrsPeoplePicker, BrsRoleBadge, CR_PERMISSION_OPTIONS, CR_PRESETS, describeCrPermissions } from "./BrsPeoplePicker";
@@ -80,6 +80,7 @@ export default function ChangeRequestWorkspace(props: {
   const [sectionDrafts, setSectionDrafts] = useState<Record<string, string>>({});
   const [commentFor, setCommentFor] = useState<string | null>(null);
   const [lastSeen, setLastSeen] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   async function load() {
     try {
@@ -185,6 +186,13 @@ export default function ChangeRequestWorkspace(props: {
     if (!(await confirmAction({ title: `Remove "${s.title}"?`, text: "Its text stays in the history.", confirmButtonText: "Remove" }))) return;
     try { await api.crRemoveSection(submissionId, s.id); await afterChange(); } catch (e: any) { void showNotice(e?.message || "Couldn't remove the section."); }
   }
+  async function downloadCommentsHistory() {
+    setDownloading(true);
+    try {
+      // Same reference as the RAID log and the PDF itself.
+      await downloadBlob(() => api.crCommentsHistoryPdf(submissionId), `CHG-${submissionId.slice(0, 8).toUpperCase()}-comments-and-history.pdf`);
+    } catch (e: any) { void showNotice(e?.message || "Couldn't download the comments and history."); } finally { setDownloading(false); }
+  }
   async function discardDraft() {
     if (!(await confirmAction({ title: "Discard this draft?", text: "The draft and its comments and history are deleted for everyone.", confirmButtonText: "Discard" }))) return;
     try { await api.crDiscardDraft(submissionId); onChanged?.(); onClose(); } catch (e: any) { void showNotice(e?.message || "Couldn't discard the draft."); }
@@ -215,15 +223,27 @@ export default function ChangeRequestWorkspace(props: {
           <ShieldAlert size={13} /> RAID log
         </button>
       </div>
-      {ws.status === "DRAFT" && perms.submit && onSubmitDraft && (
-        <button className="ep-btn" style={{ marginLeft: "auto", fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }}
-          onClick={() => onSubmitDraft({ id: submissionId, data: detail.data || {} })}>
-          <Send size={13} /> Submit for approval
+      <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {detail.can_view_pdf && (
+          <button className="ep-btn-outline" style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }}
+            onClick={() => void openBlobInNewTab(() => api.customRequestPdf(submissionId)).catch((e: any) => showNotice(e?.message || "Couldn't generate the PDF."))}>
+            <FileText size={13} /> Download PDF
+          </button>
+        )}
+        <button className="ep-btn-outline" style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }} disabled={downloading}
+          onClick={() => void downloadCommentsHistory()} title="Every comment and the full history, oldest first, as a PDF">
+          <Download size={13} /> {downloading ? "Preparing…" : "Download comments & history"}
         </button>
-      )}
-      {ws.status === "DRAFT" && perms.manage && (
-        <button className="ep-btn-danger" style={{ fontSize: 12.5, marginLeft: perms.submit && onSubmitDraft ? 0 : "auto" }} onClick={() => void discardDraft()}>Discard draft</button>
-      )}
+        {ws.status === "DRAFT" && perms.submit && onSubmitDraft && (
+          <button className="ep-btn" style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }}
+            onClick={() => onSubmitDraft({ id: submissionId, data: detail.data || {} })}>
+            <Send size={13} /> Submit for approval
+          </button>
+        )}
+        {ws.status === "DRAFT" && perms.manage && (
+          <button className="ep-btn-danger" style={{ fontSize: 12.5 }} onClick={() => void discardDraft()}>Discard draft</button>
+        )}
+      </div>
     </div>
   );
 

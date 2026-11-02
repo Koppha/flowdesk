@@ -1604,6 +1604,19 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                       {isExpanded && (
                       <>
 
+                      {s.request_type_code === "CHANGE_REQUEST" && (
+                        // Assignees see the whole Change Request - every section, comments,
+                        // history and approvals - not just their own part.
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                          <button className="ep-btn" style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => setWorkspaceId(s.id)}>
+                            <FileText size={13} /> Open the full Change Request
+                          </button>
+                          <button className="ep-btn-outline" style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => void downloadCustomRequestPdf(s.id)}>
+                            <Download size={13} /> Download PDF
+                          </button>
+                        </div>
+                      )}
+
                       {multiFields.map((f) => {
                         const entries: AssigneeEntry[] = Array.isArray(s.data?.[f.field_key]) ? s.data[f.field_key] : [];
                         const mine = entries.find((a) => !a.confirmed && assigneeIsMe(a, profile)) ?? entries.find((a) => assigneeIsMe(a, profile));
@@ -2298,7 +2311,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
           renderFieldEditor={(f, vals, set) => renderField(f as RequestField, vals, set)}
           onSubmitDraft={submitDraftThroughWizard}
           onChanged={() => void loadMine()}
-          onClose={() => { setWorkspaceId(null); void loadMine(); }}
+          onClose={() => { setWorkspaceId(null); void loadMine(); if (tab === "ASSIGNED") void loadAssignedToMe(); }}
         />
       )}
       {draftDialog && createPortal(
