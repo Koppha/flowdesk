@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, setSessionExpiredHandler } from "./api";
-import { getToken, inApp, initialDocId, initialRequestId, initialSection, setBrowserToken, type Section } from "./bridge";
+import { applyTheme, getToken, inApp, initialDocId, initialRequestId, initialSection, setBrowserToken, waitForAppHandover, type Section } from "./bridge";
 import { href, sectionOf, useRoute, type Route } from "./router";
 import ListScreen from "./screens/ListScreen";
 import DocScreen from "./screens/DocScreen";
@@ -36,26 +36,41 @@ const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
 };
 
 export default function App() {
-  const [signedIn, setSignedIn] = useState(() => Boolean(getToken()));
+  const [ready, setReady] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [noHandover, setNoHandover] = useState(false);
   const [expired, setExpired] = useState(false);
   const route = useRoute();
 
   useEffect(() => {
     setSessionExpiredHandler(() => (inApp ? setExpired(true) : setSignedIn(false)));
-    if (location.hash.length > 2) return; // reloaded mid-way - stay put
-    // Opened for a specific item (app inbox / push): land on it, with the
-    // list one step back.
-    if (initialSection() === "maintenance") {
-      location.replace(href({ name: "mlist" }));
-      const reqId = initialRequestId();
-      if (reqId) location.hash = href({ name: "mreq", id: reqId });
-    } else {
-      const docId = initialDocId();
-      if (docId) location.hash = href({ name: "doc", id: docId });
-    }
+    void (async () => {
+      // Inside the app, nothing is decided until its handover is here - the
+      // section, the theme and above all the session come from it.
+      const arrived = await waitForAppHandover();
+      applyTheme();
+      if (inApp && !arrived) setNoHandover(true);
+      setSignedIn(Boolean(getToken()));
+      if (location.hash.length <= 2) {
+        // Opened for a specific item (app inbox / push): land on it, with
+        // the list one step back. (A reload mid-way keeps its place.)
+        if (initialSection() === "maintenance") {
+          location.replace(href({ name: "mlist" }));
+          const reqId = initialRequestId();
+          if (reqId) location.hash = href({ name: "mreq", id: reqId });
+        } else {
+          const docId = initialDocId();
+          if (docId) location.hash = href({ name: "doc", id: docId });
+        }
+      }
+      setReady(true);
+    })();
   }, []);
 
+  if (!ready) return <p className="muted center pad-top">Loading…</p>;
   if (expired) return <p className="error center pad-top">Your session has expired. Close this screen and sign in to FlowDesk again.</p>;
+  // Never show a second sign-in inside the app - the app owns the session.
+  if (noHandover) return <p className="error center pad-top">Couldn't connect to your FlowDesk session. Go back and open this screen again.</p>;
   if (!signedIn) return <BrowserLogin onDone={() => setSignedIn(true)} />;
 
   const section = sectionOf(route);

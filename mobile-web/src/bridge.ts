@@ -7,7 +7,11 @@ export type Section = "sign" | "maintenance";
 
 type Injected = { token?: string; theme?: "light" | "dark"; section?: Section; docId?: string; requestId?: string };
 
-const injected: Injected = (window as any).__FLOWDESK__ || {};
+// Read fresh every time, never cached at load: on Android the app's
+// injected script can land a moment AFTER this page's own script starts
+// (often when the page comes from cache), and a value read once at startup
+// stayed empty - the page then showed its own sign-in form inside the app.
+const injectedNow = (): Injected => (window as any).__FLOWDESK__ || {};
 const query = new URLSearchParams(location.search);
 
 /** Running inside the FlowDesk app (vs. a normal browser, for testing). */
@@ -29,7 +33,8 @@ export function postToApp(msg: AppMessage) {
 const TOKEN_KEY = "flowdesk.sign.token";
 
 export function getToken(): string | null {
-  if (injected.token) return injected.token;
+  const fromApp = injectedNow().token;
+  if (fromApp) return fromApp;
   try {
     return sessionStorage.getItem(TOKEN_KEY);
   } catch {
@@ -46,23 +51,42 @@ export function setBrowserToken(token: string | null) {
   }
 }
 
+/**
+ * Inside the app, wait for its handover (token, section, theme) - it can
+ * arrive just after this page starts. Resolves at once in a browser or when
+ * it's already here; gives up after timeoutMs.
+ */
+export function waitForAppHandover(timeoutMs = 4000): Promise<boolean> {
+  if (!inApp || injectedNow().token) return Promise.resolve(Boolean(injectedNow().token) || !inApp);
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const arrived = Boolean(injectedNow().token);
+      if (arrived || Date.now() - started > timeoutMs) {
+        clearInterval(timer);
+        resolve(arrived);
+      }
+    }, 50);
+  });
+}
+
 /** Which part of the page the app opened (?section= for browser testing). */
 export function initialSection(): Section {
-  const s = injected.section || query.get("section");
+  const s = injectedNow().section || query.get("section");
   return s === "maintenance" ? "maintenance" : "sign";
 }
 
 /** A document to open straight away (from the app's inbox or a push). */
 export function initialDocId(): string | null {
-  return injected.docId || query.get("doc");
+  return injectedNow().docId || query.get("doc");
 }
 
 /** A maintenance request to open straight away. */
 export function initialRequestId(): string | null {
-  return injected.requestId || query.get("req");
+  return injectedNow().requestId || query.get("req");
 }
 
 export function applyTheme() {
-  const theme = injected.theme || query.get("theme");
+  const theme = injectedNow().theme || query.get("theme");
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
 }
