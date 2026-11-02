@@ -11,6 +11,7 @@ import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.j
 import { ensureMobileAppBuildsSchema, getLatestMobileAppBuild, saveMobileAppBuild } from "../../lib/mobileAppBuilds.js";
 import { clientInfo, ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent, recordMobileAppOpen } from "../../lib/mobileAppEvents.js";
 import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
+import { mobileUpdatesRouter } from "./mobile-updates.routes.js";
 import { getPhoneCampaign, runPhoneCampaignNow, setPhoneCampaign, startPhoneCampaign } from "../../lib/phoneCampaign.js";
 import { supportRouter } from "../support/support.routes.js";
 
@@ -90,6 +91,10 @@ mobileAppRouter.get("/download", async (req, res, next) => {
 // Maintenance). A static page with no data in it - every API call it makes
 // carries the user's own token - so it sits before requireAuth.
 mobileAppRouter.use("/web", mobileSignPageRouter);
+
+// Over-the-air updates (mobile-updates.routes.ts): the app checks on launch
+// without a session; publishing inside is ADMIN-only.
+mobileAppRouter.use("/updates", mobileUpdatesRouter);
 
 mobileAppRouter.use(requireAuth);
 
