@@ -1,10 +1,14 @@
 // Everything the FlowDesk app hands this page, and the messages it sends back.
 // The app sets window.__FLOWDESK__ before the page loads (WebView
-// injectedJavaScriptBeforeContentLoaded) - see the app's src/app/sign.tsx.
+// injectedJavaScriptBeforeContentLoaded) - see the app's
+// src/components/ServerPage.tsx.
 
-type Injected = { token?: string; theme?: "light" | "dark"; docId?: string };
+export type Section = "sign" | "maintenance";
+
+type Injected = { token?: string; theme?: "light" | "dark"; section?: Section; docId?: string; requestId?: string };
 
 const injected: Injected = (window as any).__FLOWDESK__ || {};
+const query = new URLSearchParams(location.search);
 
 /** Running inside the FlowDesk app (vs. a normal browser, for testing). */
 export const inApp = Boolean((window as any).ReactNativeWebView);
@@ -42,12 +46,23 @@ export function setBrowserToken(token: string | null) {
   }
 }
 
+/** Which part of the page the app opened (?section= for browser testing). */
+export function initialSection(): Section {
+  const s = injected.section || query.get("section");
+  return s === "maintenance" ? "maintenance" : "sign";
+}
+
 /** A document to open straight away (from the app's inbox or a push). */
 export function initialDocId(): string | null {
-  return injected.docId || new URLSearchParams(location.search).get("doc");
+  return injected.docId || query.get("doc");
+}
+
+/** A maintenance request to open straight away. */
+export function initialRequestId(): string | null {
+  return injected.requestId || query.get("req");
 }
 
 export function applyTheme() {
-  const theme = injected.theme || new URLSearchParams(location.search).get("theme");
+  const theme = injected.theme || query.get("theme");
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
 }

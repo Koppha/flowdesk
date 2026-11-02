@@ -17,7 +17,9 @@ const ModulesSchema = z.object({
   overtime: z.boolean(),
   standby: z.boolean(),
   customProcesses: z.boolean(),
-  signADocument: z.boolean()
+  signADocument: z.boolean(),
+  // .default(false): settings saved before Maintenance existed still parse.
+  maintenance: z.boolean().default(false)
 });
 type Modules = z.infer<typeof ModulesSchema>;
 
@@ -29,7 +31,8 @@ const DEFAULT_MODULES: Modules = {
   overtime: false,
   standby: false,
   customProcesses: false,
-  signADocument: false
+  signADocument: false,
+  maintenance: false
 };
 
 async function currentModules(): Promise<Modules> {

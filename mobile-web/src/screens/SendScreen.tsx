@@ -69,7 +69,7 @@ export default function SendScreen() {
 
   return (
     <div className="stack">
-      <h1>Send for signing</h1>
+      <h1>Request signature</h1>
       <PdfPicker file={file} onPick={pick} />
 
       <label className="field">

@@ -1,10 +1,11 @@
 import { getToken, inApp, postToApp, setBrowserToken } from "./bridge";
 
-// The page lives at <api>/mobile-app/sign/, so the API is everything before
-// that - whatever proxy prefix the page was loaded through.
+// The page lives at <api>/mobile-app/web/ (or the older /mobile-app/sign/),
+// so the API is everything before that - whatever proxy prefix the page was
+// loaded through.
 export const API_BASE =
   (import.meta.env.VITE_API as string | undefined) ||
-  location.origin + location.pathname.replace(/\/mobile-app\/sign(\/.*)?$/, "");
+  location.origin + location.pathname.replace(/\/mobile-app\/(web|sign)(\/.*)?$/, "");
 
 let onSessionExpired: () => void = () => {};
 export function setSessionExpiredHandler(fn: () => void) {
@@ -18,7 +19,7 @@ function errorMessage(json: any, fallback: string): string {
   return fallback || "Something went wrong.";
 }
 
-async function send(path: string, init: RequestInit = {}): Promise<Response> {
+export async function send(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
   headers.set("X-Flowdesk-Client", "mobile");
@@ -33,7 +34,7 @@ async function send(path: string, init: RequestInit = {}): Promise<Response> {
   return res;
 }
 
-async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await send(path, { ...init, headers: { Accept: "application/json", ...(init.headers as any) } });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(errorMessage(json, res.statusText));

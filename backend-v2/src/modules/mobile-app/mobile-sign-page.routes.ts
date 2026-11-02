@@ -16,12 +16,15 @@ export const mobileSignPageRouter = Router();
 
 // Asset URLs in the page are relative ("./assets/..."), so it must be loaded
 // with a trailing slash. express.static's own slash redirect is absolute
-// ("/mobile-app/sign/") and would drop a reverse-proxy prefix like
-// /etl/flowdesk/uat - redirect relatively instead.
+// ("/mobile-app/web/") and would drop a reverse-proxy prefix like
+// /etl/flowdesk/uat - redirect relatively instead. Mounted at both
+// /mobile-app/web (Sign a Document and Maintenance) and the original
+// /mobile-app/sign, so the redirect uses whichever was asked for.
 mobileSignPageRouter.get("/", (req, res, next) => {
-  if (!req.originalUrl.split("?")[0].endsWith("/")) {
+  const pathname = req.originalUrl.split("?")[0];
+  if (!pathname.endsWith("/")) {
     const query = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
-    return res.redirect(301, `sign/${query}`);
+    return res.redirect(301, `${pathname.slice(pathname.lastIndexOf("/") + 1)}/${query}`);
   }
   return next();
 });

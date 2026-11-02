@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, PanelBottom, Smartphone, User } from "lucide-react";
 
-type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument";
+type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument" | "maintenance";
 type Modules = Record<ModuleKey, boolean>;
 type TabBarKey = "home" | "inbox" | "profile";
 type TabBarItem = { key: TabBarKey; enabled: boolean };
@@ -33,7 +33,8 @@ const MODULES: { key: ModuleKey; label: string; color: string; bg: string }[] = 
   { key: "overtime", label: "Overtime", color: "#b45309", bg: "#fef3e2" },
   { key: "standby", label: "Standby", color: "#0369a1", bg: "#e0f2fe" },
   { key: "customProcesses", label: "Custom Processes", color: "#7c3aed", bg: "#ede9fe" },
-  { key: "signADocument", label: "Sign a Document", color: "#c8102e", bg: "#fdecec" }
+  { key: "signADocument", label: "Sign a Document", color: "#c8102e", bg: "#fdecec" },
+  { key: "maintenance", label: "Maintenance", color: "#b45309", bg: "#fef3e2" }
 ];
 
 const DEFAULTS: Modules = {
@@ -44,7 +45,8 @@ const DEFAULTS: Modules = {
   overtime: false,
   standby: false,
   customProcesses: false,
-  signADocument: false
+  signADocument: false,
+  maintenance: false
 };
 
 // Not Home tiles (so they stay out of MODULES and the phone preview) - they

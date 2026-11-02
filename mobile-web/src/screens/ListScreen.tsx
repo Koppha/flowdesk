@@ -34,8 +34,8 @@ export default function ListScreen() {
           <span className="muted small">Sign a document yourself</span>
         </a>
         <a className="action-tile" href={href({ name: "send" })}>
-          <strong>Send for signing</strong>
-          <span className="muted small">Route it to others</span>
+          <strong>Request signature</strong>
+          <span className="muted small">Send it to others to sign</span>
         </a>
       </div>
 

@@ -10,6 +10,7 @@ import { badRequest, notFound, unauthorized } from "../../lib/errors.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { ensureMobileAppBuildsSchema, getLatestMobileAppBuild, saveMobileAppBuild } from "../../lib/mobileAppBuilds.js";
 import { ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent } from "../../lib/mobileAppEvents.js";
+import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
 
 export const mobileAppUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "mobile-app");
 
@@ -79,6 +80,11 @@ mobileAppRouter.get("/download", async (req, res, next) => {
     return next(err);
   }
 });
+
+// The mobile app's server-built screens (mobile-web/: Sign a Document,
+// Maintenance). A static page with no data in it - every API call it makes
+// carries the user's own token - so it sits before requireAuth.
+mobileAppRouter.use("/web", mobileSignPageRouter);
 
 mobileAppRouter.use(requireAuth);
 
