@@ -23,16 +23,16 @@ const TABS: Record<Section, Tab[]> = {
     { route: { name: "send" }, label: "Request signature", match: ["send"] },
     { route: { name: "signature" }, label: "My signature", match: ["signature"] }
   ],
-  maintenance: [
-    { route: { name: "mlist" }, label: "Requests", match: ["mlist", "mreq"] },
-    { route: { name: "mnew" }, label: "New request", match: ["mnew"] }
-  ]
+  // Like My Advances / My Clearances: one list with "+ New" at the top
+  // right, no tab bar.
+  maintenance: []
 };
 
 const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
   doc: { to: { name: "list" }, label: "Documents" },
   signed: { to: { name: "list" }, label: "Documents" },
-  mreq: { to: { name: "mlist" }, label: "Requests" }
+  mreq: { to: { name: "mlist" }, label: "Requests" },
+  mnew: { to: { name: "mlist" }, label: "Requests" }
 };
 
 export default function App() {
@@ -77,7 +77,7 @@ export default function App() {
   const back = BACK[route.name];
 
   return (
-    <div className="app">
+    <div className={TABS[section].length ? "app" : "app no-tabs"}>
       <main className="content">
         {back && (
           <button type="button" className="back" onClick={() => history.length > 1 ? history.back() : (location.hash = href(back.to))}>
@@ -94,13 +94,15 @@ export default function App() {
         {route.name === "mnew" && <MaintenanceNew />}
         {route.name === "mreq" && <MaintenanceRequest key={route.id} id={route.id} />}
       </main>
-      <nav className="tabs" aria-label={section === "maintenance" ? "Maintenance" : "Signing"}>
-        {TABS[section].map((t) => (
-          <a key={t.label} href={href(t.route)} className={t.match.includes(route.name) ? "on" : ""} aria-current={t.match.includes(route.name) ? "page" : undefined}>
-            {t.label}
-          </a>
-        ))}
-      </nav>
+      {TABS[section].length > 0 && (
+        <nav className="tabs" aria-label="Signing">
+          {TABS[section].map((t) => (
+            <a key={t.label} href={href(t.route)} className={t.match.includes(route.name) ? "on" : ""} aria-current={t.match.includes(route.name) ? "page" : undefined}>
+              {t.label}
+            </a>
+          ))}
+        </nav>
+      )}
     </div>
   );
 }

@@ -59,7 +59,16 @@ export default function MaintenanceList() {
     <div className="stack">
       <div className="row space">
         <h1>Maintenance</h1>
-        {canCreate && <a className="pill-btn" href={href({ name: "mnew" })}>+ New request</a>}
+        {canCreate && (
+          // Same as the app's "+ New" on My Advances / My Clearances.
+          <a className="new-btn" href={href({ name: "mnew" })} aria-label="New maintenance request">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M5 12h14" />
+              <path d="M12 5v14" />
+            </svg>
+            New
+          </a>
+        )}
       </div>
       {!meta.enabled && <p className="muted small">New maintenance requests are switched off right now. Requests already open can still be finished.</p>}
       {meta.enabled && !meta.has_route && <p className="muted small">There's no maintenance route for your division yet, so you can't log a request. Ask an administrator to set one up.</p>}
