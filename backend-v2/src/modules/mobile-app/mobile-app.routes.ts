@@ -9,7 +9,7 @@ import { type AuthedRequest, requireAuth, requireRole, verifyToken } from "../..
 import { badRequest, notFound, unauthorized } from "../../lib/errors.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { ensureMobileAppBuildsSchema, getLatestMobileAppBuild, saveMobileAppBuild } from "../../lib/mobileAppBuilds.js";
-import { ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent } from "../../lib/mobileAppEvents.js";
+import { clientInfo, ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent, recordMobileAppOpen } from "../../lib/mobileAppEvents.js";
 import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
 
 export const mobileAppUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "mobile-app");
@@ -113,6 +113,20 @@ mobileAppRouter.get("/latest", async (req: AuthedRequest, res, next) => {
   } catch (err) {
     return next(err);
   }
+});
+
+// The app reports each open/unlock (its lib/api.ts trackOpen) - logins alone
+// miss everyone who unlocks with biometrics. Best-effort: always 204.
+mobileAppRouter.post("/events", async (req: AuthedRequest, res) => {
+  try {
+    if (req.body?.type === "OPEN") {
+      await ensureMobileAppEventsSchema();
+      await recordMobileAppOpen(req.user!.userId, clientInfo(req.headers as Record<string, unknown>));
+    }
+  } catch {
+    // Analytics must never break the app.
+  }
+  return res.status(204).end();
 });
 
 mobileAppRouter.get("/analytics", requireRole(["ADMIN"]), async (_req: AuthedRequest, res, next) => {

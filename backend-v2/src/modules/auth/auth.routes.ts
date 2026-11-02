@@ -15,7 +15,7 @@ import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePer
 import { generateDelegationReference, getDelegationRequestTypes, setDelegationRequestTypes, writeDelegationAudit } from "../../lib/delegations.js";
 import { reassignPendingRequestsForMovedEmployee, syncApproverTitleForPendingSteps } from "../../lib/approvalReassignment.js";
 import { ensurePushTokensSchema, getNotificationPrefs, saveMobilePushToken, setNotificationPrefs } from "../../lib/pushTokens.js";
-import { ensureMobileAppEventsSchema, recordMobileAppEvent } from "../../lib/mobileAppEvents.js";
+import { clientInfo, ensureMobileAppEventsSchema, recordMobileAppEvent } from "../../lib/mobileAppEvents.js";
 
 const LoginSchema = z
   .object({
@@ -37,7 +37,7 @@ function trackMobileLoginIfNeeded(req: { headers: Record<string, unknown> }, use
   void (async () => {
     try {
       await ensureMobileAppEventsSchema();
-      await recordMobileAppEvent("LOGIN", userId);
+      await recordMobileAppEvent("LOGIN", userId, clientInfo(req.headers));
     } catch {
       // Best-effort - never let analytics logging affect a real login.
     }

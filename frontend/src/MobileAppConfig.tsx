@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { api } from "./api";
 import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, PanelBottom, Smartphone, User } from "lucide-react";
 
@@ -12,9 +12,51 @@ type Analytics = {
   totalDownloads: number;
   totalLogins: number;
   uniqueLoginUsers: number;
+  // Added with app 1.0.7 (opens/unlocks are tracked) - optional so an older
+  // backend's response still renders.
+  active?: { today: number; last7Days: number; last30Days: number };
+  pushEnabledUsers?: number;
+  daily?: { day: string; users: number }[];
+  versions?: { version: string; users: number }[];
+  users?: {
+    userId: string; fullName: string | null; department: string | null; firstSeen: string; lastActive: string;
+    logins: number; opens: number; version: string | null; push: boolean;
+  }[];
   recentDownloads: { createdAt: string; fullName: string | null; version: string | null }[];
   recentLogins: { createdAt: string; fullName: string | null }[];
 };
+
+const statCard: CSSProperties = { flex: "1 1 120px", border: "1px solid var(--border)", borderRadius: 10, padding: 14 };
+const sectionLabel: CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 };
+const shortDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
+function Stat({ value, label, hint }: { value: number | string; label: string; hint?: string }) {
+  return (
+    <div style={statCard} title={hint}>
+      <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{label}</div>
+    </div>
+  );
+}
+
+// Active people per day, last 30 days - plain bars, no chart library.
+function DailyBars({ daily }: { daily: { day: string; users: number }[] }) {
+  const max = Math.max(1, ...daily.map((d) => d.users));
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 90, padding: "0 2px", borderBottom: "1px solid var(--border)" }}>
+        {daily.map((d) => (
+          <div key={d.day} title={`${shortDate(d.day)}: ${d.users} ${d.users === 1 ? "person" : "people"}`}
+            style={{ flex: 1, height: `${Math.max((d.users / max) * 100, d.users ? 6 : 1)}%`, background: d.users ? "var(--accent, #283889)" : "var(--border)", borderRadius: "3px 3px 0 0" }} />
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--muted)", marginTop: 4 }}>
+        <span>{daily[0] ? shortDate(daily[0].day) : ""}</span>
+        <span>Today</span>
+      </div>
+    </div>
+  );
+}
 
 const TAB_BAR_META: Record<TabBarKey, { label: string; icon: typeof Home }> = {
   home: { label: "Home", icon: Home },
@@ -431,26 +473,78 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Analytics</div>
               <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
-                Downloads from Get the App, and logins made through the app itself (tracked separately from web logins).
+                Who uses the mobile app: password sign-ins plus every open or unlock (fingerprint, face or PIN), counted once per person per 15 minutes. Web use is not included.
               </p>
               {!analytics ? (
                 <p style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</p>
               ) : (
                 <>
-                  <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
-                    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
-                      <div style={{ fontSize: 22, fontWeight: 700 }}>{analytics.totalDownloads}</div>
-                      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>Total downloads</div>
-                    </div>
-                    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
-                      <div style={{ fontSize: 22, fontWeight: 700 }}>{analytics.totalLogins}</div>
-                      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>App logins</div>
-                    </div>
-                    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
-                      <div style={{ fontSize: 22, fontWeight: 700 }}>{analytics.uniqueLoginUsers}</div>
-                      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>Unique users</div>
-                    </div>
+                  <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                    <Stat value={analytics.active?.today ?? "–"} label="Active today" hint="People who signed in or opened the app today" />
+                    <Stat value={analytics.active?.last7Days ?? "–"} label="Active, last 7 days" />
+                    <Stat value={analytics.active?.last30Days ?? "–"} label="Active, last 30 days" />
                   </div>
+                  <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
+                    <Stat value={analytics.uniqueLoginUsers} label="People signed in (ever)" hint={`${analytics.totalLogins} password sign-ins in total`} />
+                    <Stat value={analytics.pushEnabledUsers ?? "–"} label="Push notifications on" hint="People with at least one phone registered for push" />
+                    <Stat value={analytics.totalDownloads} label="Downloads" hint="From Get the App" />
+                  </div>
+
+                  {analytics.daily && (
+                    <div style={{ marginBottom: 18 }}>
+                      <div style={sectionLabel}>Active people per day · last 30 days</div>
+                      <DailyBars daily={analytics.daily} />
+                    </div>
+                  )}
+
+                  {analytics.versions && analytics.versions.length > 0 && (
+                    <div style={{ marginBottom: 18 }}>
+                      <div style={sectionLabel}>App versions in use</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {analytics.versions.map((v) => (
+                          <span key={v.version} style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "4px 10px", fontSize: 12 }}>
+                            {v.version.startsWith("Older") ? v.version : `v${v.version}`} · <b>{v.users}</b>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {analytics.users && (
+                    <div style={{ marginBottom: 18 }}>
+                      <div style={sectionLabel}>People using the app ({analytics.users.length})</div>
+                      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "auto", maxHeight: 360 }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                          <thead>
+                            <tr style={{ textAlign: "left", color: "var(--muted)", position: "sticky", top: 0, background: "var(--surface, #fff)" }}>
+                              {["Name", "Last used", "First used", "Sign-ins", "Opens", "Version", "Push"].map((h) => (
+                                <th key={h} style={{ padding: "8px 10px", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analytics.users.length === 0 && (
+                              <tr><td colSpan={7} style={{ padding: 12, color: "var(--muted)" }}>Nobody yet</td></tr>
+                            )}
+                            {analytics.users.map((u) => (
+                              <tr key={u.userId} style={{ borderTop: "1px solid var(--border)" }}>
+                                <td style={{ padding: "7px 10px" }}>
+                                  <div>{u.fullName || "Unknown"}</div>
+                                  {u.department && <div style={{ fontSize: 11, color: "var(--muted)" }}>{u.department}</div>}
+                                </td>
+                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{new Date(u.lastActive).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "var(--muted)" }}>{shortDate(u.firstSeen)}</td>
+                                <td style={{ padding: "7px 10px" }}>{u.logins}</td>
+                                <td style={{ padding: "7px 10px" }}>{u.opens}</td>
+                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.version ? `v${u.version}` : "–"}</td>
+                                <td style={{ padding: "7px 10px" }}>{u.push ? "On" : "–"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 240px" }}>
