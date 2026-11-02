@@ -11,8 +11,12 @@ import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.j
 import { ensureMobileAppBuildsSchema, getLatestMobileAppBuild, saveMobileAppBuild } from "../../lib/mobileAppBuilds.js";
 import { clientInfo, ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent, recordMobileAppOpen } from "../../lib/mobileAppEvents.js";
 import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
+import { getPhoneCampaign, runPhoneCampaignNow, setPhoneCampaign, startPhoneCampaign } from "../../lib/phoneCampaign.js";
 
 export const mobileAppUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "mobile-app");
+
+// The "add your phone number" push campaign runs alongside the mobile API.
+startPhoneCampaign();
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -133,6 +137,29 @@ mobileAppRouter.get("/analytics", requireRole(["ADMIN"]), async (_req: AuthedReq
   try {
     await ensureMobileAppEventsSchema();
     return res.json(await getMobileAppAnalytics());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// "Add your phone number" campaign (lib/phoneCampaign.ts) - admin on/off and
+// testing (every 5 minutes) vs live (random 7-14 days per person).
+mobileAppRouter.get("/campaigns/phone", requireRole(["ADMIN"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await getPhoneCampaign());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const CampaignSchema = z.object({ enabled: z.boolean().optional(), testMode: z.boolean().optional() });
+mobileAppRouter.put("/campaigns/phone", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const p = CampaignSchema.safeParse(req.body);
+    if (!p.success) throw badRequest("Invalid campaign settings", p.error.flatten());
+    const status = await setPhoneCampaign(p.data);
+    if (p.data.enabled) void runPhoneCampaignNow();
+    return res.json(status);
   } catch (err) {
     return next(err);
   }

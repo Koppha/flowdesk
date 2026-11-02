@@ -15,10 +15,13 @@ export type Route =
   // Maintenance
   | { name: "mlist" }
   | { name: "mnew" }
-  | { name: "mreq"; id: string };
+  | { name: "mreq"; id: string }
+  // Account
+  | { name: "phone" };
 
 export function parse(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (parts[0] === "phone") return { name: "phone" };
   if (parts[0] === "m") {
     if (parts[1] === "new") return { name: "mnew" };
     if (parts[1] === "req" && parts[2]) return { name: "mreq", id: parts[2] };
@@ -44,6 +47,7 @@ export function href(r: Route) {
 }
 
 export function sectionOf(r: Route): Section {
+  if (r.name === "phone") return "account";
   return r.name === "mlist" || r.name === "mnew" || r.name === "mreq" ? "maintenance" : "sign";
 }
 

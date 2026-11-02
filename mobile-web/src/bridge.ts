@@ -3,7 +3,7 @@
 // injectedJavaScriptBeforeContentLoaded) - see the app's
 // src/components/ServerPage.tsx.
 
-export type Section = "sign" | "maintenance";
+export type Section = "sign" | "maintenance" | "account";
 
 type Injected = {
   token?: string;
@@ -11,6 +11,8 @@ type Injected = {
   section?: Section;
   docId?: string;
   requestId?: string;
+  /** A named screen to open first (app /web?go=phone). */
+  start?: string;
   /** What this app build can do for the page, e.g. "headerAction" (1.0.8+). */
   capabilities?: string[];
 };
@@ -118,7 +120,7 @@ export function waitForAppHandover(timeoutMs = 4000): Promise<boolean> {
 /** Which part of the page the app opened (?section= for browser testing). */
 export function initialSection(): Section {
   const s = injectedNow().section || query.get("section");
-  return s === "maintenance" ? "maintenance" : "sign";
+  return s === "maintenance" || s === "account" ? s : "sign";
 }
 
 /** A document to open straight away (from the app's inbox or a push). */
@@ -134,4 +136,9 @@ export function initialRequestId(): string | null {
 export function applyTheme() {
   const theme = injectedNow().theme || query.get("theme");
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+}
+
+/** The named screen the app asked for (/web?go=...), or ?start= in a browser. */
+export function initialStart(): string | null {
+  return injectedNow().start || query.get("start");
 }

@@ -6,6 +6,7 @@ import { forbidden, unauthorized } from "./errors.js";
 import { query } from "./db.js";
 import { getUserGroups } from "./permissionGroups.js";
 import { isCompensationFinanceUser } from "./financeAuthority.js";
+import { trackMobileRequest } from "./mobileAppUsage.js";
 
 export type Role =
   | "EMPLOYEE"
@@ -70,6 +71,13 @@ export async function requireAuth(req: AuthedRequest, _res: Response, next: Next
       }
     } catch (err) {
       // ignore if system_state table missing
+    }
+
+    // FlowDesk Mobile usage for the admin Analytics tab - once per request,
+    // even when nested routers run requireAuth again.
+    if (req.headers["x-flowdesk-client"] === "mobile" && !(req as any).mobileUsageCounted) {
+      (req as any).mobileUsageCounted = true;
+      trackMobileRequest(payload.userId);
     }
 
     return next();

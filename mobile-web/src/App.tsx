@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, setSessionExpiredHandler } from "./api";
-import { applyTheme, getToken, inApp, initialDocId, initialRequestId, initialSection, setBrowserToken, waitForAppHandover, type Section } from "./bridge";
+import { applyTheme, getToken, inApp, initialDocId, initialRequestId, initialSection, initialStart, setBrowserToken, waitForAppHandover, type Section } from "./bridge";
 import { href, sectionOf, useRoute, type Route } from "./router";
 import ListScreen from "./screens/ListScreen";
 import DocScreen from "./screens/DocScreen";
@@ -11,6 +11,7 @@ import SignatureScreen from "./screens/SignatureScreen";
 import MaintenanceList from "./maintenance/ListScreen";
 import MaintenanceNew from "./maintenance/NewScreen";
 import MaintenanceRequest from "./maintenance/RequestScreen";
+import PhoneScreen from "./screens/PhoneScreen";
 
 type Tab = { route: Route; label: string; match: Route["name"][] };
 
@@ -25,7 +26,8 @@ const TABS: Record<Section, Tab[]> = {
   ],
   // Like My Advances / My Clearances: one list with "+ New" at the top
   // right, no tab bar.
-  maintenance: []
+  maintenance: [],
+  account: []
 };
 
 const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
@@ -54,7 +56,9 @@ export default function App() {
       if (location.hash.length <= 2) {
         // Opened for a specific item (app inbox / push): land on it, with
         // the list one step back. (A reload mid-way keeps its place.)
-        if (initialSection() === "maintenance") {
+        if (initialStart() === "phone") {
+          location.replace(href({ name: "phone" }));
+        } else if (initialSection() === "maintenance") {
           location.replace(href({ name: "mlist" }));
           const reqId = initialRequestId();
           if (reqId) location.hash = href({ name: "mreq", id: reqId });
@@ -93,6 +97,7 @@ export default function App() {
         {route.name === "mlist" && <MaintenanceList />}
         {route.name === "mnew" && <MaintenanceNew />}
         {route.name === "mreq" && <MaintenanceRequest key={route.id} id={route.id} />}
+        {route.name === "phone" && <PhoneScreen />}
       </main>
       {TABS[section].length > 0 && (
         <nav className="tabs" aria-label="Signing">

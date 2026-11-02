@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { api } from "./api";
+import { API, api, getToken } from "./api";
 import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, PanelBottom, Smartphone, User } from "lucide-react";
 
 type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument" | "maintenance";
@@ -16,11 +16,15 @@ type Analytics = {
   // backend's response still renders.
   active?: { today: number; last7Days: number; last30Days: number };
   pushEnabledUsers?: number;
+  onlineNow?: { userId: string; fullName: string | null; lastSeen: string }[];
+  onlineWindowMinutes?: number;
+  requestsToday?: number;
   daily?: { day: string; users: number }[];
   versions?: { version: string; users: number }[];
   users?: {
     userId: string; fullName: string | null; department: string | null; firstSeen: string; lastActive: string;
     logins: number; opens: number; version: string | null; push: boolean;
+    requests30d?: number; requestsTotal?: number; online?: boolean;
   }[];
   recentDownloads: { createdAt: string; fullName: string | null; version: string | null }[];
   recentLogins: { createdAt: string; fullName: string | null }[];
@@ -142,6 +146,79 @@ function Toggle({ checked, disabled, onChange }: { checked: boolean; disabled?: 
         }}
       />
     </button>
+  );
+}
+
+// Calls for screens this file owns, kept here rather than in api.ts.
+async function adminReq<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { ...init, headers });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || res.statusText);
+  return json as T;
+}
+
+type PhoneCampaign = { enabled: boolean; testMode: boolean; missingPhone: number; reachable: number; reached: number; completed: number; pushesSent: number };
+
+// "Add your phone number" push campaign (backend lib/phoneCampaign.ts).
+function PhoneCampaignCard() {
+  const [c, setC] = useState<PhoneCampaign | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const load = () => adminReq<PhoneCampaign>("/mobile-app/campaigns/phone").then(setC).catch((e) => setError(e.message));
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function change(patch: Partial<Pick<PhoneCampaign, "enabled" | "testMode">>) {
+    setBusy(true);
+    setError("");
+    try {
+      setC(await adminReq<PhoneCampaign>("/mobile-app/campaigns/phone", { method: "PUT", body: JSON.stringify(patch) }));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700 }}>Campaign: add your phone number</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+            Pushes people with no phone on their profile; tapping opens the app's phone screen. Repeats until they add one, then stops. Needs app 1.0.8+.
+          </div>
+        </div>
+        {c && <Toggle checked={c.enabled} disabled={busy} onChange={() => change({ enabled: !c.enabled })} />}
+      </div>
+      {c && (
+        <>
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            {[
+              { test: true, label: "Testing - every 5 minutes" },
+              { test: false, label: "Live - every 7-14 days (random per person)" }
+            ].map((m) => (
+              <button key={String(m.test)} type="button" disabled={busy || c.testMode === m.test} onClick={() => change({ testMode: m.test })}
+                style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: c.testMode === m.test ? "default" : "pointer",
+                  border: `1px solid ${c.testMode === m.test ? "#c8102e" : "var(--border)"}`, background: c.testMode === m.test ? "#fdecec" : "transparent", color: c.testMode === m.test ? "#c8102e" : "inherit" }}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 18, marginTop: 14, fontSize: 12.5, flexWrap: "wrap" }}>
+            <span><b>{c.missingPhone}</b> without a phone</span>
+            <span><b>{c.reachable}</b> reachable now</span>
+            <span><b>{c.reached}</b> pushed ({c.pushesSent} pushes)</span>
+            <span><b>{c.completed}</b> added their phone</span>
+          </div>
+        </>
+      )}
+      {error && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 8 }}>{error}</div>}
+    </div>
   );
 }
 
@@ -425,13 +502,15 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
 
           {tab === "push" && (
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 15, fontWeight: 700 }}>Push notifications</span>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Push notifications</div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Phones register for push when people sign in to the app. FlowDesk pushes approvals (advances, clearances, documents to sign) and maintenance updates; people can switch push off in the app's Profile.
+              </p>
+              {isAdmin && <PhoneCampaignCard />}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "22px 0 8px" }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>Per-event switches</span>
                 <ComingSoon />
               </div>
-              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
-                Devices already register for push on login. Nothing is actually sent through them yet.
-              </p>
               <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
                 {["New item awaiting your approval", "Your request was approved or rejected", "SLA reminder — step overdue"].map((label, i) => (
                   <div key={label} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i > 0 ? "1px solid var(--border)" : undefined }}>
@@ -480,7 +559,21 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
               ) : (
                 <>
                   <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-                    <Stat value={analytics.active?.today ?? "–"} label="Active today" hint="People who signed in or opened the app today" />
+                    <Stat value={analytics.onlineNow?.length ?? "–"} label={`Online now (last ${analytics.onlineWindowMinutes ?? 5} min)`} hint={(analytics.onlineNow || []).map((o) => o.fullName || "Unknown").join(", ") || "Nobody right now"} />
+                    <Stat value={analytics.requestsToday ?? "–"} label="App requests today" hint="Every call the app made to FlowDesk today" />
+                  </div>
+                  {analytics.onlineNow && analytics.onlineNow.length > 0 && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 12px" }}>
+                      {analytics.onlineNow.map((o) => (
+                        <span key={o.userId} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid var(--border)", borderRadius: 999, padding: "3px 10px", fontSize: 12 }}>
+                          <span style={{ width: 7, height: 7, borderRadius: 999, background: "#0f9d58" }} />
+                          {o.fullName || "Unknown"}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                    <Stat value={analytics.active?.today ?? "–"} label="Active today" hint="People who signed in, opened the app or used it today" />
                     <Stat value={analytics.active?.last7Days ?? "–"} label="Active, last 7 days" />
                     <Stat value={analytics.active?.last30Days ?? "–"} label="Active, last 30 days" />
                   </div>
@@ -517,23 +610,27 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                           <thead>
                             <tr style={{ textAlign: "left", color: "var(--muted)", position: "sticky", top: 0, background: "var(--surface, #fff)" }}>
-                              {["Name", "Last used", "First used", "Sign-ins", "Opens", "Version", "Push"].map((h) => (
+                              {["Name", "Last used", "First used", "Requests (30 days)", "Sign-ins", "Opens", "Version", "Push"].map((h) => (
                                 <th key={h} style={{ padding: "8px 10px", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody>
                             {analytics.users.length === 0 && (
-                              <tr><td colSpan={7} style={{ padding: 12, color: "var(--muted)" }}>Nobody yet</td></tr>
+                              <tr><td colSpan={8} style={{ padding: 12, color: "var(--muted)" }}>Nobody yet</td></tr>
                             )}
                             {analytics.users.map((u) => (
                               <tr key={u.userId} style={{ borderTop: "1px solid var(--border)" }}>
                                 <td style={{ padding: "7px 10px" }}>
-                                  <div>{u.fullName || "Unknown"}</div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    {u.online && <span title="Online now" style={{ width: 7, height: 7, borderRadius: 999, background: "#0f9d58", flex: "none" }} />}
+                                    {u.fullName || "Unknown"}
+                                  </div>
                                   {u.department && <div style={{ fontSize: 11, color: "var(--muted)" }}>{u.department}</div>}
                                 </td>
                                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{new Date(u.lastActive).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
                                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "var(--muted)" }}>{shortDate(u.firstSeen)}</td>
+                                <td style={{ padding: "7px 10px" }} title={`${u.requestsTotal ?? 0} in total`}>{u.requests30d ?? 0}</td>
                                 <td style={{ padding: "7px 10px" }}>{u.logins}</td>
                                 <td style={{ padding: "7px 10px" }}>{u.opens}</td>
                                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.version ? `v${u.version}` : "–"}</td>

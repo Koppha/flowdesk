@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { currentUser } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { api, currentUser } from "../api";
+import { validPhone } from "../screens/PhoneScreen";
 import { go } from "../router";
 import { mApi } from "./api";
 import { PhotoPicker, stillUploading, uploadedIds, type PickedPhoto } from "./Photos";
@@ -21,6 +22,19 @@ export default function MaintenanceNew() {
   const [photos, setPhotos] = useState<PickedPhoto[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The phone on my FlowDesk profile: prefills the contact phone, and if
+  // there's none, the number I type here (as the contact) is saved to it.
+  const [profilePhone, setProfilePhone] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    api
+      .me()
+      .then((p) => {
+        setProfilePhone(p.phone || null);
+        if (p.phone) setContactPhone((cur) => cur || p.phone || "");
+      })
+      .catch(() => setProfilePhone(undefined));
+  }, []);
 
   // My own sites first - that's almost always where the problem is.
   const sites = useMemo(() => {
@@ -48,6 +62,11 @@ export default function MaintenanceNew() {
         site_id: siteId, location: location.trim(), contact_name: contactName.trim(), contact_phone: contactPhone.trim(), category_id: categoryId,
         priority, asset_tag: assetTag.trim(), description: description.trim(), access_times: accessTimes.trim(), photo_ids: uploadedIds(photos)
       });
+      // No phone on my profile yet, and I'm the contact: keep the number.
+      const isMe = contactName.trim().toLowerCase() === (me?.fullName || "").trim().toLowerCase();
+      if (profilePhone === null && isMe && validPhone(contactPhone)) {
+        await api.saveMyPhone(contactPhone.trim()).catch(() => {});
+      }
       go({ name: "mreq", id: r.id }, true);
     } catch (e: any) {
       setError(e.message);

@@ -120,7 +120,12 @@ export const api = {
   saveSignature: (s: SavedSignature) => req("/signatures/my-saved-signature", { method: "PUT", body: JSON.stringify(s) }),
   clearSignature: () => req("/signatures/my-saved-signature", { method: "DELETE" }),
 
-  people: () => req<Person[]>("/auth/request-directory?scope=company")
+  people: () => req<Person[]>("/auth/request-directory?scope=company"),
+
+  me: () => req<{ id: string; full_name: string | null; phone: string | null }>("/auth/me"),
+  /** The FlowDesk profile phone (users.phone) - shared with the web portal. */
+  saveMyPhone: (phone: string) =>
+    req<{ ok: true; phone: string | null }>("/auth/me/profile", { method: "PATCH", body: JSON.stringify({ phone }) })
 };
 
 /** API path of a signed PDF: a routing document's current copy, or a one-off signature. */
