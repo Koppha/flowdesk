@@ -1,12 +1,12 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { API, api, getToken } from "./api";
-import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, PanelBottom, Smartphone, User } from "lucide-react";
+import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, MessageCircle, PanelBottom, Smartphone, User } from "lucide-react";
 
 type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument" | "maintenance";
 type Modules = Record<ModuleKey, boolean>;
 type TabBarKey = "home" | "inbox" | "profile";
 type TabBarItem = { key: TabBarKey; enabled: boolean };
-type Tab = "modules" | "tabbar" | "branding" | "push" | "distribution" | "analytics";
+type Tab = "modules" | "tabbar" | "branding" | "push" | "support" | "distribution" | "analytics";
 
 type Analytics = {
   totalDownloads: number;
@@ -108,6 +108,7 @@ const TABS: { key: Tab; label: string; icon: typeof LayoutGrid }[] = [
   { key: "branding", label: "Branding", icon: Smartphone },
   { key: "push", label: "Push Notifications", icon: Bell },
   { key: "distribution", label: "Distribution", icon: Smartphone },
+  { key: "support", label: "Help & Support", icon: MessageCircle },
   { key: "analytics", label: "Analytics", icon: BarChart3 }
 ];
 
@@ -218,6 +219,188 @@ function PhoneCampaignCard() {
         </>
       )}
       {error && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+type SupportAgent = { user_id: string; full_name: string | null; email: string; department: string | null };
+type SupportConv = { id: string; status: string; last_message_at: string; full_name: string | null; department: string | null; last_body: string | null; last_from_agent: boolean | null };
+type SupportMsg = { id: string; body: string; from_agent: boolean; created_at: string; sender_name: string | null };
+
+// Help & Support (backend modules/support at /mobile-app/support): who
+// answers, and an inbox to answer from the desk.
+function SupportAdmin() {
+  const [agents, setAgents] = useState<SupportAgent[]>([]);
+  const [email, setEmail] = useState("");
+  const [convs, setConvs] = useState<SupportConv[]>([]);
+  const [status, setStatus] = useState<"open" | "closed">("open");
+  const [open, setOpen] = useState<string | null>(null);
+  const [msgs, setMsgs] = useState<SupportMsg[]>([]);
+  const [reply, setReply] = useState("");
+  const [error, setError] = useState("");
+
+  const loadAgents = () => adminReq<SupportAgent[]>("/mobile-app/support/agents").then(setAgents).catch((e) => setError(e.message));
+  const loadConvs = () => adminReq<SupportConv[]>(`/mobile-app/support/conversations?status=${status}`).then(setConvs).catch((e) => setError(e.message));
+  const loadMsgs = (id: string) => adminReq<{ messages: SupportMsg[] }>(`/mobile-app/support/conversations/${id}`).then((r) => setMsgs(r.messages)).catch((e) => setError(e.message));
+
+  useEffect(() => {
+    void loadAgents();
+  }, []);
+  // Refresh the inbox (and the open chat) every 10 seconds.
+  useEffect(() => {
+    void loadConvs();
+    const t = setInterval(() => {
+      void loadConvs();
+      if (open) void loadMsgs(open);
+    }, 10000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, open]);
+
+  async function addAgent() {
+    setError("");
+    try {
+      await adminReq("/mobile-app/support/agents", { method: "POST", body: JSON.stringify({ email }) });
+      setEmail("");
+      await loadAgents();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function send() {
+    if (!open || !reply.trim()) return;
+    try {
+      const r = await adminReq<{ messages: SupportMsg[] }>(`/mobile-app/support/conversations/${open}/messages`, { method: "POST", body: JSON.stringify({ body: reply.trim() }) });
+      setMsgs(r.messages);
+      setReply("");
+      void loadConvs();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  const box: CSSProperties = { border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" };
+  const input: CSSProperties = { flex: 1, padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 7, fontSize: 13, background: "var(--surface-soft)", color: "var(--text)" };
+  const primaryBtn: CSSProperties = { padding: "7px 14px", border: "none", borderRadius: 7, background: "#c8102e", color: "#fff", fontWeight: 700, cursor: "pointer" };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div>
+        <div style={sectionLabel}>Support team (besides admins)</div>
+        <div style={box}>
+          {agents.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>Only admins for now.</div>}
+          {agents.map((a, i) => (
+            <div key={a.user_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderTop: i ? "1px solid var(--border)" : undefined, fontSize: 13 }}>
+              <span style={{ flex: 1 }}>
+                {a.full_name || a.email} <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{a.department || a.email}</span>
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  await adminReq(`/mobile-app/support/agents/${a.user_id}`, { method: "DELETE" });
+                  void loadAgents();
+                }}
+                style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#dc2626", borderRadius: 6, padding: "3px 9px", fontSize: 12, cursor: "pointer" }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Add by FlowDesk email" style={input} />
+          <button type="button" onClick={addAgent} disabled={!email.trim()} style={primaryBtn}>Add</button>
+        </div>
+      </div>
+
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <div style={{ ...sectionLabel, marginBottom: 0, flex: 1 }}>Support inbox</div>
+          {(["open", "closed"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => {
+                setStatus(s);
+                setOpen(null);
+              }}
+              style={{ padding: "3px 10px", borderRadius: 999, fontSize: 12, cursor: "pointer", border: `1px solid ${status === s ? "#c8102e" : "var(--border)"}`, background: status === s ? "#fdecec" : "transparent", color: status === s ? "#c8102e" : "inherit" }}
+            >
+              {s === "open" ? "Open" : "Closed"}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...box, flex: "1 1 220px", maxHeight: 380, overflow: "auto" }}>
+            {convs.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>No {status} conversations.</div>}
+            {convs.map((c, i) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => {
+                  setOpen(c.id);
+                  void loadMsgs(c.id);
+                }}
+                style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", border: "none", borderTop: i ? "1px solid var(--border)" : undefined, background: open === c.id ? "var(--panel-2, #f1f2f5)" : "transparent", cursor: "pointer", color: "inherit" }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  {c.full_name || "Staff member"}
+                  {c.status === "OPEN" && c.last_from_agent === false ? " • waiting" : ""}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {c.last_from_agent ? "You: " : ""}
+                  {c.last_body}
+                </div>
+              </button>
+            ))}
+          </div>
+          <div style={{ ...box, flex: "2 1 320px", display: "flex", flexDirection: "column", minHeight: 260 }}>
+            {!open ? (
+              <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>Pick a conversation.</div>
+            ) : (
+              <>
+                <div style={{ flex: 1, overflow: "auto", maxHeight: 300, padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {msgs.map((m) => (
+                    <div
+                      key={m.id}
+                      style={{ alignSelf: m.from_agent ? "flex-end" : "flex-start", maxWidth: "80%", background: m.from_agent ? "#c8102e" : "var(--panel-2, #f1f2f5)", color: m.from_agent ? "#fff" : "inherit", borderRadius: 10, padding: "6px 10px", fontSize: 13, whiteSpace: "pre-wrap" }}
+                    >
+                      {!m.from_agent && <div style={{ fontSize: 10.5, fontWeight: 700, opacity: 0.7 }}>{m.sender_name}</div>}
+                      {m.body}
+                      <div style={{ fontSize: 10, opacity: 0.7, textAlign: "right" }}>{new Date(m.created_at).toLocaleString()}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8, padding: 8, borderTop: "1px solid var(--border)" }}>
+                  <input
+                    value={reply}
+                    onChange={(e) => setReply(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void send();
+                    }}
+                    placeholder="Reply"
+                    style={input}
+                  />
+                  <button type="button" onClick={send} style={primaryBtn}>Send</button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await adminReq(`/mobile-app/support/conversations/${open}/close`, { method: "POST" });
+                      setOpen(null);
+                      void loadConvs();
+                    }}
+                    style={{ padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 7, background: "transparent", cursor: "pointer", color: "inherit", fontSize: 12 }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+      {error && <div style={{ fontSize: 12, color: "#dc2626" }}>{error}</div>}
     </div>
   );
 }
@@ -519,6 +702,16 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {tab === "support" && (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Help &amp; Support</div>
+              <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--muted)" }}>
+                Staff chat with the support team from the app (Profile → Help &amp; support). Admins are always on the team; add anyone else who should answer. They get a push for every new message and can answer here or in the app (Support inbox).
+              </p>
+              {isAdmin ? <SupportAdmin /> : <p style={{ fontSize: 13, color: "var(--muted)" }}>Only admins can manage support.</p>}
             </div>
           )}
 

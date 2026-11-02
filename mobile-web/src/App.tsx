@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, setSessionExpiredHandler } from "./api";
-import { applyTheme, getToken, inApp, initialDocId, initialRequestId, initialSection, initialStart, setBrowserToken, waitForAppHandover, type Section } from "./bridge";
+import { appCan, applyTheme, getToken, inApp, initialDocId, initialRequestId, initialSection, initialStart, postToApp, setBrowserToken, waitForAppHandover, type Section } from "./bridge";
 import { href, sectionOf, useRoute, type Route } from "./router";
 import ListScreen from "./screens/ListScreen";
 import DocScreen from "./screens/DocScreen";
@@ -12,6 +12,7 @@ import MaintenanceList from "./maintenance/ListScreen";
 import MaintenanceNew from "./maintenance/NewScreen";
 import MaintenanceRequest from "./maintenance/RequestScreen";
 import PhoneScreen from "./screens/PhoneScreen";
+import SupportScreen, { SupportChat, SupportInbox } from "./screens/SupportScreen";
 
 type Tab = { route: Route; label: string; match: Route["name"][] };
 
@@ -34,7 +35,18 @@ const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
   doc: { to: { name: "list" }, label: "Documents" },
   signed: { to: { name: "list" }, label: "Documents" },
   mreq: { to: { name: "mlist" }, label: "Requests" },
-  mnew: { to: { name: "mlist" }, label: "Requests" }
+  mnew: { to: { name: "mlist" }, label: "Requests" },
+  supportInbox: { to: { name: "support" }, label: "Help & support" },
+  supportChat: { to: { name: "supportInbox" }, label: "Support inbox" }
+};
+
+// Screens the app can open by name (/web?go=<name>) - opened that way they
+// stand alone, without another section's tabs.
+const START_ROUTES: Record<string, Route> = { phone: { name: "phone" }, signature: { name: "signature" }, support: { name: "support" } };
+
+// Header titles for the app (capability "title"); others keep the app's own.
+const TITLES: Partial<Record<Route["name"], string>> = {
+  phone: "Phone number", signature: "Saved signature", support: "Help & support", supportInbox: "Support inbox", supportChat: "Support chat"
 };
 
 export default function App() {
@@ -43,6 +55,13 @@ export default function App() {
   const [noHandover, setNoHandover] = useState(false);
   const [expired, setExpired] = useState(false);
   const route = useRoute();
+
+  // App 1.0.8+ puts the screen's name in its header.
+  useEffect(() => {
+    if (!ready || !appCan("title")) return;
+    const title = TITLES[route.name];
+    if (title) postToApp({ type: "title", title });
+  }, [ready, route.name]);
 
   useEffect(() => {
     setSessionExpiredHandler(() => (inApp ? setExpired(true) : setSignedIn(false)));
@@ -56,8 +75,9 @@ export default function App() {
       if (location.hash.length <= 2) {
         // Opened for a specific item (app inbox / push): land on it, with
         // the list one step back. (A reload mid-way keeps its place.)
-        if (initialStart() === "phone") {
-          location.replace(href({ name: "phone" }));
+        const start = START_ROUTES[initialStart() || ""];
+        if (start) {
+          location.replace(href(start));
         } else if (initialSection() === "maintenance") {
           location.replace(href({ name: "mlist" }));
           const reqId = initialRequestId();
@@ -79,9 +99,11 @@ export default function App() {
 
   const section = sectionOf(route);
   const back = BACK[route.name];
+  // Opened by name from the app (Profile, a push): that screen alone.
+  const tabs = initialSection() === "account" ? [] : TABS[section];
 
   return (
-    <div className={TABS[section].length ? "app" : "app no-tabs"}>
+    <div className={tabs.length ? "app" : "app no-tabs"}>
       <main className="content">
         {back && (
           <button type="button" className="back" onClick={() => history.length > 1 ? history.back() : (location.hash = href(back.to))}>
@@ -98,10 +120,13 @@ export default function App() {
         {route.name === "mnew" && <MaintenanceNew />}
         {route.name === "mreq" && <MaintenanceRequest key={route.id} id={route.id} />}
         {route.name === "phone" && <PhoneScreen />}
+        {route.name === "support" && <SupportScreen />}
+        {route.name === "supportInbox" && <SupportInbox />}
+        {route.name === "supportChat" && <SupportChat key={route.id} id={route.id} />}
       </main>
-      {TABS[section].length > 0 && (
+      {tabs.length > 0 && (
         <nav className="tabs" aria-label="Signing">
-          {TABS[section].map((t) => (
+          {tabs.map((t) => (
             <a key={t.label} href={href(t.route)} className={t.match.includes(route.name) ? "on" : ""} aria-current={t.match.includes(route.name) ? "page" : undefined}>
               {t.label}
             </a>

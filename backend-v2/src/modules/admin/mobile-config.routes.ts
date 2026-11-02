@@ -73,11 +73,34 @@ async function currentTabs(): Promise<Tabs> {
   }
 }
 
+// Extra Home tiles for processes built on the server: each opens a screen of
+// the mobile server page (/web?go=<go>), so a new process shows up in the app
+// with no release. Icon is a name from the app's Home WEB_TILE_ICONS.
+const WebTileSchema = z.object({
+  go: z.string().regex(/^[a-z0-9-]{1,40}$/),
+  label: z.string().trim().min(1).max(30),
+  icon: z.string().trim().max(30).optional(),
+  color: z.enum(["accent", "good", "warn", "bad", "info", "purple"]).optional()
+});
+const WebTilesSchema = z.array(WebTileSchema).max(20);
+const WEB_TILES_KEY = "mobile_app_web_tiles";
+
+async function currentWebTiles() {
+  const raw = await getStringSystemSetting(WEB_TILES_KEY, null);
+  if (!raw) return [];
+  try {
+    const parsed = WebTilesSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
+  }
+}
+
 // Read access is any authenticated user (the mobile app itself needs this on
 // every load); only ADMIN can change it - same split as sla-settings.routes.ts.
 mobileConfigRouter.get("/", async (_req: AuthedRequest, res, next) => {
   try {
-    return res.json({ modules: await currentModules(), tabs: await currentTabs() });
+    return res.json({ modules: await currentModules(), tabs: await currentTabs(), webTiles: await currentWebTiles() });
   } catch (err) {
     return next(err);
   }
@@ -101,7 +124,15 @@ mobileConfigRouter.put("/", requireRole(["ADMIN"]), async (req: AuthedRequest, r
       tabs = tabsParsed.data;
     }
 
-    return res.json({ modules, tabs });
+    let webTiles = await currentWebTiles();
+    if (req.body?.webTiles !== undefined) {
+      const tilesParsed = WebTilesSchema.safeParse(req.body.webTiles);
+      if (!tilesParsed.success) throw badRequest("Invalid Home tiles", tilesParsed.error.flatten());
+      await setStringSystemSetting(WEB_TILES_KEY, JSON.stringify(tilesParsed.data));
+      webTiles = tilesParsed.data;
+    }
+
+    return res.json({ modules, tabs, webTiles });
   } catch (err) {
     return next(err);
   }

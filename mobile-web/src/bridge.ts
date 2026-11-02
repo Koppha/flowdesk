@@ -35,6 +35,8 @@ export type AppMessage =
   | { type: "sharePdf"; path: string; title: string }
   /** A button in the app's own header (label null = none); tapping it opens `hash` here. */
   | { type: "headerAction"; label: string | null; hash?: string }
+  /** The header title for this screen (app capability "title"). */
+  | { type: "title"; title: string }
   /** The app's native camera / gallery; the photos come back via window.__flowdeskPhotos. */
   | { type: "pickPhotos"; id: string; source: "camera" | "library"; max: number };
 

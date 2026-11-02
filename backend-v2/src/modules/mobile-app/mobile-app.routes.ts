@@ -12,6 +12,7 @@ import { ensureMobileAppBuildsSchema, getLatestMobileAppBuild, saveMobileAppBuil
 import { clientInfo, ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent, recordMobileAppOpen } from "../../lib/mobileAppEvents.js";
 import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
 import { getPhoneCampaign, runPhoneCampaignNow, setPhoneCampaign, startPhoneCampaign } from "../../lib/phoneCampaign.js";
+import { supportRouter } from "../support/support.routes.js";
 
 export const mobileAppUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "mobile-app");
 
@@ -91,6 +92,9 @@ mobileAppRouter.get("/download", async (req, res, next) => {
 mobileAppRouter.use("/web", mobileSignPageRouter);
 
 mobileAppRouter.use(requireAuth);
+
+// Help & Support chat (modules/support) - signed-in users only.
+mobileAppRouter.use("/support", supportRouter);
 
 // Logged into FlowDesk at all is the only access control here, by design -
 // see mobileAppBuilds.ts. Any authenticated user can mint a download token
