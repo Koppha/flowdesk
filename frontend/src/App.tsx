@@ -648,6 +648,7 @@ export default function App() {
   const [idleSecondsLeft, setIdleSecondsLeft] = useState(0);
   const lastActivityRef = useRef(Date.now());
   const [orgNavOpen, setOrgNavOpen] = useState(false);
+  const [settingsNavOpen, setSettingsNavOpen] = useState(false);
   const [featurePermissions, setFeaturePermissions] = useState<Record<string, string[]>>({});
   const [featurePermOpen, setFeaturePermOpen] = useState(false);
   const [featurePermDraft, setFeaturePermDraft] = useState<Record<string, string[]>>({});
@@ -1996,10 +1997,13 @@ export default function App() {
     }
   }, [token, page, role]);
 
-  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "ORG_GAPS", "TEAM_ROSTER", "PDF_DESIGNER", "MOBILE_APP_CONFIG"] as const;
+  const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "ORG_GAPS", "TEAM_ROSTER"] as const;
+  // Settings sidebar group: General plus the app-wide configuration pages.
+  const SETTINGS_PAGES = ["SETTINGS", "PDF_DESIGNER", "MOBILE_APP_CONFIG"] as const;
 
   useEffect(() => {
     if (ORG_PAGES.includes(page as any)) setOrgNavOpen(true);
+    if (SETTINGS_PAGES.includes(page as any)) setSettingsNavOpen(true);
   }, [page]);
 
   async function loadMealValue() {
@@ -5095,7 +5099,7 @@ export default function App() {
           {role === "ADMIN" && (
             <a href="#" className={navItemClass(page === "BRS_ADMIN")} onClick={(e) => { e.preventDefault(); setPage("BRS_ADMIN"); }}><span className="sidebar-nav-icon"><FileText size={18} aria-hidden /></span>BRS Templates</a>
           )}
-          {(canAccessFeature("org_structure") || canAccessFeature("org_data_gaps") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines") || canAccessFeature("pdf_designer")) && (
+          {(canAccessFeature("org_structure") || canAccessFeature("org_data_gaps") || canAccessFeature("team_roster") || canAccessFeature("ceo_management") || canAccessFeature("employees") || canAccessFeature("exco_members") || canAccessFeature("managers") || canAccessFeature("leadership_assignments") || canAccessFeature("workflow_builder") || canAccessFeature("reporting_lines")) && (
             <div className={`sidebar-group ${orgNavOpen ? "open" : ""}`}>
               <a href="#" className={navItemClass(ORG_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setOrgNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><Network size={18} aria-hidden /></span>Organizational Structure <strong>{orgNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
               <div className="sidebar-subnav">
@@ -5109,12 +5113,21 @@ export default function App() {
                 {canAccessFeature("leadership_assignments") && <a href="#" className={navItemClass(page === "LEADERSHIP")} onClick={(e) => { e.preventDefault(); setPage("LEADERSHIP"); }}><Users size={14} aria-hidden />Leadership Assignments</a>}
                 {canAccessFeature("workflow_builder") && <a href="#" className={navItemClass(page === "WORKFLOW_BUILDER")} onClick={(e) => { e.preventDefault(); setPage("WORKFLOW_BUILDER"); }}><ShieldCheck size={14} aria-hidden />Approval Workflow Builder</a>}
                 {canAccessFeature("reporting_lines") && <a href="#" className={navItemClass(page === "REPORTING_LINES")} onClick={(e) => { e.preventDefault(); setPage("REPORTING_LINES"); }}><GitBranch size={14} aria-hidden />Reporting Lines</a>}
+              </div>
+            </div>
+          )}
+          {canAccessFeature("pdf_designer") || canAccessFeature("mobile_app_config") ? (
+            <div className={`sidebar-group ${settingsNavOpen ? "open" : ""}`}>
+              <a href="#" className={navItemClass(SETTINGS_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setSettingsNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings <strong>{settingsNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
+              <div className="sidebar-subnav">
+                <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><SettingsIcon size={14} aria-hidden />General</a>
                 {canAccessFeature("pdf_designer") && <a href="#" className={navItemClass(page === "PDF_DESIGNER")} onClick={(e) => { e.preventDefault(); setPage("PDF_DESIGNER"); }}><FileText size={14} aria-hidden />PDF Designer</a>}
                 {canAccessFeature("mobile_app_config") && <a href="#" className={navItemClass(page === "MOBILE_APP_CONFIG")} onClick={(e) => { e.preventDefault(); setPage("MOBILE_APP_CONFIG"); }}><Smartphone size={14} aria-hidden />Mobile App</a>}
               </div>
             </div>
+          ) : (
+            <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings</a>
           )}
-          <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings</a>
           {role === "ADMIN" && (
             <a href="#" className={navItemClass(page === "DATA_CLEANUP")} onClick={(e) => { e.preventDefault(); setPage("DATA_CLEANUP"); }}><span className="sidebar-nav-icon"><Trash2 size={18} aria-hidden /></span>Data Cleanup</a>
           )}
