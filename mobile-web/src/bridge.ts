@@ -32,7 +32,37 @@ export type AppMessage =
   /** The app downloads it with the session and opens the share sheet. */
   | { type: "sharePdf"; path: string; title: string }
   /** A button in the app's own header (label null = none); tapping it opens `hash` here. */
-  | { type: "headerAction"; label: string | null; hash?: string };
+  | { type: "headerAction"; label: string | null; hash?: string }
+  /** The app's native camera / gallery; the photos come back via window.__flowdeskPhotos. */
+  | { type: "pickPhotos"; id: string; source: "camera" | "library"; max: number };
+
+// ── Native photos (app 1.0.8+, capability "nativePhotos") ───────────────────
+// Android's in-WebView file chooser doesn't reliably hand pictures back, so
+// the page asks the app to take/choose them and gets data URLs back.
+type NativePhoto = { dataUrl: string; name: string };
+const photoWaiters = new Map<string, (photos: NativePhoto[]) => void>();
+(window as any).__flowdeskPhotos = (reply: { id: string; photos?: NativePhoto[] }) => {
+  photoWaiters.get(reply?.id)?.(reply.photos || []);
+  photoWaiters.delete(reply?.id);
+};
+
+function dataUrlToFile({ dataUrl, name }: NativePhoto): File {
+  const [head, b64] = dataUrl.split(",");
+  const type = /data:([^;]+)/.exec(head)?.[1] || "image/jpeg";
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], name, { type });
+}
+
+/** Take or choose photos with the app's native picker. Resolves [] if cancelled. */
+export function pickNativePhotos(source: "camera" | "library", max: number): Promise<File[]> {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise((resolve) => {
+    photoWaiters.set(id, (photos) => resolve(photos.map(dataUrlToFile)));
+    postToApp({ type: "pickPhotos", id, source, max });
+  });
+}
 
 /** Whether this app build supports a given page feature (older builds support none). */
 export function appCan(capability: string) {

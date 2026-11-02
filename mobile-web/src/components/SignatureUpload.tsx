@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { appCan, pickNativePhotos } from "../bridge";
 
 // Upload a picture of your signature (a photo or scan of it on paper) - the
 // same processing as the web portal's SignatureUpload (frontend/src/
@@ -133,6 +134,17 @@ export default function SignatureUpload({ value, onChange }: { value: string | n
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, removeWhite]);
 
+  // App 1.0.8+: its own gallery (the WebView file chooser doesn't reliably
+  // return pictures on Android); a browser uses the file input.
+  const choose = async () => {
+    if (appCan("nativePhotos")) {
+      const [picked] = await pickNativePhotos("library", 1);
+      if (picked) setFile(picked);
+    } else {
+      inputRef.current?.click();
+    }
+  };
+
   return (
     <div className="stack-sm">
       <input ref={inputRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); e.target.value = ""; }} />
@@ -140,12 +152,12 @@ export default function SignatureUpload({ value, onChange }: { value: string | n
         <div className="saved-drawing">
           <img src={value} alt="Your uploaded signature" className="checker" />
           <div className="row gap">
-            <button type="button" className="link-btn" onClick={() => inputRef.current?.click()}>Choose another</button>
+            <button type="button" className="link-btn" onClick={() => void choose()}>Choose another</button>
             <button type="button" className="link-btn danger-text" onClick={() => { setFile(null); onChange(null); }}>Remove</button>
           </div>
         </div>
       ) : (
-        <button type="button" className="photo-btn" onClick={() => inputRef.current?.click()} disabled={busy}>
+        <button type="button" className="photo-btn" onClick={() => void choose()} disabled={busy}>
           {busy ? "Reading the picture…" : "Upload a picture of your signature"}
         </button>
       )}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { mApi, photoUrl, shrink, toDataUrl } from "./api";
+import { appCan, pickNativePhotos } from "../bridge";
 
 export type PickedPhoto = { key: string; preview: string; state: "uploading" | "done" | "error"; id?: string; file: File };
 
@@ -32,7 +33,7 @@ export function PhotoPicker({ photos, onChange, max = 5 }: { photos: PickedPhoto
     }
   }
 
-  async function add(files: FileList | null) {
+  async function add(files: FileList | File[] | null) {
     if (!files?.length) return;
     const room = max - latest.current.length;
     const picked: PickedPhoto[] = [];
@@ -44,6 +45,7 @@ export function PhotoPicker({ photos, onChange, max = 5 }: { photos: PickedPhoto
   }
 
   const full = photos.length >= max;
+  const native = appCan("nativePhotos");
   return (
     <div className="stack-sm">
       {photos.length > 0 && (
@@ -60,7 +62,15 @@ export function PhotoPicker({ photos, onChange, max = 5 }: { photos: PickedPhoto
           ))}
         </div>
       )}
-      {!full && (
+      {!full && native && (
+        // App 1.0.8+: its own camera and gallery (the WebView file chooser
+        // doesn't reliably return pictures on Android).
+        <div className="row gap">
+          <button type="button" className="photo-btn" onClick={async () => add(await pickNativePhotos("camera", 1))}>Take photo</button>
+          <button type="button" className="photo-btn" onClick={async () => add(await pickNativePhotos("library", max - latest.current.length))}>Choose photos</button>
+        </div>
+      )}
+      {!full && !native && (
         <div className="row gap">
           <label className="photo-btn">
             <input type="file" accept="image/*" capture="environment" onChange={(e) => { void add(e.target.files); e.target.value = ""; }} />
