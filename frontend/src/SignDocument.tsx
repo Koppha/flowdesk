@@ -3,9 +3,10 @@ import SignatureUpload from "./components/SignatureUpload";
 import PdfPlacePicker, { SignatureMarkPreview, type PlacePosition } from "./components/PdfPlacePicker";
 import { api, getUserFromToken, openBlobInNewTab } from "./api";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
-import { FileSignature, Upload, Eraser, CheckCircle2, Copy, Download, Eye, ShieldCheck, BookmarkCheck, XCircle, Send, PenLine } from "lucide-react";
+import { FileSignature, Upload, Eraser, CheckCircle2, Copy, Download, Eye, ShieldCheck, BookmarkCheck, XCircle, Send, PenLine, BarChart3 } from "lucide-react";
 import SignRoutingDocument from "./SignRoutingDocument";
 import PdfTextEditor from "./PdfTextEditor";
+import SignPerformance from "./SignPerformance";
 
 // Tier A (audit-trail based) electronic signature: no third-party provider,
 // no separate portal — this screen IS the signing surface, reusing the
@@ -138,7 +139,7 @@ export default function SignDocument() {
   }, []);
   const directory: DirectoryUser[] = companyDirectory.filter((s) => s.id !== me?.userId);
 
-  const [mode, setMode] = useState<"quick" | "routing" | "annotate">(() => (
+  const [mode, setMode] = useState<"quick" | "routing" | "annotate" | "performance">(() => (
     new URLSearchParams(window.location.search).get("signDoc") ? "routing" : "quick"
   ));
 
@@ -308,6 +309,8 @@ export default function SignDocument() {
           ? "Upload a PDF, sign it electronically, and get back a stamped copy with a public verification code anyone can check — no FlowDesk account required to verify."
           : mode === "routing"
           ? "Ask several people to sign a document in turn, each placing their mark exactly where it belongs on the page — for example a multi-manager sign-off form."
+          : mode === "performance"
+          ? "How much gets signed, how fast documents get fully signed, and who documents are waiting on — across the web portal and the mobile app."
           : "Add text anywhere on a PDF before signing or sending it — no signing, no sharing, just a quick fix."}
       </div>
 
@@ -321,9 +324,16 @@ export default function SignDocument() {
         <button type="button" onClick={() => setMode("annotate")} style={{ padding: "7px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer", border: mode === "annotate" ? "1px solid #3b82f6" : "1px solid var(--border)", background: mode === "annotate" ? "#eff6ff" : "var(--surface-soft)", color: mode === "annotate" ? "#1d4ed8" : "var(--text)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
           <PenLine size={13} /> Add Text to PDF
         </button>
+        {isAdmin && (
+          <button type="button" onClick={() => setMode("performance")} style={{ padding: "7px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer", border: mode === "performance" ? "1px solid #3b82f6" : "1px solid var(--border)", background: mode === "performance" ? "#eff6ff" : "var(--surface-soft)", color: mode === "performance" ? "#1d4ed8" : "var(--text)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+            <BarChart3 size={13} /> Performance
+          </button>
+        )}
       </div>
 
-      {mode === "routing" ? (
+      {mode === "performance" && isAdmin ? (
+        <SignPerformance />
+      ) : mode === "routing" ? (
         <SignRoutingDocument />
       ) : mode === "annotate" ? (
         <PdfTextEditor />

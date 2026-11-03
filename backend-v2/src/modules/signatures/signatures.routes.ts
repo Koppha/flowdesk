@@ -21,6 +21,7 @@ import {
   rejectSignableDocument, addTextToDocument, finishSignableDocument, addTickToDocument,
   undoLastEdit, undoableEditCount, deleteSignableDocument, assertCanSeeDocument
 } from "./signatures.service.js";
+import { getSigningPerformance } from "./signatures.performance.js";
 
 const upload = multer({
   storage: persistentDiskStorage({
@@ -40,6 +41,21 @@ const upload = multer({
 // ---------------------------------------------------------------------
 export const signaturesRouter = Router();
 signaturesRouter.use(requireAuth);
+
+// The app's server page sends X-Flowdesk-Client: mobile; the portal doesn't.
+const channelOf = (req: AuthedRequest) => (req.headers["x-flowdesk-client"] === "mobile" ? "MOBILE" : "WEB");
+
+// GET /signatures/performance?days=30&slaHours=48 - admin Performance view
+// (signatures.performance.ts).
+signaturesRouter.get("/performance", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+    const slaHours = Math.min(Math.max(Number(req.query.slaHours) || 48, 1), 24 * 30);
+    return res.json(await getSigningPerformance(days, slaHours));
+  } catch (err) {
+    return next(err);
+  }
+});
 
 const SignSchema = z.object({
   title: z.string().trim().min(1, "A title is required"),
@@ -91,6 +107,7 @@ signaturesRouter.post("/upload-and-sign", async (req: AuthedRequest, res, next) 
       signerId: req.user!.userId,
       signerName: req.user!.fullName || "Unknown",
       signerIp: req.ip || null,
+      channel: channelOf(req),
       consentStatement: parsed.data.consentStatement,
       typedSignatureText: parsed.data.typedSignatureText || null,
       signatureImageDataUrl: parsed.data.signatureImageDataUrl || null,
@@ -251,7 +268,7 @@ signaturesRouter.post("/documents", async (req: AuthedRequest, res, next) => {
     await ensureSignaturesSchema();
     const originalBuffer = fs.readFileSync(req.file.path);
     const doc = await createSignableDocument({
-      title, originalBuffer, originalFileName: req.file.originalname, createdById: req.user!.userId, approvalChain
+      title, originalBuffer, originalFileName: req.file.originalname, createdById: req.user!.userId, approvalChain, channel: channelOf(req)
     });
     try { fs.unlinkSync(req.file.path); } catch { /* best effort */ }
 
@@ -453,6 +470,7 @@ signaturesRouter.post("/documents/:id/sign", async (req: AuthedRequest, res, nex
       signerId: req.user!.userId,
       signerName: req.user!.fullName || "Unknown",
       signerIp: req.ip || null,
+      channel: channelOf(req),
       consentStatement: parsed.data.consentStatement,
       pageNumber: parsed.data.pageNumber,
       xPct: parsed.data.xPct,

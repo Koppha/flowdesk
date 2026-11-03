@@ -128,4 +128,11 @@ export async function ensureSignaturesSchema() {
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_doc_sig_placements_document ON document_signature_placements(document_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_doc_sig_placements_signer ON document_signature_placements(signer_id)`);
+
+  // Where it was done: WEB (the portal) or MOBILE (the app's server page,
+  // which sends X-Flowdesk-Client: mobile). Null on rows from before this
+  // was recorded. Read by the admin Performance view.
+  await query(`ALTER TABLE document_signatures ADD COLUMN IF NOT EXISTS channel text`);
+  await query(`ALTER TABLE document_signature_placements ADD COLUMN IF NOT EXISTS channel text`);
+  await query(`ALTER TABLE signable_documents ADD COLUMN IF NOT EXISTS channel text`);
 }

@@ -67,6 +67,8 @@ export interface SignDocumentInput {
   // Only honoured when the org policy allows a per-signature override;
   // otherwise the resolved policy default is used regardless of this value.
   requestedNotation?: SignatureNotation | null;
+  // WEB or MOBILE - see the channel columns in signatures.schema.ts.
+  channel?: string | null;
   sourceType?: string | null;
   sourceId?: string | null;
   // Where the signer placed it (Quick sign "Place it myself"). Without it,
@@ -121,14 +123,14 @@ export async function performSignDocument(input: SignDocumentInput) {
     `INSERT INTO document_signatures
        (verification_code, title, source_type, source_id, signer_id, authority_user_id, delegation_notation,
         signature_typed_name, signature_image, consent_statement, original_file_path, original_file_name,
-        signed_file_path, content_hash, signer_ip, signed_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        signed_file_path, content_hash, signer_ip, signed_at, channel)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      RETURNING id`,
     [
       verificationCode, input.title, input.sourceType ?? null, input.sourceId ?? null,
       input.signerId, input.authorityUserId ?? null, notation,
       input.typedSignatureText ?? null, input.signatureImageDataUrl ?? null, input.consentStatement,
-      originalFilePath, input.originalFileName, signedFilePath, contentHash, input.signerIp, signedAt
+      originalFilePath, input.originalFileName, signedFilePath, contentHash, input.signerIp, signedAt, input.channel ?? null
     ]
   ))[0];
 
@@ -209,6 +211,7 @@ export interface CreateSignableDocumentInput {
   // original free-for-all behavior, where anyone with the link can sign in
   // any order.
   approvalChain?: { approverId: string; approverName: string }[];
+  channel?: string | null;
 }
 
 export async function createSignableDocument(input: CreateSignableDocumentInput) {
@@ -229,10 +232,10 @@ export async function createSignableDocument(input: CreateSignableDocumentInput)
 
   const row = (await query<{ id: string }>(
     `INSERT INTO signable_documents
-       (verification_code, title, original_file_path, original_file_name, current_file_path, current_content_hash, created_by_id, approval_chain)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       (verification_code, title, original_file_path, original_file_name, current_file_path, current_content_hash, created_by_id, approval_chain, channel)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      RETURNING id`,
-    [verificationCode, input.title, originalFilePath, input.originalFileName, currentFilePath, contentHash, input.createdById, JSON.stringify(chain)]
+    [verificationCode, input.title, originalFilePath, input.originalFileName, currentFilePath, contentHash, input.createdById, JSON.stringify(chain), input.channel ?? null]
   ))[0];
 
   const doc = await getSignableDocument(row.id);
@@ -360,6 +363,7 @@ export interface AddSignaturePlacementInput {
   authorityUserId?: string | null;
   authorityName?: string | null;
   requestedNotation?: SignatureNotation | null;
+  channel?: string | null;
 }
 
 export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
@@ -399,13 +403,13 @@ export async function addSignaturePlacement(input: AddSignaturePlacementInput) {
   const row = (await query<{ id: string }>(
     `INSERT INTO document_signature_placements
        (document_id, signer_id, authority_user_id, delegation_notation, signature_typed_name, signature_image,
-        consent_statement, page_number, x_pct, y_pct, mark_width_pct, signer_ip, signed_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        consent_statement, page_number, x_pct, y_pct, mark_width_pct, signer_ip, signed_at, channel)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING id`,
     [
       input.documentId, input.signerId, input.authorityUserId ?? null, notation,
       input.typedSignatureText ?? null, input.signatureImageDataUrl ?? null, input.consentStatement,
-      input.pageNumber, input.xPct, input.yPct, input.widthPct, input.signerIp, signedAt
+      input.pageNumber, input.xPct, input.yPct, input.widthPct, input.signerIp, signedAt, input.channel ?? null
     ]
   ))[0];
 
