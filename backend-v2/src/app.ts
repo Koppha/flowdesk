@@ -52,6 +52,7 @@ import { serviceContractsRouter } from "./modules/service-contracts/service-cont
 import { serviceContractsExternalRouter } from "./modules/service-contracts/service-contracts.external.routes.js";
 import { searchRouter } from "./modules/search/search.routes.js";
 import { signaturesRouter, signatureVerifyRouter } from "./modules/signatures/signatures.routes.js";
+import { processPerformanceRouter } from "./modules/reporting/process-performance.routes.js";
 import { pdfEditRouter } from "./modules/pdf-edit/pdf-edit.routes.js";
 
 export function createApp() {
@@ -165,6 +166,7 @@ export function createApp() {
   // registration order, and /signatures/verify is a prefix of /signatures.
   app.use("/signatures/verify", signatureVerifyRouter);
   app.use("/signatures", signaturesRouter);
+  app.use("/reporting/process-performance", processPerformanceRouter);
   app.use("/pdf-edit", pdfEditRouter);
 
   app.use(errorHandler);
