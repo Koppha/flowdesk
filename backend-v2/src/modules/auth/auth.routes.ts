@@ -17,6 +17,8 @@ import { reassignPendingRequestsForMovedEmployee, syncApproverTitleForPendingSte
 import { ensurePushTokensSchema, getNotificationPrefs, saveMobilePushToken, setNotificationPrefs } from "../../lib/pushTokens.js";
 import { clientInfo, ensureMobileAppEventsSchema, recordMobileAppEvent } from "../../lib/mobileAppEvents.js";
 
+const ACCOUNT_DEACTIVATED = "Your FlowDesk account has been deactivated. Contact your administrator.";
+
 const LoginSchema = z
   .object({
     email: z.string().min(1).optional(),
@@ -383,6 +385,30 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
     );
     let user = users[0] ?? null;
 
+    // A deactivated account isn't matched above. Once the password checks out
+    // (AD or the stored hash) say so, instead of "Invalid credentials" - and,
+    // for AD, instead of creating a second account with the same email, which
+    // fails on the unique email. Never shown for a wrong password, so it
+    // doesn't reveal which accounts exist.
+    const inactive = user
+      ? null
+      : (
+          await query<{ id: string; password_hash: string }>(
+            `SELECT id, password_hash
+             FROM users
+             WHERE (
+               lower(employee_no)=lower($1)
+               OR lower(split_part(email,'@',1))=lower($1)
+               OR ($2::text IS NOT NULL AND lower(email)=lower($2))
+             )
+             AND is_active=false
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+            [loginUser, loginEmail]
+          )
+        )[0] ?? null;
+    let adDeactivated = false;
+
     // AD_FALLBACK_LOCAL=false means "AD is the sole source of truth" — that
     // must also hold when AD is reachable and explicitly rejects the
     // credentials, not just when the AD call itself errors (the pre-existing
@@ -392,7 +418,9 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
     if (env.AD_AUTH_ENABLED) {
       try {
         const ad = await authenticateAgainstAd({ email: loginUser, password });
-        if (ad.authenticated) {
+        if (ad.authenticated && !user && inactive) {
+          adDeactivated = true;
+        } else if (ad.authenticated) {
           const adProfile = ad.profile;
           const emailFromAdOrLogin = normalizeEmailForStorage(adProfile?.email || loginRaw);
           if (!user) {
@@ -451,15 +479,25 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
           trackMobileLoginIfNeeded(req, user.id);
           return res.json(toAuthResponse(user, loginDisplay));
         }
-        logger.warn("auth_login_failed_ad_false", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
-        adExplicitlyRejected = true;
+        else {
+          logger.warn("auth_login_failed_ad_false", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
+          adExplicitlyRejected = true;
+        }
       } catch (adErr) {
         logger.warn("auth_login_failed_ad_error_fallback", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null, error: serializeError(adErr) });
         if (!env.AD_FALLBACK_LOCAL) throw unauthorized("AD authentication unavailable");
       }
+      if (adDeactivated) {
+        logger.warn("auth_login_failed_deactivated", { login: loginUser, user_id: inactive!.id, via: "ad" });
+        throw forbidden(ACCOUNT_DEACTIVATED);
+      }
       if (adExplicitlyRejected && !env.AD_FALLBACK_LOCAL) throw unauthorized("Invalid credentials");
     }
 
+    if (!user && inactive && (await comparePassword(password, inactive.password_hash))) {
+      logger.warn("auth_login_failed_deactivated", { login: loginUser, user_id: inactive.id, via: "local" });
+      throw forbidden(ACCOUNT_DEACTIVATED);
+    }
     if (!user) {
       logger.warn("auth_login_failed_local_user_not_found", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
       throw unauthorized("Invalid credentials");
