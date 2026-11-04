@@ -5,6 +5,8 @@ import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js"
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { getBooleanSystemSetting, setBooleanSystemSetting, getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { logger } from "../../lib/logger.js";
+import { loadAiConfig, setAiAssistantEnabled } from "../ai/ai-settings.js";
 
 export const requestTypesRouter = Router();
 requestTypesRouter.use(requireAuth);
@@ -130,12 +132,15 @@ requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) =
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled, true),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, true)
     ]);
+    // The AI Assistant's own on/off (Settings > AI Assistant), shown and
+    // switched here too - one setting, two screens.
+    const ai_assistant_enabled = (await loadAiConfig()).settings.enabled;
     return res.json({
       overtime_enabled, standby_enabled,
       salary_advance_enabled, loan_advance_enabled,
       salary_advance_max_payback_months, loan_advance_max_payback_months,
       vendor_contracts_enabled, service_contracts_enabled,
-      signature_enabled
+      signature_enabled, ai_assistant_enabled
     });
   } catch (err) {
     return next(err);
@@ -154,7 +159,8 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
       loan_advance_max_payback_months: z.number().int().positive().max(360).optional(),
       vendor_contracts_enabled: z.boolean().optional(),
       service_contracts_enabled: z.boolean().optional(),
-      signature_enabled: z.boolean().optional()
+      signature_enabled: z.boolean().optional(),
+      ai_assistant_enabled: z.boolean().optional()
     }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
     if (parsed.data.overtime_enabled !== undefined) {
@@ -183,6 +189,14 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
     }
     if (parsed.data.signature_enabled !== undefined) {
       await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, parsed.data.signature_enabled);
+    }
+    if (parsed.data.ai_assistant_enabled !== undefined) {
+      try {
+        await setAiAssistantEnabled(parsed.data.ai_assistant_enabled);
+      } catch (e: any) {
+        throw badRequest(e?.message || "Could not switch the AI Assistant");
+      }
+      logger.info("ai_settings_updated", { by: req.user!.userId, enabled: parsed.data.ai_assistant_enabled, from: "process_page" });
     }
     return res.json({ ok: true });
   } catch (err) {

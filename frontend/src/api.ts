@@ -502,11 +502,19 @@ export const api = {
     salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
     salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
     vendor_contracts_enabled?: boolean; service_contracts_enabled?: boolean;
-    signature_enabled?: boolean;
+    signature_enabled?: boolean; ai_assistant_enabled?: boolean;
   }) => req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
   slaSettings: () => req("/admin/sla-settings"),
   updateSlaSettings: (data: { enabled: boolean; thresholdHours: number }) =>
     req("/admin/sla-settings", { method: "PUT", body: JSON.stringify(data) }),
+  // Settings > AI Assistant (ADMIN). The key is write-only - never returned.
+  aiSettings: () => req("/ai/assistant/settings"),
+  updateAiSettings: (data: Record<string, unknown>) =>
+    req("/ai/assistant/settings", { method: "PUT", body: JSON.stringify(data) }),
+  aiSettingsModels: (data: { service: string; base_url: string; api_key?: string }) =>
+    req("/ai/assistant/settings/models", { method: "POST", body: JSON.stringify(data) }),
+  aiSettingsTest: (data: { services: Array<{ service: string; base_url: string; api_key?: string }>; models: Array<{ service: string; model: string }> }) =>
+    req("/ai/assistant/settings/test", { method: "POST", body: JSON.stringify(data) }),
   mobileAppConfig: () => req("/admin/mobile-config"),
   updateMobileAppConfig: (modules: Record<string, boolean>, tabs?: { key: string; enabled: boolean }[]) =>
     req("/admin/mobile-config", { method: "PUT", body: JSON.stringify({ modules, ...(tabs ? { tabs } : {}) }) }),

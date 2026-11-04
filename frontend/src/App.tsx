@@ -34,6 +34,7 @@ import Salaries from "./Salaries";
 import ReportingLines from "./ReportingLines";
 import PdfDesigner from "./PdfDesigner";
 import MobileAppConfig from "./MobileAppConfig";
+import AiAssistantSettings from "./AiAssistantSettings";
 import GetTheApp from "./GetTheApp";
 import DataCleanup from "./DataCleanup";
 import RequestTypes from "./RequestTypes";
@@ -458,7 +459,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "GET_THE_APP" | "ORG_GAPS";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "AI_ASSISTANT_CONFIG" | "GET_THE_APP" | "ORG_GAPS";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -559,6 +560,8 @@ export default function App() {
   const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(true);
   const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(true);
   const [signatureModuleEnabled, setSignatureModuleEnabled] = useState(true);
+  // AI Assistant on/off (Process > Built-in Processes, same as Settings > AI Assistant).
+  const [aiAssistantModuleEnabled, setAiAssistantModuleEnabled] = useState(true);
   const [salaryAdvanceEnabled, setSalaryAdvanceEnabled] = useState(true);
   const [loanAdvanceEnabled, setLoanAdvanceEnabled] = useState(true);
   const [salaryAdvanceMaxMonths, setSalaryAdvanceMaxMonths] = useState(6);
@@ -1697,6 +1700,7 @@ export default function App() {
         salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
         salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
         signature_enabled?: boolean;
+        ai_assistant_enabled?: boolean;
       }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true, signature_enabled: true }, "Module flags"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.vendorContractsAccess(), { allowed: false }, "Vendor Contracts access"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.serviceContractsAccess(), { allowed: false }, "Service Contracts access"),
@@ -1771,6 +1775,7 @@ export default function App() {
     setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
     setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
     setSignatureModuleEnabled(moduleFlagsResp?.signature_enabled !== false);
+    setAiAssistantModuleEnabled(moduleFlagsResp?.ai_assistant_enabled !== false);
     setSalaryAdvanceEnabled(moduleFlagsResp?.salary_advance_enabled !== false);
     setLoanAdvanceEnabled(moduleFlagsResp?.loan_advance_enabled !== false);
     setSalaryAdvanceMaxMonths(Number(moduleFlagsResp?.salary_advance_max_payback_months) || 6);
@@ -2005,7 +2010,7 @@ export default function App() {
 
   const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "ORG_GAPS", "TEAM_ROSTER"] as const;
   // Settings sidebar group: General plus the app-wide configuration pages.
-  const SETTINGS_PAGES = ["SETTINGS", "PDF_DESIGNER", "MOBILE_APP_CONFIG"] as const;
+  const SETTINGS_PAGES = ["SETTINGS", "PDF_DESIGNER", "MOBILE_APP_CONFIG", "AI_ASSISTANT_CONFIG"] as const;
 
   useEffect(() => {
     if (ORG_PAGES.includes(page as any)) setOrgNavOpen(true);
@@ -3054,6 +3059,28 @@ export default function App() {
       alert("Error submitting payback proof: " + e.message);
     } finally {
       setPaybackProofSubmitting(false);
+    }
+  }
+
+  // The AI Assistant saves drafts without this page knowing - reload the
+  // person's own lists so My Advances / Clearances show them straight away.
+  async function reloadMyRequests() {
+    const [a, c] = await Promise.all([api.advances().catch(() => null), api.claims().catch(() => null)]);
+    if (Array.isArray(a)) setAdvances(a);
+    if (Array.isArray(c)) setClaims(c);
+  }
+
+  // "Open draft" in the assistant: straight into that draft's form, same as
+  // Edit on My Advances / Continue on a clearance.
+  async function openAssistantDraft(kind: string, id: string) {
+    await reloadMyRequests();
+    if (kind === "clearance") return editClearance(id);
+    try {
+      const detail: any = await api.advanceDetail(id);
+      populateAdvanceForm(detail);
+      setPage("ADVANCE");
+    } catch {
+      setPage("MY_ADVANCES");
     }
   }
 
@@ -4939,7 +4966,7 @@ export default function App() {
             <h2>FlowDesk</h2>
           </div>
           <a href="#" className={navItemClass(page === "HOME")} onClick={(e) => { e.preventDefault(); setPage("HOME"); }}><span className="sidebar-nav-icon"><Home size={18} aria-hidden /></span>Dashboard</a>
-          {canAccessFeature("ai_assistant") && (
+          {canAccessFeature("ai_assistant") && aiAssistantModuleEnabled && (
             <a href="#" className={navItemClass(aiAssistantOpen)} onClick={(e) => { e.preventDefault(); setAiAssistantOpen((v) => !v); }}><span className="sidebar-nav-icon"><Sparkles size={18} aria-hidden /></span>AI Assistant</a>
           )}
           <div className={`sidebar-group ${groupOpen("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page)) ? "open" : ""}`}>
@@ -5137,13 +5164,14 @@ export default function App() {
               </div>
             </div>
           )}
-          {canAccessFeature("pdf_designer") || canAccessFeature("mobile_app_config") ? (
+          {canAccessFeature("pdf_designer") || canAccessFeature("mobile_app_config") || role === "ADMIN" ? (
             <div className={`sidebar-group ${settingsNavOpen ? "open" : ""}`}>
               <a href="#" className={navItemClass(SETTINGS_PAGES.includes(page as any))} onClick={(e) => { e.preventDefault(); setSettingsNavOpen((v) => !v); }}><span className="sidebar-nav-icon"><SettingsIcon size={18} aria-hidden /></span>Settings <strong>{settingsNavOpen ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}</strong></a>
               <div className="sidebar-subnav">
                 <a href="#" className={navItemClass(page === "SETTINGS")} onClick={(e) => { e.preventDefault(); setPage("SETTINGS"); }}><SettingsIcon size={14} aria-hidden />General</a>
                 {canAccessFeature("pdf_designer") && <a href="#" className={navItemClass(page === "PDF_DESIGNER")} onClick={(e) => { e.preventDefault(); setPage("PDF_DESIGNER"); }}><FileText size={14} aria-hidden />PDF Designer</a>}
                 {canAccessFeature("mobile_app_config") && <a href="#" className={navItemClass(page === "MOBILE_APP_CONFIG")} onClick={(e) => { e.preventDefault(); setPage("MOBILE_APP_CONFIG"); }}><Smartphone size={14} aria-hidden />Mobile App</a>}
+                {role === "ADMIN" && <a href="#" className={navItemClass(page === "AI_ASSISTANT_CONFIG")} onClick={(e) => { e.preventDefault(); setPage("AI_ASSISTANT_CONFIG"); }}><Sparkles size={14} aria-hidden />AI Assistant</a>}
               </div>
             </div>
           ) : (
@@ -5288,6 +5316,8 @@ export default function App() {
             <ReportingLines />
           ) : page === "PDF_DESIGNER" ? (
             <PdfDesigner />
+          ) : page === "AI_ASSISTANT_CONFIG" && role === "ADMIN" ? (
+            <AiAssistantSettings />
           ) : page === "MOBILE_APP_CONFIG" ? (
             <MobileAppConfig isAdmin={role === "ADMIN"} />
           ) : page === "GET_THE_APP" ? (
@@ -9685,8 +9715,8 @@ export default function App() {
           )}
           {historyOpen && renderAdvanceTrackingModal()}
           {clearanceTrackOpen && renderClearanceTrackingModal()}
-          {canAccessFeature("ai_assistant") && (
-            <AiAssistant open={aiAssistantOpen} onClose={() => setAiAssistantOpen(false)} onOpenAdvances={() => setPage("MY_ADVANCES")} onOpenClearances={() => setPage("MY_CLEARANCES")} />
+          {canAccessFeature("ai_assistant") && aiAssistantModuleEnabled && (
+            <AiAssistant open={aiAssistantOpen} onClose={() => setAiAssistantOpen(false)} onDraftSaved={() => void reloadMyRequests()} onOpenDraft={(kind, id) => void openAssistantDraft(kind, id)} />
           )}
           </div>
         </div>

@@ -1,24 +1,29 @@
 import React, { useEffect, useRef, useState } from "react";
-import { History, Loader2, MessageCircleQuestion, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
-import { API, getToken } from "../api";
+import { ArrowUp, CircleHelp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X } from "lucide-react";
+import { API, getToken, getUserFromToken } from "../api";
 
-// The FlowDesk AI Assistant: a chat panel opened from a floating button.
-// Answers stream in from POST /ai/assistant/chat (Server-Sent Events). It
-// only sees what the signed-in person can already see, and can save drafts
-// (never submit) - an "Open draft" button appears when it does.
+// The FlowDesk AI Assistant: a chat panel opened from the side menu. Answers
+// stream in from POST /ai/assistant/chat (Server-Sent Events). It only sees
+// what the signed-in person can already see, and can save drafts (never
+// submit) - an "Open draft" button appears when it does. Styles: .fda-* in
+// styles.css.
 
 type Msg = { role: "user" | "assistant"; text: string; notes?: string[]; drafts?: Array<{ kind: string; id: string; label: string }>; error?: boolean };
 type Conv = { id: string; title: string | null; updated_at: string };
+type Suggestion = { icon: typeof FileText; title: string; hint: string; ask: string };
 
-const SUGGESTIONS = [
-  "Where is my latest advance?",
-  "What's waiting for my approval?",
-  "How do I clear an advance?",
-  "What does Amount To Be Expensed mean?"
+const SUGGESTIONS: Suggestion[] = [
+  { icon: FileText, title: "How many advances do I have?", hint: "Totals and what's not cleared", ask: "How many advances do I have, and how many are not cleared?" },
+  { icon: Inbox, title: "What's waiting for my approval?", hint: "Your Approval Inbox", ask: "What's waiting for my approval?" },
+  { icon: MapPin, title: "Where is my latest advance?", hint: "Who it's with and since when", ask: "Where is my latest advance?" },
+  { icon: CircleHelp, title: "How do I clear an advance?", hint: "Step-by-step help", ask: "How do I clear an advance?" }
 ];
+// Administrators get a usage question in place of the "latest advance" one.
+const ADMIN_SUGGESTION: Suggestion = { icon: Smartphone, title: "How many people use the app?", hint: "Users and mobile app usage", ask: "How many users are active, and how many use the mobile app?" };
 
-// Minimal, safe formatting for answers: paragraphs, bullet/numbered lists
-// and **bold** - rendered as React nodes, never as HTML.
+// Minimal, safe formatting for answers: paragraphs, bullet/numbered lists,
+// simple | tables | (some models answer with them) and **bold** - rendered
+// as React nodes, never as HTML.
 function renderInline(text: string) {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return parts.map((p, i) => (p.startsWith("**") && p.endsWith("**") ? <strong key={i}>{p.slice(2, -2)}</strong> : <span key={i}>{p}</span>));
@@ -26,7 +31,20 @@ function renderInline(text: string) {
 function Formatted({ text }: { text: string }) {
   const blocks: React.ReactElement[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
+  let table: string[][] | null = null;
   const flush = () => {
+    if (table) {
+      const [head, ...rows] = table;
+      blocks.push(
+        <div key={blocks.length} className="fda-table-wrap">
+          <table className="fda-table">
+            <thead><tr>{head.map((c, i) => <th key={i}>{renderInline(c)}</th>)}</tr></thead>
+            <tbody>{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{renderInline(c)}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      );
+      table = null;
+    }
     if (!list) return;
     const items = list.items.map((it, i) => <li key={i}>{renderInline(it)}</li>);
     blocks.push(list.ordered ? <ol key={blocks.length} style={{ margin: "4px 0 4px 18px", padding: 0 }}>{items}</ol> : <ul key={blocks.length} style={{ margin: "4px 0 4px 18px", padding: 0 }}>{items}</ul>);
@@ -34,6 +52,14 @@ function Formatted({ text }: { text: string }) {
   };
   for (const raw of text.split("\n")) {
     const line = raw.trimEnd();
+    if (line.trim().startsWith("|")) {
+      if (list) flush();
+      // The |---|---| line under the header carries no content.
+      if (/^\s*\|?[\s:|-]+\|?\s*$/.test(line) && line.includes("-")) continue;
+      (table ??= []).push(line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()));
+      continue;
+    }
+    if (table) flush();
     const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
     if (bullet || numbered) {
@@ -62,9 +88,11 @@ async function getJson(path: string, init?: RequestInit) {
 }
 
 // Opened from the side menu ("AI Assistant"); the parent owns open/closed.
-export default function AiAssistant({ open, onClose, onOpenAdvances, onOpenClearances }: { open: boolean; onClose: () => void; onOpenAdvances: () => void; onOpenClearances: () => void }) {
+// Drafts are saved behind the page's back, so the parent is told when one is
+// (to reload its lists) and opens the draft itself from the "Open" button.
+export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }: { open: boolean; onClose: () => void; onDraftSaved: () => void; onOpenDraft: (kind: string, id: string) => void }) {
   const setOpen = (v: boolean) => { if (!v) onClose(); };
-  const [status, setStatus] = useState<{ configured: boolean; daily_limit: number; used_today: number } | null>(null);
+  const [status, setStatus] = useState<{ configured: boolean; enabled?: boolean; daily_limit: number; used_today: number } | null>(null);
   const [allowed, setAllowed] = useState(true);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -145,7 +173,10 @@ export default function AiAssistant({ open, onClose, onOpenAdvances, onOpenClear
           if (ev.type === "conversation") setConversationId(ev.id);
           else if (ev.type === "text") patchLast((m) => ({ ...m, text: m.text + ev.delta }));
           else if (ev.type === "tool") patchLast((m) => ({ ...m, notes: [...(m.notes || []), ev.label] }));
-          else if (ev.type === "draft") patchLast((m) => ({ ...m, drafts: [...(m.drafts || []), { kind: ev.kind, id: ev.id, label: ev.label }] }));
+          else if (ev.type === "draft") {
+            patchLast((m) => ({ ...m, drafts: [...(m.drafts || []), { kind: ev.kind, id: ev.id, label: ev.label }] }));
+            onDraftSaved();
+          }
           else if (ev.type === "error") patchLast((m) => ({ ...m, text: (m.text ? m.text + "\n\n" : "") + ev.message, error: true }));
         }
       }
@@ -158,103 +189,110 @@ export default function AiAssistant({ open, onClose, onOpenAdvances, onOpenClear
     }
   }
 
-  const notConfigured = status && !status.configured;
+  const notConfigured = Boolean(status && !status.configured);
+  const switchedOff = status?.enabled === false;
   const left = status ? Math.max(0, status.daily_limit - status.used_today) : null;
+  const suggestions = getUserFromToken()?.role === "ADMIN" ? [SUGGESTIONS[0], SUGGESTIONS[1], ADMIN_SUGGESTION, SUGGESTIONS[3]] : SUGGESTIONS;
 
+  if (!open) return null;
   return (
-    <>
-      {open && (
-        <div role="dialog" aria-label="FlowDesk Assistant" style={{ position: "fixed", right: 16, bottom: 16, zIndex: 900, width: "min(420px, calc(100vw - 32px))", height: "min(620px, calc(100vh - 32px))", display: "flex", flexDirection: "column", background: "var(--surface, #fff)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "0 18px 50px rgba(15,23,42,0.25)", overflow: "hidden" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", borderBottom: "1px solid var(--border)", background: "linear-gradient(135deg, #4f46e5, #2563eb)", color: "#fff" }}>
-            <Sparkles size={16} />
-            <div style={{ fontWeight: 700, fontSize: 14 }}>FlowDesk Assistant</div>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-              <button type="button" onClick={() => void loadHistory()} title="Past conversations" style={iconBtn}><History size={15} /></button>
-              <button type="button" onClick={newChat} title="New conversation" style={iconBtn}><Plus size={15} /></button>
-              <button type="button" onClick={() => setOpen(false)} title="Close" style={iconBtn}><X size={15} /></button>
-            </div>
+    <div role="dialog" aria-label="FlowDesk Assistant" className="fda-panel">
+      <div className="fda-header">
+        <div className="fda-logo"><Sparkles size={20} aria-hidden /></div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="fda-kicker">
+            AI Assistant
+            <span className={`fda-status${notConfigured || !status ? " is-off" : ""}`}>{!status ? "Connecting" : switchedOff ? "Switched off" : notConfigured ? "Not set up" : "Online"}</span>
           </div>
+          <div className="fda-title">Ask about FlowDesk</div>
+        </div>
+        <button type="button" className="fda-icon-btn" onClick={() => void loadHistory()} title="Past conversations" aria-label="Past conversations"><History size={16} /></button>
+        <button type="button" className="fda-icon-btn" onClick={newChat} title="New conversation" aria-label="New conversation"><SquarePen size={16} /></button>
+        <button type="button" className="fda-icon-btn" onClick={() => setOpen(false)} title="Close" aria-label="Close"><X size={16} /></button>
+      </div>
 
-          {showHistory && (
-            <div style={{ borderBottom: "1px solid var(--border)", maxHeight: 220, overflowY: "auto", padding: 6 }}>
-              {history.length === 0 ? <div style={{ fontSize: 12.5, color: "var(--muted)", padding: 8 }}>No past conversations.</div> : history.map((c) => (
-                <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderRadius: 6 }}>
-                  <button type="button" onClick={() => void openConversation(c.id)} style={{ flex: 1, textAlign: "left", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title || "Conversation"}</button>
-                  <button type="button" onClick={() => void deleteConversation(c.id)} title="Delete" style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--muted)" }}><Trash2 size={13} /></button>
-                </div>
-              ))}
+      {showHistory && (
+        <div className="fda-history">
+          {history.length === 0 ? <div className="fda-history-empty">No past conversations.</div> : history.map((c) => (
+            <div key={c.id} className="fda-history-row">
+              <button type="button" className="fda-history-open" onClick={() => void openConversation(c.id)}>{c.title || "Conversation"}</button>
+              <button type="button" className="fda-history-delete" onClick={() => void deleteConversation(c.id)} title="Delete" aria-label="Delete conversation"><Trash2 size={13} /></button>
             </div>
-          )}
+          ))}
+        </div>
+      )}
 
-          <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="fda-body">
+        {messages.length === 0 ? (
+          <div className="fda-welcome">
+            <div className="fda-hero"><Sparkles size={28} aria-hidden /></div>
             {notConfigured ? (
-              <div style={{ fontSize: 13.5, color: "var(--muted)", lineHeight: 1.5 }}>
-                <strong style={{ color: "var(--text)" }}>The assistant isn't set up yet.</strong><br />
-                An administrator needs to connect it to Claude before it can answer questions.
-              </div>
-            ) : messages.length === 0 ? (
-              <div>
-                <div style={{ fontSize: 13.5, lineHeight: 1.5, marginBottom: 10 }}>
-                  Hi! I can explain how FlowDesk works, find your advances, clearances and approvals, run reports you have access to, and save drafts for you to review and submit.
-                </div>
-                <div style={{ display: "grid", gap: 6 }}>
-                  {SUGGESTIONS.map((s) => (
-                    <button key={s} type="button" onClick={() => void ask(s)} style={{ textAlign: "left", border: "1px solid var(--border)", background: "var(--surface-2, #f8fafc)", borderRadius: 8, padding: "8px 10px", cursor: "pointer", fontSize: 13, color: "var(--text)", display: "flex", gap: 8, alignItems: "center" }}>
-                      <MessageCircleQuestion size={14} /> {s}
+              <>
+                <h3>{switchedOff ? "The assistant is switched off" : "The assistant isn't set up yet"}</h3>
+                <p>{switchedOff ? "An administrator has turned it off for now." : "An administrator needs to connect it to an AI service before it can answer questions."}</p>
+              </>
+            ) : (
+              <>
+                <h3>What would you like to know?</h3>
+                <p>Ask in plain language about your advances, clearances and approvals, or how anything in FlowDesk works.</p>
+                <div className="fda-cards">
+                  {suggestions.map((s) => (
+                    <button key={s.title} type="button" className="fda-card" onClick={() => void ask(s.ask)} disabled={busy}>
+                      <span className="fda-card-icon"><s.icon size={16} aria-hidden /></span>
+                      <span>
+                        <strong>{s.title}</strong>
+                        <span className="fda-card-hint">{s.hint}</span>
+                      </span>
                     </button>
                   ))}
                 </div>
-              </div>
-            ) : messages.map((m, i) => (
-              <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "stretch", maxWidth: m.role === "user" ? "85%" : "100%" }}>
-                {m.role === "user" ? (
-                  <div style={{ background: "#2563eb", color: "#fff", padding: "8px 12px", borderRadius: "12px 12px 2px 12px", fontSize: 13.5, whiteSpace: "pre-wrap" }}>{m.text}</div>
-                ) : (
-                  <div style={{ fontSize: 13.5, lineHeight: 1.5, color: m.error ? "#b91c1c" : "var(--text)" }}>
-                    {(m.notes || []).map((n, j) => (
-                      <div key={j} style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
-                        {busy && i === messages.length - 1 && j === (m.notes || []).length - 1 && !m.text ? <Loader2 size={12} className="spin" /> : <span>✓</span>} {n}
-                      </div>
-                    ))}
-                    {m.text ? <Formatted text={m.text} /> : busy && i === messages.length - 1 && !(m.notes || []).length ? (
-                      <div style={{ fontSize: 12.5, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={13} className="spin" /> Thinking…</div>
-                    ) : null}
-                    {(m.drafts || []).map((d) => (
-                      <button key={d.id} type="button" onClick={() => { setOpen(false); (d.kind === "clearance" ? onOpenClearances : onOpenAdvances)(); }}
-                        style={{ marginTop: 6, border: "1px solid #2563eb", color: "#2563eb", background: "transparent", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
-                        Open {d.label} →
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-            <div ref={endRef} />
+                <div className="fda-disclaimer">AI-generated from the FlowDesk records you can see. Check before acting on it.</div>
+              </>
+            )}
           </div>
-
-          <form onSubmit={(e) => { e.preventDefault(); void ask(input); }} style={{ borderTop: "1px solid var(--border)", padding: 10, display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }}
-              placeholder={notConfigured ? "Not set up yet" : "Ask about FlowDesk or your requests…"}
-              disabled={Boolean(notConfigured) || busy}
-              rows={1}
-              style={{ flex: 1, resize: "none", border: "1px solid var(--border)", borderRadius: 10, padding: "9px 11px", fontSize: 13.5, fontFamily: "inherit", maxHeight: 120, background: "var(--surface, #fff)", color: "var(--text)" }}
-            />
-            <button type="submit" disabled={busy || !input.trim() || Boolean(notConfigured)} aria-label="Send" style={{ border: "none", borderRadius: 10, padding: "9px 12px", background: "#2563eb", color: "#fff", cursor: "pointer", opacity: busy || !input.trim() ? 0.5 : 1 }}>
-              {busy ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-            </button>
-          </form>
-          {left !== null && !notConfigured && (
-            <div style={{ fontSize: 11, color: "var(--muted)", padding: "0 12px 8px" }}>
-              {left} question{left === 1 ? "" : "s"} left today · Answers can be wrong — check before you act.
+        ) : messages.map((m, i) => (
+          m.role === "user" ? (
+            <div key={i} className="fda-msg-user">{m.text}</div>
+          ) : (
+            <div key={i} className={`fda-msg-ai${m.error ? " is-error" : ""}`}>
+              {(m.notes || []).map((n, j) => (
+                <div key={j} className="fda-note">
+                  {busy && i === messages.length - 1 && j === (m.notes || []).length - 1 && !m.text ? <Loader2 size={12} className="spin" /> : <span>✓</span>} {n}
+                </div>
+              ))}
+              {m.text ? <Formatted text={m.text} /> : busy && i === messages.length - 1 && !(m.notes || []).length ? (
+                <div className="fda-note"><Loader2 size={13} className="spin" /> Thinking…</div>
+              ) : null}
+              {(m.drafts || []).map((d) => (
+                <button key={d.id} type="button" className="fda-draft-btn" onClick={() => { setOpen(false); onOpenDraft(d.kind, d.id); }}>
+                  Open {d.label} →
+                </button>
+              ))}
             </div>
-          )}
+          )
+        ))}
+        <div ref={endRef} />
+      </div>
+
+      <form className="fda-composer" onSubmit={(e) => { e.preventDefault(); void ask(input); }}>
+        <div className="fda-input">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }}
+            placeholder={notConfigured ? "Not set up yet" : "Ask about FlowDesk or your requests…"}
+            disabled={notConfigured || busy}
+            rows={1}
+          />
+          <button type="submit" className="fda-send" disabled={busy || !input.trim() || notConfigured} aria-label="Send">
+            {busy ? <Loader2 size={16} className="spin" /> : <ArrowUp size={17} />}
+          </button>
         </div>
-      )}
-    </>
+        <div className="fda-hints">
+          <span><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</span>
+          {left !== null && !notConfigured && <span>{left} question{left === 1 ? "" : "s"} left today · verify before acting</span>}
+        </div>
+      </form>
+    </div>
   );
 }
-
-const iconBtn: React.CSSProperties = { border: "none", background: "rgba(255,255,255,0.18)", color: "#fff", borderRadius: 6, padding: 5, cursor: "pointer", display: "inline-flex" };

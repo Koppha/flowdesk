@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AuthedRequest, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
+import { AuthedRequest, requireAuth, requireFeatureAccess, requireRole } from "../../lib/auth.js";
 import { badRequest } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { assistantConfigured, conversationForDisplay, DAILY_LIMIT, streamChat, usedToday } from "./assistant.js";
+import { logger } from "../../lib/logger.js";
+import { conversationForDisplay, streamChat, usedToday } from "./assistant.js";
+import { AI_SERVICES, AiModelsSchema, AiServiceSchema, AiSettingsSchema, aiConfigured, listAiModels, loadAiConfig, publicAiConfig, resolveTarget, saveAiSettings, testAiModel } from "./ai-settings.js";
 
 function startOfCurrentMonth() {
   const now = new Date();
@@ -150,15 +152,79 @@ aiRouter.post("/ocr-extract", async (req: AuthedRequest, res, next) => {
   }
 });
 
-// ── AI Assistant (Claude) ────────────────────────────────────────────────
+// ── AI Assistant ─────────────────────────────────────────────────────────
 // Available to everyone by default; an admin can restrict it from Roles &
-// Permissions ("AI Assistant"). Not configured until ANTHROPIC_API_KEY is set.
+// Permissions ("AI Assistant"). Which AI service it uses is set from
+// Settings > AI Assistant (ai-settings.ts).
 export const AI_ASSISTANT_DEFAULT_ROLES = ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"];
 const requireAssistant = requireFeatureAccess("ai_assistant", AI_ASSISTANT_DEFAULT_ROLES);
 
 aiRouter.get("/assistant/status", requireAssistant, async (req: AuthedRequest, res, next) => {
   try {
-    return res.json({ configured: assistantConfigured(), daily_limit: DAILY_LIMIT, used_today: await usedToday(req.user!.userId) });
+    const cfg = await loadAiConfig();
+    return res.json({ configured: aiConfigured(cfg), enabled: cfg.settings.enabled, daily_limit: cfg.settings.daily_limit, used_today: await usedToday(req.user!.userId) });
+  } catch (err) { return next(err); }
+});
+
+// Settings > AI Assistant (ADMIN only). Keys are write-only: never returned,
+// only which services have one and its last 4 characters.
+aiRouter.get("/assistant/settings", requireRole(["ADMIN"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    return res.json(await publicAiConfig(await loadAiConfig()));
+  } catch (err) { return next(err); }
+});
+
+// keys: per service, a new key, or null to remove its saved key; services
+// not mentioned keep theirs.
+const KeyChangesSchema = z.record(z.enum(AI_SERVICES), z.string().max(500).nullable()).default({});
+
+aiRouter.put("/assistant/settings", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = AiSettingsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid AI settings", parsed.error.flatten());
+    const keys = KeyChangesSchema.safeParse(req.body?.keys);
+    if (!keys.success) throw badRequest("Invalid API keys", keys.error.flatten());
+    const keyChanges = Object.fromEntries(Object.entries(keys.data).filter(([, v]) => v === null || Boolean(v?.trim())));
+    await saveAiSettings(parsed.data, keyChanges);
+    logger.info("ai_settings_updated", {
+      by: req.user!.userId, enabled: parsed.data.enabled,
+      services: parsed.data.services.map((s) => s.service), models: parsed.data.models.map((m) => `${m.service}:${m.model}`),
+      keys_changed: Object.keys(keyChanges)
+    });
+    return res.json(await publicAiConfig(await loadAiConfig()));
+  } catch (err) { return next(err); }
+});
+
+// "Load models" / "Test connection" on the not-yet-saved form use the key
+// typed in, or the one available for that exact service and address.
+const TargetSchema = AiServiceSchema.extend({ api_key: z.string().max(500).optional() }).refine(
+  (t) => t.service === "anthropic" || /^https?:\/\/\S+$/i.test(t.base_url),
+  { message: "A service address (http:// or https://) is required" }
+);
+
+aiRouter.post("/assistant/settings/models", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = TargetSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid AI service details");
+    try {
+      return res.json({ models: await listAiModels(await resolveTarget(parsed.data)) });
+    } catch (err: any) {
+      return res.status(400).json({ error: `Couldn't load models: ${err?.message || err}` });
+    }
+  } catch (err) { return next(err); }
+});
+
+aiRouter.post("/assistant/settings/test", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = z.object({ services: z.array(TargetSchema).min(1).max(AI_SERVICES.length), models: AiModelsSchema.min(1) }).safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Add at least one model to test");
+    const results = [];
+    for (const m of parsed.data.models) {
+      const service = parsed.data.services.find((s) => s.service === m.service);
+      if (!service) { results.push({ service: m.service, model: m.model, ok: false, ms: 0, message: "Its service isn't in the list" }); continue; }
+      results.push(await testAiModel(await resolveTarget(service), m.model));
+    }
+    return res.json({ results });
   } catch (err) { return next(err); }
 });
 
@@ -190,9 +256,10 @@ aiRouter.post("/assistant/chat", requireAssistant, async (req: AuthedRequest, re
   try {
     const parsed = z.object({ message: z.string().trim().min(1).max(4000), conversation_id: z.string().uuid().nullish() }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Type a question first");
-    if (!assistantConfigured()) return res.status(503).json({ error: "The AI assistant hasn't been set up yet." });
-    if ((await usedToday(req.user!.userId)) >= DAILY_LIMIT) {
-      return res.status(429).json({ error: `You've reached today's limit of ${DAILY_LIMIT} questions - it resets at midnight.` });
+    const cfg = await loadAiConfig();
+    if (!aiConfigured(cfg)) return res.status(503).json({ error: cfg.settings.enabled ? "The AI assistant hasn't been set up yet." : "The AI assistant is switched off." });
+    if ((await usedToday(req.user!.userId)) >= cfg.settings.daily_limit) {
+      return res.status(429).json({ error: `You've reached today's limit of ${cfg.settings.daily_limit} questions - it resets at midnight.` });
     }
     await streamChat({
       res,
