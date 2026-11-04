@@ -34,10 +34,15 @@ const TREASURY_FEATURE_DEFAULTS = ["ADMIN", "Section: Treasury & Financial Accou
 // "treasury_processing" group grant the router-wide requireFeatureAccess
 // gate below already requires to even reach these routes closes that gap:
 // anyone let into the queue can act on what's in it.
-async function requireTreasuryActor(req: AuthedRequest, _res: Response, next: NextFunction) {
-  const allowed = (await isCompensationFinanceUser(req))
+// Also "who counts as Finance" for querying a payback proof from View
+// Clearances (deductions.routes.ts) - querying is part of reconciling it.
+export async function isTreasuryActor(req: AuthedRequest): Promise<boolean> {
+  return (await isCompensationFinanceUser(req))
     || (await hasFeatureAccess(req.user!.userId, req.user!.role, "treasury_processing", TREASURY_FEATURE_DEFAULTS));
-  if (!allowed) return next(forbidden());
+}
+
+async function requireTreasuryActor(req: AuthedRequest, _res: Response, next: NextFunction) {
+  if (!(await isTreasuryActor(req))) return next(forbidden());
   return next();
 }
 

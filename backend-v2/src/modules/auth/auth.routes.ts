@@ -2253,7 +2253,7 @@ const FEATURE_KEYS = [
   "claims_sla_report", "advance_recovery_settings", "manager_delegations", "deductions", "refundable",
   "payments", "capture", "clearance_status_report",
   "accommodation", "hr_operations_review",
-  "overtime_request", "overtime_claim", "treasury_processing"
+  "overtime_request", "overtime_claim", "treasury_processing", "payback_query"
 ] as const;
 
 const FEATURE_DEFAULTS: Record<string, string[]> = {
@@ -2296,7 +2296,10 @@ const FEATURE_DEFAULTS: Record<string, string[]> = {
   // (isCompensationFinanceSection/Treasury & Financial Accounting), since
   // Treasury authority is deliberately the same authority throughout this
   // system, not a separate permission concept.
-  treasury_processing:   ["ADMIN", "Section: Treasury & Financial Accounting"]
+  treasury_processing:   ["ADMIN", "Section: Treasury & Financial Accounting"],
+  // View Clearances + its Query (payback proof) button, for people who aren't
+  // on the Deductions row - see canViewClearances in deductions.routes.ts.
+  payback_query:         ["ADMIN", "Section: Treasury & Financial Accounting"]
 };
 
 authRouter.get("/admin-feature-permissions", requireAuth, async (_req: AuthedRequest, res, next) => {

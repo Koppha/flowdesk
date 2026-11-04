@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "./api";
+import Swal from "sweetalert2";
+import { api, openBlobInNewTab } from "./api";
+import { showNotice } from "./alerts";
 import { formatMoney } from "./constants";
 import {
-  ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, Building2, Users
+  ChevronLeft, ChevronRight, Download, ArrowUpDown, FolderSearch, Building2, Users, Paperclip
 } from "lucide-react";
 import { BusinessUnitTabs, FinanceFilterBar, FilterField, SearchField, FinanceEmptyState, type BusinessUnit, ColumnChooser, useColumnVisibility, type ColumnOption } from "./components/FinanceQueueKit";
 
@@ -23,6 +25,8 @@ const STATUS_LABEL: Record<string, string> = {
   PAYBACK_DUE: "Payback Due",
   PAYBACK_PROOF_SUBMITTED: "Payback Proof Submitted",
   PAYBACK_PROOF_REJECTED: "Payback Proof Rejected",
+  // Not a real clearance_claims.status - see displayStatus().
+  PAYBACK_QUERIED: "Queried by Finance",
   FINANCE_TREASURY_REVIEW: "With Finance Treasury",
   COMPLETED: "Fully Cleared",
   CANCELLED: "Cancelled"
@@ -50,8 +54,19 @@ interface ClearanceItem {
   advance_amount: string | number;
   cleared_amount: string | number;
   amount_to_be_expensed: string | number;
+  // What the employee has shown they repaid (latest payback proof, unless
+  // rejected); salary_deduction already has this taken off.
+  paid_back: string | number;
   salary_deduction: string | number;
   payable: string | number;
+  payback_proof_id: string | null;
+  payback_proof_status: "SUBMITTED" | "VERIFIED" | "REJECTED" | "QUERIED" | null;
+  payback_proof_amount: string | number | null;
+  payback_payment_date: string | null;
+  payback_reference: string | null;
+  payback_query_reason: string | null;
+  payback_queried_at: string | null;
+  payback_queried_by_name: string | null;
   status: string;
   closed_at: string | null;
   currency: string | null;
@@ -62,7 +77,29 @@ function fmtDate(s: string | null | undefined) {
   return new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "origin" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "salaryDeduction" | "payable" | "status";
+const PROOF_STATUS_LABEL: Record<string, string> = {
+  SUBMITTED: "Under HR review",
+  VERIFIED: "Verified",
+  REJECTED: "Proof rejected",
+  QUERIED: "Queried"
+};
+
+// A Finance query sends the clearance back to the employee through the same
+// PAYBACK_PROOF_REJECTED state as an HR Operations rejection - told apart
+// here by the proof's own status so the row can say "Queried by Finance".
+function displayStatus(i: ClearanceItem) {
+  return i.status === "PAYBACK_PROOF_REJECTED" && i.payback_proof_status === "QUERIED" ? "PAYBACK_QUERIED" : i.status;
+}
+
+// Finance can query the employee's latest proof while it's with HR
+// Operations or awaiting Treasury - mirrors the backend's own check.
+function canQueryRow(i: ClearanceItem) {
+  return Boolean(i.payback_proof_id)
+    && ["SUBMITTED", "VERIFIED"].includes(i.payback_proof_status || "")
+    && ["PAYBACK_PROOF_SUBMITTED", "FINANCE_TREASURY_REVIEW"].includes(i.status);
+}
+
+type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "origin" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "paidBack" | "salaryDeduction" | "payable" | "status";
 
 const COLUMNS: ColumnOption[] = [
   { key: "name", label: "Name", locked: true },
@@ -80,6 +117,7 @@ const COLUMNS: ColumnOption[] = [
   { key: "advAmount", label: "Adv Amount" },
   { key: "clearedAmount", label: "Cleared Amount" },
   { key: "toBeExpensed", label: "Amount To Be Expensed" },
+  { key: "paidBack", label: "Paid Back" },
   { key: "salaryDeduction", label: "Salary Deduction" },
   { key: "payable", label: "Payable" },
   { key: "status", label: "Status" },
@@ -95,6 +133,8 @@ export default function ViewClearances() {
   const [items, setItems] = useState<ClearanceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [canQuery, setCanQuery] = useState(false);
+  const [queryingId, setQueryingId] = useState<string | null>(null);
 
   const [companyFilter, setCompanyFilter] = useState<BusinessUnit>("ALL");
   const [search, setSearch] = useState("");
@@ -110,12 +150,40 @@ export default function ViewClearances() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  useEffect(() => {
-    api.allClearances()
-      .then((resp: any) => setItems(resp.items || []))
+  function load() {
+    return api.allClearances()
+      .then((resp: any) => { setItems(resp.items || []); setCanQuery(Boolean(resp.can_query_payback)); })
       .catch((e: any) => setError(String(e.message)))
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { void load(); }, []);
+
+  async function queryProof(item: ClearanceItem) {
+    if (!item.payback_proof_id) return;
+    const result = await Swal.fire({
+      title: "Query this payback proof?",
+      html: `<div style="font-size:14px;text-align:left">${(item.employee_name || "The employee").replace(/</g, "&lt;")} will be asked to upload corrected proof, and HR Operations will be copied. Until they resubmit, the ${formatMoney(item.paid_back, item.currency)} no longer counts as paid back, so it shows as a salary deduction again.</div>`,
+      input: "textarea",
+      inputLabel: "What's wrong with the proof? (sent to the employee)",
+      inputPlaceholder: "e.g. Amount not in the bank statement / reference doesn't match",
+      inputValidator: (v) => (v && v.trim().length >= 3 ? undefined : "Please say what's wrong with the proof"),
+      showCancelButton: true,
+      confirmButtonText: "Send Query",
+      confirmButtonColor: "#d97706"
+    });
+    if (!result.isConfirmed) return;
+    setQueryingId(item.id);
+    try {
+      await api.queryPaybackProof(item.id, item.payback_proof_id, String(result.value).trim());
+      await load();
+      void showNotice(`Query sent to ${item.employee_name || "the employee"}. HR Operations has been copied.`);
+    } catch (e: any) {
+      void showNotice(e?.message || "Could not send the query");
+    } finally {
+      setQueryingId(null);
+    }
+  }
 
   const companyCounts = useMemo(() => {
     const counts: Record<string, number> = { ALL: items.length, MNO: 0, SEFS: 0, HigherLife: 0 };
@@ -131,7 +199,8 @@ export default function ViewClearances() {
     const counts = new Map<string, number>();
     for (const i of items) {
       if (companyFilter !== "ALL" && i.division_name !== companyFilter) continue;
-      counts.set(i.status, (counts.get(i.status) || 0) + 1);
+      const s = displayStatus(i);
+      counts.set(s, (counts.get(s) || 0) + 1);
     }
     return [...counts.entries()]
       .map(([value, n]) => ({ value, label: STATUS_LABEL[value] || value, n }))
@@ -141,7 +210,7 @@ export default function ViewClearances() {
   const filtered = useMemo(() => {
     return items.filter((i) => {
       if (companyFilter !== "ALL" && i.division_name !== companyFilter) return false;
-      if (statusFilter !== "ALL" && i.status !== statusFilter) return false;
+      if (statusFilter !== "ALL" && displayStatus(i) !== statusFilter) return false;
       if (dateFrom && (!i.closed_at || i.closed_at < dateFrom)) return false;
       if (dateTo && (!i.closed_at || i.closed_at > dateTo)) return false;
       if (search) {
@@ -178,9 +247,10 @@ export default function ViewClearances() {
         case "advAmount": return (Number(a.advance_amount) - Number(b.advance_amount)) * dir;
         case "clearedAmount": return (Number(a.cleared_amount) - Number(b.cleared_amount)) * dir;
         case "toBeExpensed": return (Number(a.amount_to_be_expensed) - Number(b.amount_to_be_expensed)) * dir;
+        case "paidBack": return (Number(a.paid_back) - Number(b.paid_back)) * dir;
         case "salaryDeduction": return (Number(a.salary_deduction) - Number(b.salary_deduction)) * dir;
         case "payable": return (Number(a.payable) - Number(b.payable)) * dir;
-        case "status": return a.status.localeCompare(b.status) * dir;
+        case "status": return displayStatus(a).localeCompare(displayStatus(b)) * dir;
         case "vrDate":
         default: {
           const av = a.vr_date ? new Date(a.vr_date).getTime() : 0;
@@ -220,9 +290,12 @@ export default function ViewClearances() {
       ["advAmount", "Adv Amount", (i) => String(Number(i.advance_amount || 0).toFixed(2))],
       ["clearedAmount", "Cleared Amount", (i) => String(Number(i.cleared_amount || 0).toFixed(2))],
       ["toBeExpensed", "Amount To Be Expensed", (i) => String(Number(i.amount_to_be_expensed || 0).toFixed(2))],
+      ["paidBack", "Paid Back", (i) => String(Number(i.paid_back || 0).toFixed(2))],
+      ["paidBack", "Payback Reference", (i) => String(i.payback_proof_id && i.payback_proof_status !== "REJECTED" ? (i.payback_reference || "") : "")],
       ["salaryDeduction", "Salary Deduction", (i) => String(Number(i.salary_deduction || 0).toFixed(2))],
       ["payable", "Payable", (i) => String(Number(i.payable || 0).toFixed(2))],
-      ["status", "Status", (i) => String(STATUS_LABEL[i.status] || i.status)],
+      ["status", "Status", (i) => String(STATUS_LABEL[displayStatus(i)] || i.status)],
+      ["status", "Finance Query", (i) => String(displayStatus(i) === "PAYBACK_QUERIED" ? (i.payback_query_reason || "") : "")],
     ];
     const csvColumns = allCsvColumns.filter(([key]) => key === "*" || show(key));
     const headers = csvColumns.map(([, h]) => h);
@@ -249,7 +322,7 @@ export default function ViewClearances() {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">View Clearances</h1>
-          <p className="ep-subtitle">Every clearance company-wide, at whatever stage it's currently at — view only, nothing to action here.</p>
+          <p className="ep-subtitle">Every clearance company-wide, at whatever stage it's currently at.{canQuery ? " Finance can open and query an employee's payback proof." : ""}</p>
         </div>
         <div className="ep-actions">
           <ColumnChooser columns={COLUMNS} show={columns.show} toggle={columns.toggle} reset={columns.reset} />
@@ -308,6 +381,7 @@ export default function ViewClearances() {
                   {show("advAmount") && <SortableHeader label="Adv Amount" sortKeyName="advAmount" />}
                   {show("clearedAmount") && <SortableHeader label="Cleared Amount" sortKeyName="clearedAmount" />}
                   {show("toBeExpensed") && <SortableHeader label="Amount To Be Expensed" sortKeyName="toBeExpensed" />}
+                  {show("paidBack") && <SortableHeader label="Paid Back" sortKeyName="paidBack" />}
                   {show("salaryDeduction") && <SortableHeader label="Salary Deduction" sortKeyName="salaryDeduction" />}
                   {show("payable") && <SortableHeader label="Payable" sortKeyName="payable" />}
                   {show("status") && <SortableHeader label="Status" sortKeyName="status" />}
@@ -334,6 +408,38 @@ export default function ViewClearances() {
                     {show("advAmount") && <td style={{ fontWeight: 600 }}>{formatMoney(item.advance_amount, item.currency)}</td>}
                     {show("clearedAmount") && <td style={{ fontWeight: 600 }}>{formatMoney(item.cleared_amount, item.currency)}</td>}
                     {show("toBeExpensed") && <td>{formatMoney(item.amount_to_be_expensed, item.currency)}</td>}
+                    {show("paidBack") && (
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <div style={{ color: Number(item.paid_back) > 0 ? "#059669" : "var(--muted)", fontWeight: 600 }}>
+                          {formatMoney(item.paid_back, item.currency)}
+                        </div>
+                        {item.payback_proof_id && (
+                          <button
+                            type="button"
+                            title={[
+                              item.payback_payment_date ? `Paid ${fmtDate(item.payback_payment_date)}` : null,
+                              item.payback_reference ? `Ref ${item.payback_reference}` : null,
+                              item.payback_proof_status === "REJECTED" ? `Rejected proof for ${formatMoney(item.payback_proof_amount ?? 0, item.currency)}` : null
+                            ].filter(Boolean).join(" · ") || "View payback proof"}
+                            onClick={() => { void openBlobInNewTab(() => api.allClearancesPaybackProofBlob(item.id, item.payback_proof_id!)).catch((e: any) => void showNotice(e?.message || "Could not open the payback proof")); }}
+                            style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 2, padding: 0, border: 0, background: "none", cursor: "pointer", fontSize: 11, color: item.payback_proof_status === "REJECTED" ? "#dc2626" : "var(--primary, #2563eb)" }}
+                          >
+                            <Paperclip size={11} /> Proof · {PROOF_STATUS_LABEL[item.payback_proof_status || ""] || item.payback_proof_status}
+                          </button>
+                        )}
+                        {canQuery && canQueryRow(item) && (
+                          <button
+                            type="button"
+                            title="Query this proof - the employee must upload corrected proof"
+                            disabled={queryingId === item.id}
+                            onClick={() => void queryProof(item)}
+                            style={{ display: "block", marginTop: 4, padding: "1px 8px", borderRadius: 99, border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", fontSize: 11, fontWeight: 700, cursor: queryingId === item.id ? "wait" : "pointer" }}
+                          >
+                            {queryingId === item.id ? "Sending…" : "Query"}
+                          </button>
+                        )}
+                      </td>
+                    )}
                     {show("salaryDeduction") && (
                       <td style={{ color: Number(item.salary_deduction) > 0 ? "#dc2626" : "var(--muted)", fontWeight: 600 }}>
                         {formatMoney(item.salary_deduction, item.currency)}
@@ -346,9 +452,23 @@ export default function ViewClearances() {
                     )}
                     {show("status") && (
                       <td>
-                        <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#f1f5f9", color: "#475569", whiteSpace: "nowrap" }}>
-                          {STATUS_LABEL[item.status] || item.status}
-                        </span>
+                        {displayStatus(item) === "PAYBACK_QUERIED" ? (
+                          <>
+                            <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#fef3c7", color: "#92400e", whiteSpace: "nowrap" }}>
+                              Queried by Finance
+                            </span>
+                            <div
+                              title={[item.payback_query_reason, item.payback_queried_by_name ? `— ${item.payback_queried_by_name}, ${fmtDate(item.payback_queried_at)}` : null].filter(Boolean).join(" ")}
+                              style={{ marginTop: 3, maxWidth: 220, fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                            >
+                              {item.payback_query_reason}
+                            </div>
+                          </>
+                        ) : (
+                          <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#f1f5f9", color: "#475569", whiteSpace: "nowrap" }}>
+                            {STATUS_LABEL[item.status] || item.status}
+                          </span>
+                        )}
                       </td>
                     )}
                   </tr>

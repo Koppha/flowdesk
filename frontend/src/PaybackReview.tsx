@@ -23,6 +23,13 @@ type PaybackRow = {
   submitted_at: string | null;
   proof_status: string | null;
   rejection_reason: string | null;
+  // Finance queried the proof from View Clearances (proof_status QUERIED).
+  query_reason: string | null;
+  queried_at: string | null;
+  queried_by_name: string | null;
+  // Treasury sent an already-verified payback back to HR Operations.
+  treasury_return_reason: string | null;
+  treasury_returned_at: string | null;
 };
 
 const STATUS_STYLE: Record<string, [string, string]> = {
@@ -37,9 +44,17 @@ const STATUS_TEXT: Record<string, string> = {
   REFUND_DUE: "Refund — Ready to Send to Treasury"
 };
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ row }: { row: PaybackRow }) {
+  const status = row.status;
   const [bg, color] = STATUS_STYLE[status] || ["#f1f5f9", "#64748b"];
-  return <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>{STATUS_TEXT[status] || status}</span>;
+  // A Finance query shares PAYBACK_PROOF_REJECTED with an HR rejection;
+  // a Treasury return shares PAYBACK_PROOF_SUBMITTED with a fresh proof.
+  const text = status === "PAYBACK_PROOF_REJECTED" && row.proof_status === "QUERIED"
+    ? "Queried by Finance — Awaiting Resubmission"
+    : status === "PAYBACK_PROOF_SUBMITTED" && row.proof_status === "VERIFIED"
+      ? "Returned by Treasury — Review Again"
+      : STATUS_TEXT[status] || status;
+  return <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>{text}</span>;
 }
 
 function fmtDate(s: string | null | undefined) {
@@ -196,7 +211,7 @@ export default function PaybackReview({ onBack }: { onBack: () => void }) {
                       <td>{r.amount_paid != null ? formatMoney(Number(r.amount_paid), r.currency) : "—"}</td>
                       <td>{fmtDate(r.submitted_at)}</td>
                       <td>{r.submission_count}</td>
-                      <td><StatusBadge status={r.status} /></td>
+                      <td><StatusBadge row={r} /></td>
                       <td>
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                           {r.proof_id && (
@@ -233,9 +248,22 @@ export default function PaybackReview({ onBack }: { onBack: () => void }) {
                         </td>
                       </tr>
                     )}
-                    {r.status === "PAYBACK_PROOF_REJECTED" && r.rejection_reason && (
+                    {r.status === "PAYBACK_PROOF_REJECTED" && r.proof_status === "QUERIED" && r.query_reason ? (
+                      <tr>
+                        <td colSpan={8} style={{ fontSize: 12, color: "var(--muted)", paddingTop: 0 }}>
+                          Queried by Finance{r.queried_by_name ? ` (${r.queried_by_name}, ${fmtDate(r.queried_at)})` : ""}: {r.query_reason}
+                        </td>
+                      </tr>
+                    ) : r.status === "PAYBACK_PROOF_REJECTED" && r.rejection_reason ? (
                       <tr>
                         <td colSpan={8} style={{ fontSize: 12, color: "var(--muted)", paddingTop: 0 }}>Rejected: {r.rejection_reason}</td>
+                      </tr>
+                    ) : null}
+                    {r.status === "PAYBACK_PROOF_SUBMITTED" && r.proof_status === "VERIFIED" && r.treasury_return_reason && (
+                      <tr>
+                        <td colSpan={8} style={{ fontSize: 12, color: "var(--muted)", paddingTop: 0 }}>
+                          Returned by Treasury{r.treasury_returned_at ? ` (${fmtDate(r.treasury_returned_at)})` : ""}: {r.treasury_return_reason}
+                        </td>
                       </tr>
                     )}
                   </Fragment>

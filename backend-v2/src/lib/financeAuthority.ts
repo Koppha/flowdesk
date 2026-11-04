@@ -1,5 +1,6 @@
 import type { AuthedRequest } from "./auth.js";
 import { query } from "./db.js";
+import { getUserGroups } from "./permissionGroups.js";
 
 // Which Departments (the `sections` table — see the Company/Division/
 // Department/Section -> divisions/departments/sections/teams mapping used
@@ -36,4 +37,29 @@ export async function isCompensationFinanceSection(sectionId?: string | null): P
 export async function isCompensationFinanceUser(req: AuthedRequest): Promise<boolean> {
   if (req.user!.role === "ADMIN") return true;
   return isCompensationFinanceSection(req.user!.sectionId);
+}
+
+// "Finance" as set up in Workflow Builder, whatever the company (MNO, SEFS,
+// or any added later): anyone on a Capture step of an Advance workflow, or on
+// a Mark Paid (payment officer) step of any workflow - named directly on the
+// step, or a member of the step's group ("Section: X", "Department: X",
+// "Team: X", ...). Only steps of ACTIVE, unexpired workflows count.
+// Capture steps on other request types are left out on purpose: e.g. the
+// Travel Clearance workflow's Capture step is HR's ("Team: Human Resource").
+export async function isWorkflowFinanceStaff(userId: string): Promise<boolean> {
+  const steps = await query<{ assigned_user_id: string | null; assigned_user_ids: string[] | null; approval_group_name: string | null }>(
+    `SELECT ws.assigned_user_id, ws.assigned_user_ids, ws.approval_group_name
+       FROM workflow_steps ws
+       JOIN workflows w ON w.id = ws.workflow_id
+      WHERE ws.is_active = true
+        AND w.status = 'ACTIVE'
+        AND (w.valid_until IS NULL OR w.valid_until > now())
+        AND (ws.action_type = 'MARK_PAID'
+             OR (ws.action_type IN ('CAPTURE', 'DEPT_CAPTURE') AND w.request_type = 'ADVANCE_REQUEST'))`
+  );
+  if (steps.some((s) => s.assigned_user_id === userId || (s.assigned_user_ids || []).includes(userId))) return true;
+  const stepGroups = steps.map((s) => s.approval_group_name).filter((g): g is string => Boolean(g));
+  if (!stepGroups.length) return false;
+  const userGroups = await getUserGroups(userId);
+  return stepGroups.some((g) => userGroups.includes(g));
 }

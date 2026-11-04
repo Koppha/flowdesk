@@ -2091,6 +2091,13 @@ async function ensureClearanceOutcomeSchema() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_cpp_claim ON clearance_payback_proofs(clearance_claim_id)`);
+  // Finance querying a proof from View Clearances (deductions.routes.ts) -
+  // the proof's status becomes 'QUERIED' and the employee must resubmit.
+  // Kept apart from reviewed_by/rejection_reason so HR Operations' own
+  // verification of the same proof stays on record.
+  await query(`ALTER TABLE clearance_payback_proofs ADD COLUMN IF NOT EXISTS queried_by_id uuid REFERENCES users(id)`);
+  await query(`ALTER TABLE clearance_payback_proofs ADD COLUMN IF NOT EXISTS queried_at timestamptz`);
+  await query(`ALTER TABLE clearance_payback_proofs ADD COLUMN IF NOT EXISTS query_reason text`);
 }
 
 // Ensure core organizational structure sections exist (e.g., Treasury section

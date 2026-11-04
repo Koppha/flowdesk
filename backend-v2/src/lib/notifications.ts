@@ -1254,6 +1254,82 @@ export async function notifyPaybackProofRejected(args: {
   }
 }
 
+// Finance queried a payback proof from View Clearances (deductions.routes.ts):
+// the employee must upload corrected proof; the HR Operations reviewer who
+// owns the payback is copied for visibility (no action needed from them
+// until the corrected proof arrives in their queue).
+export async function notifyPaybackProofQueried(args: {
+  claimId: string;
+  claimantName: string | null;
+  claimantEmail?: string | null;
+  department: string | null;
+  reason: string;
+  amount: number;
+  currency?: string | null;
+  queriedByName: string | null;
+  hrReviewer: { name: string | null; email: string | null } | null;
+}) {
+  const claimant = args.claimantName || "Claimant";
+  const details = detailBlock([
+    ["Claimant", claimant],
+    ["Division", args.department],
+    ["Payback amount", fmt(args.amount, args.currency)],
+    ["Queried by", args.queriedByName ? `${args.queriedByName} (Finance)` : "Finance"],
+    ["Query", args.reason]
+  ]);
+  try {
+    if (args.claimantEmail) {
+      await sendMail({
+        to: [args.claimantEmail],
+        subject: `[Action Required] Finance queried your payback proof — corrected proof needed`,
+        text: [
+          header(`CLEARANCE CLAIM — PAYBACK PROOF QUERIED`),
+          ``,
+          `Hello ${claimant},`,
+          ``,
+          `Finance has queried the repayment proof you submitted. Until corrected proof is submitted, the payback is treated as outstanding and may be deducted from your salary. Please open your clearance in FlowDesk and upload corrected proof.`,
+          ``,
+          details,
+          ``,
+          footer()
+        ].join("\n")
+      });
+    }
+    if (args.hrReviewer?.email) {
+      await sendMail({
+        to: [args.hrReviewer.email],
+        subject: `[FYI] Finance queried a payback proof — ${claimant}`,
+        text: [
+          header(`CLEARANCE CLAIM — PAYBACK PROOF QUERIED BY FINANCE`),
+          ``,
+          `Hello ${args.hrReviewer.name || "HR Operations"},`,
+          ``,
+          `Finance has queried ${claimant}'s repayment proof and sent it back to them for correction. It will return to your HR Operations Review queue once they resubmit.`,
+          ``,
+          details,
+          ``,
+          footer()
+        ].join("\n")
+      });
+    }
+
+    sendTeamsCard({
+      title: "Clearance Claim — Payback Proof Queried by Finance",
+      summary: `Payback proof queried for ${claimant}`,
+      subtitle: args.reason,
+      color: "d97706",
+      facts: [
+        { name: "Claimant", value: claimant },
+        { name: "Division", value: args.department || "—" },
+        { name: "Amount", value: fmt(args.amount, args.currency) },
+        { name: "Query", value: args.reason }
+      ]
+    }).catch((e) => logger.warn("teams_payback_proof_queried_failed", { error: serializeError(e) }));
+  } catch (error) {
+    logger.warn("payback_proof_queried_notification_failed", { claim_id: args.claimId, error: serializeError(error) });
+  }
+}
+
 // ─── notifyUserOnboarded ──────────────────────────────────────────────────────
 
 export async function notifyUserOnboarded(args: {

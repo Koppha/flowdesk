@@ -727,6 +727,9 @@ export const api = {
   deductionsAccess: () => req("/deductions/access"),
   deductions: () => req("/deductions"),
   allClearances: () => req("/deductions/all-clearances"),
+  allClearancesPaybackProofBlob: (id: string, proofId: string) => fetchBlob(`/deductions/all-clearances/${id}/payback-proof/${proofId}/file`),
+  queryPaybackProof: (id: string, proofId: string, reason: string) =>
+    req(`/deductions/all-clearances/${id}/payback-proof/${proofId}/query`, { method: "POST", body: JSON.stringify({ reason }) }),
   setDeductionActioned: (id: string, deducted: boolean) =>
     req(`/deductions/${id}/deducted`, { method: "PATCH", body: JSON.stringify({ deducted }) }),
   refundableAccess: () => req("/refundable/access"),

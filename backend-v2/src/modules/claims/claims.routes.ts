@@ -200,7 +200,7 @@ async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: strin
 // The HR Operations step that reviews a payback proof / refund: the chain's
 // DEPT_CLOSE step. Found by type rather than position - "View" steps are
 // appended after it when a clearance closes.
-function paybackReviewStep(chain: ChainStep[]): ChainStep {
+export function paybackReviewStep(chain: ChainStep[]): ChainStep {
   for (let i = chain.length - 1; i >= 0; i--) if (chain[i].action_type === "DEPT_CLOSE") return chain[i];
   for (let i = chain.length - 1; i >= 0; i--) if (chain[i].action_type !== "DEPT_REPORTS") return chain[i];
   return chain[chain.length - 1];
@@ -319,7 +319,9 @@ claimsRouter.get("/payback-review-queue", async (req: AuthedRequest, res, next) 
               COALESCE(c.currency, 'LSL') AS currency,
               (SELECT count(*) FROM clearance_payback_proofs p WHERE p.clearance_claim_id = c.id) AS submission_count,
               p.id AS proof_id, p.amount_paid, p.payment_date, p.reference, p.comment AS proof_comment,
-              p.file_path, p.submitted_at, p.status AS proof_status, p.rejection_reason
+              p.file_path, p.submitted_at, p.status AS proof_status, p.rejection_reason,
+              p.query_reason, p.queried_at, (SELECT q.full_name FROM users q WHERE q.id = p.queried_by_id) AS queried_by_name,
+              c.treasury_return_reason, c.treasury_returned_at
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
          LEFT JOIN LATERAL (
@@ -1444,7 +1446,12 @@ claimsRouter.post("/:id/payback-proof/:proofId/verify", requireAuth, async (req:
     if (!proof || proof.id !== req.params.proofId) {
       throw badRequest("Only the current (latest) payback proof can be verified");
     }
-    if (proof.status !== "SUBMITTED") throw badRequest("This proof has already been reviewed");
+    // VERIFIED here means Treasury returned an already-verified payback to
+    // HR Operations (treasury.routes.ts POST /:id/return-to-hr puts the
+    // claim back to PAYBACK_PROOF_SUBMITTED but keeps the proof's VERIFIED
+    // record) - HR must be able to re-verify or reject it, or it's stuck.
+    // The claim-status check above already rules out a double verify.
+    if (!["SUBMITTED", "VERIFIED"].includes(proof.status)) throw badRequest("This proof has already been reviewed");
 
     const now = new Date();
     await withTransaction(async (client) => {
@@ -1520,7 +1527,8 @@ claimsRouter.post("/:id/payback-proof/:proofId/reject", requireAuth, async (req:
     if (!proof || proof.id !== req.params.proofId) {
       throw badRequest("Only the current (latest) payback proof can be rejected");
     }
-    if (proof.status !== "SUBMITTED") throw badRequest("This proof has already been reviewed");
+    // VERIFIED = returned by Treasury; see the same check in /verify above.
+    if (!["SUBMITTED", "VERIFIED"].includes(proof.status)) throw badRequest("This proof has already been reviewed");
 
     const now = new Date();
     await withTransaction(async (client) => {
@@ -1528,7 +1536,15 @@ claimsRouter.post("/:id/payback-proof/:proofId/reject", requireAuth, async (req:
         `UPDATE clearance_payback_proofs SET status='REJECTED', reviewed_by_id=$2, reviewed_at=$3, rejection_reason=$4 WHERE id=$1`,
         [proof.id, req.user!.userId, now, parsed.data.reason]
       );
-      await client.query(`UPDATE clearance_claims SET status='PAYBACK_PROOF_REJECTED', updated_at=now() WHERE id=$1`, [claim.id]);
+      // Undo an earlier verification's "fully cleared" (only set when a
+      // Treasury-returned proof is now rejected) - the payback is owed again.
+      await client.query(
+        `UPDATE clearance_claims SET status='PAYBACK_PROOF_REJECTED',
+           employee_clearance_status='NOT_CLEARED', payback_verified_by_id=NULL, payback_verified_at=NULL,
+           updated_at=now()
+         WHERE id=$1`,
+        [claim.id]
+      );
     });
 
     await writeClaimAudit({

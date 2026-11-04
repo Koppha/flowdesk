@@ -564,6 +564,9 @@ export default function App() {
   const [salaryAdvanceMaxMonths, setSalaryAdvanceMaxMonths] = useState(6);
   const [loanAdvanceMaxMonths, setLoanAdvanceMaxMonths] = useState(6);
   const [hasDeductionsAccess, setHasDeductionsAccess] = useState(false);
+  // View Clearances (and its Query button) has a wider audience than
+  // Deductions - see canViewClearances in deductions.routes.ts.
+  const [hasViewClearancesAccess, setHasViewClearancesAccess] = useState(false);
   const [deductionsCount, setDeductionsCount] = useState(0);
   const [hasRefundableAccess, setHasRefundableAccess] = useState(false);
   const [refundableCount, setRefundableCount] = useState(0);
@@ -1685,7 +1688,7 @@ export default function App() {
       // catch-and-fallback, same as every other startup call above — no role check needed here.
       optionalStartupData<{ total?: number }>(api.payments({ status: "pending" }), { total: 0 }, "Payments"),
       optionalStartupData<{ allowed?: boolean }>(api.paymentsAccess(), { allowed: false }, "Payments access"),
-      optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
+      optionalStartupData<{ allowed?: boolean; viewClearances?: boolean; pendingCount?: number }>(api.deductionsAccess(), { allowed: false }, "Deductions access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.refundableAccess(), { allowed: false }, "Refundable access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.treasuryAccess(), { allowed: false }, "Treasury access"),
       optionalStartupData<{ allowed?: boolean; awaitingProvisioning?: number; inProgress?: number }>(api.itProvisioningAccess(), { allowed: false }, "IT Provisioning access"),
@@ -1773,6 +1776,7 @@ export default function App() {
     setSalaryAdvanceMaxMonths(Number(moduleFlagsResp?.salary_advance_max_payback_months) || 6);
     setLoanAdvanceMaxMonths(Number(moduleFlagsResp?.loan_advance_max_payback_months) || 6);
     setHasDeductionsAccess(Boolean(deductionsAccessResp?.allowed));
+    setHasViewClearancesAccess(Boolean(deductionsAccessResp?.viewClearances ?? deductionsAccessResp?.allowed));
     setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
     setHasRefundableAccess(Boolean(refundableAccessResp?.allowed));
     setRefundableCount(refundableAccessResp?.pendingCount || 0);
@@ -1870,8 +1874,9 @@ export default function App() {
       // Separate try/catch: 403s here (anyone without Deductions access) are
       // expected and must not trigger the inbox poll's auth-error logout above.
       try {
-        const deductionsResp: { allowed?: boolean; pendingCount?: number } = await api.deductionsAccess();
+        const deductionsResp: { allowed?: boolean; viewClearances?: boolean; pendingCount?: number } = await api.deductionsAccess();
         setHasDeductionsAccess(Boolean(deductionsResp?.allowed));
+        setHasViewClearancesAccess(Boolean(deductionsResp?.viewClearances ?? deductionsResp?.allowed));
         setDeductionsCount(deductionsResp?.pendingCount || 0);
       } catch {
         // ignored — users without Deductions access simply won't see the nav item
@@ -4448,7 +4453,19 @@ export default function App() {
                     </section>
                   )}
 
-                  {currentStatus === "PAYBACK_PROOF_REJECTED" && (
+                  {currentStatus === "PAYBACK_PROOF_REJECTED" && claim.payback_proofs?.[0]?.status === "QUERIED" && (
+                    <section className="tracking-card">
+                      <h3>Payback Proof Queried by Finance</h3>
+                      <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
+                        Finance has queried your previous proof
+                        {claim.payback_proofs[0].query_reason ? <>: <strong>{claim.payback_proofs[0].query_reason}</strong></> : "."}
+                        {" "}Until corrected proof is submitted, the payback counts as outstanding and may be deducted from your salary. Please upload corrected proof — required payback amount: {fmtMoney(Math.abs(Number(claim.balance_amount || 0)), claim.currency)}.
+                      </p>
+                      <PaybackProofForm form={paybackProofForm} setForm={setPaybackProofForm} onSubmit={submitPaybackProofForTracking} submitting={paybackProofSubmitting} submitLabel="Resubmit Payback Proof" />
+                    </section>
+                  )}
+
+                  {currentStatus === "PAYBACK_PROOF_REJECTED" && claim.payback_proofs?.[0]?.status !== "QUERIED" && (
                     <section className="tracking-card">
                       <h3>Payback Proof Rejected</h3>
                       <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
@@ -4481,7 +4498,7 @@ export default function App() {
                       <h3>Payback Proof History</h3>
                       <dl className="tracking-detail-list">
                         {claim.payback_proofs.map((p: any) => (
-                          <div key={p.id}><dt>v{p.version} — {formatTrackingDate(p.submitted_at)}</dt><dd>{p.status} {p.rejection_reason ? `— ${p.rejection_reason}` : ""}</dd></div>
+                          <div key={p.id}><dt>v{p.version} — {formatTrackingDate(p.submitted_at)}</dt><dd>{p.status === "QUERIED" ? `QUERIED BY FINANCE${p.query_reason ? ` — ${p.query_reason}` : ""}` : `${p.status} ${p.rejection_reason ? `— ${p.rejection_reason}` : ""}`}</dd></div>
                         ))}
                       </dl>
                     </section>
@@ -4994,7 +5011,7 @@ export default function App() {
           )}
           {signatureModuleEnabled && <a href="#" className={navItemClass(page === "SIGNATURES")} onClick={(e) => { e.preventDefault(); setPage("SIGNATURES"); }}><span className="sidebar-nav-icon"><FileSignature size={18} aria-hidden /></span>Sign a Document</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
-          {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasRefundableAccess) && (
+          {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasViewClearancesAccess || hasRefundableAccess) && (
             <div className={`sidebar-group ${groupOpen("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
               <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)); }}>
                 <span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Finance
@@ -5021,7 +5038,7 @@ export default function App() {
                 {hasDeductionsAccess && (
                   <a href="#" className={navItemClass(page === "DEDUCTIONS")} onClick={(e) => { e.preventDefault(); setPage("DEDUCTIONS"); }}><MinusCircle size={14} aria-hidden />Deductions <span className="inbox-count-chip">{deductionsCount}</span></a>
                 )}
-                {hasDeductionsAccess && (
+                {hasViewClearancesAccess && (
                   <a href="#" className={navItemClass(page === "VIEW_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("VIEW_CLEARANCES"); }}><Eye size={14} aria-hidden />View Clearances</a>
                 )}
                 {hasRefundableAccess && (
@@ -5757,6 +5774,7 @@ export default function App() {
                       { key: "advance_recovery_settings", label: "Advance Recovery Settings", group: "Advances" },
                       { key: "manager_delegations",    label: "Manager Delegations",      group: "User Management" },
                       { key: "deductions",             label: "Deductions",               group: "Finance Operations" },
+                      { key: "payback_query",          label: "View Clearances + Query Payback Proof", group: "Finance Operations" },
                       { key: "refundable",             label: "Refundable",               group: "Finance Operations" },
                       { key: "salaries",               label: "Salaries",                 group: "Finance Operations" },
                       { key: "it_provisioning",        label: "IT Provisioning",          group: "IT" },
@@ -5799,6 +5817,7 @@ export default function App() {
                       advance_recovery_settings: ["ADMIN","FINANCE"],
                       manager_delegations:    ["ADMIN"],
                       deductions:             ["ADMIN"],
+                      payback_query:          ["ADMIN","Section: Treasury & Financial Accounting"],
                       refundable:             ["ADMIN"],
                       salaries:               ["ADMIN"],
     it_provisioning:        ["ADMIN"],
