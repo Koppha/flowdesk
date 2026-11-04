@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { API, api, getToken } from "./api";
 import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, MessageCircle, PanelBottom, Smartphone, User } from "lucide-react";
 
-type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument" | "maintenance";
+type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument" | "maintenance" | "myTeam";
 type Modules = Record<ModuleKey, boolean>;
 type TabBarKey = "home" | "inbox" | "profile";
 type TabBarItem = { key: TabBarKey; enabled: boolean };
@@ -81,7 +81,9 @@ const MODULES: { key: ModuleKey; label: string; color: string; bg: string }[] = 
   { key: "standby", label: "Standby", color: "#0369a1", bg: "#e0f2fe" },
   { key: "customProcesses", label: "Custom Processes", color: "#7c3aed", bg: "#ede9fe" },
   { key: "signADocument", label: "Sign a Document", color: "#c8102e", bg: "#fdecec" },
-  { key: "maintenance", label: "Maintenance", color: "#b45309", bg: "#fef3e2" }
+  { key: "maintenance", label: "Maintenance", color: "#b45309", bg: "#fef3e2" },
+  // Shown only to managers (MANAGER, HOD, EXCO, CEO, ADMIN); staff never see it.
+  { key: "myTeam", label: "My Team (managers only)", color: "#0369a1", bg: "#e0f2fe" }
 ];
 
 const DEFAULTS: Modules = {
@@ -93,7 +95,8 @@ const DEFAULTS: Modules = {
   standby: false,
   customProcesses: false,
   signADocument: false,
-  maintenance: false
+  maintenance: false,
+  myTeam: false
 };
 
 // Not Home tiles (so they stay out of MODULES and the phone preview) - they

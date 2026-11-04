@@ -19,7 +19,9 @@ const ModulesSchema = z.object({
   customProcesses: z.boolean(),
   signADocument: z.boolean(),
   // .default(false): settings saved before Maintenance existed still parse.
-  maintenance: z.boolean().default(false)
+  maintenance: z.boolean().default(false),
+  // Managers' My Team tile (MANAGER/HOD/EXCO/CEO/ADMIN only, enforced by the app and the endpoint).
+  myTeam: z.boolean().default(false)
 });
 type Modules = z.infer<typeof ModulesSchema>;
 
@@ -32,7 +34,8 @@ const DEFAULT_MODULES: Modules = {
   standby: false,
   customProcesses: false,
   signADocument: false,
-  maintenance: false
+  maintenance: false,
+  myTeam: false
 };
 
 async function currentModules(): Promise<Modules> {

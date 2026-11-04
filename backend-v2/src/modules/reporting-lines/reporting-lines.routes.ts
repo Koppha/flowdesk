@@ -444,7 +444,7 @@ reportingLinesRouter.get("/my-team", requireRole(["MANAGER", "HOD", "EXCO", "CEO
               UNION SELECT id FROM section_fallback
               UNION SELECT id FROM department_fallback
             )
-       SELECT u.id, u.full_name, u.email, u.title, u.role::text AS role, u.department, u.is_active,
+       SELECT u.id, u.full_name, u.email, u.phone, u.title, u.role::text AS role, u.department, u.is_active,
               (SELECT COUNT(*) FROM advance_requests ar WHERE ar.requester_id = u.id AND ar.status::text IN ${OPEN_ADVANCE_STATUSES}) AS pending_advances,
               (SELECT COUNT(*) FROM clearance_claims cc WHERE cc.claimant_id = u.id AND cc.status::text IN ${OPEN_CLAIM_STATUSES}) AS pending_claims,
               (SELECT COUNT(*) FROM advance_requests ar WHERE ar.requester_id = u.id) AS total_advances,
