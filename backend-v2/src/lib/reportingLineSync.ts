@@ -1,6 +1,6 @@
 import { query, withTransaction } from "./db.js";
 import { logger } from "./logger.js";
-import { getDepartmentLeadership, getSectionLeadership, getTeamLeadership } from "./departments.js";
+import { getDepartmentLeadership, getSectionLeadership, getTeamLeadership, normalizeDepartmentName } from "./departments.js";
 
 // Reporting lines and the Workflow Builder's "Manager" steps work from the
 // same rule. Every employee's immediate manager according to Org Structure
@@ -19,10 +19,34 @@ export type OrgManager = {
   ambiguous: boolean;
 };
 
-// Mirrors the workflow engine's manager resolution (resolveRequesterManager)
+// A MANAGER manages their own Section. When someone's Section has no manager,
+// a MANAGER who sits in a different Section of the same Department/Division
+// is not borrowed - it skips to the next level (HOD, then EXCO) instead
+// (user's rule, 2026-11-05: Thabiso Phusumane, alone in Network & Information
+// Security, had been given the IT Manager from the next Section). Only a
+// MANAGER of the wider unit itself (not placed in a narrower one) counts, or
+// a Division manager an admin assigned explicitly on the Division.
+async function wideUnitManagers<T extends { id: string }>(level: "Department" | "Division", unit: string, candidates: T[]): Promise<T[]> {
+  if (!candidates.length) return candidates;
+  if (level === "Division") {
+    const explicit = (await query<{ manager_user_id: string | null }>(
+      `SELECT manager_user_id FROM departments WHERE lower(trim(name)) = lower($1) LIMIT 1`, [normalizeDepartmentName(unit)]
+    ))[0]?.manager_user_id;
+    if (explicit && candidates.some((c) => c.id === explicit)) return candidates;
+  }
+  const kept = new Set((await query<{ id: string }>(
+    `SELECT id FROM users WHERE id = ANY($1::uuid[]) AND role::text = 'MANAGER' AND team_id IS NULL
+        ${level === "Division" ? "AND section_id IS NULL" : ""}`,
+    [candidates.map((c) => c.id)]
+  )).map((r) => r.id));
+  return candidates.filter((c) => kept.has(c.id));
+}
+
+// The workflow engine's manager resolution (resolveRequesterManager) uses this
 // for someone with no reporting line: EXCO -> CEO; otherwise the closest unit
 // first - their Section (team), then Department (section), then Division -
-// HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else -> MANAGER/HOD/EXCO.
+// HOD -> EXCO, MANAGER -> HOD/EXCO, everyone else -> MANAGER/HOD/EXCO, where
+// a Department's or Division's MANAGER only counts per wideUnitManagers.
 export async function computeOrgManager(userId: string): Promise<OrgManager> {
   const user = (await query<{ role: string; department: string | null; section_id: string | null; team_id: string | null }>(
     `SELECT role::text AS role, department, section_id, team_id FROM users WHERE id = $1`, [userId]
@@ -58,7 +82,9 @@ export async function computeOrgManager(userId: string): Promise<OrgManager> {
     if (p.id) return { manager_id: p.id, basis: "Section", ambiguous: (await holders("team_id", user.team_id, p.role!)) > 1 };
   }
   if (user.section_id) {
-    const l = await getSectionLeadership(user.section_id);
+    const sl = await getSectionLeadership(user.section_id);
+    const managers = await wideUnitManagers("Department", user.section_id, sl.managers);
+    const l = { ...sl, manager_user_id: managers[0]?.id ?? null, managers };
     const p = pick(l);
     if (p.id) {
       const pool = p.role === "MANAGER" ? l.managers : p.role === "HOD" ? l.hods : l.excos;
@@ -66,7 +92,9 @@ export async function computeOrgManager(userId: string): Promise<OrgManager> {
     }
   }
   if (user.department) {
-    const l = await getDepartmentLeadership(user.department);
+    const dl = await getDepartmentLeadership(user.department);
+    const managers = await wideUnitManagers("Division", user.department, dl.managers ?? []);
+    const l = { ...dl, manager_user_id: managers[0]?.id ?? null, managers };
     const p = pick(l);
     if (p.id) {
       const pool = p.role === "MANAGER" ? l.managers : p.role === "HOD" ? l.hods : l.excos;

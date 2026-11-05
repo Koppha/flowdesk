@@ -1,5 +1,6 @@
 import { query, withTransaction } from "./db.js";
-import { getDepartmentLeadership, getSectionLeadership, getTeamLeadership } from "./departments.js";
+import { getDepartmentLeadership, getSectionLeadership } from "./departments.js";
+import { computeOrgManager } from "./reportingLineSync.js";
 import { isCompensationFinanceSection } from "./financeAuthority.js";
 import { getUserGroups } from "./permissionGroups.js";
 import { normalizeWorkflowRouteCode } from "./workflowRouting.js";
@@ -90,18 +91,12 @@ export function findPendingAccommodationStep(chain: ChainStep[]): { index: numbe
   return index === -1 ? null : { index, step: chain[index] };
 }
 
-// Mirrors getFallbackManagerId in reporting-lines.routes.ts: the requester's
-// active reporting_lines manager, falling back to the closest available
-// leadership when no reporting_lines row exists yet - their TEAM's
-// leadership first (users.team_id, the UI's "Section" field - the closest
-// possible org unit, e.g. Operations now has a distinct MANAGER per team:
-// Transmission, NOC, IP Core Network, Network Quality, so matching on team
-// finds the right one instead of picking arbitrarily among all of them),
-// then their SECTION's (users.section_id, the UI's "Department" field - a
-// broader unit, e.g. Technical's four sections each have their own real
-// HOD), then their department's, as a broader last resort. Same HOD -> EXCO
-// / MANAGER -> HOD/EXCO / everyone else -> MANAGER/HOD/EXCO chain at each
-// level.
+// The requester's active reporting_lines manager, or - when no line exists
+// yet - their Org Structure manager, worked out exactly the way Reporting
+// Lines' automatic lines are (computeOrgManager in reportingLineSync.ts), so a
+// workflow always routes to who Reporting Lines shows. That includes the
+// rule that a Section with no manager skips to the next level (HOD, then
+// EXCO) rather than borrowing a manager from another Section.
 export async function resolveRequesterManager(
   requesterId: string
 ): Promise<{ id: string; full_name: string | null; title: string | null; email: string | null; role: string } | null> {
@@ -112,27 +107,8 @@ export async function resolveRequesterManager(
   let managerId = lineRows[0]?.manager_id ?? null;
 
   if (!managerId || managerId === requesterId) {
-    const requesterRows = await query<{ role: string; department: string | null; section_id: string | null; team_id: string | null }>(
-      `SELECT role::text AS role, department, section_id, team_id FROM users WHERE id = $1`,
-      [requesterId]
-    );
-    const requesterUser = requesterRows[0];
-    const fallbackId = (leadership: { hod_user_id: string | null; manager_user_id: string | null; exco_user_id: string | null }) => {
-      if (requesterUser!.role === "HOD") return leadership.exco_user_id ?? null;
-      if (requesterUser!.role === "MANAGER") return leadership.hod_user_id ?? leadership.exco_user_id ?? null;
-      return leadership.manager_user_id ?? leadership.hod_user_id ?? leadership.exco_user_id ?? null;
-    };
-    if (requesterUser?.team_id) {
-      managerId = fallbackId(await getTeamLeadership(requesterUser.team_id));
-    }
-    if ((!managerId || managerId === requesterId) && requesterUser?.section_id) {
-      managerId = fallbackId(await getSectionLeadership(requesterUser.section_id));
-    }
-    if ((!managerId || managerId === requesterId) && requesterUser?.department) {
-      managerId = fallbackId(await getDepartmentLeadership(requesterUser.department));
-    }
+    managerId = (await computeOrgManager(requesterId)).manager_id;
   }
-
   if (!managerId || managerId === requesterId) return null;
   return (
     (await query<{ id: string; full_name: string | null; title: string | null; email: string | null; role: string }>(
@@ -458,6 +434,11 @@ export async function resolveWorkflowChain(params: {
   // so it's left alone.
   let lastApproveApproverId: string | null = null;
   let secondLevelManager: Awaited<ReturnType<typeof resolveRequesterManager>> | undefined;
+  // The last plain (dynamic) HOD step, if any - see the no-manager skip below.
+  const lastDynamicHodIndex = steps.reduce((last, s, i) => {
+    const c = normalizeWorkflowRouteCode(s.position_type_code, s.position_name);
+    return c === "HOD" && !s.assigned_user_ids?.length && !(s.approval_mode === "ANY_ONE" && s.approval_group_name) ? i : last;
+  }, -1);
   for (const step of steps) {
     const code = normalizeWorkflowRouteCode(step.position_type_code, step.position_name);
 
@@ -502,6 +483,24 @@ export async function resolveWorkflowChain(params: {
     // guards above bypass a step that can't meaningfully apply to this
     // requester - regardless of this step's own skip_if_unassigned flag.
     if (isDeptManagerCode && !requesterManager && ["HOD", "EXCO", "CEO", "ADMIN"].includes(requesterRole)) {
+      previousStepPushed = false;
+      continue;
+    }
+
+    // No manager in the requester's own Section: their reporting line goes
+    // straight to the next level (an HOD, or EXCO where there's no HOD - see
+    // computeOrgManager). Skip the Manager step and let that person sign at
+    // the HOD step (user's rule, 2026-11-05), instead of countersigning as
+    // "Manager" and pushing the HOD step on up to EXCO. Only when a later HOD
+    // step is there to take it - otherwise the next level fills the Manager
+    // step, so the request is still reviewed. MANAGER-role requesters keep
+    // their HOD on the Manager step as before.
+    if (
+      isDeptManagerCode && !hasFixedAssignees && !override && requesterManager &&
+      ["HOD", "EXCO", "CEO"].includes(requesterManager.role) &&
+      requesterRole !== "" && !["MANAGER", "HOD", "EXCO", "CEO", "ADMIN"].includes(requesterRole) &&
+      steps.indexOf(step) < lastDynamicHodIndex
+    ) {
       previousStepPushed = false;
       continue;
     }
