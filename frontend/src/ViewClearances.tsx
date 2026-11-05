@@ -78,7 +78,7 @@ function fmtDate(s: string | null | undefined) {
 }
 
 const PROOF_STATUS_LABEL: Record<string, string> = {
-  SUBMITTED: "Under HR review",
+  SUBMITTED: "",
   VERIFIED: "Verified",
   REJECTED: "Proof rejected",
   QUERIED: "Queried"
@@ -424,7 +424,11 @@ export default function ViewClearances() {
                             onClick={() => { void openBlobInNewTab(() => api.allClearancesPaybackProofBlob(item.id, item.payback_proof_id!)).catch((e: any) => void showNotice(e?.message || "Could not open the payback proof")); }}
                             style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 2, padding: 0, border: 0, background: "none", cursor: "pointer", fontSize: 11, color: item.payback_proof_status === "REJECTED" ? "#dc2626" : "var(--primary, #2563eb)" }}
                           >
-                            <Paperclip size={11} /> Proof · {PROOF_STATUS_LABEL[item.payback_proof_status || ""] || item.payback_proof_status}
+                            <Paperclip size={11} /> Proof{(() => {
+                              const status = item.payback_proof_status || "";
+                              const label = status in PROOF_STATUS_LABEL ? PROOF_STATUS_LABEL[status] : status;
+                              return label ? ` · ${label}` : "";
+                            })()}
                           </button>
                         )}
                         {canQuery && canQueryRow(item) && (

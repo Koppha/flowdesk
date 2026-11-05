@@ -51,7 +51,8 @@ const KIND_LABEL: Record<string, string> = {
   CREATED: "Submitted", DRAFT_CREATED: "Started the draft", SUBMITTED: "Submitted for approval", FIELDS_SAVED: "Edited",
   SECTION_ADDED: "Added a section", SECTION_REMOVED: "Removed a section", SECTION_SAVED: "Edited a section",
   PEOPLE_CHANGED: "People", COMMENTED: "Comment", ASSIGNEE_ADDED: "Assignee added", ASSIGNEE_CONFIRMED: "Assignee confirmed",
-  APPROVAL_ACTION: "Approval", CANCELLED: "Cancelled", CLOSED: "Closed", DISTRIBUTED: "Distributed", RAID_CHANGED: "RAID log"
+  APPROVAL_ACTION: "Approval", CANCELLED: "Cancelled", CLOSED: "Closed", DISTRIBUTED: "Distributed", RAID_CHANGED: "RAID log",
+  ROLLED_BACK: "Rolled back for correction", ASSIGNEE_REJECTED: "Rejected by an assignee"
 };
 
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
@@ -61,7 +62,7 @@ export default function ChangeRequestWorkspace(props: {
   currentUserId: string | null;
   directory: DirectoryUser[];
   renderFieldEditor?: (f: WsField, values: Record<string, any>, setValue: (key: string, value: any) => void) => ReactNode;
-  onSubmitDraft?: (draft: { id: string; data: Record<string, any> }) => void;
+  onSubmitDraft?: (draft: { id: string; data: Record<string, any>; approval_chain?: any[] }) => void;
   onChanged?: () => void;
   onClose: () => void;
 }) {
@@ -236,7 +237,7 @@ export default function ChangeRequestWorkspace(props: {
         </button>
         {ws.status === "DRAFT" && perms.submit && onSubmitDraft && (
           <button className="ep-btn" style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }}
-            onClick={() => onSubmitDraft({ id: submissionId, data: detail.data || {} })}>
+            onClick={() => onSubmitDraft({ id: submissionId, data: detail.data || {}, approval_chain: Array.isArray(detail.approval_chain) ? detail.approval_chain : [] })}>
             <Send size={13} /> Submit for approval
           </button>
         )}
@@ -262,6 +263,19 @@ export default function ChangeRequestWorkspace(props: {
         <HistoryView submissionId={submissionId} fieldByKey={fieldByKey} formatValue={formatValue} lastSeen={lastSeen} currentUserId={currentUserId} />
       ) : (
         <div style={{ display: "grid", gap: 14 }}>
+          {/* Rolled back for correction: say who sent it back and why, until it's resubmitted. */}
+          {(() => {
+            if (ws.status !== "DRAFT") return null;
+            const back = [...ws.recent].sort((a, b) => b.created_at.localeCompare(a.created_at)).find((r) => r.kind === "ROLLED_BACK" || r.kind === "SUBMITTED" || r.kind === "CREATED");
+            if (!back || back.kind !== "ROLLED_BACK") return null;
+            return (
+              <div className="card" style={{ padding: 14, borderLeft: "4px solid #f59e0b", background: "#fffbeb", color: "#78350f" }}>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Rolled back for correction</div>
+                <div style={{ fontSize: 13 }}>{back.summary.replace(/^Rolled back for correction /, "")}</div>
+                <div style={{ fontSize: 12, marginTop: 6 }}>{when(back.created_at)} · Make the corrections, then choose <strong>Submit for approval</strong>. It starts again from step 1{detail.data && Object.values(detail.data).some((v) => Array.isArray(v) && v.some((a: any) => a && typeof a === "object" && "confirmed" in a)) ? " (the assignees confirm again)" : ""}.</div>
+              </div>
+            );
+          })()}
           {/* Recent changes */}
           <div className="card" style={{ padding: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -421,12 +435,12 @@ export default function ChangeRequestWorkspace(props: {
           {/* Approvals, once submitted */}
           {Array.isArray(detail.approval_chain) && detail.approval_chain.length > 0 && (
             <div className="card" style={{ padding: 14 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Approvals</div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>{ws.status === "DRAFT" ? "Approvals (last round, before it was rolled back)" : "Approvals"}</div>
               <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
                 {detail.approval_chain.map((step: any, i: number) => (
                   <div key={i}>
                     <strong>{i + 1}. {step.position_name}</strong> — {step.approver_name || "—"}
-                    <span style={{ color: "var(--muted)" }}> · {step.acted_at ? step.status : i === detail.current_step_order && ws.status === "IN_PROGRESS" ? "PENDING" : "WAITING"}</span>
+                    <span style={{ color: "var(--muted)" }}> · {step.acted_at ? (step.status === "ROLLED_BACK" ? "ROLLED BACK FOR CORRECTION" : step.status) : i === detail.current_step_order && ws.status === "IN_PROGRESS" ? "PENDING" : ws.status === "DRAFT" ? "—" : "WAITING"}</span>
                     {step.comment && <div style={{ color: "var(--muted)", fontSize: 12 }}>"{step.comment}"</div>}
                   </div>
                 ))}

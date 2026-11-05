@@ -57,7 +57,8 @@ const KIND_LABEL: Record<string, string> = {
   CREATED: "Submitted", DRAFT_CREATED: "Started the draft", SUBMITTED: "Submitted for approval", FIELDS_SAVED: "Edited",
   SECTION_ADDED: "Added a section", SECTION_REMOVED: "Removed a section", SECTION_SAVED: "Edited a section",
   PEOPLE_CHANGED: "People", COMMENTED: "Comment", ASSIGNEE_ADDED: "Assignee added", ASSIGNEE_CONFIRMED: "Assignee confirmed",
-  APPROVAL_ACTION: "Approval", CANCELLED: "Cancelled", CLOSED: "Closed", DISTRIBUTED: "Distributed", RAID_CHANGED: "RAID log"
+  APPROVAL_ACTION: "Approval", CANCELLED: "Cancelled", CLOSED: "Closed", DISTRIBUTED: "Distributed", RAID_CHANGED: "RAID log",
+  ROLLED_BACK: "Rolled back for correction", ASSIGNEE_REJECTED: "Rejected by an assignee"
 };
 
 const stamp = (iso: string) =>

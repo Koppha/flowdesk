@@ -6,8 +6,8 @@ import DistributeDialog from "./components/DistributeDialog";
 import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
 import { BrsPeoplePicker, CR_PERMISSION_OPTIONS, CR_PRESETS } from "./components/BrsPeoplePicker";
 import OrgSearchModal, { type OrgEntry } from "./components/OrgSearchModal";
-import { showNotice } from "./alerts";
-import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, X, Share2 } from "lucide-react";
+import { confirmAction, showNotice } from "./alerts";
+import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, Share2 } from "lucide-react";
 import { ApproverCombobox, COMBOBOX_DROPDOWN_HEIGHT, COMBOBOX_DROPDOWN_MIN_WIDTH, EMAIL_RE, userLabel, type DirectoryUser } from "./shared/ApproverCombobox";
 
 type TableFieldConfig = {
@@ -643,6 +643,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   // fetch each distinct request type's "user_multi" fields once and cache.
   const [assignedTypeFields, setAssignedTypeFields] = useState<Record<string, RequestField[]>>({});
   const [assigneeActionError, setAssigneeActionError] = useState<string | null>(null);
+  // Change Request, step 1: an assignee's comment for Roll back / Reject, per request.
+  const [assigneeComment, setAssigneeComment] = useState<Record<string, string>>({});
   // Local edit buffer for implementation-side fields (Implementation Plan,
   // Callout Person/Contact) an assignee fills in before confirming — keyed
   // by submission id so multiple cards can be edited independently.
@@ -670,9 +672,6 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftDialog, setDraftDialog] = useState<{ ownerIds: string[]; coWriters: OrgEntry[] } | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
-  // Change Request: co-owners named on the form (same rights as the requester).
-  const [coOwnerIds, setCoOwnerIds] = useState<string[]>([]);
-  const [coOwnerPick, setCoOwnerPick] = useState("");
   // Attendance Register only - day-by-day autosave (see attendance.routes.ts)
   // lets the grid be built up over several sessions instead of only ever
   // reaching the database on final Submit.
@@ -686,11 +685,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   const isFieldRequired = (f: RequestField) =>
     f.is_required || (isChangeRequestType && f.field_key === "back_out_plan" && ["SIGNIFICANT", "MAJOR"].includes(String(values.impact || "").toUpperCase()));
 
+  // A new Change Request is saved as a draft first, for its owners and
+  // co-writers to work on; approvers are only picked when it's submitted from
+  // that draft. So the form has no approvals page until then.
+  const crNeedsDraft = isChangeRequestType && !draftId;
+
   // Group fields into wizard pages by their configured wizard_step, then
   // append one implicit final page for the approval chain / change control.
   const fieldStepNumbers = useMemo(() => [...new Set(fields.map((f) => f.wizard_step || 1))].sort((a, b) => a - b), [fields]);
-  const totalWizardSteps = fieldStepNumbers.length + 1;
-  const approvalsStepIndex = totalWizardSteps;
+  const approvalsStepIndex = fieldStepNumbers.length + 1;
+  const totalWizardSteps = crNeedsDraft ? fieldStepNumbers.length : approvalsStepIndex;
   const currentStepFields = useMemo(
     () => fields.filter((f) => (f.wizard_step || 1) === (fieldStepNumbers[wizardStep - 1] ?? 1)),
     [fields, fieldStepNumbers, wizardStep]
@@ -1014,11 +1018,9 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         request_type_id: selectedTypeId,
         data: payloadData,
         approval_chain: submitChain,
-        draft_id: draftId,
-        owner_user_ids: isChangeRequestType && !draftId ? coOwnerIds : undefined
+        draft_id: draftId
       }, attachmentFiles);
       setDraftId(null);
-      setCoOwnerIds([]);
       setValues({});
       setChain(
         fixedChain?.length
@@ -1052,7 +1054,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         return;
       }
     }
-    setWizardStep((s) => Math.min(s + 1, approvalsStepIndex));
+    setWizardStep((s) => Math.min(s + 1, totalWizardSteps));
   }
 
   // Change Request only: save the form as a draft that owners and co-writers
@@ -1086,10 +1088,16 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   }
 
   // From the workspace: carry the draft into the wizard to pick approvers and submit.
-  function submitDraftThroughWizard(draft: { id: string; data: Record<string, any> }) {
+  function submitDraftThroughWizard(draft: { id: string; data: Record<string, any>; approval_chain?: any[] }) {
     setWorkspaceId(null);
     setDraftId(draft.id);
     setValues({ ...draft.data });
+    // A draft that was rolled back for correction keeps its last approval
+    // route - start from it rather than an empty list.
+    const previous = (draft.approval_chain || []).filter((s: any) => s?.approver_id);
+    if (previous.length && !selectedType?.fixed_approval_chain?.length) {
+      setChain(previous.map((s: any) => ({ approver_id: s.approver_id, position_name: s.position_name || "", decision_type: s.decision_type === "NOTE" ? "NOTE" as const : "APPROVE" as const })));
+    }
     setAttachmentFiles([]);
     setWizardStep(1);
     setError(null);
@@ -1169,6 +1177,28 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
       await loadAssignedToMe();
     } catch (e: any) {
       setAssigneeActionError(e?.message || "Failed to confirm.");
+    }
+  }
+
+  // Change Request, step 1: an assignee rejects it (a dead stop) or rolls it
+  // back to its owners as a draft for correction - both with a comment.
+  async function assigneeDecision(submissionId: string, decision: "REJECT" | "ROLLBACK") {
+    setAssigneeActionError(null);
+    const comment = (assigneeComment[submissionId] || "").trim();
+    if (!comment) {
+      setAssigneeActionError(decision === "REJECT" ? "Add a comment saying why you're rejecting it." : "Add a comment saying what needs correcting.");
+      return;
+    }
+    const ok = await confirmAction(decision === "REJECT"
+      ? { title: "Reject this Change Request?", text: "This is a dead stop: the Change Request is closed as rejected and can't continue.", confirmButtonText: "Reject" }
+      : { title: "Roll it back for correction?", text: "It goes back to its owners as a draft with your comment. When they resubmit it, it starts again from step 1.", confirmButtonText: "Roll back" });
+    if (!ok) return;
+    try {
+      await api.decideCustomRequestAssignee(submissionId, { decision, comment });
+      setAssigneeComment((prev) => { const next = { ...prev }; delete next[submissionId]; return next; });
+      await loadAssignedToMe();
+    } catch (e: any) {
+      setAssigneeActionError(e?.message || "Failed to save your decision.");
     }
   }
 
@@ -1641,6 +1671,26 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                                 {isGroupAssignee(mine) ? `Confirm Ready for ${assigneeLabel(mine)}` : "Confirm Ready"}
                               </button>
                             )}
+                            {mine && !mine.confirmed && s.status === "IN_PROGRESS" && s.request_type_code === "CHANGE_REQUEST" && (
+                              <div style={{ marginTop: 10, maxWidth: 560 }}>
+                                <textarea
+                                  className="ep-form-textarea"
+                                  rows={2}
+                                  placeholder="Comment (required to roll back or reject)"
+                                  value={assigneeComment[s.id] || ""}
+                                  onChange={(e) => setAssigneeComment((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                                  style={{ width: "100%", marginBottom: 8 }}
+                                />
+                                <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 12px", marginRight: 8 }} onClick={() => void assigneeDecision(s.id, "ROLLBACK")}
+                                  title="Send it back to its owners as a draft, with your comment, to correct and resubmit">
+                                  Roll back for correction
+                                </button>
+                                <button className="ep-btn-danger" style={{ fontSize: 12, padding: "5px 12px" }} onClick={() => void assigneeDecision(s.id, "REJECT")}
+                                  title="A dead stop: it's closed as rejected">
+                                  Reject
+                                </button>
+                              </div>
+                            )}
                             {s.status === "IN_PROGRESS" && (
                               <div style={{ marginTop: 8, maxWidth: 460 }}>
                                 <AssigneeAdder users={companyDirectorySorted} existing={entries} onAdd={(entry) => addAssignee(s.id, f.field_key, entry)} />
@@ -1783,6 +1833,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
               </div>
 
               <div className="custom-request-form-body">
+              {crNeedsDraft && (
+                <div className="custom-request-note custom-request-note-neutral" style={{ marginBottom: 12 }}>
+                  A Change Request starts as a draft. Fill in what you can, save it and invite the people who'll work on it with you (co-owners, co-writers, sections). When it's ready, open the draft and choose <strong>Submit for approval</strong> to pick the approvers.
+                </div>
+              )}
               {draftId && (
                 <div className="custom-request-note custom-request-note-neutral" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <span>You're submitting a draft worked on with others. Check the details, pick the approvers and submit — its people, sections, comments and history carry on.</span>
@@ -1899,36 +1954,6 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                 </>
               )}
 
-              {isApprovalsStep && isChangeRequestType && !draftId && (
-                <div style={{ marginTop: 8, marginBottom: 18 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Co-owners <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 13 }}>(optional)</span></div>
-                  <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
-                    Co-owners have the same rights as you: they can edit it, add people, send reminders, cancel or close it and distribute it, and they get its approval emails. A co-owner can't also be an approver.
-                  </div>
-                  {coOwnerIds.length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                      {coOwnerIds.map((id) => {
-                        const u = companyDirectorySorted.find((x) => x.id === id);
-                        return (
-                          <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 6px 4px 10px", borderRadius: 99, background: "#ede9fe", color: "#6d28d9", fontSize: 12.5, fontWeight: 600 }}>
-                            {u ? u.full_name || u.email : "Unknown user"}
-                            <button type="button" aria-label={`Remove ${u?.full_name || "co-owner"}`} onClick={() => setCoOwnerIds((ids) => ids.filter((x) => x !== id))}
-                              style={{ border: "none", background: "transparent", cursor: "pointer", color: "inherit", display: "inline-flex", padding: 0 }}><X size={13} /></button>
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <div style={{ maxWidth: 460 }}>
-                    <ApproverCombobox
-                      users={companyDirectorySorted.filter((u) => u.id !== profile?.id && !coOwnerIds.includes(u.id) && !chain.some((c) => c.approver_id === u.id))}
-                      value={coOwnerPick}
-                      onChange={(id) => { setCoOwnerPick(""); if (id) setCoOwnerIds((ids) => (ids.includes(id) ? ids : [...ids, id])); }}
-                      placeholder={coOwnerIds.length ? "Add another co-owner…" : "Search a co-owner by name or email…"}
-                    />
-                  </div>
-                </div>
-              )}
               {isApprovalsStep && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Approval Workflow</div>
@@ -2035,7 +2060,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                 >
                   Back
                 </button>
-                {isChangeRequestType && (
+                {isChangeRequestType && !(crNeedsDraft && wizardStep === totalWizardSteps) && (
                   <button
                     className="ep-btn-outline"
                     style={{ marginLeft: "auto", marginRight: 8 }}
@@ -2049,6 +2074,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                 {isApprovalsStep ? (
                   <button className="ep-btn" onClick={handleSubmit} disabled={submitting}>
                     {submitting ? "Submitting…" : `Submit ${selectedType?.name || "Request"}`}
+                  </button>
+                ) : crNeedsDraft && wizardStep === totalWizardSteps ? (
+                  <button className="ep-btn" style={{ marginLeft: "auto" }} disabled={savingDraft} onClick={() => setDraftDialog({ ownerIds: [], coWriters: [] })}
+                    title="A Change Request starts as a draft: save it and invite the people who'll work on it with you">
+                    {savingDraft ? "Saving…" : "Save as draft & invite people"}
                   </button>
                 ) : (
                   <button className="ep-btn" onClick={goToNextStep}>Next</button>

@@ -588,8 +588,11 @@ export const api = {
   customRequestDetail: (id: string) => req(`/custom-requests/${id}`),
   customRequestConsolidated: (id: string) => req(`/custom-requests/${id}/consolidated`),
   customRequestAttachmentBlob: (id: string, attachmentId: string) => fetchBlob(`/custom-requests/${id}/attachments/${attachmentId}`),
-  actionCustomRequest: (id: string, data: { action: "APPROVE" | "REJECT"; comment?: string }) =>
+  actionCustomRequest: (id: string, data: { action: "APPROVE" | "REJECT" | "ROLLBACK"; comment?: string }) =>
     req(`/custom-requests/${id}/action`, { method: "POST", body: JSON.stringify(data) }),
+  // Change Request, step 1: an assignee rejects it (stops it) or rolls it back to its owners for correction.
+  decideCustomRequestAssignee: (id: string, data: { decision: "REJECT" | "ROLLBACK"; comment: string }) =>
+    req(`/custom-requests/${id}/assignees/decision`, { method: "POST", body: JSON.stringify(data) }),
   acknowledgeComputerCollection: (id: string) =>
     req(`/custom-requests/${id}/acknowledge-collection`, { method: "POST", body: JSON.stringify({}) }),
   cancelCustomRequest: (id: string, comment: string) =>

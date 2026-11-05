@@ -2729,11 +2729,49 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
     })();
   }, [item.id]);
 
-  async function act(action: "APPROVE" | "REJECT") {
+  const isChangeRequest = detail?.request_type_code === "CHANGE_REQUEST";
+
+  // Change Request: Reject stops it for good, Roll back sends it to its owners
+  // as a draft for correction - both need a comment, and both are confirmed first.
+  async function confirmStop(kind: "REJECT" | "ROLLBACK"): Promise<boolean> {
+    if (!comment.trim()) {
+      setError(kind === "REJECT" ? "Add a comment saying why you're rejecting it." : "Add a comment saying what needs correcting.");
+      return false;
+    }
+    const r = await Swal.fire({
+      icon: "warning",
+      title: kind === "REJECT" ? "Reject this Change Request?" : "Roll it back for correction?",
+      text: kind === "REJECT"
+        ? "This is a dead stop: the Change Request is closed as rejected and can't continue."
+        : "It goes back to its owners as a draft with your comment. When they resubmit it, it starts again from step 1.",
+      showCancelButton: true,
+      confirmButtonText: kind === "REJECT" ? "Reject" : "Roll back",
+      confirmButtonColor: kind === "REJECT" ? "#dc2626" : "#d97706"
+    });
+    return r.isConfirmed;
+  }
+
+  async function act(action: "APPROVE" | "REJECT" | "ROLLBACK") {
+    if (isChangeRequest && action !== "APPROVE" && !(await confirmStop(action))) return;
     setBusy(true);
     setError(null);
     try {
       await api.actionCustomRequest(item.id, { action, comment: comment.trim() || undefined });
+      await props.onDone();
+    } catch (e: any) {
+      setError(String(e.message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // An assignee's turn (step 1): reject it, or roll it back to its owners for correction.
+  async function assigneeDecision(decision: "REJECT" | "ROLLBACK") {
+    if (!(await confirmStop(decision))) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.decideCustomRequestAssignee(item.id, { decision, comment: comment.trim() });
       await props.onDone();
     } catch (e: any) {
       setError(String(e.message));
@@ -2992,16 +3030,21 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
                   <textarea
                     className="ep-form-textarea"
                     rows={2}
-                    placeholder="Add a comment (optional)"
+                    placeholder={isChangeRequest ? "Comment (required to roll back or reject)" : "Add a comment (optional)"}
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     style={{ width: "100%", marginBottom: 10, marginTop: 14 }}
                   />
-                  <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <button className="button small-button button-primary" disabled={busy} onClick={() => act("APPROVE")}>
                       {detail.approval_chain?.[detail.current_step_order]?.decision_type === "NOTE" ? "Acknowledge (Note)" : "Approve"}
                     </button>
-                    <button className="button small-button button-danger" disabled={busy} onClick={() => act("REJECT")}>
+                    {isChangeRequest && (
+                      <button className="button small-button" disabled={busy} onClick={() => act("ROLLBACK")} title="Send it back to its owners as a draft, with your comment, to correct and resubmit">
+                        Roll back for correction
+                      </button>
+                    )}
+                    <button className="button small-button button-danger" disabled={busy} onClick={() => act("REJECT")} title={isChangeRequest ? "A dead stop: it's closed as rejected" : undefined}>
                       Reject
                     </button>
                   </div>
@@ -3021,11 +3064,33 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
                       </div>
                     );
                   })()}
-                  {!!item.assignee_field_keys?.length && (
-                    <button className="button small-button" disabled={busy} onClick={() => void confirmReady()}>
-                      {busy ? "Confirming…" : (item.assignee_labels || []).some((l) => l !== "You") ? `Confirm for ${(item.assignee_labels || []).filter((l) => l !== "You").join(", ")}` : "Confirm I'm ready"}
-                    </button>
+                  {isChangeRequest && (
+                    <textarea
+                      className="ep-form-textarea"
+                      rows={2}
+                      placeholder="Comment (required to roll back or reject)"
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                      style={{ width: "100%", marginBottom: 10 }}
+                    />
                   )}
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {!!item.assignee_field_keys?.length && (
+                      <button className="button small-button button-primary" disabled={busy} onClick={() => void confirmReady()}>
+                        {busy ? "Working…" : (item.assignee_labels || []).some((l) => l !== "You") ? `Confirm for ${(item.assignee_labels || []).filter((l) => l !== "You").join(", ")}` : "Confirm I'm ready"}
+                      </button>
+                    )}
+                    {isChangeRequest && (
+                      <>
+                        <button className="button small-button" disabled={busy} onClick={() => void assigneeDecision("ROLLBACK")} title="Send it back to its owners as a draft, with your comment, to correct and resubmit">
+                          Roll back for correction
+                        </button>
+                        <button className="button small-button button-danger" disabled={busy} onClick={() => void assigneeDecision("REJECT")} title="A dead stop: it's closed as rejected">
+                          Reject
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
               {!canAct && !isAssigneeTask && <div className="review-empty-note" style={{ padding: "0 14px 16px" }}>This request is not awaiting your action.</div>}

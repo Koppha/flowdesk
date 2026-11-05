@@ -6,7 +6,7 @@ import multer from "multer";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query, withTransaction } from "../../lib/db.js";
-import { notifyChangeRequestPeopleAdded, notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder, notifyCustomRequestAssigneeReminder } from "../../lib/notifications.js";
+import { notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder, notifyCustomRequestAssigneeReminder } from "../../lib/notifications.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { resolveDirectManagerId } from "../reporting-lines/reporting-lines.routes.js";
@@ -108,9 +108,72 @@ const CreateSchema = z.object({
 });
 
 const ActionSchema = z.object({
-  action: z.enum(["APPROVE", "REJECT"]),
+  // ROLLBACK (Change Request only): back to its owners as a draft, for correction.
+  action: z.enum(["APPROVE", "REJECT", "ROLLBACK"]),
   comment: z.string().trim().nullish()
 });
+
+// A Change Request assignee at step 1 (before the approvers) can stop it for
+// good, or send it back to its owners for correction - always with a comment.
+const AssigneeDecisionSchema = z.object({
+  decision: z.enum(["REJECT", "ROLLBACK"]),
+  comment: z.string().trim().min(1, "A comment is required - say why")
+});
+
+// Change Request "roll back for correction", by an assignee at step 1 or by the
+// approver whose turn it is: it goes back to its owners as a DRAFT (they edit
+// it in the workspace and submit it for approval again), every assignee
+// confirmation is cleared because the plan will change, and the requester and
+// co-owners are emailed the comment. Its history keeps who rolled it back and why.
+async function rollBackChangeRequest(args: {
+  submission: any;
+  chain: unknown[];
+  actor: { userId: string; role: string; teamId?: string | null };
+  comment: string;
+  byLabel: string;
+}) {
+  const { submission, chain, comment, byLabel } = args;
+  const multiFields = await query<{ field_key: string }>(
+    `SELECT field_key FROM request_type_fields WHERE request_type_id = $1 AND field_type = 'user_multi' AND is_active = true`,
+    [submission.request_type_id]
+  );
+  const data = { ...(submission.data || {}) };
+  for (const f of multiFields) {
+    if (Array.isArray(data[f.field_key])) {
+      data[f.field_key] = (data[f.field_key] as AssigneeEntry[]).map((a) => ({ ...a, confirmed: false, confirmed_at: null, confirmedBy: null }));
+    }
+  }
+  const updated = await query<{ id: string }>(
+    `UPDATE custom_request_submissions
+        SET status = 'DRAFT', current_step_order = 0, approval_chain = $1, data = $2, updated_at = now()
+      WHERE id = $3 AND status = 'IN_PROGRESS'
+      RETURNING id`,
+    [JSON.stringify(chain), JSON.stringify(data), submission.id]
+  );
+  if (!updated.length) throw badRequest("This request is no longer in progress");
+  await auditChangeRequest(submission.id, args.actor, "ROLLED_BACK", `Rolled back for correction by ${byLabel} — ${comment}`);
+  await notifyChangeRequestOwners(submission, {
+    decision: "RETURNED", decidedBy: byLabel, comment,
+    nextSteps: "It is a draft again. Open it from Custom Requests > My Requests, make the corrections with your co-owners and co-writers, then choose Submit for approval."
+  });
+}
+
+// The requester and every co-owner of a Change Request hear about a decision.
+async function notifyChangeRequestOwners(
+  submission: { id: string; request_type_name: string; requester_email: string | null; requester_name: string | null; owner_user_ids?: string[] | null },
+  d: { decision: "REJECTED" | "RETURNED"; decidedBy: string; comment: string; nextSteps?: string | null }
+) {
+  const coOwners = (submission.owner_user_ids || []).length
+    ? await query<{ email: string; full_name: string | null }>(`SELECT email, full_name FROM users WHERE id = ANY($1::uuid[]) AND is_active`, [submission.owner_user_ids])
+    : [];
+  for (const r of [{ email: submission.requester_email, full_name: submission.requester_name }, ...coOwners]) {
+    void notifyCustomRequestDecision({
+      submissionId: submission.id, requestTypeName: submission.request_type_name,
+      requesterEmail: r.email, requesterName: r.full_name,
+      decision: d.decision, decidedBy: d.decidedBy, comment: d.comment, nextSteps: d.nextSteps ?? null
+    });
+  }
+}
 
 const CloseSchema = z.object({
   implementation_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "implementation_date must be YYYY-MM-DD"),
@@ -128,10 +191,7 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
   try {
     let bodyData: unknown;
     let bodyChain: unknown;
-    let bodyOwners: unknown;
     try {
-      // Change Request only: co-owners named on the form (full rights, like the requester).
-      bodyOwners = typeof req.body.owner_user_ids === "string" ? JSON.parse(req.body.owner_user_ids) : (req.body.owner_user_ids ?? []);
       bodyData = typeof req.body.data === "string" ? JSON.parse(req.body.data) : (req.body.data ?? {});
       bodyChain = typeof req.body.approval_chain === "string" ? JSON.parse(req.body.approval_chain) : (req.body.approval_chain ?? []);
     } catch {
@@ -166,6 +226,11 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
       if (row.status !== "DRAFT") throw badRequest("This draft has already been submitted");
       if (!(await crPermissions(row, req.user!)).submit) throw forbidden("You don't have permission to submit this Change Request for approval");
       crDraft = { id: row.id, requester_id: row.requester_id, owner_user_ids: row.owner_user_ids };
+    }
+    // A Change Request always goes through its draft first, where its owners
+    // and co-writers work on it together - it is only ever submitted from there.
+    if (requestType.code === "CHANGE_REQUEST" && !crDraft) {
+      throw badRequest("A Change Request starts as a draft. Save it as a draft, add the people who'll work on it, then submit it for approval from the draft.");
     }
 
     // Attendance Register only: an admin can close a month once payroll
@@ -308,17 +373,8 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
       throw badRequest("The person who started this Change Request cannot also approve it");
     }
 
-    // Co-owners: from the form on a direct submission, or the draft's own.
-    let coOwnerIds: string[] = crDraft ? (crDraft.owner_user_ids ?? []) : [];
-    if (!crDraft && requestType.code === "CHANGE_REQUEST") {
-      const parsedOwners = z.array(z.string().uuid()).max(20).safeParse(bodyOwners);
-      if (!parsedOwners.success) throw badRequest("Invalid co-owners");
-      coOwnerIds = [...new Set(parsedOwners.data)].filter((id) => id !== req.user!.userId);
-      if (coOwnerIds.length) {
-        const found = await query<{ id: string }>(`SELECT id FROM users WHERE id = ANY($1::uuid[]) AND is_active = true`, [coOwnerIds]);
-        if (found.length !== coOwnerIds.length) throw badRequest("One or more co-owners are not active FlowDesk users");
-      }
-    }
+    // Co-owners come from the draft (set in its workspace).
+    const coOwnerIds: string[] = crDraft?.owner_user_ids ?? [];
     if (chainInput.some((s) => coOwnerIds.includes(s.approver_id))) {
       throw badRequest("A co-owner can't also be an approver on the same Change Request");
     }
@@ -420,12 +476,6 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
         summary: `Submitted for approval: ${route}${uploadedFiles.length ? `; ${uploadedFiles.length} attachment(s)` : ""}`
       }).catch((e) => logger.warn("cr_revision_failed", { submission_id: submission.id, error: serializeError(e) }));
     }
-    const newCoOwners = !crDraft && coOwnerIds.length
-      ? await query<{ id: string; full_name: string | null; email: string }>(`SELECT id, full_name, email FROM users WHERE id = ANY($1::uuid[])`, [coOwnerIds])
-      : [];
-    if (newCoOwners.length) {
-      await auditChangeRequest(submission.id, req.user!, "PEOPLE_CHANGED", `Co-owners: ${newCoOwners.map((o) => o.full_name || o.email).join(", ")}`);
-    }
 
     // Respond as soon as the submission itself is durably saved — every
     // notification below is an email/Teams send that can each take seconds,
@@ -437,12 +487,6 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
 
     void (async () => {
       try {
-        if (newCoOwners.length) {
-          await notifyChangeRequestPeopleAdded({
-            submissionId: submission.id, title: String(parsed.data.data.description_of_change || "Change Request").slice(0, 120),
-            addedBy: req.user!.fullName ?? null, owners: newCoOwners, coWriterEmails: []
-          });
-        }
         // With assignees still to confirm, it's their turn first - the first
         // approver is emailed when the last one confirms (assignees/confirm).
         const pending = await unconfirmedAssignees(requestType.id, parsed.data.data);
@@ -1050,6 +1094,52 @@ customRequestsRouter.post("/:id/assignees/confirm", async (req: AuthedRequest, r
   }
 });
 
+// POST /custom-requests/:id/assignees/decision — a Change Request assignee
+// whose turn it is (step 1: they haven't confirmed yet) rejects it, which
+// stops it for good, or rolls it back to its owners for correction. Both need
+// a comment. Once every assignee has confirmed it's the approvers' turn, and
+// this is no longer open to them.
+customRequestsRouter.post("/:id/assignees/decision", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = AssigneeDecisionSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid payload");
+    const { decision, comment } = parsed.data;
+
+    const submission = (await query<any>(
+      `SELECT s.*, rt.name AS request_type_name, rt.code AS request_type_code, u.full_name AS requester_name, u.email AS requester_email
+         FROM custom_request_submissions s
+         JOIN custom_request_types rt ON rt.id = s.request_type_id
+         JOIN users u ON u.id = s.requester_id
+        WHERE s.id = $1`,
+      [req.params.id]
+    ))[0];
+    if (!submission) throw notFound();
+    if (submission.request_type_code !== "CHANGE_REQUEST") throw badRequest("Only a Change Request can be rejected or rolled back by an assignee");
+    if (submission.status !== "IN_PROGRESS") throw badRequest("This request is no longer in progress");
+
+    const mine = (await unconfirmedAssignees(submission.request_type_id, submission.data)).filter((p) => assigneeMatches(p.entry, req.user!));
+    if (!mine.length) throw forbidden("Only an assignee who hasn't confirmed yet can reject or roll back this Change Request");
+    const groups = mine.filter((p) => !p.entry.id).map((p) => assigneeLabel(p.entry));
+    const byLabel = `${req.user!.fullName ?? "an assignee"} (Change Assignee${groups.length ? ` for ${groups.join(", ")}` : ""})`;
+
+    if (decision === "ROLLBACK") {
+      await rollBackChangeRequest({ submission, chain: submission.approval_chain || [], actor: req.user!, comment, byLabel });
+      return res.json({ ok: true, status: "DRAFT" });
+    }
+
+    const updated = await query<{ id: string }>(
+      `UPDATE custom_request_submissions SET status = 'REJECTED', updated_at = now() WHERE id = $1 AND status = 'IN_PROGRESS' RETURNING id`,
+      [submission.id]
+    );
+    if (!updated.length) throw badRequest("This request is no longer in progress");
+    await auditChangeRequest(submission.id, req.user!, "ASSIGNEE_REJECTED", `Rejected by ${byLabel} — ${comment}`);
+    await notifyChangeRequestOwners(submission, { decision: "REJECTED", decidedBy: byLabel, comment });
+    return res.json({ ok: true, status: "REJECTED" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 const UpdateDataSchema = z.object({ data: z.record(z.string(), z.any()) });
 
 // PATCH /custom-requests/:id/data — the requester, an assignee (person or
@@ -1107,7 +1197,7 @@ customRequestsRouter.patch("/:id/data", async (req: AuthedRequest, res, next) =>
 export async function performCustomRequestAction(
   submissionId: string,
   actor: { userId: string; role: string; fullName: string | null },
-  action: "APPROVE" | "REJECT",
+  action: "APPROVE" | "REJECT" | "ROLLBACK",
   comment?: string | null
 ): Promise<{ status: string }> {
   const submission = (await query<any>(
@@ -1135,6 +1225,14 @@ export async function performCustomRequestAction(
     }
   }
 
+  // Change Request: reject (a dead stop) and roll back for correction both
+  // need a comment saying why. Roll back exists for Change Requests only.
+  const isChangeRequest = submission.request_type_code === "CHANGE_REQUEST";
+  if (action === "ROLLBACK" && !isChangeRequest) throw badRequest("Only a Change Request can be rolled back for correction");
+  if (isChangeRequest && action !== "APPROVE" && !String(comment ?? "").trim()) {
+    throw badRequest(action === "REJECT" ? "Say why you're rejecting it - a comment is required" : "Say what needs correcting - a comment is required");
+  }
+
   // Approval (not rejection) is gated on every assignee in any "user_multi"
   // field (e.g. Change Assignee) individually confirming they're ready —
   // typically once the implementation plan is in place. Rejection is never
@@ -1157,9 +1255,17 @@ export async function performCustomRequestAction(
   // form) still has to act for the chain to move on, but its affirmative action
   // is recorded as "NOTED" rather than "APPROVED" — it's acknowledging the
   // change for the record, not formally signing off on it.
-  step.status = action === "APPROVE" ? (step.decision_type === "NOTE" ? "NOTED" : "APPROVED") : "REJECTED";
+  step.status = action === "APPROVE" ? (step.decision_type === "NOTE" ? "NOTED" : "APPROVED") : action === "ROLLBACK" ? "ROLLED_BACK" : "REJECTED";
   step.comment = comment || null;
   step.acted_at = new Date().toISOString();
+
+  if (action === "ROLLBACK") {
+    await rollBackChangeRequest({
+      submission, chain, actor, comment: String(comment).trim(),
+      byLabel: `${actor.fullName ?? "the approver"} (${step.position_name})`
+    });
+    return { status: "DRAFT" };
+  }
 
   let newStatus = submission.status;
   let newStepOrder = stepIdx;

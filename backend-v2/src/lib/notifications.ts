@@ -211,7 +211,10 @@ async function sendViaSmtp(to: string[], subject: string, text: string): Promise
 
 async function sendMail(args: { to: string[]; subject: string; text: string }): Promise<void> {
   // Recipients who switched email notifications off (FlowDesk Mobile > Profile).
-  args = { ...args, to: await filterEmailRecipients(args.to) };
+  // A subject is one line: the email API rejects line breaks ("not in the form
+  // required for a subject"), and some are built from multi-line user text
+  // such as a Change Request's description.
+  args = { ...args, to: await filterEmailRecipients(args.to), subject: args.subject.replace(/\s+/g, " ").trim() };
   if (args.to.length === 0) return;
   if (env.EMAIL_API_ENABLED) {
     for (const recipient of args.to) {
@@ -1881,7 +1884,8 @@ export async function notifyCustomRequestDecision(args: {
   requestTypeName: string;
   requesterEmail: string | null;
   requesterName: string | null;
-  decision: "APPROVED" | "REJECTED";
+  // RETURNED = rolled back for correction (Change Request): it's a draft again.
+  decision: "APPROVED" | "REJECTED" | "RETURNED";
   decidedBy: string | null;
   comment?: string | null;
   // What happens next, for types with a stage after approval (e.g. a
@@ -1891,12 +1895,13 @@ export async function notifyCustomRequestDecision(args: {
   try {
     if (!args.requesterEmail) return;
 
+    const decisionText = args.decision === "RETURNED" ? "rolled back for correction" : args.decision.toLowerCase();
     const lines = [
-      header(`${args.requestTypeName.toUpperCase()} — ${args.decision}`),
+      header(`${args.requestTypeName.toUpperCase()} — ${args.decision === "RETURNED" ? "ROLLED BACK FOR CORRECTION" : args.decision}`),
       ``,
       `Hello ${args.requesterName || ""},`,
       ``,
-      `Your ${args.requestTypeName.toLowerCase()} has been ${args.decision.toLowerCase()} by ${args.decidedBy || "an approver"}.`
+      `Your ${args.requestTypeName.toLowerCase()} has been ${decisionText} by ${args.decidedBy || "an approver"}.`
     ];
     if (args.comment) {
       lines.push(``, `Comment: ${args.comment}`);
@@ -1909,7 +1914,7 @@ export async function notifyCustomRequestDecision(args: {
 
     await sendMail({
       to: [args.requesterEmail],
-      subject: `[${args.decision}] Your ${args.requestTypeName}`,
+      subject: `[${args.decision === "RETURNED" ? "Rolled back for correction" : args.decision}] Your ${args.requestTypeName}`,
       text: body
     });
   } catch (error) {
