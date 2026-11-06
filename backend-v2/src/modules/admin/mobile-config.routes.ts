@@ -21,7 +21,9 @@ const ModulesSchema = z.object({
   // .default(false): settings saved before Maintenance existed still parse.
   maintenance: z.boolean().default(false),
   // Managers' My Team tile (MANAGER/HOD/EXCO/CEO/ADMIN only, enforced by the app and the endpoint).
-  myTeam: z.boolean().default(false)
+  myTeam: z.boolean().default(false),
+  // Delegating one's own approvals (managers, and anyone on a step that allows delegation).
+  delegation: z.boolean().default(false)
 });
 type Modules = z.infer<typeof ModulesSchema>;
 
@@ -35,7 +37,8 @@ const DEFAULT_MODULES: Modules = {
   customProcesses: false,
   signADocument: false,
   maintenance: false,
-  myTeam: false
+  myTeam: false,
+  delegation: false
 };
 
 async function currentModules(): Promise<Modules> {

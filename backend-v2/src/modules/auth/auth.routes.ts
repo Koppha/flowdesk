@@ -1341,6 +1341,46 @@ authRouter.get("/delegations/eligibility", async (req: AuthedRequest, res, next)
   }
 });
 
+// Who the caller may delegate their own approvals to - the same scoping
+// POST /delegations enforces below (CEO: anyone; no department of their own:
+// same division; otherwise same department or section). For the mobile app,
+// and for anyone without User Management access (GET /users is gated on it).
+authRouter.get("/delegations/candidates", async (req: AuthedRequest, res, next) => {
+  try {
+    const me = (await query<{ id: string; role: string; department: string | null; section_id: string | null; division_id: string | null }>(
+      `SELECT id, role, department, section_id, division_id FROM users WHERE id=$1`,
+      [req.user!.userId]
+    ))[0];
+    if (!me) throw notFound();
+    if (!["MANAGER", "HOD", "EXCO", "CEO"].includes(me.role) && !(await isDelegationEligible(me.id))) {
+      throw forbidden("You have no approvals to delegate");
+    }
+    const dept = String(me.department || "").trim();
+    let scope = "";
+    const params: unknown[] = [me.id];
+    if (me.role === "CEO") {
+      scope = "";
+    } else if (!dept) {
+      if (!me.division_id) return res.json([]);
+      params.push(me.division_id);
+      scope = `AND u.division_id = $2`;
+    } else {
+      params.push(dept, me.section_id);
+      scope = `AND (trim(coalesce(u.department, '')) = $2 OR ($3::uuid IS NOT NULL AND u.section_id = $3::uuid))`;
+    }
+    const rows = await query(
+      `SELECT u.id, u.full_name, u.email, u.employee_no, u.title, u.department
+         FROM users u
+        WHERE u.is_active = true AND u.id <> $1 ${scope}
+        ORDER BY u.full_name NULLS LAST, u.email`,
+      params
+    );
+    return res.json(rows);
+  } catch (err) {
+    return next(err);
+  }
+});
+
 authRouter.get("/delegations", async (req: AuthedRequest, res, next) => {
   try {
     const isAdmin = req.user!.role === "ADMIN";
