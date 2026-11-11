@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OrgGaps from "./OrgGaps";
+import Maintenance from "./Maintenance";
 import { useStaffDirectory, refreshStaffDirectory } from "./useStaffDirectory";
 import { api, clearToken, getTheme, getToken, setTheme as saveTheme, setToken, getUserFromToken, getUiScale, saveUiScale, openBlobInNewTab } from "./api";
 import Inbox, { isAwaitingMyAction, isCaptureItem, isCapturePendingItem, isPaymentItem, needsAccommodationBooking } from "./Inbox";
@@ -38,6 +39,9 @@ import AiAssistantSettings from "./AiAssistantSettings";
 import GetTheApp from "./GetTheApp";
 import DataCleanup from "./DataCleanup";
 import RequestTypes from "./RequestTypes";
+import SidebarMenu, { type MenuItemDef } from "./menu/SidebarMenu";
+import MenuEditor from "./menu/MenuEditor";
+import { CUSTOM_PROCESS_PREFIX, mergeLayout, type MenuLayout } from "./menu/menuModel";
 import CustomRequestsHub from "./CustomRequestsHub";
 import BrsStudio from "./BrsStudio";
 import BrsAdmin from "./BrsAdmin";
@@ -95,10 +99,12 @@ import {
   Eye,
   EyeOff,
   FileSignature,
+  Wrench,
   FileText,
   GitBranch,
   History as HistoryIcon,
   Home,
+  ListTree,
   Hotel,
   Info,
   LayoutDashboard,
@@ -459,7 +465,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "AI_ASSISTANT_CONFIG" | "GET_THE_APP" | "ORG_GAPS";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "AI_ASSISTANT_CONFIG" | "MENU_EDITOR" | "GET_THE_APP" | "ORG_GAPS" | "MAINTENANCE";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -560,8 +566,11 @@ export default function App() {
   const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(true);
   const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(true);
   const [signatureModuleEnabled, setSignatureModuleEnabled] = useState(true);
+  const [maintenanceModuleEnabled, setMaintenanceModuleEnabled] = useState(false);
   // AI Assistant on/off (Process > Built-in Processes, same as Settings > AI Assistant).
   const [aiAssistantModuleEnabled, setAiAssistantModuleEnabled] = useState(true);
+  // Admin-arranged sidebar (Settings > Menu); null = the default menu.
+  const [savedMenuLayout, setSavedMenuLayout] = useState<MenuLayout | null>(null);
   const [salaryAdvanceEnabled, setSalaryAdvanceEnabled] = useState(true);
   const [loanAdvanceEnabled, setLoanAdvanceEnabled] = useState(true);
   const [salaryAdvanceMaxMonths, setSalaryAdvanceMaxMonths] = useState(6);
@@ -1378,6 +1387,10 @@ export default function App() {
   }, [token]);
 
   const role = profile?.role || me?.role || "UNKNOWN";
+  // Maintenance sits in Custom Processes. Admins keep it while it's switched
+  // off under Process, to set up its lists first.
+  const showMaintenanceNav = maintenanceModuleEnabled || role === "ADMIN";
+  const inCustomProcesses = page === "CHANGE_REQUEST" || page === "BRS" || page === "MAINTENANCE";
   const userName = displayUserLabel(profile?.full_name || me?.fullName || me?.username || "User", role);
   const userDepartment = [profile?.division_name, profile?.department, profile?.section_name, profile?.team_name].filter(Boolean).join(" › ")
     || profile?.department || me?.department || "No Division";
@@ -1453,6 +1466,7 @@ export default function App() {
     { key: "TRAVEL_SETUP", label: "Travel Setup", icon: BriefcaseBusiness, available: canManageTravelSettings },
     { key: "REQUEST_TYPES", label: "Process", icon: ClipboardList, available: canAccessFeature("request_types") },
     { key: "SIGNATURES", label: "Sign a Document", icon: FileSignature, available: signatureModuleEnabled },
+    { key: "MAINTENANCE", label: "Maintenance", icon: Wrench, available: maintenanceModuleEnabled },
     { key: "USER_MANAGEMENT", label: "User Management", icon: Users, available: canAccessFeature("user_management") },
     { key: "ORG_STRUCTURE", label: "Org Structure", icon: Network, available: canAccessFeature("org_structure") },
     { key: "SETTINGS", label: "Settings", icon: SettingsIcon, available: true }
@@ -1700,8 +1714,9 @@ export default function App() {
         salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
         salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
         signature_enabled?: boolean;
+        maintenance_enabled?: boolean;
         ai_assistant_enabled?: boolean;
-      }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true, signature_enabled: true }, "Module flags"),
+      }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true, signature_enabled: true, maintenance_enabled: false }, "Module flags"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.vendorContractsAccess(), { allowed: false }, "Vendor Contracts access"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.serviceContractsAccess(), { allowed: false }, "Service Contracts access"),
       optionalStartupData<{ is_finance?: boolean }>(api.overtimeDashboard(), { is_finance: false }, "Overtime dashboard"),
@@ -1764,6 +1779,8 @@ export default function App() {
     // fragile positional destructuring) — BRS is optional, so any failure
     // here should just leave the nav item hidden, never break startup.
     api.brsModuleFlag().then((f: any) => setHasActiveBrsTypes(Boolean(f?.brs_enabled))).catch(() => setHasActiveBrsTypes(false));
+    // Same here: the menu arrangement is optional - on failure the default menu shows.
+    api.menuLayout().then((r: any) => setSavedMenuLayout(r?.layout ?? null)).catch(() => setSavedMenuLayout(null));
     // Same reasoning as BRS above - only feeds "Plan Your Trip" on the
     // international advance-request flow, so a failure here shouldn't stall
     // the rest of startup. ~6000 rows loaded once, filtered client-side by
@@ -1775,6 +1792,7 @@ export default function App() {
     setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
     setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
     setSignatureModuleEnabled(moduleFlagsResp?.signature_enabled !== false);
+    setMaintenanceModuleEnabled(moduleFlagsResp?.maintenance_enabled === true);
     setAiAssistantModuleEnabled(moduleFlagsResp?.ai_assistant_enabled !== false);
     setSalaryAdvanceEnabled(moduleFlagsResp?.salary_advance_enabled !== false);
     setLoanAdvanceEnabled(moduleFlagsResp?.loan_advance_enabled !== false);
@@ -2010,7 +2028,9 @@ export default function App() {
 
   const ORG_PAGES = ["EXCO", "CEO_MANAGEMENT", "MANAGERS", "EMPLOYEES", "LEADERSHIP", "WORKFLOW_BUILDER", "REPORTING_LINES", "ORG_STRUCTURE", "ORG_GAPS", "TEAM_ROSTER"] as const;
   // Settings sidebar group: General plus the app-wide configuration pages.
-  const SETTINGS_PAGES = ["SETTINGS", "PDF_DESIGNER", "MOBILE_APP_CONFIG", "AI_ASSISTANT_CONFIG"] as const;
+  const SETTINGS_PAGES = ["SETTINGS", "PDF_DESIGNER", "MOBILE_APP_CONFIG", "AI_ASSISTANT_CONFIG", "MENU_EDITOR"] as const;
+  // Every page under Reports (the hub and the reports reached from it).
+  const REPORT_PAGES: AppPage[] = ["REPORTS","SLA_REPORTS","REPORT_ADVANCES","REPORT_APPROVAL","REPORT_PROCESS_PERFORMANCE","REPORT_WORKFLOW","REPORT_AUDIT","REPORT_RECONCILIATION","REPORT_TOUR_ENGAGEMENT","REPORT_CLEARANCE_STATUS","REPORT_CLEARANCE_SUMMARY","REPORT_REFUNDS_DUE","REPORT_EMPLOYEE_PAYBACKS","REPORT_FULLY_CLEARED","REPORT_OUTSTANDING","REPORT_AGEING","REPORT_TREASURY_AUDIT","REPORT_DEPT_DIVISION","REPORT_OVERTIME","REPORT_STANDBY"];
 
   useEffect(() => {
     if (ORG_PAGES.includes(page as any)) setOrgNavOpen(true);
@@ -4039,6 +4059,93 @@ export default function App() {
     return acc;
   }, {});
   const navItemClass = (active: boolean) => `sidebar-link${active ? " active" : ""}`;
+
+  // ── Sidebar links ──────────────────────────────────────────────────────
+  // Every link, with who sees it (permissions / module on-off) and where it
+  // goes. WHERE it sits in the sidebar is the admin-arranged menu layout
+  // (menu/menuModel.ts, Settings > Menu); its default is the classic sidebar.
+  const go = (p: AppPage) => () => setPage(p);
+  const anyFinanceAccess = canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasViewClearancesAccess || hasRefundableAccess;
+  const hasOvertimeLink = (canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled;
+  const isAdminRole = role === "ADMIN";
+  const menuItems: Record<string, MenuItemDef> = {
+    dashboard: { label: "Dashboard", icon: Home, visible: true, active: page === "HOME", onClick: go("HOME") },
+    ai_assistant: { label: "AI Assistant", icon: Sparkles, visible: canAccessFeature("ai_assistant") && aiAssistantModuleEnabled, active: aiAssistantOpen, onClick: () => setAiAssistantOpen((v) => !v) },
+    advance_requests: { label: "Advance Requests", icon: FileText, visible: true, active: page === "ADVANCE" || page === "MY_ADVANCES", onClick: go("MY_ADVANCES") },
+    clearances: { label: "Clearances", icon: CheckCircle2, visible: true, active: page === "CLEARANCE" || page === "MY_CLEARANCES", onClick: go("MY_CLEARANCES") },
+    salaries_dashboard: { label: "Dashboard", icon: LayoutDashboard, visible: hasSalariesAccess, active: page === "SALARIES_DASHBOARD", onClick: go("SALARIES_DASHBOARD"), groupCount: salariesCount },
+    salary_registers: { label: "Salary Registers", icon: ClipboardList, visible: hasSalariesAccess, active: page === "SALARY_REGISTERS", onClick: go("SALARY_REGISTERS") },
+    salaries_attendance: { label: "Attendance", icon: CalendarCheck, visible: hasSalariesAccess, active: page === "SALARIES_ATTENDANCE", onClick: go("SALARIES_ATTENDANCE") },
+    salaries_ready: { label: "Ready for Payment", icon: CheckCircle2, visible: hasSalariesAccess, active: page === "SALARIES_READY_FOR_PAYMENT", onClick: go("SALARIES_READY_FOR_PAYMENT") },
+    salaries_history: { label: "History", icon: HistoryIcon, visible: hasSalariesAccess, active: page === "SALARIES_HISTORY", onClick: go("SALARIES_HISTORY") },
+    overtime: { label: "Overtime", icon: Clock3, visible: hasOvertimeLink, active: page === "OVERTIME", onClick: go("OVERTIME") },
+    standby: { label: "Standby", icon: Clock3, visible: standbyModuleEnabled, active: page === "STANDBY", onClick: go("STANDBY") },
+    call_out: { label: "Call-Out", icon: PhoneCall, visible: standbyModuleEnabled, active: page === "CALL_OUT", onClick: go("CALL_OUT") },
+    ...Object.fromEntries(customProcessTypes.map((t) => [`${CUSTOM_PROCESS_PREFIX}${t.id}`, {
+      label: t.name,
+      icon: t.code === "COMPUTER_REQUEST" ? Laptop : t.code === "CHANGE_REQUEST" ? GitPullRequest : t.code === "ATTENDANCE_REGISTER" ? CalendarCheck : FileText,
+      visible: true,
+      active: page === "CHANGE_REQUEST" && customProcessTypeId === t.id,
+      onClick: () => { setCustomProcessTypeId(t.id); setPage("CHANGE_REQUEST"); }
+    } satisfies MenuItemDef])),
+    brs: { label: "BRS Studio", icon: FileText, visible: hasActiveBrsTypes, active: page === "BRS", onClick: go("BRS") },
+    maintenance: { label: "Maintenance", icon: Wrench, visible: showMaintenanceNav, active: page === "MAINTENANCE", onClick: go("MAINTENANCE") },
+    signatures: { label: "Sign a Document", icon: FileSignature, visible: signatureModuleEnabled, active: page === "SIGNATURES", onClick: go("SIGNATURES") },
+    inbox: { label: "Approval Inbox", icon: Mail, visible: true, active: page === "INBOX", onClick: go("INBOX"), badge: inboxCount },
+    capture: { label: "Capture Inbox", icon: Camera, visible: canAccessFeature("capture"), active: page === "CAPTURE", onClick: go("CAPTURE"), badge: captureCount },
+    payments: { label: "Payments", icon: Wallet, visible: hasPaymentsAccess, active: page === "PAYMENTS", onClick: go("PAYMENTS"), badge: paymentsCount },
+    deductions: { label: "Deductions", icon: MinusCircle, visible: hasDeductionsAccess, active: page === "DEDUCTIONS", onClick: go("DEDUCTIONS"), badge: deductionsCount },
+    view_clearances: { label: "View Clearances", icon: Eye, visible: hasViewClearancesAccess, active: page === "VIEW_CLEARANCES", onClick: go("VIEW_CLEARANCES") },
+    refundable: { label: "Refundable", icon: PlusCircle, visible: hasRefundableAccess, active: page === "REFUNDABLE", onClick: go("REFUNDABLE"), badge: refundableCount },
+    // Finance's own shortcut to the Reports hub - only for people with some
+    // Finance access, and it doesn't open Finance on every report page.
+    finance_reports: { label: "Reports", icon: BarChart3, visible: anyFinanceAccess, active: REPORT_PAGES.includes(page), groupActive: false, onClick: go("REPORTS") },
+    it_provisioning: { label: "IT Provisioning", icon: Monitor, visible: hasItProvisioningAccess, active: page === "IT_PROVISIONING", onClick: go("IT_PROVISIONING"), badge: itProvisioningCount },
+    vendor_contracts: { label: "Vendor Contracts", icon: FileText, visible: hasVendorContractsAccess, active: page === "VENDOR_CONTRACTS", onClick: go("VENDOR_CONTRACTS") },
+    service_contracts: { label: "Service Contracts", icon: Wifi, visible: hasServiceContractsAccess, active: page === "SERVICE_CONTRACTS", onClick: go("SERVICE_CONTRACTS") },
+    employee_contracts: { label: "Employee Contracts", icon: Users, visible: canAccessFeature("employee_contracts"), active: page === "EMPLOYEE_CONTRACTS", onClick: go("EMPLOYEE_CONTRACTS") },
+    report_advances: { label: "Advance Requests", icon: FileText, visible: canAccessFeature("report_advances"), active: page === "REPORT_ADVANCES", onClick: go("REPORT_ADVANCES") },
+    report_approval: { label: "Approval Performance", icon: Users, visible: canAccessFeature("report_advances"), active: page === "REPORT_APPROVAL", onClick: go("REPORT_APPROVAL") },
+    report_process_performance: { label: "Process Performance", icon: BarChart3, visible: isAdminRole, active: page === "REPORT_PROCESS_PERFORMANCE", onClick: go("REPORT_PROCESS_PERFORMANCE") },
+    sla_reports: { label: "SLA Reports", icon: BarChart3, visible: true, active: page === "SLA_REPORTS", onClick: go("SLA_REPORTS") },
+    report_workflow: { label: "Workflow Analytics", icon: GitBranch, visible: true, active: page === "REPORT_WORKFLOW", onClick: go("REPORT_WORKFLOW") },
+    report_audit: { label: "Audit Trail", icon: ShieldCheck, visible: true, active: page === "REPORT_AUDIT", onClick: go("REPORT_AUDIT") },
+    report_reconciliation: { label: "Reconciliation", icon: BarChart3, visible: canAccessFeature("report_reconciliation"), active: page === "REPORT_RECONCILIATION", onClick: go("REPORT_RECONCILIATION") },
+    report_clearance_status: { label: "Clearance Status", icon: CheckCircle2, visible: canAccessFeature("clearance_status_report"), active: page === "REPORT_CLEARANCE_STATUS", onClick: go("REPORT_CLEARANCE_STATUS") },
+    report_tour_engagement: { label: "Tooltip Engagement", icon: PlayCircle, visible: isAdminRole, active: page === "REPORT_TOUR_ENGAGEMENT", onClick: go("REPORT_TOUR_ENGAGEMENT") },
+    users: { label: "Users", icon: Users, visible: canAccessFeature("user_management"), active: page === "USER_MANAGEMENT", onClick: go("USER_MANAGEMENT") },
+    roles_permissions: { label: "Roles & Permissions", icon: ShieldCheck, visible: canAccessFeature("roles_permissions"), active: page === "ROLES_PERMISSIONS", onClick: go("ROLES_PERMISSIONS") },
+    manager_delegations: { label: "Manager Delegations", icon: Users, visible: canAccessFeature("manager_delegations") || delegationEligible, active: page === "MANAGER_DELEGATIONS", onClick: go("MANAGER_DELEGATIONS") },
+    external_payees: { label: "External Payees", icon: Building2, visible: isAdminRole, active: page === "EXTERNAL_PAYEES", onClick: go("EXTERNAL_PAYEES") },
+    my_team: { label: "My Team", icon: Users, visible: ["MANAGER", "HOD", "EXCO", "CEO", "ADMIN"].includes(role), active: page === "MY_TEAM", onClick: go("MY_TEAM") },
+    travel_setup: { label: "Travel Setup", icon: BriefcaseBusiness, visible: canManageTravelSettings, active: page === "TRAVEL_SETUP", onClick: go("TRAVEL_SETUP") },
+    process: { label: "Process", icon: ClipboardList, visible: canAccessFeature("request_types"), active: page === "REQUEST_TYPES", onClick: go("REQUEST_TYPES") },
+    brs_templates: { label: "BRS Templates", icon: FileText, visible: isAdminRole, active: page === "BRS_ADMIN", onClick: go("BRS_ADMIN") },
+    org_structure: { label: "Org Structure", icon: Network, visible: canAccessFeature("org_structure"), active: page === "ORG_STRUCTURE", onClick: go("ORG_STRUCTURE") },
+    org_gaps: { label: "Missing Department", icon: Users, visible: canAccessFeature("org_data_gaps"), active: page === "ORG_GAPS", onClick: go("ORG_GAPS") },
+    team_roster: { label: "Section Roster", icon: Users, visible: canAccessFeature("team_roster"), active: page === "TEAM_ROSTER", onClick: go("TEAM_ROSTER") },
+    ceo: { label: "CEO", icon: ShieldCheck, visible: canAccessFeature("ceo_management"), active: page === "CEO_MANAGEMENT", onClick: go("CEO_MANAGEMENT") },
+    employees: { label: "Employees", icon: Users, visible: canAccessFeature("employees"), active: page === "EMPLOYEES", onClick: go("EMPLOYEES") },
+    exco: { label: "EXCO Members", icon: ShieldCheck, visible: canAccessFeature("exco_members"), active: page === "EXCO", onClick: go("EXCO") },
+    managers: { label: "Managers", icon: UserRoundCheck, visible: canAccessFeature("managers"), active: page === "MANAGERS", onClick: go("MANAGERS") },
+    leadership: { label: "Leadership Assignments", icon: Users, visible: canAccessFeature("leadership_assignments"), active: page === "LEADERSHIP", onClick: go("LEADERSHIP") },
+    workflow_builder: { label: "Approval Workflow Builder", icon: ShieldCheck, visible: canAccessFeature("workflow_builder"), active: page === "WORKFLOW_BUILDER", onClick: go("WORKFLOW_BUILDER") },
+    reporting_lines: { label: "Reporting Lines", icon: GitBranch, visible: canAccessFeature("reporting_lines"), active: page === "REPORTING_LINES", onClick: go("REPORTING_LINES") },
+    settings_general: { label: "General", icon: SettingsIcon, visible: true, active: page === "SETTINGS", onClick: go("SETTINGS") },
+    pdf_designer: { label: "PDF Designer", icon: FileText, visible: canAccessFeature("pdf_designer"), active: page === "PDF_DESIGNER", onClick: go("PDF_DESIGNER") },
+    mobile_app_config: { label: "Mobile App", icon: Smartphone, visible: canAccessFeature("mobile_app_config"), active: page === "MOBILE_APP_CONFIG", onClick: go("MOBILE_APP_CONFIG") },
+    ai_assistant_config: { label: "AI Assistant", icon: Sparkles, visible: isAdminRole, active: page === "AI_ASSISTANT_CONFIG", onClick: go("AI_ASSISTANT_CONFIG") },
+    menu_editor: { label: "Menu", icon: ListTree, visible: isAdminRole, active: page === "MENU_EDITOR", onClick: go("MENU_EDITOR") },
+    data_cleanup: { label: "Data Cleanup", icon: Trash2, visible: isAdminRole, active: page === "DATA_CLEANUP", onClick: go("DATA_CLEANUP") }
+  };
+  // Not a hook on purpose (this runs after early returns); merging ~80 nodes is cheap.
+  const menuLayout = mergeLayout(savedMenuLayout, Object.keys(menuItems));
+  // Pages with no link of their own that still belong to a group.
+  const menuGroupExtraActive: Record<string, boolean> = {
+    advances: page === "MY_CLEARANCE_STATUS",
+    reports: REPORT_PAGES.includes(page),
+    org: ORG_PAGES.includes(page as any)
+  };
   const nowLabel = new Date().toLocaleString("en-GB", {
     day: "2-digit",
     month: "short",
@@ -5005,9 +5112,9 @@ export default function App() {
               </div>
             </div>
           )}
-          {(hasActiveCustomRequestTypes || hasActiveBrsTypes) && (
-            <div className={`sidebar-group ${groupOpen("custom", page === "CHANGE_REQUEST" || page === "BRS") ? "open" : ""}`}>
-              <a href="#" className={navItemClass(page === "CHANGE_REQUEST" || page === "BRS")} onClick={(e) => { e.preventDefault(); toggleGroup("custom", page === "CHANGE_REQUEST" || page === "BRS"); }}>
+          {(hasActiveCustomRequestTypes || hasActiveBrsTypes || showMaintenanceNav) && (
+            <div className={`sidebar-group ${groupOpen("custom", inCustomProcesses) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(inCustomProcesses)} onClick={(e) => { e.preventDefault(); toggleGroup("custom", inCustomProcesses); }}>
                 <span className="sidebar-nav-icon"><GitBranch size={18} aria-hidden /></span>Custom Processes
                 <strong><ChevronDown size={14} aria-hidden /></strong>
               </a>
@@ -5031,6 +5138,11 @@ export default function App() {
                 {hasActiveBrsTypes && (
                   <a href="#" className={navItemClass(page === "BRS")} onClick={(e) => { e.preventDefault(); setPage("BRS"); }}>
                     <FileText size={14} aria-hidden />BRS Studio
+                  </a>
+                )}
+                {showMaintenanceNav && (
+                  <a href="#" className={navItemClass(page === "MAINTENANCE")} onClick={(e) => { e.preventDefault(); setPage("MAINTENANCE"); }}>
+                    <Wrench size={14} aria-hidden />Maintenance
                   </a>
                 )}
               </div>
@@ -5336,6 +5448,8 @@ export default function App() {
             <OrgStructure />
           ) : page === "ORG_GAPS" ? (
             <OrgGaps />
+          ) : page === "MAINTENANCE" ? (
+            <Maintenance onOpenProcess={() => setPage("REQUEST_TYPES")} />
           ) : page === "TEAM_ROSTER" ? (
             <TeamRoster />
           ) : page === "REQUEST_TYPES" ? (
@@ -9551,6 +9665,12 @@ export default function App() {
                     <button className="button" disabled={!canRequestForSelf} onClick={startNewClearance}>
                       <Plus size={14} aria-hidden /> New Clearance
                     </button>
+                    {/* The sidebar is hidden on phones; stores log maintenance problems from here. */}
+                    {maintenanceModuleEnabled && (
+                      <button className="button" onClick={() => setPage("MAINTENANCE")}>
+                        <Wrench size={14} aria-hidden /> Report a maintenance problem
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="card dashboard-card dashboard-profile-card">

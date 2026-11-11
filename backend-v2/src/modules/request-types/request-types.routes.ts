@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { getBooleanSystemSetting, setBooleanSystemSetting, getNumericSystemSetting, setNumericSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { getBooleanSystemSetting, setBooleanSystemSetting, getNumericSystemSetting, setNumericSystemSetting, getStringSystemSetting, setStringSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { logger } from "../../lib/logger.js";
 import { loadAiConfig, setAiAssistantEnabled } from "../ai/ai-settings.js";
 
@@ -121,7 +121,7 @@ requestTypesRouter.get("/", async (req: AuthedRequest, res, next) => {
 // path, must precede /:id so it isn't swallowed by the :id param.
 requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) => {
   try {
-    const [overtime_enabled, standby_enabled, salary_advance_enabled, loan_advance_enabled, salary_advance_max_payback_months, loan_advance_max_payback_months, vendor_contracts_enabled, service_contracts_enabled, signature_enabled] = await Promise.all([
+    const [overtime_enabled, standby_enabled, salary_advance_enabled, loan_advance_enabled, salary_advance_max_payback_months, loan_advance_max_payback_months, vendor_contracts_enabled, service_contracts_enabled, signature_enabled, maintenance_enabled] = await Promise.all([
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.overtimeModuleEnabled, true),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, true),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, true),
@@ -130,7 +130,9 @@ requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) =
       getNumericSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths, 6),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.vendorContractsModuleEnabled, true),
       getBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, true)
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, true),
+      // A new process: off until an admin switches it on.
+      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.maintenanceModuleEnabled, false)
     ]);
     // The AI Assistant's own on/off (Settings > AI Assistant), shown and
     // switched here too - one setting, two screens.
@@ -140,7 +142,7 @@ requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) =
       salary_advance_enabled, loan_advance_enabled,
       salary_advance_max_payback_months, loan_advance_max_payback_months,
       vendor_contracts_enabled, service_contracts_enabled,
-      signature_enabled, ai_assistant_enabled
+      signature_enabled, maintenance_enabled, ai_assistant_enabled
     });
   } catch (err) {
     return next(err);
@@ -160,6 +162,7 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
       vendor_contracts_enabled: z.boolean().optional(),
       service_contracts_enabled: z.boolean().optional(),
       signature_enabled: z.boolean().optional(),
+      maintenance_enabled: z.boolean().optional(),
       ai_assistant_enabled: z.boolean().optional()
     }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -190,6 +193,9 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
     if (parsed.data.signature_enabled !== undefined) {
       await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, parsed.data.signature_enabled);
     }
+    if (parsed.data.maintenance_enabled !== undefined) {
+      await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.maintenanceModuleEnabled, parsed.data.maintenance_enabled);
+    }
     if (parsed.data.ai_assistant_enabled !== undefined) {
       try {
         await setAiAssistantEnabled(parsed.data.ai_assistant_enabled);
@@ -199,6 +205,83 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
       logger.info("ai_settings_updated", { by: req.user!.userId, enabled: parsed.data.ai_assistant_enabled, from: "process_page" });
     }
     return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Sidebar menu layout ───────────────────────────────────────────────────
+// Where each sidebar link sits (main menu / groups / groups inside groups,
+// order, group names and icons) - arranged by admins in Settings > Menu or
+// when activating a process. Only placement: who sees each link is still
+// decided by permissions in the app. null = the built-in default menu.
+// Fixed paths, so they must stay before /:id.
+const MENU_LAYOUT_KEY = "sidebar_menu_layout";
+const MENU_MAX_DEPTH = 6;
+const MENU_MAX_NODES = 600;
+const MenuIdSchema = z.string().regex(/^[A-Za-z0-9_:-]{1,80}$/);
+const MenuLabelSchema = z.string().trim().min(1).max(40);
+type MenuNodeIn =
+  | { type: "item"; id: string }
+  | { type: "group"; id: string; label: string; icon: string; children: MenuNodeIn[]; page?: string; flattenIfSingle?: boolean }
+  | { type: "section"; id: string; label: string };
+const MenuNodeSchema: z.ZodType<MenuNodeIn> = z.lazy(() => z.discriminatedUnion("type", [
+  z.object({ type: z.literal("item"), id: MenuIdSchema }),
+  z.object({
+    type: z.literal("group"), id: MenuIdSchema, label: MenuLabelSchema, icon: z.string().regex(/^[A-Za-z0-9]{1,40}$/),
+    children: z.array(MenuNodeSchema), page: z.string().regex(/^[A-Z_]{1,60}$/).optional(), flattenIfSingle: z.boolean().optional()
+  }),
+  z.object({ type: z.literal("section"), id: MenuIdSchema, label: MenuLabelSchema })
+]));
+const MenuLayoutSchema = z.object({ version: z.literal(1), nodes: z.array(MenuNodeSchema) }).superRefine((l, ctx) => {
+  const ids = new Set<string>();
+  let count = 0;
+  const walk = (nodes: MenuNodeIn[], depth: number) => {
+    for (const n of nodes) {
+      count++;
+      if (ids.has(n.id)) ctx.addIssue({ code: "custom", message: `"${n.id}" appears twice in the menu` });
+      ids.add(n.id);
+      if (n.type === "section" && depth > 0) ctx.addIssue({ code: "custom", message: "Section labels can only be in the main menu" });
+      if (n.type === "group") {
+        if (depth + 1 >= MENU_MAX_DEPTH) ctx.addIssue({ code: "custom", message: `Groups can be nested at most ${MENU_MAX_DEPTH - 1} deep` });
+        else walk(n.children, depth + 1);
+      }
+    }
+  };
+  walk(l.nodes, 0);
+  if (count > MENU_MAX_NODES) ctx.addIssue({ code: "custom", message: "The menu has too many entries" });
+});
+
+// Any signed-in user: the sidebar is drawn from it.
+requestTypesRouter.get("/menu-layout", async (_req: AuthedRequest, res, next) => {
+  try {
+    const raw = await getStringSystemSetting(MENU_LAYOUT_KEY, null);
+    let layout: unknown = null;
+    if (raw) {
+      try {
+        const parsed = MenuLayoutSchema.safeParse(JSON.parse(raw));
+        layout = parsed.success ? parsed.data : null;
+      } catch { layout = null; }
+    }
+    return res.json({ layout });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Admins only. { layout: null } goes back to the default menu.
+requestTypesRouter.put("/menu-layout", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    if (req.body?.layout === null) {
+      await setStringSystemSetting(MENU_LAYOUT_KEY, null);
+      logger.info("menu_layout_reset", { by: req.user!.userId });
+      return res.json({ layout: null });
+    }
+    const parsed = MenuLayoutSchema.safeParse(req.body?.layout);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid menu layout", parsed.error.flatten());
+    await setStringSystemSetting(MENU_LAYOUT_KEY, JSON.stringify(parsed.data));
+    logger.info("menu_layout_saved", { by: req.user!.userId });
+    return res.json({ layout: parsed.data });
   } catch (err) {
     return next(err);
   }

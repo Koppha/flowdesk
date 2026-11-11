@@ -497,12 +497,15 @@ export const api = {
   updateRequestTypeFields: (id: string, fields: any[]) => req(`/request-types/${id}/fields`, { method: "PUT", body: JSON.stringify(fields) }),
   requestTypePermissions: (id: string) => req(`/request-types/${id}/permissions`),
   moduleFlags: () => req("/request-types/module-flags"),
+  // Sidebar menu arrangement (Settings > Menu). null = the default menu.
+  menuLayout: () => req("/request-types/menu-layout"),
+  saveMenuLayout: (layout: unknown) => req("/request-types/menu-layout", { method: "PUT", body: JSON.stringify({ layout }) }),
   updateModuleFlags: (data: {
     overtime_enabled?: boolean; standby_enabled?: boolean;
     salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
     salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
     vendor_contracts_enabled?: boolean; service_contracts_enabled?: boolean;
-    signature_enabled?: boolean; ai_assistant_enabled?: boolean;
+    signature_enabled?: boolean; maintenance_enabled?: boolean; ai_assistant_enabled?: boolean;
   }) => req("/request-types/module-flags", { method: "PUT", body: JSON.stringify(data) }),
   slaSettings: () => req("/admin/sla-settings"),
   updateSlaSettings: (data: { enabled: boolean; thresholdHours: number }) =>
@@ -998,5 +1001,32 @@ export const api = {
   annotateSignableDocument: (id: string, data: { pageNumber: number; xPct: number; yPct: number; text: string; fontSize: number; color: string }) =>
     req(`/signatures/documents/${id}/annotate-text`, { method: "POST", body: JSON.stringify(data) }),
 
-  annotatePdf: (form: FormData) => postForBlob("/pdf-edit/annotate", form)
+  annotatePdf: (form: FormData) => postForBlob("/pdf-edit/annotate", form),
+
+  // Maintenance Requests
+  maintenanceMeta: () => req("/maintenance/meta"),
+  maintenanceRequests: (scope: "mine" | "site" | "jobs" | "office" | "approvals", status = "open") =>
+    req(`/maintenance/requests?scope=${scope}&status=${status}`),
+  maintenanceRequest: (id: string) => req(`/maintenance/requests/${id}`),
+  createMaintenanceRequest: (data: Record<string, unknown>) => req("/maintenance/requests", { method: "POST", body: JSON.stringify(data) }),
+  maintenanceAction: (id: string, data: Record<string, unknown>) =>
+    req(`/maintenance/requests/${id}/actions`, { method: "POST", body: JSON.stringify(data) }),
+  uploadMaintenancePhoto: (file: Blob, name: string) => {
+    const form = new FormData();
+    form.append("file", file, name);
+    return req("/maintenance/photos", { method: "POST", body: form }) as Promise<{ id: string }>;
+  },
+  maintenancePhotoBlob: (id: string) => fetchBlob(`/maintenance/photos/${id}`),
+  deleteMaintenancePhoto: (id: string, reason: string) => req(`/maintenance/photos/${id}`, { method: "DELETE", body: JSON.stringify({ reason }) }),
+  maintenanceAdminLists: () => req("/maintenance/admin/lists"),
+  saveMaintenanceSite: (id: string | null, data: Record<string, unknown>) =>
+    req(id ? `/maintenance/admin/sites/${id}` : "/maintenance/admin/sites", { method: id ? "PATCH" : "POST", body: JSON.stringify(data) }),
+  saveMaintenanceCategory: (id: string | null, data: Record<string, unknown>) =>
+    req(id ? `/maintenance/admin/categories/${id}` : "/maintenance/admin/categories", { method: id ? "PATCH" : "POST", body: JSON.stringify(data) }),
+  saveMaintenanceWorker: (id: string | null, data: Record<string, unknown>) =>
+    req(id ? `/maintenance/admin/workers/${id}` : "/maintenance/admin/workers", { method: id ? "PATCH" : "POST", body: JSON.stringify(data) }),
+  saveMaintenanceTargets: (targets: Array<{ priority: string; respond_hours: number; fix_working_days: number }>) =>
+    req("/maintenance/admin/targets", { method: "PUT", body: JSON.stringify(targets) }),
+  saveMaintenanceSettings: (data: { spend_limit?: number | null; auto_close_working_days?: number }) =>
+    req("/maintenance/admin/settings", { method: "PUT", body: JSON.stringify(data) })
 };

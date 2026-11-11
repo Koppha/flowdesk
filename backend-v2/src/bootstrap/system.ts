@@ -16,6 +16,7 @@ import { ensureFinanceAuthoritySchema } from "../lib/financeAuthority.js";
 import { ensureBrsSchema } from "../modules/brs/brs.schema.js";
 import { ensureChangeCollabSchema } from "../modules/custom-requests/change-collab.service.js";
 import { ensureRaidSchema } from "../modules/raid/raid.service.js";
+import { ensureMaintenanceSchema } from "../modules/maintenance/maintenance.service.js";
 import { backfillUploadsToStore, ensureFileStoreSchema } from "../lib/fileStore.js";
 import { ensureApprovalChangeSchema } from "../lib/approvalChanges.js";
 import { ensureReportingViewsSchema } from "../modules/reporting/reporting.schema.js";
@@ -45,6 +46,7 @@ export async function bootstrapSystem() {
   await ensureBrsSchema();
   await ensureChangeCollabSchema();
   await ensureRaidSchema();
+  await ensureMaintenanceSchema();
   // Uploaded files are also kept in the shared database (lib/fileStore.ts);
   // copy whatever this server already has, without holding up startup.
   await ensureFileStoreSchema();
@@ -1426,7 +1428,8 @@ async function ensureWorkflowSchema() {
     "CLEARANCE_REQUEST",
     "PETTY_CASH_REQUEST",
     "CUSTOM_WORKFLOW",
-    "CLAIM_REQUEST"
+    "CLAIM_REQUEST",
+    "MAINTENANCE_REQUEST"
   ]) {
     await ensureEnumTypeValue("workflow_request_type", requestType);
   }

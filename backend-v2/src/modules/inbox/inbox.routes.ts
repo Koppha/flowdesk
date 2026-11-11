@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { assigneeLabel, assigneeMatches } from "../custom-requests/change-collab.service.js";
+import { maintenanceInboxItems } from "../maintenance/maintenance.routes.js";
 import { AuthedRequest, Role, hasFeatureAccess, requireAuth } from "../../lib/auth.js";
 import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { query } from "../../lib/db.js";
@@ -1290,6 +1291,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     await loadCaptureHistoryItems();
     await loadAccommodationItems();
     await loadCustomRequestsForUser();
+    // Maintenance requests where this person has the next move (review,
+    // accept, update, verify, approve spend, confirm) - see maintenance.routes.ts.
+    items.push(...(await maintenanceInboxItems({ userId: req.user!.userId, role: req.user!.role, fullName: req.user!.fullName ?? null, sectionId: req.user!.sectionId ?? null })));
     await loadSignableDocumentsForUser();
     await loadOvertimeRequestItems();
     await loadOvertimeClaimItems();

@@ -1814,6 +1814,34 @@ export async function notifyCustomRequestAssigneeReminder(args: {
   }
 }
 
+// Maintenance Requests: every event (submitted, assigned, update requested,
+// completed...) uses this one template - the module decides who hears about
+// what (maintenance.service.ts notifyEvent). Photos stay in FlowDesk; the
+// email only points at the request.
+export async function notifyMaintenanceEvent(args: {
+  requestNo: string;
+  emails: string[];
+  subject: string;
+  heading: string;
+  lines: string[];
+}) {
+  try {
+    if (!args.emails.length) return;
+    const body = [
+      header(`MAINTENANCE ${args.requestNo} — ${args.heading.toUpperCase()}`),
+      ``,
+      ...args.lines,
+      ``,
+      `Open it in FlowDesk > Maintenance (or your Approval Inbox).`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({ to: args.emails, subject: `${args.subject} — ${args.requestNo}`, text: body });
+  } catch (error) {
+    logger.warn("maintenance_notification_failed", { request_no: args.requestNo, error: serializeError(error) });
+  }
+}
+
 export async function notifyChangeRequestFollowUp(args: {
   submissionId: string;
   requestTypeName: string;

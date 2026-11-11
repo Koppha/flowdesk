@@ -9,6 +9,7 @@ import { startEmployeeContractReminderWorker } from "./modules/employee-contract
 import { startSlaReminderWorker } from "./modules/sla/sla.service.js";
 import { reassignAllPendingApprovals } from "./lib/approvalReassignment.js";
 import { sendCollectionReminders } from "./modules/it-provisioning/it-provisioning.service.js";
+import { runMaintenanceAutoClose } from "./modules/maintenance/maintenance.service.js";
 
 await bootstrapSystem();
 
@@ -35,6 +36,11 @@ async function runCollectionReminders() {
 }
 runCollectionReminders();
 setInterval(runCollectionReminders, 6 * 60 * 60 * 1000);
+
+// Maintenance: requests waiting on the requester's confirmation close by
+// themselves after N working days (FR-08). Checked hourly.
+void runMaintenanceAutoClose();
+setInterval(() => void runMaintenanceAutoClose(), 60 * 60 * 1000);
 
 // Automatic sweep disabled per explicit request (stopped 2026-09-07) - was:
 // run once at startup then every 24h, re-checking every pending advance/

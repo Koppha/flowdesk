@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RaidLogButton } from "./components/RaidLog";
 import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
+import { MaintenanceDetailModal } from "./Maintenance";
 import Swal from "sweetalert2";
 import { api, getUserFromToken, navigateTabToBlob, openBlankTab, openBlobInNewTab } from "./api";
 import { showNotice, confirmAction } from "./alerts";
 import { LESOTHO_DISTRICTS, TravelType, displayOrgGroupName, formatMoney, isTravelTypeCode, stepDoneStatusLabel, travelTypeLabel } from "./constants";
 import { useStaffDirectory } from "./useStaffDirectory";
 import { roleLabel } from "./roles";
-import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Hourglass, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users, Wallet } from "lucide-react";
+import { AlertTriangle, AlignLeft, Bell, Briefcase, Building2, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, ClipboardList, Clock3, CreditCard, Download, Eye, FileText, Flag, Hash, Hourglass, Info, type LucideIcon, MapPin, Plane, RefreshCw, Search, ShieldCheck, User, Users, Wallet, Wrench } from "lucide-react";
 import { BusinessUnitTabs, IconTabRow, FinanceEmptyState, type BusinessUnit } from "./components/FinanceQueueKit";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
@@ -130,6 +131,22 @@ type InboxItem =
       status: string;
       title: string;
       created_by_name: string | null;
+      current_step_actionable_by_me?: boolean;
+      created_at?: string;
+    }
+  | {
+      // Maintenance request where this person has the next move (task_label).
+      doc_type: "MAINTENANCE_REQUEST";
+      id: string;
+      status: string;
+      status_label: string;
+      request_no: string;
+      site_name: string;
+      location: string;
+      category: string;
+      priority: string;
+      requester_name: string;
+      task_label: string;
       current_step_actionable_by_me?: boolean;
       created_at?: string;
     };
@@ -318,6 +335,7 @@ function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) 
     case "CHANGE_REQUEST":   return "Change Request";
     case "BRS_APPROVAL":     return "BRS Approval";
     case "OVERTIME_REQUEST": return "Overtime Request";
+    case "MAINTENANCE_REQUEST": return "Maintenance";
     case "OVERTIME_CLAIM":   return "Overtime Claim";
     case "STANDBY_CLAIM":    return "Standby Claim";
     case "SIGNABLE_DOCUMENT": return "Signature";
@@ -361,6 +379,7 @@ function docTypeIcon(value: InboxItem["doc_type"] | string | null | undefined) {
     case "OVERTIME_REQUEST":
     case "OVERTIME_CLAIM":   return Clock3;
     case "STANDBY_CLAIM":    return CircleDot;
+    case "MAINTENANCE_REQUEST": return Wrench;
     default:                 return CreditCard;
   }
 }
@@ -384,6 +403,7 @@ function docTypeTone(value: InboxItem["doc_type"] | string | null | undefined) {
 function itemStageProgress(item: InboxItem) {
   const status = String(item.status || "").toUpperCase();
   if (item.doc_type === "SIGNABLE_DOCUMENT") return item.current_step_actionable_by_me ? "Awaiting your signature" : "Awaiting another approver";
+  if (item.doc_type === "MAINTENANCE_REQUEST") return item.task_label;
   if (item.doc_type === "CUSTOM_REQUEST") return (item.current_step_position_name && displayOrgGroupName(item.current_step_position_name)) || statusLabel(status);
   if (item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "OVERTIME_CLAIM" || item.doc_type === "STANDBY_CLAIM") return item.my_title || "Pending";
   // A claim/advance not yet at a terminal/outcome status is still
@@ -440,6 +460,7 @@ function itemStatusLabel(item: InboxItem) {
     if ((item as any).current_step_action_type === "MARK_PAID") return "Approved — Awaiting Payment";
     return item.current_step_actionable_by_me ? "Pending Approval" : "Approved";
   }
+  if (item.doc_type === "MAINTENANCE_REQUEST") return item.status_label;
   if (item.doc_type === "CUSTOM_REQUEST" && item.status === "IN_PROGRESS") {
     if (item.current_step_actionable_by_me) return "Pending Approval";
     if (item.is_assignee_task) return "Awaiting Your Confirmation";
@@ -460,19 +481,20 @@ function itemOwner(item: InboxItem) {
 function itemAmountValue(item: InboxItem) {
   if (item.doc_type === "ADVANCE") return Number(item.requested_total || 0);
   if (item.doc_type === "ACCOMMODATION") return Number(item.amount || 0);
-  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "SIGNABLE_DOCUMENT") return 0;
+  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "SIGNABLE_DOCUMENT" || item.doc_type === "MAINTENANCE_REQUEST") return 0;
   if (item.doc_type === "OVERTIME_CLAIM") return Number(item.total_amount || 0);
   if (item.doc_type === "STANDBY_CLAIM") return Number(item.calculated_amount || 0);
   return Number(item.claim_total || 0);
 }
 
 function itemAmount(item: InboxItem) {
-  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "SIGNABLE_DOCUMENT") return "—";
+  if (item.doc_type === "CUSTOM_REQUEST" || item.doc_type === "OVERTIME_REQUEST" || item.doc_type === "SIGNABLE_DOCUMENT" || item.doc_type === "MAINTENANCE_REQUEST") return "—";
   return fmt(itemAmountValue(item), (item as any).currency);
 }
 
 function itemContext(item: InboxItem) {
   if (item.doc_type === "SIGNABLE_DOCUMENT") return item.title;
+  if (item.doc_type === "MAINTENANCE_REQUEST") return `${item.request_no} — ${item.site_name}, ${item.location} (${item.category})`;
   if (item.doc_type === "ADVANCE") return item.purpose || "Advance request";
   if (item.doc_type === "ACCOMMODATION") return `${item.location || "Location pending"}${item.provider ? ` - ${item.provider}` : ""}`;
   if (item.doc_type === "CUSTOM_REQUEST") return item.request_type_name;
@@ -787,6 +809,15 @@ export default function Inbox(props: {
   const latestAction = myActions[0] || null;
 
   if (selected) {
+    if (selected.doc_type === "MAINTENANCE_REQUEST") {
+      return (
+        <MaintenanceDetailModal
+          id={selected.id}
+          onClose={() => { setSelected(null); void refresh(); }}
+          onDone={() => { void refresh(); }}
+        />
+      );
+    }
     return selected.doc_type === "CUSTOM_REQUEST" ? (
       <CustomRequestReviewModal
         item={selected}
@@ -998,7 +1029,8 @@ export default function Inbox(props: {
                         </thead>
                         <tbody>
                           {pagedItems.map((it) => (
-                            <tr key={it.id}>
+                            // The whole row opens it; the eye button stays for keyboard and screen-reader users.
+                            <tr key={it.id} className="inbox-row-clickable" onClick={() => openItem(it)}>
                               <td>
                                 <div className="inbox-person-cell">
                                   <span className="inbox-avatar-mini">{initials(itemOwner(it))}</span>
@@ -1034,7 +1066,7 @@ export default function Inbox(props: {
                                 <button
                                   type="button"
                                   className="inbox-review-button"
-                                  onClick={() => openItem(it)}
+                                  onClick={(e) => { e.stopPropagation(); openItem(it); }}
                                   aria-label={`Review ${itemTypeLabel(it as any)} for ${itemOwner(it)}`}
                                   title="Review"
                                 >

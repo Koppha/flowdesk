@@ -22,6 +22,7 @@ import { requestTypesRouter } from "./modules/request-types/request-types.routes
 import { customRequestsRouter } from "./modules/custom-requests/custom-requests.routes.js";
 import { changeCollabRouter } from "./modules/custom-requests/change-collab.routes.js";
 import { raidRouter } from "./modules/raid/raid.routes.js";
+import { maintenanceRouter } from "./modules/maintenance/maintenance.routes.js";
 import { orgGapsRouter } from "./modules/admin/org-gaps.routes.js";
 import { brsRouter } from "./modules/brs/brs.routes.js";
 import { brsAdminRouter } from "./modules/brs/brs-admin.routes.js";
@@ -137,6 +138,7 @@ export function createApp() {
   app.use("/custom-requests", changeCollabRouter);
   app.use("/custom-requests", customRequestsRouter);
   app.use("/raid", raidRouter);
+  app.use("/maintenance", maintenanceRouter);
   app.use("/admin/org-gaps", orgGapsRouter);
   app.use("/brs", brsRouter);
   app.use("/brs-types", brsAdminRouter);

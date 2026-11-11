@@ -27,6 +27,7 @@ export const SYSTEM_SETTING_KEYS = {
   vendorContractsModuleEnabled: "vendor_contracts_module_enabled",
   serviceContractsModuleEnabled: "service_contracts_module_enabled",
   signatureModuleEnabled: "signature_module_enabled",
+  maintenanceModuleEnabled: "maintenance_module_enabled",
   salaryAdvanceEnabled: "salary_advance_enabled",
   loanAdvanceEnabled: "loan_advance_enabled",
   salaryAdvanceMaxPaybackMonths: "salary_advance_max_payback_months",

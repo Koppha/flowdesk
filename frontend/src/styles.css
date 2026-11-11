@@ -1581,6 +1581,15 @@ html[data-theme="dark"] .inbox-error {
   border-bottom: 0;
 }
 
+/* Approval Inbox rows open the request when clicked anywhere. */
+.inbox-table tr.inbox-row-clickable {
+  cursor: pointer;
+}
+
+.inbox-table tr.inbox-row-clickable:hover td {
+  background: var(--surface-soft);
+}
+
 .review-table-totals-row td {
   font-weight: 700;
   border-top: 2px solid var(--border);

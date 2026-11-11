@@ -141,14 +141,18 @@ const ALL_REQUEST_TYPES = [
   "PROCUREMENT_REQUEST",
   "CLEARANCE_REQUEST",
   "PETTY_CASH_REQUEST",
-  "CLAIM_REQUEST"
+  "CLAIM_REQUEST",
+  "MAINTENANCE_REQUEST"
 ];
 
 // Must stay in sync with the built-in module list on the Request Types page
 const BUILTIN_REQUEST_TYPES = [
   { value: "ADVANCE_REQUEST", label: "Advance Request" },
   { value: "CLEARANCE_REQUEST", label: "Clearance Request" },
-  { value: "OVERTIME_REQUEST", label: "Overtime Request" }
+  { value: "OVERTIME_REQUEST", label: "Overtime Request" },
+  // Step 1 is the Admin Office (reviews, assigns, verifies); any later
+  // steps approve spend, only when a job needs approval.
+  { value: "MAINTENANCE_REQUEST", label: "Maintenance Request" }
 ];
 
 const STATUS_OPTIONS: Array<{ value: WorkflowStatus; label: string }> = [
