@@ -107,7 +107,9 @@ Administration (administrators only): user accounts are managed under User Manag
 
 Reporting lines: each person's manager comes from Organisation Structure automatically (their Section, then Department, then Division leadership); HR or an admin can set a different manager by hand. Approval workflows route "Manager" steps to that person.
 
-If you don't know how something works in FlowDesk, say so and suggest asking the system administrator rather than guessing.`;
+If you don't know how something works in FlowDesk, say so and suggest asking the system administrator rather than guessing.
+
+Charts: when an answer compares or trends numbers (totals by department, status, month or type; counts over time; shares of a whole) or the person asks for a chart or graph, call show_chart once you have the numbers (the chat can only show a chart through show_chart - never say "here's the chart" without calling it) - bar for comparing categories, line for change over time, pie for parts of one whole (up to 8 slices). Only chart numbers a lookup returned, exactly as returned; never estimate or invent values. Still give a short written summary of what the chart shows.`;
 
 // ── Tools ─────────────────────────────────────────────────────────────────
 const NoInput = z.object({}).strict();
@@ -121,6 +123,19 @@ const ReportInput = z.object({
   division: z.string().optional(),
   department: z.string().optional()
 }).strict();
+const ChartInput = z.object({
+  title: z.string().trim().min(1).max(120),
+  type: z.enum(["bar", "line", "pie"]),
+  labels: z.array(z.string().trim().min(1).max(60)).min(1).max(24),
+  series: z.array(z.object({ name: z.string().trim().min(1).max(60), values: z.array(z.number().finite()).min(1).max(24) }).strict()).min(1).max(4),
+  unit: z.string().trim().max(12).optional()
+}).strict().superRefine((c, ctx) => {
+  if (c.series.some((s) => s.values.length !== c.labels.length)) ctx.addIssue({ code: "custom", message: "Each series needs one value per label" });
+  if (c.type === "pie" && (c.series.length !== 1 || c.labels.length > 8)) ctx.addIssue({ code: "custom", message: "A pie chart has one series and at most 8 slices - use a bar chart" });
+  if (c.type === "pie" && c.series[0].values.some((v) => v < 0)) ctx.addIssue({ code: "custom", message: "A pie chart can't show negative values - use a bar chart" });
+});
+export type Chart = z.infer<typeof ChartInput>;
+
 const AdvanceDraftInput = z.object({
   travel_type_code: z.string().min(1),
   purpose: z.string().min(3),
@@ -206,6 +221,24 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
     eager_input_streaming: true
   },
   {
+    name: "show_chart",
+    description: "The ONLY way to show a chart or graph in the chat - call it whenever the person asks for a chart, graph or visual, after getting the numbers from a lookup (never invented). bar = compare categories, line = change over time, pie = parts of one whole (one series, at most 8 slices). labels are the categories or periods; each series has one value per label (up to 4 series, 24 labels). unit is optional, e.g. 'M' for maloti or 'hrs'. Give a short written summary as well.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: str,
+        type: { type: "string", enum: ["bar", "line", "pie"] },
+        labels: { type: "array", items: str },
+        series: { type: "array", items: { type: "object", properties: { name: str, values: { type: "array", items: { type: "number" } } }, required: ["name", "values"], additionalProperties: false } },
+        unit: str
+      },
+      required: ["title", "type", "labels", "series"],
+      additionalProperties: false
+    },
+    strict: true,
+    eager_input_streaming: true
+  },
+  {
     name: "create_advance_draft",
     description: "Save a DRAFT travel advance for the signed-in person (never submitted). Only after the person has confirmed the details. travel_type_code from get_travel_types. For per-meal local travel each line has date, from and to (Lesotho districts) and meals_or_days = meals that day (1-3). For per-day travel each line has date, country, city and meals_or_days = number of days. Payment: EcoCash number, or bank name + account number + branch.",
     input_schema: {
@@ -251,6 +284,7 @@ const TOOL_LABEL: Record<string, string> = {
   get_travel_types: "Checking travel types and rates",
   run_report: "Running the report",
   get_user_and_app_stats: "Checking users and mobile app usage",
+  show_chart: "Drawing a chart",
   create_advance_draft: "Saving a draft advance",
   create_clearance_draft: "Starting a draft clearance"
 };
@@ -447,10 +481,16 @@ const REPORT_PATH: Record<string, string> = {
 
 type DraftNote = { kind: "advance" | "clearance"; id: string; label: string };
 
-export async function runTool(name: string, rawInput: unknown, token: string, drafts: DraftNote[]): Promise<{ content: string; isError?: boolean }> {
+export async function runTool(name: string, rawInput: unknown, token: string, drafts: DraftNote[], onChart?: (c: Chart) => void): Promise<{ content: string; isError?: boolean }> {
   const ok = (v: unknown) => ({ content: JSON.stringify(v) });
   const fail = (msg: string) => ({ content: JSON.stringify({ error: msg }), isError: true });
   switch (name) {
+    case "show_chart": {
+      const p = ChartInput.safeParse(rawInput);
+      if (!p.success) return fail(p.error.issues[0]?.message || "Check the chart data");
+      onChart?.(p.data);
+      return ok({ shown: true, note: "The chart is on the person's screen - now summarise it in a sentence or two." });
+    }
     case "list_my_advances": {
       if (!NoInput.safeParse(rawInput ?? {}).success) return fail("This tool takes no input.");
       const [r, claims, me, types] = await Promise.all([
@@ -813,7 +853,7 @@ export async function usedToday(userId: string) {
 
 async function loadHistory(conversationId: string): Promise<Anthropic.Beta.BetaMessageParam[]> {
   const rows = await query<{ role: "user" | "assistant"; content: any }>(
-    `SELECT role, content FROM ai_messages WHERE conversation_id = $1 ORDER BY id`, [conversationId]
+    `SELECT role, content FROM ai_messages WHERE conversation_id = $1 AND kind <> 'chart' ORDER BY id`, [conversationId]
   );
   return rows.map((r) => ({ role: r.role, content: r.content }));
 }
@@ -825,6 +865,39 @@ async function store(conversationId: string, role: "user" | "assistant", kind: s
   await query(`UPDATE ai_conversations SET updated_at = now() WHERE id = $1`, [conversationId]);
 }
 
+// ── Chart safety net ──────────────────────────────────────────────────────
+const CHART_ASK = /\b(chart|graph|plot|visuali[sz]e|visual|pie|bar chart|line chart)\b/i;
+
+// The first markdown table in an answer whose other columns are numbers:
+// the first column becomes the labels, each numeric column a series. A
+// "Total" row is left out (it isn't a category). Null when there's no such
+// table or the result wouldn't pass show_chart's own checks.
+export function chartFromTable(text: string, ask: string): Chart | null {
+  const lines = text.split("\n").map((l) => l.trim());
+  const start = lines.findIndex((l, i) => l.startsWith("|") && /^\|?[\s:|-]+\|?$/.test(lines[i + 1] || "") && (lines[i + 1] || "").includes("-"));
+  if (start < 0) return null;
+  const cells = (l: string) => l.replace(/^\||\|$/g, "").split("|").map((c) => c.trim().replace(/\*\*/g, ""));
+  const head = cells(lines[start]);
+  const rows: string[][] = [];
+  for (let i = start + 2; i < lines.length && lines[i].startsWith("|"); i++) rows.push(cells(lines[i]));
+  const body = rows.filter((r) => r[0] && !/^total$/i.test(r[0]));
+  if (body.length < 2 || head.length < 2) return null;
+  const num = (c: string) => { const m = c.replace(/[,\s]/g, "").match(/^[^\d-]*(-?\d+(?:\.\d+)?)/); return m ? Number(m[1]) : NaN; };
+  const cols = head.map((_, j) => j).slice(1).filter((j) => body.every((r) => Number.isFinite(num(r[j] || ""))));
+  if (!cols.length) return null;
+  const unit = (body[0][cols[0]] || "").match(/^([A-Za-z]{1,3})\s?\d/)?.[1];
+  const wantPie = /\bpie\b/i.test(ask) && cols.length === 1 && body.length <= 8;
+  const candidate = {
+    title: head.slice(1).filter((_, j) => cols.includes(j + 1)).join(" and ") + " by " + head[0].toLowerCase(),
+    type: wantPie ? "pie" : /\b(line|trend|over time)\b/i.test(ask) ? "line" : "bar",
+    labels: body.slice(0, 24).map((r) => r[0].slice(0, 60)),
+    series: cols.slice(0, 4).map((j) => ({ name: head[j].slice(0, 60), values: body.slice(0, 24).map((r) => num(r[j])) })),
+    ...(unit ? { unit } : {})
+  };
+  const p = ChartInput.safeParse(candidate);
+  return p.success ? p.data : null;
+}
+
 // For the chat panel: the readable side of a stored conversation.
 export async function conversationForDisplay(conversationId: string, userId: string) {
   const conv = (await query<{ id: string; title: string | null }>(`SELECT id, title FROM ai_conversations WHERE id = $1 AND user_id = $2`, [conversationId, userId]))[0];
@@ -832,13 +905,33 @@ export async function conversationForDisplay(conversationId: string, userId: str
   const rows = await query<{ role: string; kind: string; content: any; created_at: string }>(
     `SELECT role, kind, content, created_at FROM ai_messages WHERE conversation_id = $1 ORDER BY id`, [conversationId]
   );
-  const messages: Array<{ role: string; text: string; at: string }> = [];
+  const messages: Array<{ role: string; text: string; at: string; charts?: Chart[] }> = [];
+  // Charts the assistant drew (its show_chart calls) go with its next written answer.
+  let charts: Chart[] = [];
   for (const r of rows) {
+    if (r.kind === "chart") {
+      const p = ChartInput.safeParse(r.content);
+      const last = messages[messages.length - 1];
+      if (p.success && last?.role === "assistant") last.charts = [...(last.charts || []), p.data];
+      continue;
+    }
     if (r.kind !== "message") continue;
     const blocks = Array.isArray(r.content) ? r.content : [{ type: "text", text: String(r.content) }];
+    if (r.role === "assistant") {
+      for (const b of blocks) {
+        if (b?.type !== "tool_use" || b.name !== "show_chart") continue;
+        const p = ChartInput.safeParse(b.input);
+        if (p.success) charts.push(p.data);
+      }
+    }
     const text = blocks.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
-    if (text) messages.push({ role: r.role, text, at: r.created_at });
+    if (r.role === "user" && text && charts.length) { messages.push({ role: "assistant", text: "", at: r.created_at, charts }); charts = []; }
+    if (text) {
+      messages.push({ role: r.role, text, at: r.created_at, ...(r.role === "assistant" && charts.length ? { charts } : {}) });
+      if (r.role === "assistant") charts = [];
+    }
   }
+  if (charts.length) messages.push({ role: "assistant", text: "", at: rows[rows.length - 1]?.created_at, charts });
   return { ...conv, messages };
 }
 
@@ -919,6 +1012,7 @@ export async function streamChat(args: {
     ];
 
     const drafts: DraftNote[] = [];
+    let chartsShown = 0;
     let jsonRetries = 0;
     // The person's own model first (if they picked one), then the admin's order.
     const targets = targetsFor(await loadAiConfig(), await userModelPick(userId));
@@ -1001,7 +1095,7 @@ export async function streamChat(args: {
         send({ type: "tool", name: t.name, label: TOOL_LABEL[t.name] || "Working" });
         let r: { content: string; isError?: boolean };
         try {
-          r = await runTool(t.name, t.input, token, drafts);
+          r = await runTool(t.name, t.input, token, drafts, (chart) => { chartsShown++; send({ type: "chart", chart }); });
         } catch (err) {
           logger.warn("ai_assistant_tool_failed", { tool: t.name, error: String(err) });
           r = { content: JSON.stringify({ error: "That lookup failed - try again in a moment." }), isError: true };
@@ -1012,6 +1106,16 @@ export async function streamChat(args: {
       messages.push({ role: "user", content: results });
     }
     for (const d of drafts) send({ type: "draft", ...d });
+    // Asked for a chart, got a table: draw it from the table.
+    if (!chartsShown && CHART_ASK.test(args.message)) {
+      const last = [...messages].reverse().find((m) => m.role === "assistant");
+      const text = Array.isArray(last?.content) ? (last!.content as any[]).filter((b) => b?.type === "text").map((b) => b.text).join("\n") : "";
+      const chart = chartFromTable(text, args.message);
+      if (chart) {
+        send({ type: "chart", chart });
+        await store(conversationId, "assistant", "chart", chart);
+      }
+    }
     send({ type: "done" });
   } catch (err) {
     if (aborted) return;

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowUp, CircleHelp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X } from "lucide-react";
 import { API, getToken, getUserFromToken } from "../api";
+import AssistantChart, { type AssistantChartData } from "./AssistantChart";
 
 // The FlowDesk AI Assistant: a chat panel opened from the side menu. Answers
 // stream in from POST /ai/assistant/chat (Server-Sent Events). It only sees
@@ -8,7 +9,7 @@ import { API, getToken, getUserFromToken } from "../api";
 // submit) - an "Open draft" button appears when it does. Styles: .fda-* in
 // styles.css.
 
-type Msg = { role: "user" | "assistant"; text: string; notes?: string[]; drafts?: Array<{ kind: string; id: string; label: string }>; error?: boolean };
+type Msg = { role: "user" | "assistant"; text: string; notes?: string[]; drafts?: Array<{ kind: string; id: string; label: string }>; charts?: AssistantChartData[]; error?: boolean };
 type Conv = { id: string; title: string | null; updated_at: string };
 type Suggestion = { icon: typeof FileText; title: string; hint: string; ask: string };
 
@@ -131,7 +132,7 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
     try {
       const c = await getJson(`/ai/assistant/conversations/${id}`);
       setConversationId(id);
-      setMessages((c.messages || []).map((m: any) => ({ role: m.role, text: m.text })));
+      setMessages((c.messages || []).map((m: any) => ({ role: m.role, text: m.text, ...(m.charts?.length ? { charts: m.charts } : {}) })));
       setShowHistory(false);
     } catch { /* ignore */ }
   }
@@ -180,6 +181,7 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
           if (ev.type === "conversation") setConversationId(ev.id);
           else if (ev.type === "text") patchLast((m) => ({ ...m, text: m.text + ev.delta }));
           else if (ev.type === "tool") patchLast((m) => ({ ...m, notes: [...(m.notes || []), ev.label] }));
+          else if (ev.type === "chart") patchLast((m) => ({ ...m, charts: [...(m.charts || []), ev.chart] }));
           else if (ev.type === "draft") {
             patchLast((m) => ({ ...m, drafts: [...(m.drafts || []), { kind: ev.kind, id: ev.id, label: ev.label }] }));
             onDraftSaved();
@@ -297,6 +299,7 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
                   {busy && i === messages.length - 1 && j === (m.notes || []).length - 1 && !m.text ? <Loader2 size={12} className="spin" /> : <span>✓</span>} {n}
                 </div>
               ))}
+              {(m.charts || []).map((c, j) => <AssistantChart key={j} chart={c} />)}
               {m.text ? <Formatted text={m.text} /> : busy && i === messages.length - 1 && !(m.notes || []).length ? (
                 <div className="fda-note"><Loader2 size={13} className="spin" /> Thinking…</div>
               ) : null}
