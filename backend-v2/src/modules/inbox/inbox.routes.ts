@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { assigneeLabel, assigneeMatches } from "../custom-requests/change-collab.service.js";
 import { maintenanceInboxItems } from "../maintenance/maintenance.routes.js";
+import { supportInboxItems } from "../support/support.routes.js";
 import { AuthedRequest, Role, hasFeatureAccess, requireAuth } from "../../lib/auth.js";
 import { isCompensationFinanceSection, isCompensationFinanceUser } from "../../lib/financeAuthority.js";
 import { query } from "../../lib/db.js";
@@ -1294,6 +1295,9 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     // Maintenance requests where this person has the next move (review,
     // accept, update, verify, approve spend, confirm) - see maintenance.routes.ts.
     items.push(...(await maintenanceInboxItems({ userId: req.user!.userId, role: req.user!.role, fullName: req.user!.fullName ?? null, sectionId: req.user!.sectionId ?? null })));
+    // Help & Support chats waiting on this person (support team) or with an
+    // unread reply (anyone). Never let the chat break the whole inbox.
+    items.push(...(await supportInboxItems({ userId: req.user!.userId, role: req.user!.role }).catch(() => [])));
     await loadSignableDocumentsForUser();
     await loadOvertimeRequestItems();
     await loadOvertimeClaimItems();

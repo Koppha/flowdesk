@@ -1814,6 +1814,27 @@ export async function notifyCustomRequestAssigneeReminder(args: {
   }
 }
 
+// Help & Support: a staff member wrote to the support team, or support
+// replied. Same text whichever side it goes to; the chat itself is in the
+// Approval Inbox (web) and Profile > Help & support (app).
+export async function notifySupportMessage(args: { emails: string[]; subject: string; heading: string; lines: string[] }) {
+  try {
+    if (!args.emails.length) return;
+    const body = [
+      header(args.heading),
+      ``,
+      ...args.lines,
+      ``,
+      `Open it in FlowDesk > Approval Inbox, or in the app (Profile > Help & support).`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({ to: args.emails, subject: args.subject, text: body });
+  } catch (error) {
+    logger.warn("support_notification_failed", { error: serializeError(error) });
+  }
+}
+
 // Maintenance Requests: every event (submitted, assigned, update requested,
 // completed...) uses this one template - the module decides who hears about
 // what (maintenance.service.ts notifyEvent). Photos stay in FlowDesk; the

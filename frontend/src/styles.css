@@ -12844,7 +12844,8 @@ html[data-theme="dark"] .brs-kpi-tint-green { background: rgba(21, 128, 61, 0.14
   right: 12px;
   bottom: 12px;
   z-index: 900;
-  width: min(480px, calc(100vw - 24px));
+  /* 80% wider than the original 480px; never wider than the screen. */
+  width: min(864px, calc(100vw - 24px));
   display: flex;
   flex-direction: column;
   background: var(--surface, #fff);

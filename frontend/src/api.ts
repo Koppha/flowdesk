@@ -1003,6 +1003,13 @@ export const api = {
 
   annotatePdf: (form: FormData) => postForBlob("/pdf-edit/annotate", form),
 
+  // Help & Support chat (backend modules/support, under /mobile-app/support)
+  supportMine: () => req("/mobile-app/support/me"),
+  supportWrite: (body: string) => req("/mobile-app/support/me/messages", { method: "POST", body: JSON.stringify({ body }) }),
+  supportConversation: (id: string) => req(`/mobile-app/support/conversations/${id}`),
+  supportReply: (id: string, body: string) => req(`/mobile-app/support/conversations/${id}/messages`, { method: "POST", body: JSON.stringify({ body }) }),
+  supportClose: (id: string) => req(`/mobile-app/support/conversations/${id}/close`, { method: "POST", body: JSON.stringify({}) }),
+
   // Maintenance Requests
   maintenanceMeta: () => req("/maintenance/meta"),
   maintenanceRequests: (scope: "mine" | "site" | "jobs" | "office" | "approvals", status = "open") =>
