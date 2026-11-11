@@ -4,7 +4,8 @@ import { href } from "../router";
 import { StatusPill, formatDate } from "../ui";
 
 // "To sign" home: routed documents waiting on me first, then everything
-// else I created or am on the route of, then my one-off signed PDFs.
+// else I created or am on the route of, then everything I've signed - routed
+// documents and one-off signed PDFs together, newest first.
 export default function ListScreen() {
   const [docs, setDocs] = useState<DocSummary[] | null>(null);
   const [signed, setSigned] = useState<SignedRecord[]>([]);
@@ -23,8 +24,13 @@ export default function ListScreen() {
   if (!docs) return <p className="muted center">Loading…</p>;
 
   const waiting = docs.filter((d) => d.is_my_turn);
-  const open = docs.filter((d) => !d.is_my_turn && d.status === "OPEN");
-  const closed = docs.filter((d) => d.status !== "OPEN");
+  const signedDocs = docs.filter((d) => !d.is_my_turn && d.my_signed_at);
+  const open = docs.filter((d) => !d.is_my_turn && !d.my_signed_at && d.status === "OPEN");
+  const closed = docs.filter((d) => !d.my_signed_at && d.status !== "OPEN");
+  const signedByMe = [
+    ...signedDocs.map((d) => ({ key: d.id, at: d.my_signed_at as string, doc: d, record: null })),
+    ...signed.map((s) => ({ key: s.id, at: s.signed_at, doc: null, record: s }))
+  ].sort((a, b) => b.at.localeCompare(a.at));
 
   return (
     <div className="stack">
@@ -43,24 +49,40 @@ export default function ListScreen() {
       <Section title="In progress" docs={open} />
       <Section title="Finished" docs={closed} />
 
-      {signed.length > 0 && (
-        <section className="stack-sm">
-          <h2>Signed by me</h2>
+      <section className="stack-sm">
+        <h2>
+          Signed by you {signedByMe.length > 0 && <span className="count">{signedByMe.length}</span>}
+        </h2>
+        {signedByMe.length === 0 ? (
+          <p className="muted small">Documents you sign show up here.</p>
+        ) : (
           <ul className="list">
-            {signed.map((s) => (
-              <li key={s.id}>
-                <a href={href({ name: "signed", id: s.id })} className="row-link">
-                  <span className="grow">
-                    <strong>{s.title}</strong>
-                    <span className="muted small">Signed {formatDate(s.signed_at)} · {s.verification_code}</span>
-                  </span>
-                  <span className="chev">›</span>
-                </a>
+            {signedByMe.map(({ key, at, doc, record }) => (
+              <li key={key}>
+                {doc ? (
+                  <a href={href({ name: "doc", id: doc.id })} className="row-link">
+                    <span className="grow">
+                      <strong>{doc.title}</strong>
+                      <span className="muted small">
+                        Signed {formatDate(at)} · {doc.created_by_me ? "sent by you" : `from ${doc.created_by_name || "someone"}`}
+                      </span>
+                    </span>
+                    <StatusPill status={doc.status} />
+                  </a>
+                ) : (
+                  <a href={href({ name: "signed", id: record!.id })} className="row-link">
+                    <span className="grow">
+                      <strong>{record!.title}</strong>
+                      <span className="muted small">Signed {formatDate(at)} · {record!.verification_code}</span>
+                    </span>
+                    <span className="chev">›</span>
+                  </a>
+                )}
               </li>
             ))}
           </ul>
-        </section>
-      )}
+        )}
+      </section>
     </div>
   );
 }

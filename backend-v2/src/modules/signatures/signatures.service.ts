@@ -299,6 +299,13 @@ export async function listSignableDocumentsForUser(userId: string) {
             cb.full_name AS created_by_name,
             d.status, d.current_step_order, d.approval_chain,
             (d.created_by_id = $1) AS created_by_me,
+            -- When I signed it: my latest mark on it, or my route step's
+            -- sign-off for steps signed without a placed mark.
+            COALESCE(
+              (SELECT max(sp.signed_at) FROM document_signature_placements sp WHERE sp.document_id = d.id AND sp.signer_id = $1),
+              (SELECT max((e->>'acted_at')::timestamptz) FROM jsonb_array_elements(d.approval_chain) e
+                WHERE e->>'approver_id' = $1::text AND e->>'status' = 'SIGNED' AND e->>'acted_at' IS NOT NULL)
+            ) AS my_signed_at,
             (
               d.status = 'OPEN'
               AND jsonb_array_length(d.approval_chain) > d.current_step_order

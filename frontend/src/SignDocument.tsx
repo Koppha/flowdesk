@@ -165,6 +165,9 @@ export default function SignDocument() {
 
   const [policy, setPolicy] = useState<{ default: "AI" | "PP"; overridable: boolean } | null>(null);
   const [mine, setMine] = useState<SignatureRow[]>([]);
+  // Routed documents I've signed (from /signatures/documents/mine), listed
+  // with the one-off ones so "Documents you've signed" is complete.
+  const [routedSigned, setRoutedSigned] = useState<Array<{ id: string; title: string; status: string; my_signed_at: string; created_by_name: string | null; created_by_me: boolean }>>([]);
   const [loadingMine, setLoadingMine] = useState(true);
 
   const [adminNotation, setAdminNotation] = useState<"AI" | "PP">("PP");
@@ -181,8 +184,9 @@ export default function SignDocument() {
   const loadMine = useCallback(async () => {
     setLoadingMine(true);
     try {
-      const resp = await api.mySignatures();
+      const [resp, routed] = await Promise.all([api.mySignatures(), api.mySignableDocuments().catch(() => ({ items: [] }))]);
       setMine(Array.isArray(resp?.items) ? resp.items : []);
+      setRoutedSigned((Array.isArray(routed?.items) ? routed.items : []).filter((d: any) => d.my_signed_at));
     } catch {
       // non-critical — the signing form above still works without history
     } finally {
@@ -540,10 +544,38 @@ export default function SignDocument() {
         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 10 }}>Documents you've signed</div>
         {loadingMine ? (
           <div style={{ fontSize: 12, color: "var(--muted)" }}>Loading…</div>
-        ) : mine.length === 0 ? (
+        ) : mine.length === 0 && routedSigned.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--muted)" }}>Nothing signed yet.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {routedSigned.map((d) => (
+              <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}>
+                    {d.title}
+                    <span style={{ fontSize: 10, fontWeight: 700, color: d.status === "COMPLETED" ? "#059669" : d.status === "REJECTED" ? "#dc2626" : "#92400e", background: d.status === "COMPLETED" ? "#ecfdf5" : d.status === "REJECTED" ? "#fef2f2" : "#fef3e2", padding: "2px 7px", borderRadius: 10 }}>
+                      {d.status === "COMPLETED" ? "COMPLETED" : d.status === "REJECTED" ? "REJECTED" : "IN PROGRESS"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                    Signed {new Date(d.my_signed_at).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    {d.created_by_me ? " · sent by you" : ` · from ${d.created_by_name || "someone"}`}
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    // Request signature mode opens ?signDoc=<id> when it mounts.
+                    const url = new URL(window.location.href);
+                    url.searchParams.set("signDoc", d.id);
+                    window.history.replaceState(null, "", url.toString());
+                    setMode("routing");
+                  }}
+                  style={{ padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}
+                >
+                  Open
+                </button>
+              </div>
+            ))}
             {mine.map((row) => (
               <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 200 }}>

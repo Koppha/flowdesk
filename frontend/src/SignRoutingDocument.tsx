@@ -878,6 +878,7 @@ export default function SignRoutingDocument() {
                         {d.is_my_turn && <span style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", background: "#eff6ff", padding: "2px 7px", borderRadius: 10 }}>AWAITING YOU</span>}
                         {d.status === "REJECTED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#dc2626", background: "#fef2f2", padding: "2px 7px", borderRadius: 10 }}>REJECTED</span>}
                         {d.status === "COMPLETED" && <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ecfdf5", padding: "2px 7px", borderRadius: 10 }}>COMPLETED</span>}
+                        {d.my_signed_at && <span style={{ fontSize: 10, fontWeight: 700, color: "#6d28d9", background: "#f5f3ff", padding: "2px 7px", borderRadius: 10 }}>SIGNED BY YOU</span>}
                       </div>
                       {d.status === "REJECTED" && (() => {
                         const step = (Array.isArray(d.approval_chain) ? d.approval_chain : []).find((x: any) => x.status === "REJECTED");
@@ -885,6 +886,7 @@ export default function SignRoutingDocument() {
                       })()}
                       <div style={{ fontSize: 11, color: "var(--muted)" }}>
                         {new Date(d.updated_at).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        {d.my_signed_at ? ` · you signed ${new Date(d.my_signed_at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}
                       </div>
                     </div>
                     <button onClick={() => void handleDownload(d.id, d.title)} title="Download current copy" style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-soft)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>

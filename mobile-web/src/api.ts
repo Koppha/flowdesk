@@ -66,6 +66,8 @@ export type DocSummary = {
   approval_chain: { approver_id: string; approver_name: string; status?: string | null }[];
   created_by_me: boolean;
   is_my_turn: boolean;
+  /** When I signed it, if I have. */
+  my_signed_at?: string | null;
 };
 
 export type Placement = { id: string; signerName: string; authorityName: string | null; pageNumber: number; xPct: number; yPct: number; signedAt: string };
