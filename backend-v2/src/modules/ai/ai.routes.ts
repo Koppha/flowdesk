@@ -5,7 +5,10 @@ import { badRequest } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { conversationForDisplay, streamChat, usedToday } from "./assistant.js";
-import { AI_SERVICES, AiModelsSchema, AiServiceSchema, AiSettingsSchema, aiConfigured, listAiModels, loadAiConfig, publicAiConfig, resolveTarget, saveAiSettings, testAiModel } from "./ai-settings.js";
+import {
+  AI_SERVICES, AiModelsSchema, AiServiceSchema, AiSettingsSchema, addAiKey, aiConfigured, listAiModels, loadAiConfig, modelChoices,
+  publicAiConfig, removeAiKey, resolveTarget, saveAiSettings, setUserModelPick, testAiModel, userModelPick
+} from "./ai-settings.js";
 
 function startOfCurrentMonth() {
   const now = new Date();
@@ -162,7 +165,28 @@ const requireAssistant = requireFeatureAccess("ai_assistant", AI_ASSISTANT_DEFAU
 aiRouter.get("/assistant/status", requireAssistant, async (req: AuthedRequest, res, next) => {
   try {
     const cfg = await loadAiConfig();
-    return res.json({ configured: aiConfigured(cfg), enabled: cfg.settings.enabled, daily_limit: cfg.settings.daily_limit, used_today: await usedToday(req.user!.userId) });
+    const choosing = cfg.settings.user_choice;
+    return res.json({
+      configured: aiConfigured(cfg), enabled: cfg.settings.enabled, daily_limit: cfg.settings.daily_limit, used_today: await usedToday(req.user!.userId),
+      // The models this person may pick from, and their pick (null = the admin's order).
+      user_choice: choosing,
+      models: choosing ? modelChoices(cfg) : [],
+      my_model: choosing ? await userModelPick(req.user!.userId) : null
+    });
+  } catch (err) { return next(err); }
+});
+
+// My own model, from the admin's list - or null to go back to the default.
+aiRouter.put("/assistant/my-model", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = z.object({ service: z.enum(AI_SERVICES), model: z.string().trim().min(1).max(120) }).nullable().safeParse(req.body?.pick ?? null);
+    if (!parsed.success) throw badRequest("Pick a model from the list");
+    const cfg = await loadAiConfig();
+    if (!cfg.settings.user_choice) throw badRequest("Choosing your own model is switched off");
+    const pick = parsed.data;
+    if (pick && !modelChoices(cfg).some((m) => m.service === pick.service && m.model === pick.model)) throw badRequest("That model isn't on the list any more");
+    await setUserModelPick(req.user!.userId, pick);
+    return res.json({ my_model: pick });
   } catch (err) { return next(err); }
 });
 
@@ -174,23 +198,37 @@ aiRouter.get("/assistant/settings", requireRole(["ADMIN"]), async (_req: AuthedR
   } catch (err) { return next(err); }
 });
 
-// keys: per service, a new key, or null to remove its saved key; services
-// not mentioned keep theirs.
-const KeyChangesSchema = z.record(z.enum(AI_SERVICES), z.string().max(500).nullable()).default({});
-
+// Services (each with the key it uses), models, user choice, limit, on/off.
+// Keys themselves are added and removed below.
 aiRouter.put("/assistant/settings", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = AiSettingsSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid AI settings", parsed.error.flatten());
-    const keys = KeyChangesSchema.safeParse(req.body?.keys);
-    if (!keys.success) throw badRequest("Invalid API keys", keys.error.flatten());
-    const keyChanges = Object.fromEntries(Object.entries(keys.data).filter(([, v]) => v === null || Boolean(v?.trim())));
-    await saveAiSettings(parsed.data, keyChanges);
+    await saveAiSettings(parsed.data);
     logger.info("ai_settings_updated", {
-      by: req.user!.userId, enabled: parsed.data.enabled,
-      services: parsed.data.services.map((s) => s.service), models: parsed.data.models.map((m) => `${m.service}:${m.model}`),
-      keys_changed: Object.keys(keyChanges)
+      by: req.user!.userId, enabled: parsed.data.enabled, user_choice: parsed.data.user_choice,
+      services: parsed.data.services.map((s) => `${s.service}${s.key_id ? `:${s.key_id}` : ""}`), models: parsed.data.models.map((m) => `${m.service}:${m.model}`)
     });
+    return res.json(await publicAiConfig(await loadAiConfig()));
+  } catch (err) { return next(err); }
+});
+
+// Save another named key for a service (saved at once, encrypted; the key
+// itself is never sent back). The page then picks it for the service.
+aiRouter.post("/assistant/settings/keys", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = AiServiceSchema.extend({ name: z.string().trim().min(1, "Give the key a name").max(60), key: z.string().trim().min(8, "Paste the API key").max(500) }).safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid key");
+    const id = await addAiKey(parsed.data);
+    logger.info("ai_key_added", { by: req.user!.userId, service: parsed.data.service, id, name: parsed.data.name });
+    return res.status(201).json({ id, settings: await publicAiConfig(await loadAiConfig()) });
+  } catch (err) { return next(err); }
+});
+
+aiRouter.delete("/assistant/settings/keys/:id", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    if (!(await removeAiKey(req.params.id))) return res.status(404).json({ error: "Key not found" });
+    logger.info("ai_key_removed", { by: req.user!.userId, id: req.params.id });
     return res.json(await publicAiConfig(await loadAiConfig()));
   } catch (err) { return next(err); }
 });

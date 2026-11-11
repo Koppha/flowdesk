@@ -25,7 +25,7 @@ import { query } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { getPendingGroup } from "../../lib/workflowEngine.js";
 import { formatRequestNumber } from "../../lib/pdf/pdfHelpers.js";
-import { loadAiConfig, modelTargets, type AiModelTarget } from "./ai-settings.js";
+import { loadAiConfig, targetsFor, userModelPick, type AiModelTarget } from "./ai-settings.js";
 
 const MAX_TOOL_ROUNDS = 8;
 const MAX_TURNS_PER_CONVERSATION = 40;
@@ -920,7 +920,8 @@ export async function streamChat(args: {
 
     const drafts: DraftNote[] = [];
     let jsonRetries = 0;
-    const targets = modelTargets(await loadAiConfig());
+    // The person's own model first (if they picked one), then the admin's order.
+    const targets = targetsFor(await loadAiConfig(), await userModelPick(userId));
     if (!targets.length) throw new ProviderError(503, "No AI model is set up");
     // One call to the model at `model.index`. If it fails before any of the
     // answer has been streamed - busy, out of quota, key rejected, can't do

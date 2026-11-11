@@ -3,18 +3,19 @@ import { ArrowDown, ArrowUp, CheckCircle2, Loader2, Plus, Sparkles, Trash2, X, X
 import { api } from "./api";
 
 // Settings > AI Assistant (ADMIN): which AI services the FlowDesk Assistant
-// can use (each with its own address and API key), one model list across
-// them in order of preference, daily limit and on/off. Saved to the server
-// (backend-v2/src/modules/ai/ai-settings.ts) and picked up by every server
-// within 15 seconds - no code, .env edit or restart. Keys are write-only:
-// the server only ever says which services have one.
+// can use (each with its address and one or more named API keys - the one
+// ticked is used), one model list across them in order of preference,
+// whether people may pick their own model, daily limit and on/off. Saved to
+// the server (backend-v2/src/modules/ai/ai-settings.ts) and picked up by
+// every server within 15 seconds - no code, .env edit or restart. Keys are
+// write-only: added and deleted on the spot, never shown again.
 
 type ServiceId = "gemini" | "groq" | "openrouter" | "anthropic" | "ollama" | "custom";
-type ServiceRow = { service: ServiceId; base_url: string };
+type ServiceRow = { service: ServiceId; base_url: string; key_id?: string | null };
 type ModelRow = { service: ServiceId; model: string };
-type KeyInfo = { service: ServiceId; base_url: string; source: "settings" | "env"; key_hint: string | null };
-type Saved = { enabled: boolean; daily_limit: number; services: ServiceRow[]; models: ModelRow[]; source: "settings" | "env"; configured: boolean; keys: KeyInfo[] };
-type Form = { enabled: boolean; daily_limit: string; services: ServiceRow[]; models: ModelRow[] };
+type KeyInfo = { id: string; name: string; service: ServiceId; base_url: string; source: "settings" | "env"; key_hint: string | null; created_at: string | null };
+type Saved = { enabled: boolean; daily_limit: number; services: ServiceRow[]; models: ModelRow[]; user_choice: boolean; source: "settings" | "env"; configured: boolean; keys: KeyInfo[] };
+type Form = { enabled: boolean; daily_limit: string; services: ServiceRow[]; models: ModelRow[]; user_choice: boolean };
 type TestResult = { service: ServiceId; model: string; ok: boolean; ms: number; message: string };
 
 const SERVICES: Record<ServiceId, { label: string; base: string; help: string }> = {
@@ -39,8 +40,8 @@ const serviceTag: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: 
 export default function AiAssistantSettings() {
   const [saved, setSaved] = useState<Saved | null>(null);
   const [form, setForm] = useState<Form | null>(null);
-  const [keyInputs, setKeyInputs] = useState<Partial<Record<ServiceId, string>>>({});
-  const [removeKeys, setRemoveKeys] = useState<Partial<Record<ServiceId, boolean>>>({});
+  // The "Add a key" form under each service: a name and the key itself.
+  const [newKeys, setNewKeys] = useState<Partial<Record<ServiceId, { name: string; key: string }>>>({});
   const [available, setAvailable] = useState<Partial<Record<ServiceId, string[]>>>({});
   const [newModel, setNewModel] = useState<{ service: ServiceId | ""; model: string }>({ service: "", model: "" });
   const [addingService, setAddingService] = useState<ServiceId | "">("");
@@ -51,28 +52,32 @@ export default function AiAssistantSettings() {
   // the button out, which reads as "not responding".
   const [justSaved, setJustSaved] = useState(false);
 
+  const services = (rows: ServiceRow[]) => rows.map((s) => ({ service: s.service, base_url: s.base_url, key_id: s.key_id ?? null }));
+  // Keys come back from their own calls; keep the form's unsaved edits.
+  function loadKeys(s: Saved) {
+    setSaved((prev) => (prev ? { ...prev, keys: s.keys } : s));
+  }
   function load(s: Saved) {
     setSaved(s);
-    setForm({ enabled: s.enabled, daily_limit: String(s.daily_limit), services: s.services, models: s.models });
-    setKeyInputs({});
-    setRemoveKeys({});
+    setForm({ enabled: s.enabled, daily_limit: String(s.daily_limit), services: services(s.services), models: s.models, user_choice: s.user_choice !== false });
   }
   useEffect(() => { api.aiSettings().then(load).catch((e: any) => setError(e.message)); }, []);
 
   const dirty = useMemo(() => {
     if (!saved || !form) return false;
-    return Object.values(keyInputs).some((v) => v?.trim()) || Object.values(removeKeys).some(Boolean) ||
-      form.enabled !== saved.enabled || form.daily_limit !== String(saved.daily_limit) ||
-      JSON.stringify(form.services) !== JSON.stringify(saved.services) || JSON.stringify(form.models) !== JSON.stringify(saved.models);
-  }, [saved, form, keyInputs, removeKeys]);
+    return form.enabled !== saved.enabled || form.daily_limit !== String(saved.daily_limit) || form.user_choice !== (saved.user_choice !== false) ||
+      JSON.stringify(form.services) !== JSON.stringify(services(saved.services)) || JSON.stringify(form.models) !== JSON.stringify(saved.models);
+  }, [saved, form]);
 
   if (error && !form) return <div className="ep-panel" style={{ padding: 20, color: "#b91c1c" }}>Couldn't load the AI settings: {error}</div>;
   if (!form || !saved) return null;
 
   const set = (patch: Partial<Form>) => { setForm({ ...form, ...patch }); setJustSaved(false); };
-  const savedKey = (s: ServiceRow) => saved.keys.find((k) => k.service === s.service && k.base_url === s.base_url) || null;
-  const typedKey = (id: ServiceId) => keyInputs[id]?.trim() || undefined;
-  const target = (s: ServiceRow) => ({ service: s.service, base_url: s.base_url, ...(typedKey(s.service) ? { api_key: typedKey(s.service) } : {}) });
+  // Keys saved for this service at this address, and the one it uses: the
+  // ticked one, else the first (the server does the same).
+  const keysOf = (s: ServiceRow) => saved.keys.filter((k) => k.service === s.service && k.base_url === s.base_url);
+  const activeKey = (s: ServiceRow) => { const list = keysOf(s); return list.find((k) => k.id === s.key_id) || list.find((k) => k.source === "settings") || list[0] || null; };
+  const target = (s: ServiceRow) => ({ service: s.service, base_url: s.base_url, key_id: activeKey(s)?.id ?? null });
   const notAdded = SERVICE_IDS.filter((id) => !form.services.some((s) => s.service === id));
 
   function addService(id: ServiceId) {
@@ -87,6 +92,33 @@ export default function AiAssistantSettings() {
   }
   function setBase(id: ServiceId, base_url: string) {
     set({ services: form!.services.map((s) => (s.service === id ? { ...s, base_url } : s)) });
+  }
+  function pickKey(id: ServiceId, key_id: string) {
+    set({ services: form!.services.map((s) => (s.service === id ? { ...s, key_id } : s)) });
+  }
+  // Saved at once (encrypted on the server) and ticked for its service; the
+  // pick itself is part of "Save changes".
+  async function addKey(s: ServiceRow) {
+    const k = newKeys[s.service];
+    if (!k?.name.trim() || !k.key.trim()) return;
+    setBusy(`key:${s.service}`); setError(null);
+    try {
+      const r = await api.aiKeyAdd({ service: s.service, base_url: s.base_url, name: k.name.trim(), key: k.key.trim() });
+      loadKeys(r.settings);
+      setNewKeys({ ...newKeys, [s.service]: undefined });
+      pickKey(s.service, r.id);
+    } catch (e: any) { setError(`${SERVICES[s.service].label}: ${e.message}`); }
+    finally { setBusy(""); }
+  }
+  async function deleteKey(s: ServiceRow, k: KeyInfo) {
+    const inUse = activeKey(s)?.id === k.id;
+    if (!confirm(`Delete the key "${k.name}" (${k.key_hint || "…"})?${inUse ? " It's the one this service uses now - it will switch to another saved key, if there is one." : ""} This can't be undone.`)) return;
+    setBusy(`key:${s.service}`); setError(null);
+    try {
+      loadKeys(await api.aiKeyRemove(k.id));
+      if (s.key_id === k.id) set({ services: form!.services.map((x) => (x.service === s.service ? { ...x, key_id: null } : x)) });
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(""); }
   }
   function addModel(service: ServiceId, model: string) {
     const name = model.trim();
@@ -115,13 +147,8 @@ export default function AiAssistantSettings() {
   }
   async function save() {
     setBusy("save"); setError(null); setJustSaved(false);
-    const keys: Record<string, string | null> = {};
-    for (const s of form!.services) {
-      if (typedKey(s.service)) keys[s.service] = typedKey(s.service)!;
-      else if (removeKeys[s.service]) keys[s.service] = null;
-    }
     try {
-      load(await api.updateAiSettings({ enabled: form!.enabled, daily_limit: Number(form!.daily_limit), services: form!.services, models: form!.models, keys }));
+      load(await api.updateAiSettings({ enabled: form!.enabled, daily_limit: Number(form!.daily_limit), services: form!.services, models: form!.models, user_choice: form!.user_choice }));
       setJustSaved(true);
     } catch (e: any) { setError(`Not saved: ${e.message}`); }
     finally { setBusy(""); }
@@ -163,14 +190,13 @@ export default function AiAssistantSettings() {
 
         <div style={field}>
           <span style={label}>AI services</span>
-          <span style={hint}>Connect as many as you like - each keeps its own key. Removing one keeps its saved key, so adding it back later needs no re-entry.</span>
+          <span style={hint}>Connect as many as you like. Each can keep several named keys (say a free and a paid one) - tick the one to use and save to switch. Removing a service keeps its keys, so adding it back later needs no re-entry.</span>
           {form.services.map((s) => {
-            const k = savedKey(s);
-            const removing = removeKeys[s.service];
-            const keyChip = s.service === "ollama" ? null
-              : typedKey(s.service) ? chip("#6366f1", "rgba(99,102,241,0.12)")
-              : k && !removing ? chip("#10b981", "rgba(16,185,129,0.14)") : chip("#d97706", "rgba(245,158,11,0.16)");
-            const keyText = typedKey(s.service) ? "New key - save to keep" : k && !removing ? `Key ${k.key_hint}${k.source === "env" ? " (from .env)" : ""}` : removing ? "Key will be removed" : "No key yet";
+            const k = activeKey(s);
+            const keyChip = s.service === "ollama" ? null : k ? chip("#10b981", "rgba(16,185,129,0.14)") : chip("#d97706", "rgba(245,158,11,0.16)");
+            const keyText = k ? `Using ${k.name} (${k.key_hint})` : "No key yet";
+            const keys = keysOf(s);
+            const nk = newKeys[s.service] || { name: "", key: "" };
             return (
               <div key={s.service} style={card}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -187,15 +213,30 @@ export default function AiAssistantSettings() {
                   <input value={s.base_url} onChange={(e) => setBase(s.service, e.target.value.trim())} placeholder="Service address, https://…/v1" aria-label={`${SERVICES[s.service].label} address`} />
                 )}
                 {s.service !== "ollama" && (
-                  <div style={{ display: "grid", gap: 4 }}>
-                    <input type="password" autoComplete="new-password" value={keyInputs[s.service] || ""} aria-label={`${SERVICES[s.service].label} API key`}
-                      onChange={(e) => { setKeyInputs({ ...keyInputs, [s.service]: e.target.value }); setJustSaved(false); }}
-                      placeholder={k && !removing ? `Saved (${k.key_hint}) - leave blank to keep it` : "Paste the API key"} />
-                    {k?.source === "settings" && !typedKey(s.service) && (
-                      <a href="#" style={{ fontSize: 12 }} onClick={(e) => { e.preventDefault(); setRemoveKeys({ ...removeKeys, [s.service]: !removing }); setJustSaved(false); }}>
-                        {removing ? "Keep the saved key" : "Remove the saved key"}
-                      </a>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {keys.length > 0 && (
+                      <div role="radiogroup" aria-label={`${SERVICES[s.service].label} key to use`} style={{ display: "grid", gap: 4 }}>
+                        {keys.map((key) => (
+                          <label key={key.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 8px", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer" }}>
+                            <input type="radio" name={`key-${s.service}`} checked={k?.id === key.id} onChange={() => pickKey(s.service, key.id)} style={{ width: 15, height: 15, minHeight: 0 }} />
+                            <strong style={{ fontWeight: 600 }}>{key.name}</strong>
+                            <code style={{ fontSize: 12, color: "var(--muted)" }}>{key.key_hint}</code>
+                            {key.created_at && <span style={{ fontSize: 11.5, color: "var(--muted)" }}>added {new Date(key.created_at).toLocaleDateString()}</span>}
+                            <span style={{ flex: 1 }} />
+                            {key.source === "settings" ? (
+                              <button type="button" style={{ ...iconBtn, color: "#dc2626" }} disabled={busy !== ""} onClick={(e) => { e.preventDefault(); void deleteKey(s, key); }} aria-label={`Delete key ${key.name}`} title="Delete this key"><Trash2 size={13} /></button>
+                            ) : <span style={{ fontSize: 11.5, color: "var(--muted)" }}>set on the server</span>}
+                          </label>
+                        ))}
+                      </div>
                     )}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <input value={nk.name} onChange={(e) => setNewKeys({ ...newKeys, [s.service]: { ...nk, name: e.target.value } })} placeholder="Name, e.g. Free or Company paid" aria-label={`Name for a new ${SERVICES[s.service].label} key`} style={{ flex: "1 1 160px", maxWidth: 220 }} />
+                      <input type="password" autoComplete="new-password" value={nk.key} onChange={(e) => setNewKeys({ ...newKeys, [s.service]: { ...nk, key: e.target.value } })} placeholder={keys.length ? "Paste another API key" : "Paste the API key"} aria-label={`New ${SERVICES[s.service].label} API key`} style={{ flex: "2 1 220px" }} />
+                      <button type="button" style={small} disabled={busy !== "" || !nk.name.trim() || !nk.key.trim()} onClick={() => void addKey(s)}>
+                        {busy === `key:${s.service}` ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Add key
+                      </button>
+                    </div>
                   </div>
                 )}
                 {available[s.service] && (
@@ -252,6 +293,14 @@ export default function AiAssistantSettings() {
             </div>
           )}
         </div>
+
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", maxWidth: 720 }}>
+          <input type="checkbox" checked={form.user_choice} onChange={(e) => set({ user_choice: e.target.checked })} style={{ width: 16, height: 16, minHeight: 0, marginTop: 2 }} />
+          <span>
+            People can pick their own model from this list
+            <span style={{ ...hint, display: "block", fontWeight: 400 }}>They choose in the assistant (web and app). Theirs answers first; if it fails, the list above takes over in order. Off: everyone uses the list's order.</span>
+          </span>
+        </label>
 
         <div style={field}>
           <span style={label}>Questions per person per day</span>

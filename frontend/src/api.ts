@@ -514,9 +514,13 @@ export const api = {
   aiSettings: () => req("/ai/assistant/settings"),
   updateAiSettings: (data: Record<string, unknown>) =>
     req("/ai/assistant/settings", { method: "PUT", body: JSON.stringify(data) }),
-  aiSettingsModels: (data: { service: string; base_url: string; api_key?: string }) =>
+  // Named keys: saved / deleted on the spot; the settings save picks which one a service uses.
+  aiKeyAdd: (data: { service: string; base_url: string; name: string; key: string }) =>
+    req("/ai/assistant/settings/keys", { method: "POST", body: JSON.stringify(data) }),
+  aiKeyRemove: (id: string) => req(`/ai/assistant/settings/keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  aiSettingsModels: (data: { service: string; base_url: string; api_key?: string; key_id?: string | null }) =>
     req("/ai/assistant/settings/models", { method: "POST", body: JSON.stringify(data) }),
-  aiSettingsTest: (data: { services: Array<{ service: string; base_url: string; api_key?: string }>; models: Array<{ service: string; model: string }> }) =>
+  aiSettingsTest: (data: { services: Array<{ service: string; base_url: string; api_key?: string; key_id?: string | null }>; models: Array<{ service: string; model: string }> }) =>
     req("/ai/assistant/settings/test", { method: "POST", body: JSON.stringify(data) }),
   mobileAppConfig: () => req("/admin/mobile-config"),
   updateMobileAppConfig: (modules: Record<string, boolean>, tabs?: { key: string; enabled: boolean }[]) =>

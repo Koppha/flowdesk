@@ -87,12 +87,19 @@ async function getJson(path: string, init?: RequestInit) {
   return body;
 }
 
+type ModelChoice = { service: string; model: string; label: string };
+
 // Opened from the side menu ("AI Assistant"); the parent owns open/closed.
 // Drafts are saved behind the page's back, so the parent is told when one is
 // (to reload its lists) and opens the draft itself from the "Open" button.
 export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }: { open: boolean; onClose: () => void; onDraftSaved: () => void; onOpenDraft: (kind: string, id: string) => void }) {
   const setOpen = (v: boolean) => { if (!v) onClose(); };
-  const [status, setStatus] = useState<{ configured: boolean; enabled?: boolean; daily_limit: number; used_today: number } | null>(null);
+  const [status, setStatus] = useState<{
+    configured: boolean; enabled?: boolean; daily_limit: number; used_today: number;
+    // Picking your own model (Settings > AI Assistant allows it): the list and my pick.
+    user_choice?: boolean; models?: ModelChoice[]; my_model?: { service: string; model: string } | null;
+  } | null>(null);
+  const [modelError, setModelError] = useState("");
   const [allowed, setAllowed] = useState(true);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -194,6 +201,20 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
   const left = status ? Math.max(0, status.daily_limit - status.used_today) : null;
   const suggestions = getUserFromToken()?.role === "ADMIN" ? [SUGGESTIONS[0], SUGGESTIONS[1], ADMIN_SUGGESTION, SUGGESTIONS[3]] : SUGGESTIONS;
 
+  // "" = the admin's order; otherwise "service|model".
+  const myModelValue = status?.my_model ? `${status.my_model.service}|${status.my_model.model}` : "";
+  async function pickModel(value: string) {
+    const [service, ...rest] = value.split("|");
+    const pick = value ? { service, model: rest.join("|") } : null;
+    setModelError("");
+    try {
+      await getJson("/ai/assistant/my-model", { method: "PUT", body: JSON.stringify({ pick }) });
+      setStatus((s) => (s ? { ...s, my_model: pick } : s));
+    } catch (e: any) {
+      setModelError(e?.message || "Couldn't change the model");
+    }
+  }
+
   if (!open) return null;
   return (
     <div role="dialog" aria-label="FlowDesk Assistant" className="fda-panel">
@@ -205,6 +226,22 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
             <span className={`fda-status${notConfigured || !status ? " is-off" : ""}`}>{!status ? "Connecting" : switchedOff ? "Switched off" : notConfigured ? "Not set up" : "Online"}</span>
           </div>
           <div className="fda-title">Ask about FlowDesk</div>
+          {status?.user_choice && (status.models?.length || 0) > 1 && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, fontSize: 12, color: "var(--muted)" }}>
+              Model
+              <select
+                value={myModelValue}
+                onChange={(e) => void pickModel(e.target.value)}
+                disabled={busy}
+                aria-label="AI model"
+                style={{ fontSize: 12, padding: "2px 6px", minHeight: 0, height: 26, maxWidth: 360, borderRadius: 6 }}
+              >
+                <option value="">Default</option>
+                {status.models!.map((m) => <option key={`${m.service}|${m.model}`} value={`${m.service}|${m.model}`}>{m.label}</option>)}
+              </select>
+              {modelError && <span style={{ color: "#dc2626" }}>{modelError}</span>}
+            </label>
+          )}
         </div>
         <button type="button" className="fda-icon-btn" onClick={() => void loadHistory()} title="Past conversations" aria-label="Past conversations"><History size={16} /></button>
         <button type="button" className="fda-icon-btn" onClick={newChat} title="New conversation" aria-label="New conversation"><SquarePen size={16} /></button>
