@@ -20,6 +20,11 @@ server {
     listen 80;
     server_name _;
 
+    # nginx defaults to 1 MB, which refused every larger upload (2026-11-06).
+    # Put this in EVERY server block that serves FlowDesk, including the
+    # HTTPS (443) one - FlowDesk's largest upload is a 250 MB app build.
+    client_max_body_size 260m;
+
     # Frontend (served by `serve -s dist -l 5174` via PM2)
     location / {
         proxy_pass http://127.0.0.1:5174;

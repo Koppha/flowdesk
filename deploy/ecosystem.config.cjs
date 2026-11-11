@@ -29,13 +29,12 @@ module.exports = {
       // different (and incompatible) argv parsing from the actual npm
       // package's CLI.
       script: "/usr/lib/node_modules/serve/build/main.js",
-      // NOTE: don't add "-l tcp://127.0.0.1:5174" here to restrict this to
-      // loopback - the installed `serve` version mis-parses that URI form
-      // and crash-loops ("getaddrinfo ENOTFOUND -l"), which took prod down
-      // on 2026-08-18. Restrict external access to this port via firewall
-      // instead (see deploy/README.md step 7) until a working `serve`
-      // syntax is confirmed against the actual PROD binary.
-      args: ["-s", "dist", "-l", "5174"],
+      // Loopback only: nginx proxies to 127.0.0.1:5174, and users must not
+      // reach this port directly (2026-11-06). The `tcp://` form crash-looped
+      // an older `serve` on 2026-08-18 ("getaddrinfo ENOTFOUND -l"); serve
+      // 14.2.6 on both PROD servers accepts it (PROD1 runs it on 5175).
+      // If a server has an older serve, upgrade it or firewall the port.
+      args: ["-s", "dist", "-l", "tcp://127.0.0.1:5174"],
       env: {
         NODE_ENV: "production"
       }

@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import fs from "fs";
 import type { PdfLetterhead } from "./genericPdfRenderer.js";
+import { pdfSafeText } from "./pdfHelpers.js";
 
 // A Change Request's comments and full history as one document to download
 // and keep - the workspace's Comments and History tabs on paper, oldest
@@ -64,20 +65,7 @@ const KIND_LABEL: Record<string, string> = {
 const stamp = (iso: string) =>
   new Date(iso).toLocaleString("en-GB", { timeZone: "Africa/Maseru", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
-// The built-in Helvetica only has WinAnsi glyphs; anything else (emoji,
-// arrows) would print as garbage, so swap it for something that prints.
-const WIN_ANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
-const SWAP: Record<string, string> = { "→": "->", "←": "<-" };
-function printable(s: string | null | undefined): string {
-  let out = "";
-  for (const ch of String(s ?? "").replace(/\r\n?/g, "\n").replace(/[​-‍︀-️]/g, "")) {
-    const code = ch.codePointAt(0)!;
-    if (ch === "\n" || (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WIN_ANSI_EXTRA.has(ch)) out += ch;
-    else if (ch === "\t") out += "    ";
-    else out += SWAP[ch] ?? "?";
-  }
-  return out;
-}
+const printable = pdfSafeText;
 
 function resolveLogoSource(letterhead: PdfLetterhead): string | null {
   return letterhead.logo_data || (letterhead.logo_path && fs.existsSync(letterhead.logo_path) ? letterhead.logo_path : null);

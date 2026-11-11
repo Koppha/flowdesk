@@ -89,7 +89,12 @@ export default function SignRoutingDocument() {
   const [docError, setDocError] = useState("");
 
   const [newTitle, setNewTitle] = useState("");
-  const [newFile, setNewFile] = useState<File | null>(null);
+  // PDFs waiting to be sent, one signature request each: the form works on
+  // the first, and after sending it moves on to the next.
+  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const newFile = newFiles[0] ?? null;
+  // "Sent ..." note shown on the form after a request goes out.
+  const [sentNote, setSentNote] = useState<{ id: string; text: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [openInput, setOpenInput] = useState("");
   const [opening, setOpening] = useState(false);
@@ -375,6 +380,27 @@ export default function SignRoutingDocument() {
     });
   }
 
+  function titleFromFile(f: File) {
+    return f.name.replace(/\.pdf$/i, "").replace(/[_]+/g, " ").trim();
+  }
+
+  // Add chosen PDFs to the queue (several at once is fine). The first one's
+  // file name becomes the title if none is typed yet.
+  function addFiles(list: FileList | null) {
+    const picked = Array.from(list || []).filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+    if (!picked.length) return;
+    setSentNote(null);
+    const next = [...newFiles, ...picked.filter((f) => !newFiles.some((p) => p.name === f.name && p.size === f.size))];
+    if (!newFiles.length && !newTitle.trim() && next[0]) setNewTitle(titleFromFile(next[0]));
+    setNewFiles(next);
+  }
+
+  function removeQueuedFile(idx: number) {
+    const next = newFiles.filter((_, i) => i !== idx);
+    if (idx === 0) setNewTitle(next[0] ? titleFromFile(next[0]) : "");
+    setNewFiles(next);
+  }
+
   async function handleCreate() {
     setDocError("");
     if (!newFile) { setDocError("Choose a PDF to start."); return; }
@@ -390,12 +416,25 @@ export default function SignRoutingDocument() {
       if (chain.length > 0) form.append("approvalChain", JSON.stringify(chain));
       if (chain.length > 0 && signFirst) form.append("signFirst", "true");
       const resp = await api.createSignableDocument(form);
-      setNewTitle("");
-      setNewFile(null);
-      setChainDraft([]);
-      setSignFirst(false);
-      await openDocument(resp.id);
+      const sentTitle = newTitle.trim();
+      const firstApprover = chain.length ? chainDirectory.find((u) => u.id === chain[0].approverId)?.full_name : null;
+      setSentNote({
+        id: resp.id,
+        text: signFirst
+          ? `Started “${sentTitle}” - sign it now, then Sign & send passes it on.`
+          : chain.length
+            ? `Sent “${sentTitle}” - it's waiting on ${firstApprover || "the first approver"}.`
+            : `Started “${sentTitle}” - anyone with its link can sign it. Open it to copy the link.`
+      });
+      // Move on to the next PDF. Its route starts as the same people - most
+      // batches go to the same approvers - and can be changed before sending.
+      const rest = newFiles.slice(1);
+      setNewFiles(rest);
+      setNewTitle(rest[0] ? titleFromFile(rest[0]) : "");
+      if (!rest.length) { setChainDraft([]); setSignFirst(false); }
       await loadMyDocs();
+      // Only "I'll sign it first" needs the sender inside the document right away.
+      if (signFirst) await openDocument(resp.id);
     } catch (e: any) {
       setDocError(e.message || "Failed to start document.");
     } finally {
@@ -721,18 +760,39 @@ export default function SignRoutingDocument() {
               <Field label="Title">
                 <input style={fieldStyle} value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="e.g. GM Sign-off Sheet — April 2026" />
               </Field>
-              <Field label="PDF file">
+              <Field label={newFiles.length > 1 ? `PDF file (1 of ${newFiles.length})` : "PDF file"}>
                 <label style={{
                   ...fieldStyle, display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
                   border: newFile ? "1px solid #34d399" : "1px dashed var(--border)",
                   background: newFile ? "#ecfdf5" : "var(--surface-soft)"
-                }}>
+                }} title="Choose one or more PDFs - each becomes its own signature request">
                   {newFile ? <CheckCircle2 size={14} color="#059669" /> : <Upload size={14} />}
                   <span style={{ flex: 1, color: newFile ? "#065f46" : "inherit", fontWeight: newFile ? 600 : 400 }}>
-                    {newFile ? `${newFile.name} (${(newFile.size / 1024).toFixed(0)} KB) — attached` : "Choose a PDF…"}
+                    {newFile ? `${newFile.name} (${(newFile.size / 1024).toFixed(0)} KB) — attached` : "Choose one or more PDFs…"}
                   </span>
-                  <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setNewFile(e.target.files?.[0] || null)} />
+                  <input type="file" accept="application/pdf" multiple style={{ display: "none" }}
+                    onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
                 </label>
+                {newFile && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, fontSize: 11.5, color: "var(--muted)" }}>
+                    <span>{newFiles.length > 1 ? "Click above to add more PDFs." : "Click above to add more PDFs - each is sent as its own request."}</span>
+                    <button type="button" onClick={() => removeQueuedFile(0)} style={{ border: "none", background: "none", color: "#dc2626", cursor: "pointer", fontSize: 11.5, padding: 0 }}>Remove this PDF</button>
+                  </div>
+                )}
+                {newFiles.length > 1 && (
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>
+                    Next, each as its own request:
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                      {newFiles.slice(1).map((f, i) => (
+                        <span key={`${f.name}-${f.size}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 6px 3px 9px", borderRadius: 99, background: "var(--surface-soft)", border: "1px solid var(--border)", color: "var(--text)" }}>
+                          {f.name}
+                          <button type="button" aria-label={`Remove ${f.name}`} onClick={() => removeQueuedFile(i + 1)}
+                            style={{ border: "none", background: "none", cursor: "pointer", color: "var(--muted)", padding: 0, fontSize: 13, lineHeight: 1 }}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </Field>
 
               <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 7, background: signFirst ? "#eff6ff" : "var(--surface-soft)", cursor: "pointer", fontSize: 12 }}>
@@ -773,8 +833,16 @@ export default function SignRoutingDocument() {
               </div>
 
               <button onClick={handleCreate} disabled={creating} style={{ padding: "9px 16px", border: "none", borderRadius: 7, background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, opacity: creating ? 0.7 : 1 }}>
-                {creating ? "Starting…" : signFirst ? "Start & sign" : "Start & open"}
+                {creating ? "Sending…" : signFirst ? "Start & sign" : chainDraft.some((s) => s.approverId) ? "Send for signing" : "Start"}
+                {!creating && newFiles.length > 1 ? ` · then the next PDF (${newFiles.length - 1} left)` : ""}
               </button>
+              {sentNote && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 7, background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#065f46", fontSize: 12 }}>
+                  <CheckCircle2 size={14} />
+                  <span style={{ flex: 1 }}>{sentNote.text}{newFile ? ` Next: ${newFile.name}.` : ""}</span>
+                  <button type="button" onClick={() => void openDocument(sentNote.id)} style={{ border: "1px solid #a7f3d0", background: "#fff", color: "#065f46", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 11.5 }}>Open it</button>
+                </div>
+              )}
             </div>
           </div>
 

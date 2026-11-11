@@ -9,7 +9,7 @@ import type { PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { brsActorOrg, brsMemberMatch, brsMemberParams } from "../brs/brs.service.js";
 import { entryEmails, resolveOrgEntries as resolveGroupEntries } from "../brs/brs.routes.js";
 import {
-  CR_FORM_SECTIONS, CR_OTHER_SECTION, CR_PERMISSIONS, assertBackOutPlan, assertCanSubmit, canViewChangeRequest, crActorRole,
+  CR_FORM_SECTIONS, CR_OTHER_SECTION, CR_PERMISSIONS, assertBackOutPlan, assertCanSubmit, canViewChangeRequest, changeRequestReference, crActorRole,
   crCoWriterPermissions, crOwnerIds, crPermissions, describeFieldSave, diffFields, formSectionOf,
   isSubmissionAssignee, recordCrRevision
 } from "./change-collab.service.js";
@@ -613,8 +613,7 @@ changeCollabRouter.get("/:id/comments-history.pdf", async (req: AuthedRequest, r
       `SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`
     ))[0] || { logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null };
 
-    // Same reference as the RAID log.
-    const reference = `CHG-${String(sub.id).slice(0, 8).toUpperCase()}`;
+    const reference = changeRequestReference(sub.id);
     const doc = renderChangeRequestRecordPdf(letterhead, {
       reference,
       title: titleOf(sub),

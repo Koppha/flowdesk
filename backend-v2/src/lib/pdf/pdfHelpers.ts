@@ -16,6 +16,21 @@ export function formatDateTime(value: string | null | undefined) {
   );
 }
 
+// pdfkit's built-in fonts only have WinAnsi glyphs; anything else (emoji,
+// arrows) would print as garbage, so swap it for something that prints.
+const WIN_ANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
+const WIN_ANSI_SWAP: Record<string, string> = { "→": "->", "←": "<-" };
+export function pdfSafeText(s: string | null | undefined): string {
+  let out = "";
+  for (const ch of String(s ?? "").replace(/\r\n?/g, "\n").replace(/[​-‍︀-️]/g, "")) {
+    const code = ch.codePointAt(0)!;
+    if (ch === "\n" || (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WIN_ANSI_EXTRA.has(ch)) out += ch;
+    else if (ch === "\t") out += "    ";
+    else out += WIN_ANSI_SWAP[ch] ?? "?";
+  }
+  return out;
+}
+
 export function formatMoney(value: string | number | null | undefined, currency = "LSL") {
   const amount = Number(value || 0);
   return `${currency} ${amount.toFixed(2)}`;

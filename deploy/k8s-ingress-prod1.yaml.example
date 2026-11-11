@@ -53,6 +53,9 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/proxy-set-header: |
       X-Forwarded-Proto https
+    # Default is 1m, which silently refused every upload over 1 MB (found
+    # 2026-11-06). Matches FlowDesk's largest upload (mobile app build, 250 MB).
+    nginx.ingress.kubernetes.io/proxy-body-size: "260m"
 spec:
   ingressClassName: nginx
   tls:

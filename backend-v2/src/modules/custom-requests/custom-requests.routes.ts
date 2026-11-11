@@ -14,11 +14,13 @@ import { getDelegatedManagerIds } from "../../lib/delegations.js";
 import { canAccessPdf } from "../../lib/pdf/pdfPermissions.js";
 import { resolveCustomRequestPdfData, getFieldCatalogFor } from "../../lib/pdf/pdfFieldCatalog.js";
 import { renderPdfTemplate, type PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
+import { renderChangeRequestFormPdf } from "../../lib/pdf/changeRequestFormPdf.js";
+import { loadChangeRequestFormData } from "./change-form-pdf.js";
 import { acknowledgeCollection, createProvisioningTaskForSubmission, getProvisioningStatusForSubmission } from "../it-provisioning/it-provisioning.service.js";
 import { baselineBrsDocument, recordBrsRevision, returnBrsDocumentToDraft } from "../brs/brs.service.js";
 import { isPeriodLocked } from "../attendance/attendance.routes.js";
 import { getChangesDuringApproval } from "../../lib/approvalChanges.js";
-import { assertBackOutPlan, assertCanSubmit, assigneeLabel, assigneeMatches, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision, unconfirmedAssignees, assigneeEmails } from "./change-collab.service.js";
+import { assertBackOutPlan, assertCanSubmit, assigneeLabel, assigneeMatches, changeRequestReference, crActorRole, crPermissions, describeFieldSave, diffFields, isChangeCollaborator, isSubmissionAssignee, recordCrRevision, unconfirmedAssignees, assigneeEmails } from "./change-collab.service.js";
 import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 
 export const customRequestsRouter = Router();
@@ -793,6 +795,19 @@ customRequestsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
       throw forbidden();
     }
 
+    const letterhead = (await query<PdfLetterhead>(`SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`))[0] || {
+      logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
+    };
+    // A Change Request prints as ETL's Change Control form, not a designed template.
+    if (submission.request_type_code === "CHANGE_REQUEST") {
+      const form = renderChangeRequestFormPdf(letterhead, await loadChangeRequestFormData(submission.id));
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${changeRequestReference(submission.id)}.pdf"`);
+      form.pipe(res);
+      form.end();
+      return;
+    }
+
     let template = (await query<any>(
       `SELECT * FROM pdf_templates WHERE request_type = 'CUSTOM_REQUEST' AND custom_request_type_id = $1 AND status = 'ACTIVE' LIMIT 1`,
       [submission.request_type_id]
@@ -806,9 +821,6 @@ customRequestsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
 
     const data = await resolveCustomRequestPdfData(req.params.id);
     const catalog = await getFieldCatalogFor("CUSTOM_REQUEST", submission.request_type_id);
-    const letterhead = (await query<PdfLetterhead>(`SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`))[0] || {
-      logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
-    };
     const doc = renderPdfTemplate(template, letterhead, data, catalog);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="request-${req.params.id}.pdf"`);

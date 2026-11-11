@@ -114,6 +114,11 @@ export function assigneeMatches(a: any, actor: AssigneeActor) {
   return false;
 }
 
+// The reference a Change Request is known by (RAID log, PDFs).
+export function changeRequestReference(id: string) {
+  return `CHG-${String(id).slice(0, 8).toUpperCase()}`;
+}
+
 export function assigneeLabel(a: any) {
   if (a?.teamId) return `Section: ${a.teamName}`;
   if (a?.departmentId) return `Department: ${a.departmentName}`;
