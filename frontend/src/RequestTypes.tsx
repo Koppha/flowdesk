@@ -351,7 +351,9 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
     salary_advance_max_payback_months: number; loan_advance_max_payback_months: number;
     vendor_contracts_enabled: boolean; service_contracts_enabled: boolean;
     signature_enabled: boolean; maintenance_enabled: boolean; ai_assistant_enabled: boolean;
+    clearance_reminders_enabled: boolean;
   }>({
+    clearance_reminders_enabled: false,
     overtime_enabled: true, standby_enabled: true,
     salary_advance_enabled: true, loan_advance_enabled: true,
     salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6,
@@ -412,7 +414,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
           salary_advance_enabled: true, loan_advance_enabled: true,
           salary_advance_max_payback_months: 6, loan_advance_max_payback_months: 6,
           vendor_contracts_enabled: true, service_contracts_enabled: true,
-          signature_enabled: true, maintenance_enabled: false, ai_assistant_enabled: true
+          signature_enabled: true, maintenance_enabled: false, ai_assistant_enabled: true, clearance_reminders_enabled: false
         }))
       ]);
       setRequestTypes(Array.isArray(data) ? data : []);
@@ -428,7 +430,8 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
         service_contracts_enabled: flags?.service_contracts_enabled !== false,
         signature_enabled: flags?.signature_enabled !== false,
         maintenance_enabled: flags?.maintenance_enabled === true,
-        ai_assistant_enabled: flags?.ai_assistant_enabled !== false
+        ai_assistant_enabled: flags?.ai_assistant_enabled !== false,
+        clearance_reminders_enabled: (flags as any)?.clearance_reminders_enabled === true
       });
     } catch { /* ignore */ }
     finally { setLoading(false); }
@@ -436,7 +439,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
 
   useEffect(() => { void load(); }, [load]);
 
-  async function toggleModule(key: "overtime_enabled" | "standby_enabled" | "salary_advance_enabled" | "loan_advance_enabled" | "vendor_contracts_enabled" | "service_contracts_enabled" | "signature_enabled" | "maintenance_enabled" | "ai_assistant_enabled") {
+  async function toggleModule(key: "overtime_enabled" | "standby_enabled" | "salary_advance_enabled" | "loan_advance_enabled" | "vendor_contracts_enabled" | "service_contracts_enabled" | "signature_enabled" | "maintenance_enabled" | "ai_assistant_enabled" | "clearance_reminders_enabled") {
     const next = !moduleFlags[key];
     setModuleFlags((f) => ({ ...f, [key]: next }));
     try {
@@ -696,6 +699,7 @@ export default function RequestTypes({ onNavigate, isAdmin }: { onNavigate?: (pa
             { icon: "✍️", label: "Electronic Signature", desc: "Sign uploaded documents and verify signatures publicly by code.", page: "SIGNATURES", flagKey: "signature_enabled" as const, maxMonthsKey: null },
             { icon: "🔧", label: "Maintenance Requests", desc: "Stores and offices log problems with photos; the Admin Office (Workflow Builder) assigns, tracks and verifies.", page: "MAINTENANCE", flagKey: "maintenance_enabled" as const, maxMonthsKey: null },
             // Same on/off as Settings > AI Assistant (which also picks the AI service).
+            { icon: "⏰", label: "Clearance Reminders", desc: "Push and email to travellers: clear your advance - 3 days and 1 day before it's due, then weekly (3 times) while overdue. Working hours only.", page: "MY_CLEARANCES", flagKey: "clearance_reminders_enabled" as const, maxMonthsKey: null },
             { icon: "✨", label: "AI Assistant", desc: "Answers questions about requests and drafts them in plain language. The AI service it uses is set in Settings > AI Assistant.", page: "AI_ASSISTANT_CONFIG", flagKey: "ai_assistant_enabled" as const, maxMonthsKey: null },
           ].map((t) => {
             const active = t.flagKey ? moduleFlags[t.flagKey] : true;

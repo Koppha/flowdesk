@@ -26,6 +26,8 @@ import { logger } from "../../lib/logger.js";
 import { getPendingGroup } from "../../lib/workflowEngine.js";
 import { formatRequestNumber } from "../../lib/pdf/pdfHelpers.js";
 import { loadAiConfig, targetsFor, userModelPick, type AiModelTarget } from "./ai-settings.js";
+import { clearancesDue, remindersForAssistant } from "./clearance-reminders.js";
+import { isCaptureActionType } from "../inbox/inbox.routes.js";
 
 const MAX_TOOL_ROUNDS = 8;
 const MAX_TURNS_PER_CONVERSATION = 40;
@@ -109,6 +111,10 @@ Reporting lines: each person's manager comes from Organisation Structure automat
 
 If you don't know how something works in FlowDesk, say so and suggest asking the system administrator rather than guessing.
 
+Finance staff (Treasury, Financial Accounting, HR Operations, Finance): use finance_queue for their work queues (capture, payments, deductions, refundable, treasury, payback_review, salaries_ready) and run_report for reports. Lead with the totals per currency and the oldest items waiting, point to the FlowDesk page that does the work (Capture Inbox, Payments, Deductions, Refundable, Treasury, View Clearances, Finance > Reports), and offer a chart when comparing amounts. Never total amounts across different currencies.
+
+Every other process: list_active_processes says which processes are switched on in FlowDesk and which custom processes (e.g. Change Request, Computer Request, Attendance Register, BRS Approval) the person can use - use it for "what processes are there", "is maintenance on", "what can I request". For the person's items in any process other than travel/salary/loan advances and clearances, use list_my_requests with the process: custom (all custom-process requests - pass request_type to narrow to one, e.g. "Change Request"), brs, overtime (requests and claims), standby, maintenance (reported by them and jobs assigned to them), signatures (documents they signed), it_provisioning, compensation_claims, accommodation, vendor_contracts, employee_contracts. Then get_custom_request for one custom-process request's approval steps (who it is with). list_my_recent_actions is what the person has approved, rejected or otherwise actioned recently. The lists show what the person can see in FlowDesk - their own items, or more where their role sees more (e.g. HR, IT or an administrator); say which when it matters. If a process is switched off or they have no access, say so plainly. Use the counts the tools return (count, by_status) rather than counting rows yourself.
+
 Charts: when an answer compares or trends numbers (totals by department, status, month or type; counts over time; shares of a whole) or the person asks for a chart or graph, call show_chart once you have the numbers (the chat can only show a chart through show_chart - never say "here's the chart" without calling it) - bar for comparing categories, line for change over time, pie for parts of one whole (up to 8 slices). Only chart numbers a lookup returned, exactly as returned; never estimate or invent values. Still give a short written summary of what the chart shows.`;
 
 // ── Tools ─────────────────────────────────────────────────────────────────
@@ -116,7 +122,7 @@ const NoInput = z.object({}).strict();
 const AdvanceIdInput = z.object({ advance_id: z.string().min(1) }).strict();
 const ClearanceIdInput = z.object({ clearance_id: z.string().min(1) }).strict();
 const ReportInput = z.object({
-  report: z.enum(["clearance_summary", "refunds_due", "employee_paybacks", "fully_cleared", "outstanding", "department_division", "overtime_hours", "standby_hours", "all_advances", "clearance_status"]),
+  report: z.enum(["clearance_summary", "refunds_due", "employee_paybacks", "fully_cleared", "outstanding", "department_division", "overtime_hours", "standby_hours", "all_advances", "clearance_status", "ageing", "audit_reconciliation"]),
   date_from: z.string().optional(),
   date_to: z.string().optional(),
   company: z.string().optional(),
@@ -200,11 +206,11 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: "run_report",
-    description: "Run a Finance/HR report the person has access to (company-wide data - only for people with report access; others get 'no access'). Reports: clearance_summary, refunds_due, employee_paybacks, fully_cleared, outstanding, department_division (totals by Company/Division/Department), overtime_hours, standby_hours, all_advances, clearance_status. Optional filters: date_from / date_to (YYYY-MM-DD, by clearance submission date), company (MNO, SEFS, HigherLife), division, department. Returns totals plus up to 40 rows.",
+    description: "Run a Finance/HR report the person has access to (company-wide data - only for people with report access; others get 'no access'). Reports: clearance_summary, refunds_due, employee_paybacks, fully_cleared, outstanding, department_division (totals by Company/Division/Department), overtime_hours, standby_hours, all_advances, clearance_status, ageing (outstanding clearances by how long overdue), audit_reconciliation (each clearance's required vs actual settlement, references and exceptions). Optional filters: date_from / date_to (YYYY-MM-DD, by clearance submission date), company (MNO, SEFS, HigherLife), division, department. Returns totals plus up to 40 rows.",
     input_schema: {
       type: "object",
       properties: {
-        report: { type: "string", enum: ["clearance_summary", "refunds_due", "employee_paybacks", "fully_cleared", "outstanding", "department_division", "overtime_hours", "standby_hours", "all_advances", "clearance_status"] },
+        report: { type: "string", enum: ["clearance_summary", "refunds_due", "employee_paybacks", "fully_cleared", "outstanding", "department_division", "overtime_hours", "standby_hours", "all_advances", "clearance_status", "ageing", "audit_reconciliation"] },
         date_from: str, date_to: str, company: str, division: str, department: str
       },
       required: ["report"],
@@ -233,6 +239,57 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
         unit: str
       },
       required: ["title", "type", "labels", "series"],
+      additionalProperties: false
+    },
+    strict: true,
+    eager_input_streaming: true
+  },
+  {
+    name: "list_active_processes",
+    description: "Which FlowDesk processes are switched on (travel advances, salary advances, loans, overtime, standby, maintenance, Sign a Document, contracts, ...) and the custom processes the person can use (Change Request, Computer Request, Attendance Register, BRS Approval, ...), with a short description of each. Use for 'what processes are there', 'what can I request', 'is X switched on'.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+    strict: true,
+    eager_input_streaming: true
+  },
+  {
+    name: "list_my_requests",
+    description: "The person's items in one process other than advances/clearances, with counts by status and, where there's an approval route, who each one is waiting with. process: custom (custom-process requests: Change Request, Computer Request, Attendance Register, BRS Approval... - request_type narrows to one by name), brs (business requirement specifications), overtime (requests and claims), standby (this month's standby and claim), maintenance (problems they reported and jobs assigned to them), signatures (documents they signed), it_provisioning, compensation_claims, accommodation, vendor_contracts, employee_contracts (the last five need the matching access). Returns up to 40 items, newest first.",
+    input_schema: {
+      type: "object",
+      properties: {
+        process: { type: "string", enum: ["custom", "brs", "overtime", "standby", "maintenance", "signatures", "it_provisioning", "compensation_claims", "accommodation", "vendor_contracts", "employee_contracts"] },
+        request_type: str
+      },
+      required: ["process"],
+      additionalProperties: false
+    },
+    strict: true,
+    eager_input_streaming: true
+  },
+  {
+    name: "get_custom_request",
+    description: "Full details of one custom-process request the person can see (Change Request, Computer Request, Attendance Register, BRS Approval...): its fields, each approval step with who it is with and when it was actioned, and closure or cancellation notes. Pass the id from list_my_requests (process custom) or list_my_pending_approvals.",
+    input_schema: { type: "object", properties: { request_id: str }, required: ["request_id"], additionalProperties: false },
+    strict: true,
+    eager_input_streaming: true
+  },
+  {
+    name: "list_my_recent_actions",
+    description: "What the signed-in person has recently done in the Approval Inbox - approved, rejected, countersigned, rolled back - across all processes, with the requester, the item's status now and the date. Use for 'what did I approve this week', 'have I actioned X'.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+    strict: true,
+    eager_input_streaming: true
+  },
+  {
+    name: "finance_queue",
+    description: "Finance/HR work queues - what is waiting to be done, with counts and totals per currency (only for people with access to that queue; others get 'no access'). queue: capture (approved advances and accommodation waiting for THIS person's capture in the Capture Inbox), payments (advances captured and waiting to be paid; status pending or paid), deductions (salary deductions for paybacks - pending vs deducted), refundable (refunds owed to employees - pending vs refunded), treasury (clearances sent to Treasury: settlement status, refunds and paybacks), payback_review (payback proofs waiting for HR Operations to verify), salaries_ready (salary/overtime registers approved and ready for payment). Use for 'what do I need to capture', 'how much is waiting to be paid', 'who still owes a deduction', 'what refunds are outstanding'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        queue: { type: "string", enum: ["capture", "payments", "deductions", "refundable", "treasury", "payback_review", "salaries_ready"] },
+        status: { type: "string", enum: ["pending", "done", "all"] }
+      },
+      required: ["queue"],
       additionalProperties: false
     },
     strict: true,
@@ -285,6 +342,11 @@ const TOOL_LABEL: Record<string, string> = {
   run_report: "Running the report",
   get_user_and_app_stats: "Checking users and mobile app usage",
   show_chart: "Drawing a chart",
+  list_active_processes: "Checking which processes are on",
+  list_my_requests: "Looking up your requests",
+  get_custom_request: "Opening the request",
+  list_my_recent_actions: "Checking what you've actioned",
+  finance_queue: "Checking the finance queue",
   create_advance_draft: "Saving a draft advance",
   create_clearance_draft: "Starting a draft clearance"
 };
@@ -476,10 +538,320 @@ const REPORT_PATH: Record<string, string> = {
   overtime_hours: "/treasury-reports/overtime-hours",
   standby_hours: "/treasury-reports/standby-hours",
   all_advances: "/advances",
-  clearance_status: "/advances/clearance-status-report"
+  clearance_status: "/advances/clearance-status-report",
+  ageing: "/treasury-reports/ageing",
+  audit_reconciliation: "/treasury-reports/audit-reconciliation"
 };
 
 type DraftNote = { kind: "advance" | "clearance"; id: string; label: string };
+
+// ── Every other process ──────────────────────────────────────────────────
+const PROCESSES = ["custom", "brs", "overtime", "standby", "maintenance", "signatures", "it_provisioning", "compensation_claims", "accommodation", "vendor_contracts", "employee_contracts"] as const;
+const ProcessInput = z.object({ process: z.enum(PROCESSES), request_type: z.string().trim().max(80).optional() }).strict();
+const CustomIdInput = z.object({ request_id: z.string().min(1) }).strict();
+const MAX_ITEMS = 40;
+// List endpoints answer with an array, or an object holding one (items, rows...).
+function rowsOf(d: any): any[] {
+  if (Array.isArray(d)) return d;
+  for (const k of ["items", "rows", "requests", "documents", "data"]) if (Array.isArray(d?.[k])) return d[k];
+  return [];
+}
+
+function clip(v: any, n = 140) {
+  if (v == null || v === "") return null;
+  const t = String(v).replace(/\s+/g, " ").trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+function countBy(rows: any[], key: string) {
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const k = String(r?.[key] ?? "unknown");
+    out[k] = (out[k] || 0) + 1;
+  }
+  return out;
+}
+function listed(rows: any[], statusKey = "status") {
+  const counts = countBy(rows, statusKey);
+  return {
+    count: rows.length,
+    ...(Object.keys(counts).some((k) => k !== "unknown") ? { by_status: counts } : {}),
+    items: rows.slice(0, MAX_ITEMS),
+    ...(rows.length > MAX_ITEMS ? { note: `Showing the newest ${MAX_ITEMS} of ${rows.length}.` } : {})
+  };
+}
+// Rows whose shape varies (contracts...): plain fields only, ids and long text trimmed.
+function plainRow(r: any) {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r || {})) {
+    if (Object.keys(out).length >= 14) break;
+    if (v == null || v === "" || typeof v === "object") continue;
+    if (k !== "id" && /(_id|_path|email|token|hash|password)$/i.test(k)) continue;
+    out[k] = typeof v === "string" ? (/(_at|date)$/i.test(k) ? day(v) : clip(v, 120)) : v;
+  }
+  return out;
+}
+// Custom-process approval routes: each step has its own status and acted_at.
+function customSteps(chain: any[] | null, stepOrder: number | null, status: string) {
+  if (!Array.isArray(chain) || !chain.length) return null;
+  const open = status === "IN_PROGRESS";
+  return chain.map((st: any) => {
+    const ss = String(st.status || "").toUpperCase();
+    return {
+      step: st.position_name || null,
+      with: st.approver_name || st.approval_group_name || null,
+      state: ss === "APPROVED" || ss === "CONFIRMED" || ss === "COMPLETED" ? "done"
+        : ss === "REJECTED" ? "rejected"
+        : open && st.step_order === stepOrder ? "current" : "waiting",
+      actioned_at: day(st.acted_at),
+      comment: clip(st.comment, 200)
+    };
+  });
+}
+function waitingWith(x: any) {
+  if (x.status !== "IN_PROGRESS" || !Array.isArray(x.approval_chain)) return null;
+  const cur = x.approval_chain.find((st: any) => st.step_order === x.current_step_order);
+  return cur ? `${cur.approver_name || cur.approval_group_name || "approver"}${cur.position_name ? ` (${cur.position_name})` : ""}` : null;
+}
+// The custom request's own fields (scalars only - grids and tables are left out).
+function customFields(data: any) {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data || {})) {
+    if (Object.keys(out).length >= 16) break;
+    if (v == null || v === "") continue;
+    if (typeof v === "object") {
+      if (Array.isArray(v) && v.every((i) => i && typeof i === "object" && "name" in i)) out[k] = v.map((i: any) => i.name).slice(0, 10);
+      continue;
+    }
+    out[k] = typeof v === "string" ? clip(v, 200) : v;
+  }
+  return out;
+}
+
+async function listMyRequests(token: string, proc: (typeof PROCESSES)[number], requestType?: string) {
+  const get = (path: string) => api(token, "GET", path);
+  const failed = (r: { status: number; data: any }) => ({ content: JSON.stringify(apiError(r)), isError: true });
+  const ok = (v: unknown) => ({ content: JSON.stringify({ process: proc, ...(v as object) }) });
+  switch (proc) {
+    case "custom": {
+      const r = await get("/custom-requests/mine");
+      if (r.status !== 200) return failed(r);
+      let rows = rowsOf(r.data);
+      const t = requestType?.toLowerCase().trim();
+      if (t) rows = rows.filter((x) => String(x.request_type_name || "").toLowerCase().includes(t) || String(x.request_type_code || "").toLowerCase() === t.replace(/\s+/g, "_"));
+      return ok({
+        ...(t ? { request_type: requestType } : {}),
+        by_process: countBy(rows, "request_type_name"),
+        ...listed(rows.map((x) => ({
+          id: x.id,
+          process: x.request_type_name,
+          status: x.status,
+          created: day(x.created_at),
+          waiting_with: waitingWith(x),
+          implementation_date: day(x.implementation_date),
+          closed: day(x.closed_at)
+        })))
+      });
+    }
+    case "brs": {
+      const r = await get("/brs/mine");
+      if (r.status !== 200) return failed(r);
+      return ok(listed(rowsOf(r.data).map((x) => ({
+        id: x.id, reference: x.reference_no, title: clip(x.title, 100), type: x.brs_type_name,
+        phase: x.phase, your_role: x.my_role, owner: x.owner_name, requester: x.requester_name, updated: day(x.updated_at)
+      })), "phase"));
+    }
+    case "overtime": {
+      const [req, cl] = await Promise.all([get("/overtime/requests"), get("/overtime/claims")]);
+      if (req.status !== 200) return failed(req);
+      const month = (x: any) => (x.year && x.month ? `${x.year}-${String(x.month).padStart(2, "0")}` : null);
+      return ok({
+        requests: listed(rowsOf(req.data).map((x) => ({
+          id: x.id, reference: x.request_no, employee: x.employee_name, month: month(x), status: x.status,
+          current_step: x.current_step_title || null, submitted: day(x.submitted_at), claim_status: x.claim_status || null
+        }))),
+        claims: cl.status === 200 ? listed(rowsOf(cl.data).map((x) => ({
+          id: x.id, reference: x.claim_no, employee: x.employee_name, month: month(x), status: x.status,
+          hours: money(x.total_overtime), amount: money(x.total_amount), compensation: x.compensation_preference || null,
+          current_step: x.current_step_title || null, submitted: day(x.submitted_at), paid: day(x.paid_at)
+        }))) : apiError(cl)
+      });
+    }
+    case "standby": {
+      const r = await get("/standby/my");
+      if (r.status !== 200) return failed(r);
+      const d = r.data || {};
+      const assignments = Array.isArray(d.assignments) ? d.assignments : [];
+      return ok({
+        month: d.month, total_standby_hours: d.total_standby_hours,
+        assignments: { count: assignments.length, items: assignments.slice(0, 20).map(plainRow) },
+        claim: d.claim ? plainRow(d.claim) : null
+      });
+    }
+    case "maintenance": {
+      const [mine, jobs] = await Promise.all([get("/maintenance/requests?scope=mine&status=all"), get("/maintenance/requests?scope=jobs&status=all")]);
+      if (mine.status !== 200) return failed(mine);
+      const m = (x: any) => ({
+        id: x.id, reference: x.request_no, status: x.status_label || x.status, priority: x.priority_label || x.priority,
+        site: x.site_name, district: x.district, category: x.category, problem: clip(x.description, 120),
+        worker: x.worker_name || null, target_date: day(x.target_date), next_step: clip(x.next_step, 120), reported: day(x.created_at)
+      });
+      return ok({
+        reported_by_you: listed(rowsOf(mine.data).map(m)),
+        assigned_to_you: jobs.status === 200 ? listed(rowsOf(jobs.data).map(m)) : apiError(jobs)
+      });
+    }
+    case "signatures": {
+      const r = await get("/signatures/mine");
+      if (r.status !== 200) return failed(r);
+      return ok(listed(rowsOf(r.data).map((x) => ({
+        title: clip(x.title, 120), signed: day(x.signed_at), kind: x.source_type || null, on_behalf_of: x.authority_name || null, verification_code: x.verification_code
+      })), "kind"));
+    }
+    case "it_provisioning": {
+      const r = await get("/it-provisioning");
+      if (r.status !== 200) return failed(r);
+      return ok(listed(rowsOf(r.data).map((x) => ({
+        id: x.id, status: x.status, request: x.request_type, computer: x.computer_type, device: clip(x.device && typeof x.device === "object" ? [x.device.make || x.device.brand, x.device.model || x.device.name, x.device.serial_number || x.device.asset_tag].filter(Boolean).join(" ") : x.device, 80),
+        requester: x.requester_name, department: x.requester_department, assigned_to: x.assigned_to_name,
+        submitted: day(x.submitted_at), ready_for_collection: day(x.ready_for_collection_at), completed: day(x.completed_at)
+      }))));
+    }
+    case "compensation_claims": {
+      const r = await get("/compensation-claims");
+      if (r.status !== 200) return failed(r);
+      return ok(listed(rowsOf(r.data).map((x) => ({
+        id: x.id, reference: x.claim_no, kind: x.claim_type, employee: x.employee_name, department: x.department,
+        hours: money(x.hours), equivalent_days: money(x.equivalent_days), status: x.status, submitted: day(x.submitted_at), closed: day(x.closed_at)
+      }))));
+    }
+    case "accommodation": {
+      const r = await get("/accommodation-requests");
+      if (r.status !== 200) return failed(r);
+      return ok(listed(rowsOf(r.data).map((x) => ({
+        id: x.id, requester: x.requester_name, department: x.requester_department, location: x.location, provider: x.provider,
+        check_in: day(x.check_in), check_out: day(x.check_out), amount: money(x.amount), status: x.status, paid: day(x.paid_at)
+      }))));
+    }
+    case "vendor_contracts":
+    case "employee_contracts": {
+      const r = await get(proc === "vendor_contracts" ? "/vendor-contracts" : "/employee-contracts");
+      if (r.status !== 200) return failed(r);
+      const rows = rowsOf(r.data);
+      return ok(listed(rows.map(plainRow)));
+    }
+  }
+}
+
+// ── Finance work queues ───────────────────────────────────────────────────
+const FINANCE_QUEUES = ["capture", "payments", "deductions", "refundable", "treasury", "payback_review", "salaries_ready"] as const;
+const FinanceQueueInput = z.object({ queue: z.enum(FINANCE_QUEUES), status: z.enum(["pending", "done", "all"]).optional() }).strict();
+
+// Totals per currency - amounts in different currencies are never added together.
+function totalsByCurrency(rows: any[], amountKey: string) {
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const v = Number(r[amountKey]);
+    if (!Number.isFinite(v)) continue;
+    const cur = r.currency || "LSL";
+    out[cur] = Math.round(((out[cur] || 0) + v) * 100) / 100;
+  }
+  return out;
+}
+function oldestFirst(rows: any[], dateKey: string) {
+  return rows.slice().sort((a, b) => String(a[dateKey] || "").localeCompare(String(b[dateKey] || "")));
+}
+function queueResult(queue: string, status: string, rows: any[], amountKey: string | null, dateKey: string, map: (r: any) => unknown, extra: Record<string, unknown> = {}) {
+  const sorted = status === "pending" ? oldestFirst(rows, dateKey) : rows;
+  return {
+    content: JSON.stringify({
+      queue, status, count: rows.length,
+      ...(amountKey ? { totals_by_currency: totalsByCurrency(rows, amountKey) } : {}),
+      ...extra,
+      items: sorted.slice(0, MAX_ITEMS).map(map),
+      ...(rows.length > MAX_ITEMS ? { note: `Showing ${MAX_ITEMS} of ${rows.length}${status === "pending" ? ", oldest first" : ""}; totals cover all.` } : {})
+    })
+  };
+}
+
+async function financeQueue(token: string, queue: (typeof FINANCE_QUEUES)[number], status: "pending" | "done" | "all") {
+  const get = (path: string) => api(token, "GET", path);
+  const failed = (r: { status: number; data: any }) => ({ content: JSON.stringify(apiError(r)), isError: true });
+  const pick = (rows: any[], isDone: (r: any) => boolean) => (status === "all" ? rows : rows.filter((r) => (status === "done") === isDone(r)));
+  const person = (r: any) => r.employee_name || r.requester_name || null;
+  switch (queue) {
+    case "capture": {
+      const r = await get("/inbox");
+      if (r.status !== 200) return failed(r);
+      const all = rowsOf(r.data?.items ?? r.data).filter((i: any) => i.doc_type === "ACCOMMODATION" || (i.doc_type === "ADVANCE" && (isCaptureActionType(i.current_step_action_type) || i.capture_done === true)));
+      const rows = pick(all, (i) => i.current_step_actionable_by_me !== true);
+      return queueResult(queue, status, rows, null, "created_at", (i: any) => ({
+        id: i.id, kind: i.doc_type, requester: i.requester_name, type: i.request_type_name || i.advance_type || i.type || null,
+        amount: money(i.approved_total ?? i.requested_total ?? i.amount), currency: i.currency || null,
+        waiting_for_you: i.current_step_actionable_by_me === true, since: day(i.submitted_at || i.created_at)
+      }), { where: "Capture Inbox" });
+    }
+    case "payments": {
+      const r = await get(`/advances/payments?status=${status === "done" ? "paid" : status === "all" ? "all" : "pending"}`);
+      if (r.status !== 200) return failed(r);
+      const rows = rowsOf(r.data);
+      return queueResult(queue, status, rows, "approved_total", "created_at", (x: any) => ({
+        id: x.id, requester: x.requester_name, division: x.division, department: x.department, type: x.type,
+        amount: money(x.approved_total ?? x.requested_total), currency: x.currency, payment: x.payment_status,
+        approved_by: x.approved_by_name, requested: day(x.created_at), paid: day(x.paid_at), reference: x.paid_reference
+      }), { where: "Payments", total: r.data?.total ?? undefined });
+    }
+    case "deductions": {
+      const r = await get("/deductions");
+      if (r.status !== 200) return failed(r);
+      const rows = pick(rowsOf(r.data), (x) => Boolean(x.deducted_at));
+      return queueResult(queue, status, rows, "salary_deduction", "clearance_submitted_at", (x: any) => ({
+        id: x.id, employee: x.employee_name, employee_no: x.employee_no, division: x.division_name, month: x.month,
+        advance: money(x.advance_amount), cleared: money(x.cleared_amount), salary_deduction: money(x.salary_deduction), currency: x.currency,
+        deducted: day(x.deducted_at), clearance_submitted: day(x.clearance_submitted_at), destination: x.destination || null
+      }), { where: "Deductions" });
+    }
+    case "refundable": {
+      const r = await get("/refundable");
+      if (r.status !== 200) return failed(r);
+      const rows = pick(rowsOf(r.data), (x) => Boolean(x.refunded_at));
+      return queueResult(queue, status, rows, "refundable_amount", "clearance_submitted_at", (x: any) => ({
+        id: x.id, employee: x.employee_name, employee_no: x.employee_no, division: x.division_name, month: x.month,
+        advance: money(x.advance_amount), cleared: money(x.cleared_amount), refund: money(x.refundable_amount), currency: x.currency,
+        refunded: day(x.refunded_at), clearance_submitted: day(x.clearance_submitted_at)
+      }), { where: "Refundable" });
+    }
+    case "treasury": {
+      const r = await get("/treasury");
+      if (r.status !== 200) return failed(r);
+      const rows = pick(rowsOf(r.data), (x) => Boolean(x.treasury_completed_at) || x.treasury_settlement_status === "PROCESSED");
+      return queueResult(queue, status, rows, null, "sent_to_treasury_at", (x: any) => ({
+        id: x.id, employee: x.employee_name, division: x.division_name, outcome: x.financial_outcome,
+        refund: money(x.refund_amount), payback: money(x.payback_amount), currency: x.currency,
+        settlement: x.treasury_settlement_status, sent_to_treasury: day(x.sent_to_treasury_at), completed: day(x.treasury_completed_at)
+      }), {
+        where: "Treasury",
+        refunds_by_currency: totalsByCurrency(rows, "refund_amount"),
+        paybacks_by_currency: totalsByCurrency(rows, "payback_amount"),
+        by_settlement: countBy(rows, "treasury_settlement_status")
+      });
+    }
+    case "payback_review": {
+      const r = await get("/claims/payback-review-queue");
+      if (r.status !== 200) return failed(r);
+      const rows = rowsOf(r.data);
+      return queueResult(queue, "pending", rows, null, "submitted_at", (x: any) => ({ ...plainRow(x), employee: person(x) }), { where: "View Clearances (payback proofs)" });
+    }
+    case "salaries_ready": {
+      const r = await get("/salaries/ready-for-payment");
+      if (r.status !== 200) return failed(r);
+      const rows = pick(rowsOf(r.data), (x) => Boolean(x.payment_id));
+      return queueResult(queue, status, rows, null, "period", (x: any) => ({
+        kind: x.item_type, employee: x.employee_name, employee_no: x.employee_no, division: x.division, department: x.department,
+        period: day(x.period), status: x.status, hours: money(x.converted_hours), paid: Boolean(x.payment_id)
+      }), { where: "Salaries" });
+    }
+  }
+}
 
 export async function runTool(name: string, rawInput: unknown, token: string, drafts: DraftNote[], onChart?: (c: Chart) => void): Promise<{ content: string; isError?: boolean }> {
   const ok = (v: unknown) => ({ content: JSON.stringify(v) });
@@ -552,6 +924,74 @@ export async function runTool(name: string, rawInput: unknown, token: string, dr
         submitted: day(i.submitted_at || i.created_at)
       }));
       return ok({ count: items.length, waiting_for_you: items.slice(0, 40) });
+    }
+    case "list_active_processes": {
+      if (!NoInput.safeParse(rawInput ?? {}).success) return fail("This tool takes no input.");
+      const [flags, types] = await Promise.all([api(token, "GET", "/request-types/module-flags"), api(token, "GET", "/request-types")]);
+      const f: any = flags.status === 200 ? flags.data : {};
+      const on = (v: unknown, dflt = true) => (v === undefined ? dflt : v === true);
+      const builtIn: Array<[string, boolean]> = [
+        ["Travel advances and clearances", true],
+        ["Salary advances", on(f.salary_advance_enabled)],
+        ["Loans", on(f.loan_advance_enabled)],
+        ["Overtime", on(f.overtime_enabled)],
+        ["Standby and call-outs", on(f.standby_enabled)],
+        ["Maintenance (report a problem at a site)", on(f.maintenance_enabled, false)],
+        ["Sign a Document", on(f.signature_enabled)],
+        ["Vendor contracts", on(f.vendor_contracts_enabled)],
+        ["Service contracts", on(f.service_contracts_enabled)],
+        ["BRS (business requirement specifications)", true],
+        ["AI Assistant", on(f.ai_assistant_enabled)]
+      ];
+      const custom = types.status === 200 ? (types.data as any[]).filter((t) => t.status === "ACTIVE") : [];
+      return ok({
+        switched_on: builtIn.filter(([, v]) => v).map(([n]) => n),
+        switched_off: builtIn.filter(([, v]) => !v).map(([n]) => n),
+        custom_processes_you_can_use: custom.map((t) => ({ name: t.name, code: t.code, category: t.category || null, description: clip(t.description, 160) })),
+        note: "Custom processes are submitted under Custom Processes. Some modules (contracts, IT provisioning, accommodation) are only for the teams that run them."
+      });
+    }
+    case "list_my_requests": {
+      const p = ProcessInput.safeParse(rawInput);
+      if (!p.success) return fail(`process must be one of: ${PROCESSES.join(", ")}`);
+      return listMyRequests(token, p.data.process, p.data.request_type);
+    }
+    case "get_custom_request": {
+      const p = CustomIdInput.safeParse(rawInput);
+      if (!p.success) return fail("request_id is required.");
+      const r = await api(token, "GET", `/custom-requests/${encodeURIComponent(p.data.request_id)}`);
+      if (r.status !== 200) return { content: JSON.stringify(apiError(r)), isError: true };
+      const x = r.data?.request ?? r.data;
+      return ok({
+        id: x.id,
+        process: x.request_type_name || null,
+        status: x.status,
+        requester: x.requester_name || null,
+        created: day(x.created_at),
+        details: customFields(x.data),
+        waiting_with: waitingWith(x),
+        approval_steps: customSteps(x.approval_chain, x.current_step_order, x.status),
+        implementation_date: day(x.implementation_date),
+        closure_notes: clip(x.closure_notes, 300),
+        closed: day(x.closed_at),
+        cancel_comment: clip(x.cancel_comment, 300)
+      });
+    }
+    case "finance_queue": {
+      const p = FinanceQueueInput.safeParse(rawInput);
+      if (!p.success) return fail(`queue must be one of: ${FINANCE_QUEUES.join(", ")}`);
+      return financeQueue(token, p.data.queue, p.data.status ?? "pending");
+    }
+    case "list_my_recent_actions": {
+      if (!NoInput.safeParse(rawInput ?? {}).success) return fail("This tool takes no input.");
+      const r = await api(token, "GET", "/inbox/my-actions");
+      if (r.status !== 200) return { content: JSON.stringify(apiError(r)), isError: true };
+      const rows = rowsOf(r.data).map((x) => ({
+        action: String(x.action || "").replace(/_/g, " ").toLowerCase(),
+        kind: x.doc_type, id: x.entity_id, requester: x.requester_name, status_now: x.current_status, when: day(x.created_at)
+      }));
+      const l = listed(rows, "action");
+      return ok({ count: l.count, by_action: l.by_status, by_kind: countBy(rows, "kind"), items: l.items, ...(l.note ? { note: l.note } : {}) });
     }
     case "get_travel_types": {
       if (!NoInput.safeParse(rawInput ?? {}).success) return fail("This tool takes no input.");
@@ -822,10 +1262,10 @@ async function openAiCompatibleTurn(target: AiModelTarget, system: string, messa
 
     const content: any[] = [];
     const made = calls.filter(Boolean);
-    if (!text && !made.length) {
-      text = "Sorry - I couldn't come up with an answer. Please try asking another way.";
-      onText(text);
-    }
+    // An empty answer (a free model having a bad moment - some send only
+    // garbled "reasoning") counts as the service failing, so the next model
+    // in Settings > AI Assistant is tried; nothing has been shown yet.
+    if (!text && !made.length) throw new ProviderError(502, `${target.service}:${target.model} gave an empty answer (finish: ${finish || "none"})`);
     if (text) content.push({ type: "text", text, citations: null });
     made.forEach((c, i) => {
       let input: unknown;
@@ -1010,6 +1450,16 @@ export async function streamChat(args: {
       // Lesotho's date, not UTC's - UTC is still "yesterday" until 02:00 here.
       { type: "text", text: `Signed-in person: ${user.fullName || "a FlowDesk user"} (role ${user.role}). Today is ${new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Maseru" })}.` }
     ];
+    // Advances they still have to clear - so the assistant can remind them.
+    const due = await clearancesDue(userId).catch(() => []);
+    if (due.length) {
+      const first = !messages.some((m) => m.role === "assistant");
+      system.push({ type: "text", text: `Travel advances this person still has to clear (live from FlowDesk):
+${remindersForAssistant(due)}
+${first
+  ? "This is the start of the conversation: after answering their question, add a short, friendly reminder about these (most urgent first, with the due date) and offer to start the clearance for them (create_clearance_draft with the advance_id - or, if a draft is already started, tell them to open it under Advances > Clearances, finish it and submit)."
+  : "You have already reminded them in this conversation - mention these again only if it's relevant (e.g. they ask about advances, clearances or what they should do)."} Never invent other deadlines.` });
+    }
 
     const drafts: DraftNote[] = [];
     let chartsShown = 0;

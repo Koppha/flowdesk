@@ -28,6 +28,8 @@ export const SYSTEM_SETTING_KEYS = {
   serviceContractsModuleEnabled: "service_contracts_module_enabled",
   signatureModuleEnabled: "signature_module_enabled",
   maintenanceModuleEnabled: "maintenance_module_enabled",
+  // Push + email reminders to travellers to clear their advances (ai/clearance-reminders.ts). Off until an admin switches it on.
+  clearanceRemindersEnabled: "clearance_reminders_enabled",
   salaryAdvanceEnabled: "salary_advance_enabled",
   loanAdvanceEnabled: "loan_advance_enabled",
   salaryAdvanceMaxPaybackMonths: "salary_advance_max_payback_months",

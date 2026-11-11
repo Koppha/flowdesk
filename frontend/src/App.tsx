@@ -4989,6 +4989,18 @@ export default function App() {
           )}
         </div>
         <div className="header-actions">
+          {canAccessFeature("ai_assistant") && aiAssistantModuleEnabled && (
+            <button
+              className={`fda-top-button${aiAssistantOpen ? " is-open" : ""}`}
+              type="button"
+              aria-label={aiAssistantOpen ? "Close AI Assistant" : "Open AI Assistant"}
+              aria-pressed={aiAssistantOpen}
+              title="AI Assistant"
+              onClick={() => setAiAssistantOpen((v) => !v)}
+            >
+              <Sparkles size={18} aria-hidden />
+            </button>
+          )}
           <button
             className="icon-button has-icon"
             type="button"

@@ -12840,20 +12840,56 @@ html[data-theme="dark"] .brs-kpi-tint-green { background: rgba(21, 128, 61, 0.14
 /* ── AI Assistant panel (components/AiAssistant.tsx) ───────────────────── */
 .fda-panel {
   position: fixed;
-  top: 12px;
-  right: 12px;
-  bottom: 12px;
+  top: 0;
+  right: 0;
+  bottom: 0;
   z-index: 900;
-  /* 80% wider than the original 480px; never wider than the screen. */
-  width: min(864px, calc(100vw - 24px));
+  /* Docked beside the page; the user drags .fda-resize to change it
+     (AiAssistant.tsx sets --fda-w, default 864px). */
+  width: var(--fda-w, 864px);
   display: flex;
   flex-direction: column;
   background: var(--surface, #fff);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+  border-left: 1px solid var(--border);
   overflow: hidden;
+}
+/* The page gives up the panel's width instead of sitting under it. */
+html.fda-docked .app-shell { padding-right: var(--fda-w, 864px); box-sizing: border-box; }
+.fda-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+}
+.fda-resize::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 4px;
+  height: 40px;
+  margin-top: -20px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.15s;
+}
+.fda-resize:hover::after,
+.fda-resize:focus-visible::after,
+html.fda-resizing .fda-resize::after { background: #818cf8; }
+.fda-resize:focus-visible { outline: none; }
+html.fda-resizing,
+html.fda-resizing * { cursor: col-resize !important; user-select: none !important; }
+html.fda-resizing iframe { pointer-events: none; }
+/* Small screens: no room to share - the panel covers the page. */
+@media (max-width: 900px) {
+  .fda-panel { width: 100vw; border-left: none; }
+  html.fda-docked .app-shell { padding-right: 0; }
+  .fda-resize { display: none; }
 }
 .fda-header {
   display: flex;
@@ -12872,6 +12908,24 @@ html[data-theme="dark"] .brs-kpi-tint-green { background: rgba(21, 128, 61, 0.14
   background: linear-gradient(135deg, #6366f1, #d946ef);
 }
 .fda-logo { width: 44px; height: 44px; border-radius: 12px; margin-right: 4px; }
+/* Top bar quick button (next to the theme toggle) - the assistant's logo. */
+.fda-top-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: none;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1, #d946ef);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.fda-top-button:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4); }
+.fda-top-button:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+.fda-top-button.is-open { box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3); }
 .fda-kicker {
   display: flex;
   align-items: center;
@@ -12952,6 +13006,18 @@ html[data-theme="dark"] .brs-kpi-tint-green { background: rgba(21, 128, 61, 0.14
 }
 .fda-welcome h3 { margin: 0; font-size: 20px; font-weight: 700; color: var(--text); }
 .fda-welcome p { max-width: 340px; margin: 8px auto 0; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+/* Welcome: advances to clear (GET /ai/assistant/reminders). */
+.fda-due { margin-top: 18px; padding: 12px; border: 1px solid #fcd34d; border-radius: 12px; background: #fffbeb; text-align: left; }
+.fda-due-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: #92400e; }
+.fda-due-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #fde68a; }
+.fda-due-text { min-width: 0; flex: 1 1 260px; font-size: 13px; color: var(--text); }
+.fda-due-when { display: block; margin-top: 2px; font-size: 12px; color: #92400e; }
+.fda-due-row.is-overdue .fda-due-when { color: #b91c1c; font-weight: 600; }
+.fda-due-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+html[data-theme="dark"] .fda-due { background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.4); }
+html[data-theme="dark"] .fda-due-head, html[data-theme="dark"] .fda-due-when { color: #fbbf24; }
+html[data-theme="dark"] .fda-due-row { border-top-color: rgba(245, 158, 11, 0.25); }
+html[data-theme="dark"] .fda-due-row.is-overdue .fda-due-when { color: #f87171; }
 .fda-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; text-align: left; }
 .fda-card {
   display: flex;

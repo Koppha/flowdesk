@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { AuthedRequest, requireAuth, requireFeatureAccess, requireRole } from "../../lib/auth.js";
+import { clearancesDue, dueText, longDate } from "./clearance-reminders.js";
 import { badRequest } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
@@ -161,6 +162,16 @@ aiRouter.post("/ocr-extract", async (req: AuthedRequest, res, next) => {
 // Settings > AI Assistant (ai-settings.ts).
 export const AI_ASSISTANT_DEFAULT_ROLES = ["ADMIN", "MANAGER", "HOD", "EXCO", "FINANCE", "CEO", "EMPLOYEE"];
 const requireAssistant = requireFeatureAccess("ai_assistant", AI_ASSISTANT_DEFAULT_ROLES);
+
+// What the assistant greets the person with: their advances still to clear.
+aiRouter.get("/assistant/reminders", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    const list = await clearancesDue(req.user!.userId);
+    return res.json({ clearances: list.map((c) => ({ ...c, due_text: dueText(c), due_on_text: longDate(c.due_on) })) });
+  } catch (err) {
+    return next(err);
+  }
+});
 
 aiRouter.get("/assistant/status", requireAssistant, async (req: AuthedRequest, res, next) => {
   try {

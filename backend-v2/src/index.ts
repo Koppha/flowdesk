@@ -10,6 +10,7 @@ import { startSlaReminderWorker } from "./modules/sla/sla.service.js";
 import { reassignAllPendingApprovals } from "./lib/approvalReassignment.js";
 import { sendCollectionReminders } from "./modules/it-provisioning/it-provisioning.service.js";
 import { runMaintenanceAutoClose } from "./modules/maintenance/maintenance.service.js";
+import { runClearanceReminderCycle } from "./modules/ai/clearance-reminders.js";
 
 await bootstrapSystem();
 
@@ -41,6 +42,20 @@ setInterval(runCollectionReminders, 6 * 60 * 60 * 1000);
 // themselves after N working days (FR-08). Checked hourly.
 void runMaintenanceAutoClose();
 setInterval(() => void runMaintenanceAutoClose(), 60 * 60 * 1000);
+
+// Travellers: "clear your advance by <date>" push + email - 3 days and
+// 1 day before, then weekly (3 times) while overdue. Only when switched on
+// (Processes > Clearance Reminders). Checked hourly, sends 08:00-17:00.
+async function runClearanceReminders() {
+  try {
+    const { sent } = await runClearanceReminderCycle();
+    if (sent) logger.info("clearance_reminders_sent", { sent });
+  } catch (err) {
+    logger.warn("clearance_reminders_failed", { error: String(err) });
+  }
+}
+setTimeout(() => void runClearanceReminders(), 60_000);
+setInterval(() => void runClearanceReminders(), 60 * 60 * 1000);
 
 // Automatic sweep disabled per explicit request (stopped 2026-09-07) - was:
 // run once at startup then every 24h, re-checking every pending advance/

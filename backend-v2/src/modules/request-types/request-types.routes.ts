@@ -137,7 +137,9 @@ requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) =
     // The AI Assistant's own on/off (Settings > AI Assistant), shown and
     // switched here too - one setting, two screens.
     const ai_assistant_enabled = (await loadAiConfig()).settings.enabled;
+    const clearance_reminders_enabled = await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.clearanceRemindersEnabled, false);
     return res.json({
+      clearance_reminders_enabled,
       overtime_enabled, standby_enabled,
       salary_advance_enabled, loan_advance_enabled,
       salary_advance_max_payback_months, loan_advance_max_payback_months,
@@ -163,7 +165,8 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
       service_contracts_enabled: z.boolean().optional(),
       signature_enabled: z.boolean().optional(),
       maintenance_enabled: z.boolean().optional(),
-      ai_assistant_enabled: z.boolean().optional()
+      ai_assistant_enabled: z.boolean().optional(),
+      clearance_reminders_enabled: z.boolean().optional()
     }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
     if (parsed.data.overtime_enabled !== undefined) {
@@ -192,6 +195,10 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
     }
     if (parsed.data.signature_enabled !== undefined) {
       await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, parsed.data.signature_enabled);
+    }
+    if (parsed.data.clearance_reminders_enabled !== undefined) {
+      await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.clearanceRemindersEnabled, parsed.data.clearance_reminders_enabled);
+      logger.info("clearance_reminders_switched", { by: req.user!.userId, enabled: parsed.data.clearance_reminders_enabled });
     }
     if (parsed.data.maintenance_enabled !== undefined) {
       await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.maintenanceModuleEnabled, parsed.data.maintenance_enabled);

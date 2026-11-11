@@ -1817,6 +1817,66 @@ export async function notifyCustomRequestAssigneeReminder(args: {
 // Help & Support: a staff member wrote to the support team, or support
 // replied. Same text whichever side it goes to; the chat itself is in the
 // Approval Inbox (web) and Profile > Help & support (app).
+// ─── notifyClearanceReminder ──────────────────────────────────────────────────
+// The traveller: clear your advance by <date> (ai/clearance-reminders.ts).
+// Tapping the push opens New Clearance on that advance (or the draft).
+
+export async function notifyClearanceReminder(args: {
+  userId: string;
+  email: string | null;
+  name: string | null;
+  advanceId: string;
+  reference: string;
+  type: string;
+  amount: number;
+  currency: string;
+  paidOn: string;
+  dueOn: string;
+  when: string;
+  overdue: boolean;
+  draftClearanceId: string | null;
+}) {
+  const who = args.name || "there";
+  const what = `${args.type} advance ${args.reference} (${fmt(args.amount, args.currency)})`;
+  const todo = args.draftClearanceId
+    ? "You have started a clearance for it - please finish it, attach your receipts and submit it."
+    : "Please submit your clearance: confirm what you actually spent on the trip and attach your receipts.";
+  if (args.email) {
+    const body = [
+      header(args.overdue ? "ADVANCE CLEARANCE — OVERDUE" : "ADVANCE CLEARANCE — REMINDER"),
+      ``,
+      `Hello ${who},`,
+      ``,
+      args.overdue
+        ? `The clearance for your ${what} was due on ${args.dueOn} and is now ${args.when.replace(/^overdue /, "")} overdue.`
+        : `The clearance for your ${what} is ${args.when} (by ${args.dueOn}).`,
+      todo,
+      ``,
+      detailBlock([
+        ["Advance", args.reference],
+        ["Type", args.type],
+        ["Amount", fmt(args.amount, args.currency)],
+        ["Paid", args.paidOn],
+        ["Clearance due", args.dueOn]
+      ]),
+      ``,
+      `Clear it in FlowDesk: Advances > Clearances (${env.APP_URL}), or in the FlowDesk mobile app. The AI Assistant can start the clearance for you.`,
+      ``,
+      footer()
+    ].join("\n");
+    await sendMail({
+      to: [args.email],
+      subject: args.overdue ? `[Overdue] Please clear your advance ${args.reference}` : `[Reminder] Clear your advance ${args.reference} by ${args.dueOn}`,
+      text: body
+    });
+  }
+  void sendPushToUser(args.userId, {
+    title: args.overdue ? "Clearance overdue" : "Time to clear your advance",
+    body: `${args.reference} - ${fmt(args.amount, args.currency)} - ${args.when}`,
+    data: { url: args.draftClearanceId ? `/new-clearance?claim=${args.draftClearanceId}` : `/new-clearance?advance=${args.advanceId}` }
+  });
+}
+
 export async function notifySupportMessage(args: { emails: string[]; subject: string; heading: string; lines: string[] }) {
   try {
     if (!args.emails.length) return;

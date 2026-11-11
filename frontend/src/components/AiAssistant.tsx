@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowUp, CircleHelp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X } from "lucide-react";
+import { AlarmClock, ArrowUp, CircleHelp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X } from "lucide-react";
 import { API, getToken, getUserFromToken } from "../api";
 import AssistantChart, { type AssistantChartData } from "./AssistantChart";
 
@@ -11,6 +11,7 @@ import AssistantChart, { type AssistantChartData } from "./AssistantChart";
 
 type Msg = { role: "user" | "assistant"; text: string; notes?: string[]; drafts?: Array<{ kind: string; id: string; label: string }>; charts?: AssistantChartData[]; error?: boolean };
 type Conv = { id: string; title: string | null; updated_at: string };
+type DueClearance = { advance_id: string; reference: string; type: string; amount: number; currency: string; due_text: string; due_on_text: string; overdue: boolean; days_left: number; draft_clearance_id: string | null };
 type Suggestion = { icon: typeof FileText; title: string; hint: string; ask: string };
 
 const SUGGESTIONS: Suggestion[] = [
@@ -93,6 +94,27 @@ type ModelChoice = { service: string; model: string; label: string };
 // Opened from the side menu ("AI Assistant"); the parent owns open/closed.
 // Drafts are saved behind the page's back, so the parent is told when one is
 // (to reload its lists) and opens the draft itself from the "Open" button.
+// The panel docks to the right of the page (the page shrinks to make room,
+// via html.fda-docked + --fda-w in styles.css) and its left edge can be
+// dragged. The width is remembered per browser.
+const WIDTH_KEY = "fda-width";
+const DEFAULT_WIDTH = 864;
+const MIN_WIDTH = 360;
+// Leave the page at least this much room (sidebar + a usable column).
+const PAGE_MIN = 480;
+function clampWidth(w: number) {
+  const max = Math.max(MIN_WIDTH, window.innerWidth - PAGE_MIN);
+  return Math.round(Math.min(Math.max(w, MIN_WIDTH), max));
+}
+function savedWidth() {
+  try {
+    const w = Number(localStorage.getItem(WIDTH_KEY));
+    return w > 0 ? w : DEFAULT_WIDTH;
+  } catch {
+    return DEFAULT_WIDTH;
+  }
+}
+
 export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }: { open: boolean; onClose: () => void; onDraftSaved: () => void; onOpenDraft: (kind: string, id: string) => void }) {
   const setOpen = (v: boolean) => { if (!v) onClose(); };
   const [status, setStatus] = useState<{
@@ -107,10 +129,56 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [width, setWidth] = useState(savedWidth);
+  const widthRef = useRef(width);
+  widthRef.current = width;
+  // While open, the page makes room for the panel instead of sitting under it.
+  useEffect(() => {
+    if (!open) return;
+    const html = document.documentElement;
+    const apply = () => html.style.setProperty("--fda-w", `${clampWidth(widthRef.current)}px`);
+    apply();
+    html.classList.add("fda-docked");
+    window.addEventListener("resize", apply);
+    return () => {
+      window.removeEventListener("resize", apply);
+      html.classList.remove("fda-docked");
+    };
+  }, [open, width]);
+  const keepWidth = (w: number) => {
+    setWidth(w);
+    try { localStorage.setItem(WIDTH_KEY, String(w)); } catch { /* private window: not remembered */ }
+  };
+  function startResize(e: React.PointerEvent) {
+    e.preventDefault();
+    const html = document.documentElement;
+    html.classList.add("fda-resizing");
+    let w = widthRef.current;
+    const move = (ev: PointerEvent) => { w = clampWidth(window.innerWidth - ev.clientX); setWidth(w); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      html.classList.remove("fda-resizing");
+      keepWidth(w);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+  function resizeKey(e: React.KeyboardEvent) {
+    const step = e.shiftKey ? 96 : 24;
+    if (e.key === "ArrowLeft") { e.preventDefault(); keepWidth(clampWidth(widthRef.current + step)); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); keepWidth(clampWidth(widthRef.current - step)); }
+  }
   const [history, setHistory] = useState<Conv[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
+  // Advances to clear - shown on the welcome screen.
+  const [dueList, setDueList] = useState<DueClearance[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    getJson("/ai/assistant/reminders").then((r) => setDueList(r?.clearances || [])).catch(() => setDueList([]));
+  }, [open]);
   useEffect(() => {
     getJson("/ai/assistant/status").then(setStatus).catch((e) => { if (/access|forbidden|403/i.test(String(e.message))) setAllowed(false); });
   }, []);
@@ -220,6 +288,19 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
   if (!open) return null;
   return (
     <div role="dialog" aria-label="FlowDesk Assistant" className="fda-panel">
+      <div
+        className="fda-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the assistant panel"
+        aria-valuenow={clampWidth(width)}
+        aria-valuemin={MIN_WIDTH}
+        tabIndex={0}
+        title="Drag to resize · double-click to reset"
+        onPointerDown={startResize}
+        onKeyDown={resizeKey}
+        onDoubleClick={() => keepWidth(clampWidth(DEFAULT_WIDTH))}
+      />
       <div className="fda-header">
         <div className="fda-logo"><Sparkles size={20} aria-hidden /></div>
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -274,6 +355,25 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
               <>
                 <h3>What would you like to know?</h3>
                 <p>Ask in plain language about your advances, clearances and approvals, or how anything in FlowDesk works.</p>
+                {dueList.length > 0 && (
+                  <div className="fda-due" role="region" aria-label="Advances to clear">
+                    <div className="fda-due-head"><AlarmClock size={16} aria-hidden /> {dueList.length === 1 ? "You have an advance to clear" : `You have ${dueList.length} advances to clear`}</div>
+                    {dueList.slice(0, 4).map((c) => (
+                      <div key={c.advance_id} className={`fda-due-row${c.overdue ? " is-overdue" : c.days_left <= 3 ? " is-soon" : ""}`}>
+                        <div className="fda-due-text">
+                          <strong>{c.type}</strong> · {c.reference} · {c.currency === "LSL" ? "M" : c.currency === "USD" ? "$" : `${c.currency} `}{c.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          <span className="fda-due-when">{c.overdue ? `Overdue - was due ${c.due_on_text}` : `Clear by ${c.due_on_text} (${c.due_text})`}{c.draft_clearance_id ? " · draft started" : ""}</span>
+                        </div>
+                        <div className="fda-due-actions">
+                          {c.draft_clearance_id && (
+                            <button type="button" className="fda-draft-btn" onClick={() => onOpenDraft("clearance", c.draft_clearance_id!)}>Open draft</button>
+                          )}
+                          <button type="button" className="fda-draft-btn" disabled={busy} onClick={() => void ask(`Help me clear my ${c.type} advance ${c.reference} (advance_id ${c.advance_id}). It's ${c.due_text}.`)}>Clear it with me</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="fda-cards">
                   {suggestions.map((s) => (
                     <button key={s.title} type="button" className="fda-card" onClick={() => void ask(s.ask)} disabled={busy}>
