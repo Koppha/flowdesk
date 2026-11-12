@@ -34,16 +34,34 @@ frontend_build:
       - frontend/dist
     expire_in: 1h
 
+# The mobile app's server-built screens (Sign a Document, Maintenance, Help &
+# Support), served by the backend at /mobile-app/web/ from ../mobile-web/dist.
+# Without them the backend falls through to its login check and the app's
+# screens get a 401.
+mobile_web_build:
+  stage: build
+  tags: [build]
+  script:
+    - cd mobile-web
+    - npm ci
+    - npm run build
+  artifacts:
+    paths:
+      - mobile-web/dist
+    expire_in: 1h
+
 package_release:
   stage: build
   tags: [build]
   needs:
     - backend_test
     - frontend_build
+    - mobile_web_build
   script:
     - mkdir -p release
     - tar -czf release/backend.tar.gz -C backend-v2 dist package.json package-lock.json
     - tar -czf release/frontend.tar.gz -C frontend dist
+    - tar -czf release/mobile-web.tar.gz -C mobile-web dist
   artifacts:
     paths:
       - release/
@@ -64,7 +82,7 @@ package_release:
     - chmod 700 ~/.ssh
     - ssh-keyscan -H "$PROD_HOST" >> ~/.ssh/known_hosts 2>/dev/null
   script:
-    - scp release/backend.tar.gz release/frontend.tar.gz deploy/remote-deploy.sh "$DEPLOY_USER@$PROD_HOST:/tmp/"
+    - scp release/backend.tar.gz release/frontend.tar.gz release/mobile-web.tar.gz deploy/remote-deploy.sh "$DEPLOY_USER@$PROD_HOST:/tmp/"
     - ssh "$DEPLOY_USER@$PROD_HOST" "chmod +x /tmp/remote-deploy.sh && /tmp/remote-deploy.sh $CI_COMMIT_SHA"
 
 deploy_prod1:
