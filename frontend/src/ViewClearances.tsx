@@ -29,7 +29,10 @@ const STATUS_LABEL: Record<string, string> = {
   PAYBACK_QUERIED: "Queried by Finance",
   FINANCE_TREASURY_REVIEW: "With Finance Treasury",
   COMPLETED: "Fully Cleared",
-  CANCELLED: "Cancelled"
+  CANCELLED: "Cancelled",
+  // Not a clearance: a paid advance past its clearance deadline (7 days
+  // after the return date) with nothing submitted.
+  UNCLEARED: "Uncleared"
 };
 
 interface ClearanceItem {
@@ -70,6 +73,11 @@ interface ClearanceItem {
   status: string;
   closed_at: string | null;
   currency: string | null;
+  // Uncleared advances only (status UNCLEARED).
+  clearance_due_at?: string | null;
+  days_overdue?: number | null;
+  has_draft?: boolean;
+  not_cleared_confirmed_at?: string | null;
 }
 
 function fmtDate(s: string | null | undefined) {
@@ -99,7 +107,7 @@ function canQueryRow(i: ClearanceItem) {
     && ["PAYBACK_PROOF_SUBMITTED", "FINANCE_TREASURY_REVIEW"].includes(i.status);
 }
 
-type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "origin" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "paidBack" | "salaryDeduction" | "payable" | "status";
+type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "origin" | "destination" | "departure" | "return" | "due" | "daysOverdue" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "paidBack" | "salaryDeduction" | "payable" | "status";
 
 const COLUMNS: ColumnOption[] = [
   { key: "name", label: "Name", locked: true },
@@ -111,6 +119,8 @@ const COLUMNS: ColumnOption[] = [
   { key: "destination", label: "Destination" },
   { key: "departure", label: "Departure" },
   { key: "return", label: "Return" },
+  { key: "due", label: "Clearance Due (return + 7 days)" },
+  { key: "daysOverdue", label: "Days Overdue" },
   { key: "vrDate", label: "VR Date (advance approved)" },
   { key: "submitted", label: "Clearance Submitted" },
   { key: "receipts", label: "Receipts" },
@@ -243,6 +253,8 @@ export default function ViewClearances() {
         case "dutyStation": return (a.duty_station || "").localeCompare(b.duty_station || "") * dir;
         case "departure": return (a.departure_date || "").localeCompare(b.departure_date || "") * dir;
         case "return": return (a.return_date || "").localeCompare(b.return_date || "") * dir;
+        case "due": return (a.clearance_due_at || "").localeCompare(b.clearance_due_at || "") * dir;
+        case "daysOverdue": return ((a.days_overdue ?? -1) - (b.days_overdue ?? -1)) * dir;
         case "submitted": return (a.clearance_submitted_at || "").localeCompare(b.clearance_submitted_at || "") * dir;
         case "advAmount": return (Number(a.advance_amount) - Number(b.advance_amount)) * dir;
         case "clearedAmount": return (Number(a.cleared_amount) - Number(b.cleared_amount)) * dir;
@@ -284,6 +296,8 @@ export default function ViewClearances() {
       ["destination", "Destination", (i) => String(i.destination || "")],
       ["departure", "Departure", (i) => String(i.departure_date ? fmtDate(i.departure_date) : "")],
       ["return", "Return", (i) => String(i.return_date ? fmtDate(i.return_date) : "")],
+      ["due", "Clearance Due", (i) => String(i.clearance_due_at ? fmtDate(i.clearance_due_at) : "")],
+      ["daysOverdue", "Days Overdue", (i) => String(i.days_overdue ?? "")],
       ["vrDate", "VR Date", (i) => String(fmtDate(i.vr_date))],
       ["submitted", "Clearance Submitted", (i) => String(i.clearance_submitted_at ? fmtDate(i.clearance_submitted_at) : "")],
       ["receipts", "Receipts", (i) => String(i.has_receipts ? "Yes" : "No")],
@@ -322,7 +336,7 @@ export default function ViewClearances() {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">View Clearances</h1>
-          <p className="ep-subtitle">Every clearance company-wide, at whatever stage it's currently at.{canQuery ? " Finance can open and query an employee's payback proof." : ""}</p>
+          <p className="ep-subtitle">Every clearance company-wide, at whatever stage it's currently at, plus paid advances still uncleared 7 days after the traveller returned.{canQuery ? " Finance can open and query an employee's payback proof." : ""}</p>
         </div>
         <div className="ep-actions">
           <ColumnChooser columns={COLUMNS} show={columns.show} toggle={columns.toggle} reset={columns.reset} />
@@ -375,6 +389,8 @@ export default function ViewClearances() {
                   {show("destination") && <SortableHeader label="Destination" sortKeyName="destination" />}
                   {show("departure") && <SortableHeader label="Departure" sortKeyName="departure" />}
                   {show("return") && <SortableHeader label="Return" sortKeyName="return" />}
+                  {show("due") && <SortableHeader label="Clearance Due" sortKeyName="due" />}
+                  {show("daysOverdue") && <SortableHeader label="Days Overdue" sortKeyName="daysOverdue" />}
                   {show("vrDate") && <SortableHeader label="VR Date" sortKeyName="vrDate" />}
                   {show("submitted") && <SortableHeader label="Clearance Submitted" sortKeyName="submitted" />}
                   {show("receipts") && <th>Receipts</th>}
@@ -399,6 +415,12 @@ export default function ViewClearances() {
                     {show("destination") && <td style={{ fontSize: 13 }}>{item.destination || "—"}</td>}
                     {show("departure") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.departure_date)}</td>}
                     {show("return") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.return_date)}</td>}
+                    {show("due") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.clearance_due_at)}</td>}
+                    {show("daysOverdue") && (
+                      <td style={{ fontSize: 13, fontWeight: 700, color: item.days_overdue ? "#991b1b" : "var(--muted)" }}>
+                        {item.days_overdue ?? "—"}
+                      </td>
+                    )}
                     {show("vrDate") && <td style={{ fontSize: 13 }}>{fmtDate(item.vr_date)}</td>}
                     {show("submitted") && <td style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtDate(item.clearance_submitted_at)}</td>}
                     {show("receipts") && <td>{item.has_receipts
@@ -467,6 +489,20 @@ export default function ViewClearances() {
                             >
                               {item.payback_query_reason}
                             </div>
+                          </>
+                        ) : item.status === "UNCLEARED" ? (
+                          <>
+                            <span
+                              title={`Not cleared within 7 days of returning${item.clearance_due_at ? ` (due ${fmtDate(item.clearance_due_at)})` : ""}`}
+                              style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#fee2e2", color: "#991b1b", whiteSpace: "nowrap" }}
+                            >
+                              Uncleared
+                            </span>
+                            {(item.not_cleared_confirmed_at || item.has_draft) && (
+                              <div style={{ marginTop: 3, fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                                {item.not_cleared_confirmed_at ? `Confirmed ${fmtDate(item.not_cleared_confirmed_at)}` : "Draft started, not submitted"}
+                              </div>
+                            )}
                           </>
                         ) : (
                           <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#f1f5f9", color: "#475569", whiteSpace: "nowrap" }}>

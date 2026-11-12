@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { destinationProblem, travelRegionOf } from "../../lib/travelRegions.js";
 import { tripDetailsForAdvances } from "../../lib/clearanceTrip.js";
+import { clearanceDueSql, isUnclearedSql, TODAY_SQL } from "../../lib/clearanceDue.js";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
@@ -826,15 +827,13 @@ advancesRouter.get("/reconciliation-report", requireAuth, requireFeatureAccess("
   }
 });
 
-// A paid advance is "Overdue" once it's past the admin-configured clearance
-// window with no clearance claim even started for it yet — purely a derived
-// display flag (not a stored status), so changing the setting immediately
-// reflects on every advance rather than needing a backfill/migration.
+// A paid advance is "Overdue" (uncleared) once it's past the clearance window
+// after the traveller returned, with no clearance submitted - see
+// lib/clearanceDue.ts. Purely a derived display flag (not a stored status),
+// so changing the setting immediately reflects on every advance rather than
+// needing a backfill/migration.
 const OVERDUE_SELECT = `
-  (ar.status = 'PAID' AND ar.not_cleared_confirmed_at IS NULL AND ar.paid_at IS NOT NULL
-    AND now() > ar.paid_at + (ars.clearance_duration_days || ' days')::interval
-    AND NOT EXISTS (SELECT 1 FROM clearance_claims cc WHERE cc.linked_advance_id = ar.id AND cc.status != 'REJECTED')
-  ) AS is_overdue`;
+  (ar.not_cleared_confirmed_at IS NULL AND ${isUnclearedSql("ar")}) AS is_overdue`;
 
 // ── Clearance Status Report (Human Resource / Financial Accounts) ─────────
 // Every paid travel advance, classified into exactly one of:
@@ -850,21 +849,29 @@ const CLEARANCE_STATUS_REPORT_DEFAULT_ROLES = [
   "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
   "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
 ];
+const CLAIM_DONE = ["SETTLED", "CLOSED", "COMPLETED"];
+const CLAIM_NOT_SUBMITTED = ["DRAFT", "REJECTED", "CANCELLED"];
 async function loadClearanceStatusReport(requesterId?: string) {
   const rows = await query<any>(
     `WITH latest_claim AS (
        SELECT DISTINCT ON (linked_advance_id)
-              linked_advance_id, id, status, claim_total, submitted_at, closed_at, settled_at
+              linked_advance_id, id, status, claim_total, balance_amount, duty_station, submitted_at, closed_at, settled_at
          FROM clearance_claims
         WHERE linked_advance_id IS NOT NULL
         ORDER BY linked_advance_id, created_at DESC
      )
      SELECT ar.id AS advance_id, ar.type, ar.approved_total, ar.requested_total, ar.paid_at,
+            COALESCE(tt.name, ar.type) AS type_name, ar.purpose, ar.project_number, ar.payment_method::text AS payment_method,
+            ar.paid_reference, ar.submitted_at AS advance_submitted_at,
+            ar.approved_at AS vr_date, -- VR Date: when the advance was approved (as on Deductions/Refundable)
+            to_char(${clearanceDueSql("ar")}, 'YYYY-MM-DD') AS clearance_due_at,
+            (${TODAY_SQL} - ${clearanceDueSql("ar")})::int AS days_past_due,
+            ar.recovery_deduction_amount, ar.recovery_months_at_confirmation,
             COALESCE(tt.currency, 'LSL') AS currency,
-            u.id AS requester_id, u.full_name AS requester_name, u.department,
+            u.id AS requester_id, u.full_name AS requester_name, u.employee_no, u.email AS requester_email, u.department,
             -- u.department is the Division; department_name the Department (section).
             (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name,
-            lc.id AS claim_id, lc.status AS claim_status, lc.claim_total,
+            lc.id AS claim_id, lc.status AS claim_status, lc.claim_total, lc.balance_amount, lc.duty_station,
             lc.submitted_at, lc.closed_at, lc.settled_at,
             ${OVERDUE_SELECT},
             ar.not_cleared_confirmed_at
@@ -877,33 +884,62 @@ async function loadClearanceStatusReport(requesterId?: string) {
       ORDER BY ar.paid_at DESC`,
     requesterId ? [requesterId] : []
   );
+  // Where and when each trip went (destination, departure, return).
+  const trips = await tripDetailsForAdvances(rows.map((r: any) => r.advance_id));
+  const num = (v: unknown) => (v == null ? null : Number(v));
 
   return rows.map((r) => {
     let status: "COMPLETE" | "NOT_COMPLETE" | "NOT_CLEARED";
-    const claimDone = r.claim_status && ["SETTLED", "CLOSED"].includes(r.claim_status);
-    const claimInProgress = r.claim_status && !["SETTLED", "CLOSED", "REJECTED"].includes(r.claim_status);
+    // COMPLETED is "Fully Cleared" - most finished clearances end there, not
+    // in SETTLED/CLOSED (on PROD, 365 of 366 did; they all showed Not Complete).
+    const claimDone = r.claim_status && CLAIM_DONE.includes(r.claim_status);
+    // A draft or a rejected/cancelled clearance isn't in progress: nothing
+    // has been submitted.
+    const claimInProgress = r.claim_status && !CLAIM_DONE.includes(r.claim_status) && !CLAIM_NOT_SUBMITTED.includes(r.claim_status);
     if (claimDone) status = "COMPLETE";
     else if (claimInProgress) status = "NOT_COMPLETE";
     else if (r.is_overdue || r.not_cleared_confirmed_at) status = "NOT_CLEARED";
     else status = "NOT_COMPLETE";
 
+    const trip = trips.get(r.advance_id);
     return {
       advance_id: r.advance_id,
       type: r.type,
+      type_name: r.type_name,
+      purpose: r.purpose,
+      project_number: r.project_number,
+      payment_method: r.payment_method,
+      paid_reference: r.paid_reference,
       requester_id: r.requester_id,
       requester_name: r.requester_name,
+      employee_no: r.employee_no,
+      requester_email: r.requester_email,
       department: r.department,
       department_name: r.department_name,
+      origin: trip?.origin ?? null,
+      destination: trip?.destination ?? null,
+      departure_date: trip?.departure_date ?? null,
+      return_date: trip?.return_date ?? null,
+      requested_total: num(r.requested_total),
       approved_total: Number(r.approved_total ?? r.requested_total ?? 0),
       currency: r.currency,
+      advance_submitted_at: r.advance_submitted_at,
+      vr_date: r.vr_date,
       paid_at: r.paid_at,
+      clearance_due_at: r.clearance_due_at,
+      // Whole days past the clearance deadline, for advances that are Not Cleared.
+      days_overdue: status === "NOT_CLEARED" && Number(r.days_past_due) > 0 ? Number(r.days_past_due) : null,
       claim_id: r.claim_id,
       claim_status: r.claim_status,
-      claim_total: r.claim_total != null ? Number(r.claim_total) : null,
+      claim_total: num(r.claim_total),
+      claim_balance: num(r.balance_amount),
+      duty_station: r.duty_station,
       submitted_at: r.submitted_at,
       closed_at: r.closed_at,
       settled_at: r.settled_at,
       not_cleared_confirmed_at: r.not_cleared_confirmed_at,
+      recovery_deduction_amount: num(r.recovery_deduction_amount),
+      recovery_months: r.recovery_months_at_confirmation ?? null,
       status
     };
   });

@@ -14,6 +14,7 @@ import { isTreasuryActor } from "../treasury/treasury.routes.js";
 import { withTripDetails } from "../../lib/clearanceTrip.js";
 import { canAccessDeductions } from "../../lib/deductionsPermissions.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
+import { clearanceDueSql, isUnclearedSql, TODAY_SQL } from "../../lib/clearanceDue.js";
 
 export const deductionsRouter = Router();
 deductionsRouter.use(requireAuth);
@@ -209,11 +210,58 @@ const ALL_CLEARANCES_QUERY = `
    WHERE c.status <> 'DRAFT'
 `;
 
+// Paid travel advances nobody has cleared: past the clearance window after
+// the traveller returned (lib/clearanceDue.ts) with no clearance submitted.
+// Shown on View Clearances as status UNCLEARED, in the same row shape as a
+// clearance (id = the advance's id; nothing cleared, nothing to query).
+const UNCLEARED_ADVANCES_QUERY = `
+  SELECT ar.id,
+         ar.requester_id AS employee_id,
+         u.full_name AS employee_name,
+         u.employee_no,
+         dv.name AS division_name,
+         nullif(trim(u.department), '') AS org_division,
+         (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name,
+         NULL::text AS duty_station,
+         ar.id AS linked_advance_id,
+         NULL::text AS month,
+         ar.approved_at AS vr_date,
+         NULL::timestamptz AS clearance_submitted_at,
+         false AS has_receipts,
+         COALESCE(tt.currency, 'LSL') AS currency,
+         COALESCE(NULLIF(ar.approved_total, 0), ar.requested_total) AS advance_amount,
+         0 AS cleared_amount,
+         0 AS amount_to_be_expensed,
+         0 AS paid_back,
+         0 AS salary_deduction,
+         0 AS payable,
+         NULL::uuid AS payback_proof_id,
+         NULL::text AS payback_proof_status,
+         'UNCLEARED' AS status,
+         NULL::timestamptz AS closed_at,
+         ar.paid_at,
+         to_char(${clearanceDueSql("ar")}, 'YYYY-MM-DD') AS clearance_due_at,
+         (${TODAY_SQL} - ${clearanceDueSql("ar")})::int AS days_overdue,
+         ar.not_cleared_confirmed_at,
+         ar.recovery_deduction_amount,
+         EXISTS (SELECT 1 FROM clearance_claims cc WHERE cc.linked_advance_id = ar.id AND cc.status = 'DRAFT') AS has_draft
+    FROM advance_requests ar
+    JOIN users u ON u.id = ar.requester_id
+    JOIN travel_types tt ON tt.code = ar.type
+    LEFT JOIN divisions dv ON dv.id = u.division_id
+    CROSS JOIN (SELECT clearance_duration_days FROM advance_recovery_settings ORDER BY updated_at DESC LIMIT 1) ars
+   WHERE ar.type NOT IN ('SALARY', 'LOAN')
+     AND ${isUnclearedSql("ar")}
+   ORDER BY ar.paid_at`;
+
 viewClearancesRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
     const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
     const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
-    const rows = await query<DeductionRow & { status: string }>(`${ALL_CLEARANCES_QUERY} ORDER BY c.updated_at DESC`);
+    const claims = await query<DeductionRow & { status: string }>(`${ALL_CLEARANCES_QUERY} ORDER BY c.updated_at DESC`);
+    const uncleared = await query<DeductionRow & { status: string }>(UNCLEARED_ADVANCES_QUERY);
+    // Uncleared advances first: they're the ones needing chasing.
+    const rows = [...uncleared, ...claims];
     const items = await withTripDetails(allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows);
     // Everyone who can open View Clearances (the router gate) can query.
     return res.json({ items, can_query_payback: true });

@@ -19,6 +19,7 @@ import { logger, serializeError } from "../../lib/logger.js";
 import { getBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { formatRequestNumber } from "../../lib/pdf/pdfHelpers.js";
 import { notifyClearanceReminder } from "../../lib/notifications.js";
+import { clearanceDueSql, TODAY_SQL } from "../../lib/clearanceDue.js";
 
 export type ClearanceDue = {
   advance_id: string;
@@ -45,9 +46,9 @@ const DUE_SQL = `
          COALESCE(NULLIF(ar.approved_total, 0), ar.requested_total) AS amount,
          COALESCE(tt.currency, 'LSL') AS currency,
          to_char((ar.paid_at AT TIME ZONE 'Africa/Maseru')::date, 'YYYY-MM-DD') AS paid_on,
-         to_char(((ar.paid_at + (ars.clearance_duration_days || ' days')::interval) AT TIME ZONE 'Africa/Maseru')::date, 'YYYY-MM-DD') AS due_on,
-         (((ar.paid_at + (ars.clearance_duration_days || ' days')::interval) AT TIME ZONE 'Africa/Maseru')::date
-           - (now() AT TIME ZONE 'Africa/Maseru')::date)::int AS days_left,
+         -- Due: the clearance window after they return (lib/clearanceDue.ts).
+         to_char(${clearanceDueSql("ar")}, 'YYYY-MM-DD') AS due_on,
+         (${clearanceDueSql("ar")} - ${TODAY_SQL})::int AS days_left,
          (SELECT cc.id FROM clearance_claims cc
            WHERE cc.linked_advance_id = ar.id AND cc.status = 'DRAFT'
            ORDER BY cc.created_at DESC LIMIT 1) AS draft_claim_id,

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { formatMoney } from "./constants";
 import { CheckCircle2, Clock3, AlertTriangle, ClipboardList, Search, Download, ChevronLeft, ChevronRight } from "lucide-react";
+import { ColumnChooser, useColumnVisibility, type ColumnOption } from "./components/FinanceQueueKit";
 
 interface Props {
   onBack: () => void;
@@ -13,24 +14,98 @@ type ClearanceStatus = "COMPLETE" | "NOT_COMPLETE" | "NOT_CLEARED";
 type Row = {
   advance_id: string;
   type: string;
+  type_name: string | null;
+  purpose: string | null;
+  project_number: string | null;
+  payment_method: string | null;
+  paid_reference: string | null;
   requester_id: string;
   requester_name: string | null;
+  employee_no: string | null;
+  requester_email: string | null;
   // The traveller's Division (users.department) - this report groups by it -
   // and their Department (section) within it.
   department: string | null;
   department_name: string | null;
+  // Where and when the trip went (from the advance's trip lines).
+  origin: string | null;
+  destination: string | null;
+  departure_date: string | null;
+  return_date: string | null;
+  requested_total: number | null;
   approved_total: number;
   currency: string;
+  advance_submitted_at: string | null;
+  vr_date: string | null; // VR Date: when the advance was approved
   paid_at: string | null;
+  clearance_due_at: string | null;
+  days_overdue: number | null;
   claim_id: string | null;
   claim_status: string | null;
   claim_total: number | null;
+  claim_balance: number | null;
+  duty_station: string | null;
   submitted_at: string | null;
   closed_at: string | null;
   settled_at: string | null;
   not_cleared_confirmed_at: string | null;
+  recovery_deduction_amount: number | null;
+  recovery_months: number | null;
   status: ClearanceStatus;
 };
+
+// Every column the report can show. People pick which ones they see (saved
+// per browser); the CSV export follows the same choice. "staff" columns only
+// make sense on the company-wide report, not "My Clearance Status".
+type Column = ColumnOption & { staff?: boolean; value: (r: Row) => string; cell?: (r: Row) => React.ReactNode; muted?: boolean };
+
+const money = (v: number | null, currency: string) => (v == null ? "—" : formatMoney(v, currency));
+const text = (v: string | null | undefined) => (v && String(v).trim() ? String(v) : "—");
+const titleCase = (v: string | null) => (v ? v.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) : "—");
+
+const COLUMNS: Column[] = [
+  { key: "employee", label: "Employee", locked: true, staff: true, value: (r) => text(r.requester_name), cell: (r) => <span style={{ fontWeight: 600 }}>{text(r.requester_name)}</span> },
+  { key: "empNo", label: "Emp. No", staff: true, value: (r) => text(r.employee_no), muted: true },
+  { key: "email", label: "Email", staff: true, value: (r) => text(r.requester_email), muted: true },
+  { key: "division", label: "Division", staff: true, value: (r) => text(r.department), muted: true },
+  { key: "department", label: "Department", staff: true, value: (r) => text(r.department_name), muted: true },
+  { key: "type", label: "Advance Type", value: (r) => text(r.type_name || r.type) },
+  { key: "purpose", label: "Purpose", value: (r) => text(r.purpose) },
+  { key: "project", label: "Project No.", value: (r) => text(r.project_number), muted: true },
+  { key: "origin", label: "Starting Place", value: (r) => text(r.origin) },
+  { key: "destination", label: "Destination", value: (r) => text(r.destination) },
+  { key: "departure", label: "Departure Date", value: (r) => fmtDate(r.departure_date) },
+  { key: "return", label: "Return Date", value: (r) => fmtDate(r.return_date) },
+  { key: "dutyStation", label: "Duty Station", value: (r) => text(r.duty_station), muted: true },
+  { key: "requested", label: "Requested Amount", value: (r) => money(r.requested_total, r.currency) },
+  { key: "amount", label: "Advance Amount", value: (r) => formatMoney(r.approved_total, r.currency), cell: (r) => <span style={{ fontWeight: 600 }}>{formatMoney(r.approved_total, r.currency)}</span> },
+  { key: "paymentMethod", label: "Payment Method", value: (r) => titleCase(r.payment_method), muted: true },
+  { key: "advanceSubmitted", label: "Advance Submitted", value: (r) => fmtDate(r.advance_submitted_at), muted: true },
+  { key: "vrDate", label: "VR Date (advance approved)", value: (r) => fmtDate(r.vr_date) },
+  { key: "paid", label: "Paid Date", value: (r) => fmtDate(r.paid_at), muted: true },
+  { key: "paidRef", label: "Payment Reference", value: (r) => text(r.paid_reference), muted: true },
+  { key: "due", label: "Clearance Due", value: (r) => fmtDate(r.clearance_due_at) },
+  {
+    key: "daysOverdue", label: "Days Overdue",
+    value: (r) => (r.days_overdue == null ? "—" : String(r.days_overdue)),
+    cell: (r) => (r.days_overdue == null ? "—" : <span style={{ fontWeight: 700, color: STATUS_CONFIG.NOT_CLEARED.color }}>{r.days_overdue}</span>)
+  },
+  { key: "claimStage", label: "Claim Stage", value: (r) => claimStageLabel(r.claim_status), muted: true },
+  { key: "claimSubmitted", label: "Clearance Submitted", value: (r) => fmtDate(r.submitted_at), muted: true },
+  { key: "claimTotal", label: "Cleared Amount", value: (r) => money(r.claim_total, r.currency) },
+  { key: "claimBalance", label: "Balance", value: (r) => money(r.claim_balance, r.currency) },
+  { key: "closed", label: "Closed / Settled", value: (r) => fmtDate(r.closed_at || r.settled_at), muted: true },
+  { key: "confirmed", label: "Confirmed Not Cleared", value: (r) => fmtDate(r.not_cleared_confirmed_at), muted: true },
+  { key: "recovery", label: "Recovery Deduction", value: (r) => (r.recovery_deduction_amount == null ? "—" : `${formatMoney(r.recovery_deduction_amount, r.currency)}${r.recovery_months ? ` × ${r.recovery_months} mo` : ""}`) },
+  {
+    key: "status", label: "Status", locked: true,
+    value: (r) => STATUS_CONFIG[r.status].label,
+    cell: (r) => <span style={{ padding: "2px 10px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: STATUS_CONFIG[r.status].bg, color: STATUS_CONFIG[r.status].color, whiteSpace: "nowrap" }}>{STATUS_CONFIG[r.status].label}</span>
+  }
+];
+
+// Shown until someone picks their own columns.
+const DEFAULT_HIDDEN = ["empNo", "email", "purpose", "project", "origin", "dutyStation", "requested", "paymentMethod", "advanceSubmitted", "paidRef", "claimSubmitted", "claimTotal", "claimBalance", "closed", "confirmed", "recovery"];
 
 // Fixed status palette (good/warning/critical) - reserved for state, never
 // reused as a generic categorical series color. Validated distinct under
@@ -66,6 +141,10 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  const availableColumns = useMemo(() => COLUMNS.filter((c) => !(isMine && c.staff)), [isMine]);
+  const columnPrefs = useColumnVisibility(isMine ? "report-columns:my-clearance-status" : "report-columns:clearance-status", DEFAULT_HIDDEN);
+  const visibleColumns = availableColumns.filter((c) => c.locked || columnPrefs.show(c.key));
 
   async function load() {
     setLoading(true);
@@ -142,7 +221,8 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
     if (departmentFilter && (r.department || "Unassigned") !== departmentFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      return (r.requester_name || "").toLowerCase().includes(q) || (r.department || "").toLowerCase().includes(q) || (r.department_name || "").toLowerCase().includes(q);
+      return [r.requester_name, r.employee_no, r.department, r.department_name, r.destination, r.origin, r.purpose, r.project_number, r.type_name]
+        .some((v) => (v || "").toLowerCase().includes(q));
     }
     return true;
   }), [rows, statusFilter, departmentFilter, search]);
@@ -152,21 +232,10 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
   useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
   const paged = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
 
+  // Exports the rows that match the filters, with the columns currently shown.
   function exportCsv() {
-    const h = [
-      ...(isMine ? [] : ["Employee", "Division", "Department"]),
-      "Advance Type", "Amount", "Paid Date", "Clearance Status", "Claim Stage", "Submitted", "Closed/Settled"
-    ];
-    const csvRows = filtered.map((r) => [
-      ...(isMine ? [] : [r.requester_name || "—", r.department || "—", r.department_name || "—"]),
-      r.type,
-      formatMoney(r.approved_total, r.currency),
-      fmtDate(r.paid_at),
-      STATUS_CONFIG[r.status].label,
-      claimStageLabel(r.claim_status),
-      fmtDate(r.submitted_at),
-      fmtDate(r.closed_at || r.settled_at)
-    ]);
+    const h = visibleColumns.map((c) => c.label);
+    const csvRows = filtered.map((r) => visibleColumns.map((c) => c.value(r)));
     const csv = [h, ...csvRows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const el = document.createElement("a");
     el.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
@@ -191,6 +260,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
           </p>
         </div>
         <div className="ep-actions">
+          <ColumnChooser columns={availableColumns} show={columnPrefs.show} toggle={columnPrefs.toggle} reset={columnPrefs.reset} />
           <button className="ep-btn-outline" onClick={() => void load()} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
           <button className="ep-btn-outline" onClick={exportCsv} disabled={!filtered.length}>
             <Download size={14} /> Export CSV
@@ -329,7 +399,7 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
           {!isMine && (
             <div className="ep-search" style={{ flex: "1 1 220px" }}>
               <Search size={14} />
-              <input placeholder="Search employee, division or department…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input placeholder="Search employee, emp. no, division, department, destination…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
           )}
           {!isMine && (
@@ -352,34 +422,19 @@ export default function ReportClearanceStatus({ onBack, scope = "all" }: Props) 
             <table className="ep-table">
               <thead>
                 <tr>
-                  {!isMine && <th>Employee</th>}
-                  {!isMine && <th>Division</th>}
-                  {!isMine && <th>Department</th>}
-                  <th>Advance Type</th>
-                  <th>Amount</th>
-                  <th>Paid Date</th>
-                  <th>Claim Stage</th>
-                  <th>Status</th>
+                  {visibleColumns.map((c) => <th key={c.key} style={{ whiteSpace: "nowrap" }}>{c.label}</th>)}
                 </tr>
               </thead>
               <tbody>
-                {paged.map((r) => {
-                  const cfg = STATUS_CONFIG[r.status];
-                  return (
-                    <tr key={r.advance_id}>
-                      {!isMine && <td style={{ fontWeight: 600 }}>{r.requester_name || "—"}</td>}
-                      {!isMine && <td style={{ color: "var(--muted)" }}>{r.department || "—"}</td>}
-                      {!isMine && <td style={{ color: "var(--muted)" }}>{r.department_name || "—"}</td>}
-                      <td>{r.type}</td>
-                      <td style={{ fontWeight: 600 }}>{formatMoney(r.approved_total, r.currency)}</td>
-                      <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(r.paid_at)}</td>
-                      <td style={{ color: "var(--muted)" }}>{claimStageLabel(r.claim_status)}</td>
-                      <td>
-                        <span style={{ padding: "2px 10px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: cfg.bg, color: cfg.color, whiteSpace: "nowrap" }}>{cfg.label}</span>
+                {paged.map((r) => (
+                  <tr key={r.advance_id}>
+                    {visibleColumns.map((c) => (
+                      <td key={c.key} style={{ fontSize: 13, ...(c.muted ? { color: "var(--muted)" } : {}), ...(c.key === "purpose" ? { maxWidth: 260 } : { whiteSpace: "nowrap" }) }}>
+                        {c.cell ? c.cell(r) : c.value(r)}
                       </td>
-                    </tr>
-                  );
-                })}
+                    ))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}

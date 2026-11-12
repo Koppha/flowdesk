@@ -7,8 +7,9 @@ import { query } from "./db.js";
 //     Africa"); for a road trip the places on the route other than where
 //     they set off from ("Maseru → Mokhotlong → Thaba-Tseka → Maseru" →
 //     "Mokhotlong, Thaba-Tseka").
-//   departure_date: the first trip line's date; return_date: the advance's
-//     return date, else the last trip line's date.
+//   departure_date: the first trip line's date; return_date: the last day of
+//     the trip - the later of the advance's return date and its last trip
+//     line's date (lib/clearanceDue.ts uses the same for the clearance deadline).
 //   origin: where they set off from - the flight's departure airport, else the
 //     first place on the route ("Maseru").
 export type TripDetails = { origin: string | null; destination: string | null; departure_date: string | null; return_date: string | null };
@@ -85,7 +86,8 @@ export async function tripDetailsForAdvances(advanceIds: string[]): Promise<Map<
         ? [a.airport_city, a.airport_country].filter(Boolean).join(", ")
         : destinationFromLines(own.map((l) => l.location || "")),
       departure_date: dates[0] ?? null,
-      return_date: a.return_date ?? dates[dates.length - 1] ?? null
+      // The last day of the trip: the later of the return date and the last trip line.
+      return_date: [a.return_date, dates[dates.length - 1]].filter((d): d is string => !!d).sort().pop() ?? null
     });
   }
   return out;
