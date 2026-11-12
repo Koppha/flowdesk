@@ -16,12 +16,31 @@ import { BusinessUnitTabs, IconTabRow, FinanceFilterBar, FilterField, SearchFiel
 
 const STATUS_STYLE: Record<string, [string, string]> = {
   REFUNDED:  ["#d1fae5", "#065f46"],
-  PENDING:   ["#fef3c7", "#92400e"]
+  PENDING:   ["#fef3c7", "#92400e"],
+  WITH_HR_OPERATIONS: ["#fee2e2", "#991b1b"],
+  WITH_TREASURY: ["#dbeafe", "#1e40af"],
+  IN_PROGRESS: ["#f1f5f9", "#475569"]
 };
 
 const STATUS_LABEL: Record<string, string> = {
   REFUNDED: "Refunded",
-  PENDING: "Pending"
+  PENDING: "Pending",
+  // New-style refunds (financial outcome REFUND_DUE): HR Operations sends
+  // them to Treasury, Treasury pays them on the Treasury page.
+  WITH_HR_OPERATIONS: "With HR Operations",
+  WITH_TREASURY: "With Treasury",
+  IN_PROGRESS: "In progress"
+};
+
+// Where the refund is; legacy rows only have Pending / Refunded.
+function stageOf(item: RefundableItem): string {
+  return item.stage || rowStatus(item);
+}
+
+const STAGE_HINT: Record<string, string> = {
+  WITH_HR_OPERATIONS: "HR Operations must send it to Treasury",
+  WITH_TREASURY: "Treasury pays it on the Treasury page",
+  PENDING: "Mark it refunded here once paid"
 };
 
 interface RefundableItem {
@@ -53,6 +72,13 @@ interface RefundableItem {
   refunded_by_name: string | null;
   closed_at: string | null;
   currency: string | null;
+  // Where the refund is (see refundable.routes.ts) and how long it's waited.
+  stage?: "PENDING" | "WITH_HR_OPERATIONS" | "WITH_TREASURY" | "REFUNDED" | "IN_PROGRESS";
+  legacy?: boolean;
+  waiting_with?: string | null;
+  waiting_since?: string | null;
+  days_waiting?: number | null;
+  refund_reference?: string | null;
 }
 
 function sumByCurrency(items: RefundableItem[]) {
@@ -90,7 +116,7 @@ function StatusBadge({ status }: { status: string }) {
   return <span style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: bg, color, whiteSpace: "nowrap" }}>{STATUS_LABEL[status] || status}</span>;
 }
 
-type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "origin" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "refundable" | "status";
+type SortKey = "name" | "empNo" | "division" | "department" | "dutyStation" | "origin" | "destination" | "departure" | "return" | "vrDate" | "submitted" | "advAmount" | "clearedAmount" | "toBeExpensed" | "refundable" | "status" | "waiting";
 
 const COLUMNS: ColumnOption[] = [
   { key: "name", label: "Name", locked: true },
@@ -110,6 +136,7 @@ const COLUMNS: ColumnOption[] = [
   { key: "toBeExpensed", label: "Amount To Be Expensed" },
   { key: "refundable", label: "Refundable" },
   { key: "status", label: "Status" },
+  { key: "waiting", label: "Waiting (with whom, days)" },
 ];
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
@@ -241,7 +268,8 @@ export default function Refundable() {
         case "clearedAmount": return (Number(a.cleared_amount) - Number(b.cleared_amount)) * dir;
         case "toBeExpensed": return (Number(a.amount_to_be_expensed) - Number(b.amount_to_be_expensed)) * dir;
         case "refundable": return (Number(a.refundable_amount) - Number(b.refundable_amount)) * dir;
-        case "status": return rowStatus(a).localeCompare(rowStatus(b)) * dir;
+        case "status": return stageOf(a).localeCompare(stageOf(b)) * dir;
+        case "waiting": return ((a.days_waiting ?? -1) - (b.days_waiting ?? -1)) * dir;
         case "vrDate":
         default: {
           const av = a.vr_date ? new Date(a.vr_date).getTime() : 0;
@@ -296,7 +324,9 @@ export default function Refundable() {
       ["clearedAmount", "Cleared Amount", (i) => String(Number(i.cleared_amount || 0).toFixed(2))],
       ["toBeExpensed", "Amount To Be Expensed", (i) => String(Number(i.amount_to_be_expensed || 0).toFixed(2))],
       ["refundable", "Refundable", (i) => String(Number(i.refundable_amount || 0).toFixed(2))],
-      ["status", "Status", (i) => String(STATUS_LABEL[rowStatus(i)])],
+      ["status", "Status", (i) => String(STATUS_LABEL[stageOf(i)] || stageOf(i))],
+      ["waiting", "Waiting With", (i) => String(i.waiting_with || "")],
+      ["waiting", "Days Waiting", (i) => String(i.days_waiting ?? "")],
     ];
     const csvColumns = allCsvColumns.filter(([key]) => key === "*" || show(key));
     const headers = csvColumns.map(([, h]) => h);
@@ -414,13 +444,16 @@ export default function Refundable() {
                   {show("toBeExpensed") && <SortableHeader label="Amount To Be Expensed" sortKeyName="toBeExpensed" />}
                   {show("refundable") && <SortableHeader label="Refundable" sortKeyName="refundable" />}
                   {show("status") && <SortableHeader label="Status" sortKeyName="status" />}
+                  {show("waiting") && <SortableHeader label="Waiting" sortKeyName="waiting" />}
                   <th style={{ width: 40 }} />
                 </tr>
               </thead>
               <tbody>
                 {paged.map((item) => {
                   const status = rowStatus(item);
-                  const actionable = canAct;
+                  const stage = stageOf(item);
+                  // New-style refunds are paid and recorded by Treasury, not here.
+                  const actionable = canAct && item.legacy !== false;
                   return (
                     <tr key={item.id}>
                       <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>{item.employee_name || "—"}</td>
@@ -446,7 +479,26 @@ export default function Refundable() {
                           {formatMoney(item.refundable_amount, item.currency)}
                         </td>
                       )}
-                      {show("status") && <td><StatusBadge status={status} /></td>}
+                      {show("status") && (
+                        <td title={STAGE_HINT[stage] || ""}>
+                          <StatusBadge status={stage} />
+                          {stage === "REFUNDED" && item.refund_reference && (
+                            <div style={{ marginTop: 3, fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Ref {item.refund_reference}</div>
+                          )}
+                        </td>
+                      )}
+                      {show("waiting") && (
+                        <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+                          {item.days_waiting == null ? <span style={{ color: "var(--muted)" }}>—</span> : (
+                            <>
+                              <div style={{ fontWeight: 700, color: item.days_waiting >= 3 ? "#991b1b" : "inherit" }}>
+                                {item.days_waiting} day{item.days_waiting === 1 ? "" : "s"}
+                              </div>
+                              {item.waiting_with && <div style={{ color: "var(--muted)" }}>{item.waiting_with}</div>}
+                            </>
+                          )}
+                        </td>
+                      )}
                       <td className="ep-dropdown-wrap">
                         {actionable && (
                           <button

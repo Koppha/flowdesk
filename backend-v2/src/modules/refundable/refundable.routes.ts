@@ -7,6 +7,12 @@ import { query } from "../../lib/db.js";
 import { withTripDetails } from "../../lib/clearanceTrip.js";
 import { canAccessRefundable } from "../../lib/refundablePermissions.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
+import type { ChainStep } from "../../lib/workflowEngine.js";
+import { paybackReviewStep } from "../claims/claims.routes.js";
+import { startRefundReviewReminders } from "../../lib/refundReviewReminders.js";
+
+// Remind HR Operations about refunds waiting for them (lib/refundReviewReminders.ts).
+startRefundReviewReminders();
 
 // Refundable is the opposite of Deductions (deductions.routes.ts): a closed
 // clearance claim's balance_amount can go either way - positive means the
@@ -16,16 +22,18 @@ import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 // and actioned the positive side; this module mirrors that same
 // list/act/audit flow for the negative side.
 //
-// Legacy-only: this module is untouched by the trip-completion clearance
-// outcome feature (see claims.service.ts's computeFinancialOutcome). A
-// claim only ever reaches status='CLOSED' via the old pre-outcome code path
-// (nothing sets it any more once financial_outcome is being computed), so
-// this list naturally only ever contains claims that predate that change.
-// A new-style REFUND_DUE claim is instead processed by Finance Treasury's
-// own POST /treasury/:id/process-refund (treasury.routes.ts), which
-// captures richer detail (method/reference/voucher/attachment) than this
-// module's simple boolean toggle and is the authoritative refund-processing
-// action for the new workflow.
+// Two kinds of refund are listed:
+//  - Legacy: status='CLOSED' with a negative balance (the old pre-outcome
+//    path). Finance marks these refunded here (PATCH /:id/refunded).
+//  - New-style: financial_outcome='REFUND_DUE' (claims.service.ts's
+//    computeFinancialOutcome). HR Operations sends it to Treasury, and
+//    Finance Treasury processes it (POST /treasury/:id/process-refund, with
+//    method/reference/voucher). They're listed here too - with where they
+//    are and how long they've waited - so no refund goes unseen, but they
+//    can't be marked refunded here (the PATCH stays legacy-only), so a
+//    refund is never recorded in two places.
+//    (Before Nov 2026 they weren't listed at all, and a M31.50 refund sat
+//    with HR Operations unnoticed for four weeks.)
 export const refundableRouter = Router();
 refundableRouter.use(requireAuth);
 
@@ -85,16 +93,62 @@ const LIST_QUERY = `
          -- actually cleared (spent) is what gets expensed.
          CASE WHEN coalesce(c.balance_amount, 0) = 0 THEN c.advance_amount ELSE c.claim_total END AS amount_to_be_expensed,
          -c.balance_amount AS refundable_amount,
-         c.refunded_at,
-         rb.full_name AS refunded_by_name,
-         c.closed_at
+         -- Refunded: the legacy toggle below, or Treasury processing a
+         -- new-style refund (POST /treasury/:id/process-refund).
+         CASE WHEN c.status = 'CLOSED' THEN c.refunded_at
+              WHEN c.status = 'COMPLETED' THEN coalesce(c.treasury_completed_at, c.settled_at, c.updated_at) END AS refunded_at,
+         CASE WHEN c.status = 'CLOSED' THEN rb.full_name ELSE tc.full_name END AS refunded_by_name,
+         c.closed_at,
+         c.status::text AS workflow_status,
+         -- Where the refund is: PENDING (legacy - Finance marks it here),
+         -- WITH_HR_OPERATIONS (REFUND_DUE - HR Operations must send it to
+         -- Treasury), WITH_TREASURY (Treasury processes it), REFUNDED.
+         CASE WHEN c.status = 'CLOSED' THEN CASE WHEN c.refunded_at IS NULL THEN 'PENDING' ELSE 'REFUNDED' END
+              WHEN c.status = 'REFUND_DUE' THEN 'WITH_HR_OPERATIONS'
+              WHEN c.status = 'FINANCE_TREASURY_REVIEW' THEN 'WITH_TREASURY'
+              WHEN c.status = 'COMPLETED' THEN 'REFUNDED'
+              ELSE 'IN_PROGRESS' END AS stage,
+         (c.status = 'CLOSED') AS legacy,
+         CASE WHEN c.status = 'FINANCE_TREASURY_REVIEW' THEN coalesce(c.sent_to_treasury_at, c.updated_at)
+              ELSE coalesce(c.closed_at, c.updated_at) END AS waiting_since,
+         c.settled_reference AS refund_reference,
+         c.approval_chain,
+         tof.full_name AS treasury_officer_name
     FROM clearance_claims c
     JOIN users u ON u.id = c.claimant_id
     LEFT JOIN divisions dv ON dv.id = u.division_id
     LEFT JOIN users rb ON rb.id = c.refunded_by_id
+    LEFT JOIN users tof ON tof.id = c.treasury_officer_id
+    LEFT JOIN LATERAL (
+      SELECT x.full_name FROM audit_log a JOIN users x ON x.id = a.actor_id
+       WHERE a.entity_type = 'clearance_claims' AND a.entity_id = c.id AND a.after_json->>'treasury_settlement_status' = 'PROCESSED'
+       ORDER BY a.created_at DESC LIMIT 1
+    ) tc ON c.status = 'COMPLETED'
     LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
-   WHERE c.status = 'CLOSED' AND c.balance_amount < 0
+   WHERE c.balance_amount < 0
+     AND (c.status = 'CLOSED'
+          -- New-style refunds, from the moment the outcome is determined.
+          OR (c.financial_outcome = 'REFUND_DUE' AND c.status IN ('REFUND_DUE', 'FINANCE_TREASURY_REVIEW', 'COMPLETED')))
 `;
+
+// Refunds not paid yet (the menu badge).
+const PENDING_COUNT_SQL = `
+  SELECT count(*)::text AS count FROM clearance_claims
+   WHERE balance_amount < 0
+     AND ((status = 'CLOSED' AND refunded_at IS NULL)
+          OR (financial_outcome = 'REFUND_DUE' AND status IN ('REFUND_DUE', 'FINANCE_TREASURY_REVIEW')))`;
+
+// Who the refund is waiting with: HR Operations' reviewer (the clearance's
+// close step, as for payback proofs) or the Treasury officer.
+function waitingWith(row: any, names: Map<string, string>) {
+  if (row.stage === "WITH_TREASURY") return row.treasury_officer_name || "Finance Treasury";
+  if (row.stage !== "WITH_HR_OPERATIONS") return null;
+  const chain = Array.isArray(row.approval_chain) ? (row.approval_chain as ChainStep[]) : [];
+  if (!chain.length) return "HR Operations";
+  const step = paybackReviewStep(chain);
+  const id = step.assigned_user_id || null;
+  return (id && names.get(id)) || step.position_name || "HR Operations";
+}
 
 // Lightweight, always-200 check the frontend uses to decide whether to show
 // the Refundable nav item (and its pending-count badge) at all - the real
@@ -103,10 +157,7 @@ refundableRouter.get("/access", async (req: AuthedRequest, res, next) => {
   try {
     const allowed = await canAccessRefundable(req.user!.userId, req.user!.role);
     if (!allowed) return res.json({ allowed });
-    const pending = await query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM clearance_claims
-        WHERE status='CLOSED' AND balance_amount < 0 AND refunded_at IS NULL`
-    );
+    const pending = await query<{ count: string }>(PENDING_COUNT_SQL);
     return res.json({ allowed, pendingCount: Number(pending[0]?.count || 0) });
   } catch (err) {
     return next(err);
@@ -132,8 +183,23 @@ refundableRouter.get("/", async (req: AuthedRequest, res, next) => {
     // deductions.routes.ts.
     const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
     const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
-    const rows = await query<RefundableRow>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
-    const items = await withTripDetails(allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows);
+    const rows = await query<RefundableRow & Record<string, any>>(`${LIST_QUERY} ORDER BY c.closed_at DESC NULLS LAST, c.created_at DESC`);
+    const scoped = allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows;
+    // Names of the HR Operations reviewers the waiting refunds are assigned to.
+    const reviewerIds = Array.from(new Set(scoped
+      .filter((r) => r.stage === "WITH_HR_OPERATIONS" && Array.isArray(r.approval_chain) && r.approval_chain.length)
+      .map((r) => paybackReviewStep(r.approval_chain as ChainStep[]).assigned_user_id)
+      .filter((id): id is string => !!id)));
+    const names = new Map((reviewerIds.length
+      ? await query<{ id: string; full_name: string }>(`SELECT id, full_name FROM users WHERE id = ANY($1::uuid[])`, [reviewerIds])
+      : []).map((u) => [u.id, u.full_name]));
+    const today = Date.now();
+    const shaped = scoped.map(({ approval_chain, treasury_officer_name, ...r }) => ({
+      ...r,
+      waiting_with: waitingWith({ ...r, approval_chain, treasury_officer_name }, names),
+      days_waiting: r.stage === "REFUNDED" || !r.waiting_since ? null : Math.floor((today - new Date(r.waiting_since).getTime()) / 86_400_000)
+    }));
+    const items = await withTripDetails(shaped);
     return res.json({ items });
   } catch (err) {
     return next(err);
