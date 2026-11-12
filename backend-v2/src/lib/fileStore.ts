@@ -36,16 +36,20 @@ export function storeKey(filePath: string): string {
   return `uploads/${path.basename(p)}`;
 }
 
-export async function persistFile(filePath: string) {
+// maxBytes: raise the size limit for one file (app builds, see
+// mobile-app.routes.ts). required: throw instead of only logging, for a file
+// that is useless unless both servers can read it.
+export async function persistFile(filePath: string, opts: { maxBytes?: number; required?: boolean } = {}) {
   try {
     const stat = fs.statSync(filePath);
-    if (stat.size > MAX_DB_BYTES) return;
+    if (stat.size > (opts.maxBytes ?? MAX_DB_BYTES)) return;
     await query(
       `INSERT INTO stored_files (key, bytes, size) VALUES ($1, $2, $3)
        ON CONFLICT (key) DO UPDATE SET bytes = EXCLUDED.bytes, size = EXCLUDED.size`,
       [storeKey(filePath), fs.readFileSync(filePath), stat.size]
     );
   } catch (err) {
+    if (opts.required) throw err;
     logger.warn("file_store_persist_failed", { path: filePath, error: serializeError(err) });
   }
 }

@@ -9,6 +9,9 @@ import { type AuthedRequest, requireAuth, requireRole, verifyToken } from "../..
 import { badRequest, notFound, unauthorized } from "../../lib/errors.js";
 import { sanitizeUploadFilename, fileExtensionFilter } from "../../lib/uploads.js";
 import { ensureMobileAppBuildsSchema, getLatestMobileAppBuild, saveMobileAppBuild } from "../../lib/mobileAppBuilds.js";
+import { ensureLocalFile, persistFile, storeKey } from "../../lib/fileStore.js";
+import { query } from "../../lib/db.js";
+import { logger, serializeError } from "../../lib/logger.js";
 import { clientInfo, ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent, recordMobileAppOpen } from "../../lib/mobileAppEvents.js";
 import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
 import { mobileUpdatesRouter } from "./mobile-updates.routes.js";
@@ -35,6 +38,27 @@ const upload = multer({
 });
 
 const DOWNLOAD_TOKEN_PURPOSE = "MOBILE_APP_DOWNLOAD";
+
+// App builds kept in the shared database so both PROD servers can serve them.
+// Same as the upload limit; only the newest few are kept there (each is
+// ~70 MB) - older ones stay on the disk they were uploaded to.
+const APP_BUILD_MAX_DB_BYTES = 250 * 1024 * 1024;
+const APP_BUILDS_KEPT_IN_DB = 3;
+
+async function pruneStoredAppBuilds() {
+  try {
+    const keep = (await query<{ file_path: string }>(
+      `SELECT file_path FROM mobile_app_builds ORDER BY uploaded_at DESC LIMIT $1`,
+      [APP_BUILDS_KEPT_IN_DB]
+    )).map((b) => storeKey(b.file_path));
+    await query(
+      `DELETE FROM stored_files WHERE key LIKE 'uploads/mobile-app/%' AND NOT (key = ANY($1::text[]))`,
+      [keep]
+    );
+  } catch (err) {
+    logger.warn("app_build_prune_failed", { error: serializeError(err) });
+  }
+}
 
 export const mobileAppRouter = Router();
 
@@ -75,13 +99,16 @@ mobileAppRouter.get("/download", async (req, res, next) => {
     await ensureMobileAppEventsSchema();
     const platform = typeof req.query.platform === "string" ? req.query.platform.toUpperCase() : "ANDROID";
     const build = await getLatestMobileAppBuild(platform);
-    if (!build || !fs.existsSync(build.file_path)) throw notFound("No build available yet");
+    // The build may have been uploaded to the other PROD server: restore it
+    // from the shared database onto this one.
+    const filePath = build ? await ensureLocalFile(build.file_path) : null;
+    if (!build || !filePath) throw notFound("No build available yet");
 
     void recordMobileAppEvent("DOWNLOAD", userId, { version: build.version, platform });
 
     res.setHeader("Content-Type", "application/vnd.android.package-archive");
     res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(build.original_filename)}"`);
-    return res.sendFile(path.resolve(build.file_path));
+    return res.sendFile(path.resolve(filePath));
   } catch (err) {
     return next(err);
   }
@@ -189,6 +216,11 @@ mobileAppRouter.post(
       const parsed = UploadMetaSchema.safeParse(req.body);
       if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
 
+      // PROD1 and PROD2 don't share a disk, and "Get the App" can land on
+      // either: keep the build in the shared database too (it's larger than
+      // the usual file limit), or the other server says "No build available".
+      await persistFile(req.file.path, { maxBytes: APP_BUILD_MAX_DB_BYTES, required: true });
+
       const build = await saveMobileAppBuild({
         platform: parsed.data.platform,
         version: parsed.data.version,
@@ -197,6 +229,7 @@ mobileAppRouter.post(
         sizeBytes: req.file.size,
         uploadedById: req.user!.userId
       });
+      await pruneStoredAppBuilds();
 
       return res.status(201).json({
         build: {
