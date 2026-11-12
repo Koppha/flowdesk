@@ -406,6 +406,46 @@ function AssigneeCombobox({
   );
 }
 
+// A "section" field (e.g. Change Implementor): the same people-and-groups
+// search as Change Assignee, but just a record of who carries it out - no
+// confirmation step. Stored as the chosen names, "; "-separated, so a value
+// saved before (one section's name) still shows, and the PDF and the
+// "you're the implementor" notification read the names
+// (custom-requests.routes.ts).
+function ImplementorField({ value, users, onChange }: { value: string; users: DirectoryUser[]; onChange: (value: string) => void }) {
+  const [searching, setSearching] = useState(false);
+  const names = String(value || "").split(";").map((s) => s.trim()).filter(Boolean);
+  const setNames = (next: string[]) => onChange([...new Set(next)].join("; "));
+  return (
+    <div>
+      {names.map((n, idx) => (
+        <div key={`${n}-${idx}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--surface-soft)", borderRadius: 6, marginBottom: 6, fontSize: 13 }}>
+          <strong>{n}</strong>
+          <button type="button" className="ep-icon-btn" onClick={() => setNames(names.filter((_, i) => i !== idx))} title="Remove">
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ))}
+      <button type="button" className="ep-btn-outline" style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 38 }} onClick={() => setSearching(true)}>
+        <Search size={14} /> {names.length ? "Add more" : "Add people, sections, departments or divisions"}
+      </button>
+      {searching && (
+        <OrgSearchModal
+          title="Choose the implementor"
+          subtitle="Search and select who carries out the change - employees, or a whole division, department or section."
+          people={users}
+          excludeKeys={[]}
+          onAdd={(entries) => setNames([
+            ...names,
+            ...entries.map((e) => e.type === "user" ? (users.find((u) => u.id === e.id)?.full_name || e.label) : e.type === "division" ? (e.name ?? e.label) : e.label)
+          ])}
+          onClose={() => setSearching(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 // Editable list of assignees for a "user_multi" field (e.g. Change Assignee)
 // while composing a new request — pick a system user, invite by email, or
 // assign a whole team (any member can confirm later). Confirmation happens
@@ -1448,12 +1488,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         );
       }
       case "section":
-        return (
-          <select className="ep-form-select" value={value} onChange={(e) => set(f.field_key, e.target.value)}>
-            <option value="">{f.placeholder || "Select a section…"}</option>
-            {sections.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
-          </select>
-        );
+        return <ImplementorField value={String(value || "")} users={companyDirectorySorted} onChange={(v) => set(f.field_key, v)} />;
       case "textarea":
         return (
           <textarea

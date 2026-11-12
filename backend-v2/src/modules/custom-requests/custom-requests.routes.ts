@@ -24,6 +24,22 @@ import { assertBackOutPlan, assertCanSubmit, assigneeLabel, assigneeMatches, cha
 import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 
 export const customRequestsRouter = Router();
+
+// Emails of everyone an implementor name stands for: a department (sections),
+// a section (teams), a whole division (users.department), or one person (by
+// full name) - the names the Change Implementor search stores.
+async function implementorMembers(name: string): Promise<string[]> {
+  const rows = await query<{ email: string }>(
+    `SELECT DISTINCT u.email FROM users u
+      WHERE u.is_active = true AND u.email IS NOT NULL AND (
+            u.section_id IN (SELECT id FROM sections WHERE lower(trim(name)) = lower(trim($1)) AND active = true)
+         OR u.team_id IN (SELECT id FROM teams WHERE lower(trim(name)) = lower(trim($1)))
+         OR lower(trim(u.department)) = lower(trim($1))
+         OR lower(trim(u.full_name)) = lower(trim($1)))`,
+    [name]
+  );
+  return rows.map((r) => r.email);
+}
 customRequestsRouter.use(requireAuth);
 
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
@@ -566,28 +582,26 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
           });
         }
 
-        // "section" fields (e.g. Change Implementor) store the section's name —
-        // notify everyone currently in that section, since they're the ones
-        // expected to carry out the implementation.
+        // "section" fields (e.g. Change Implementor) store who carries it out:
+        // names chosen with the people-and-groups search, "; "-separated (a
+        // single section's name before Nov 2026). Notify everyone each name
+        // stands for - a department (sections), a section (teams), a whole
+        // division, or one person - since they're expected to implement it.
         for (const f of fields) {
           if (f.field_type !== "section") continue;
-          const sectionName = String(parsed.data.data[f.field_key] ?? "").trim();
-          if (!sectionName) continue;
-          const section = (await query<{ id: string; name: string }>(
-            `SELECT id, name FROM sections WHERE lower(trim(name)) = lower(trim($1)) AND active = true`,
-            [sectionName]
-          ))[0];
-          if (!section) continue;
-          const members = await query<{ email: string }>(`SELECT email FROM users WHERE section_id = $1 AND is_active = true`, [section.id]);
-          if (!members.length) continue;
-          await notifyCustomRequestSectionAssigned({
-            submissionId: submission.id,
-            requestTypeName: requestType.name,
-            requesterName: req.user!.fullName ?? null,
-            fieldLabel: f.field_label,
-            sectionName: section.name,
-            memberEmails: members.map((m) => m.email)
-          });
+          const names = String(parsed.data.data[f.field_key] ?? "").split(";").map((s) => s.trim()).filter(Boolean);
+          for (const name of names) {
+            const members = await implementorMembers(name);
+            if (!members.length) continue;
+            await notifyCustomRequestSectionAssigned({
+              submissionId: submission.id,
+              requestTypeName: requestType.name,
+              requesterName: req.user!.fullName ?? null,
+              fieldLabel: f.field_label,
+              sectionName: name,
+              memberEmails: members
+            });
+          }
         }
       } catch (bgErr) {
         logger.warn("custom_request_post_submit_notifications_failed", { submission_id: submission.id, error: serializeError(bgErr) });
