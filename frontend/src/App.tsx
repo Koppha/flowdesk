@@ -46,6 +46,8 @@ import CustomRequestsHub from "./CustomRequestsHub";
 import BrsStudio from "./BrsStudio";
 import BrsAdmin from "./BrsAdmin";
 import SignDocument from "./SignDocument";
+import PhonePrompt from "./components/PhonePrompt";
+import SmsSettingsCard from "./components/SmsSettingsCard";
 import EmailActionConfirm from "./EmailActionConfirm";
 import GuidedTour, { type TourStep } from "./GuidedTour";
 import CeoManagement from "./CeoManagement";
@@ -528,6 +530,7 @@ export default function App() {
   const [showLoginLockoutWarning, setShowLoginLockoutWarning] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [profile, setProfile] = useState<any>(null);
+  const [smsAccordionOpen, setSmsAccordionOpen] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileFirstName, setProfileFirstName] = useState("");
@@ -9389,9 +9392,20 @@ export default function App() {
                     >
                       {savingPhone ? "Saving…" : "Save"}
                     </button>
-                    <span style={{ fontSize: 11, color: "var(--muted)" }}>Used to show your contact on standby rosters.</span>
+                    <span style={{ fontSize: 11, color: "var(--muted)" }}>Used to send you FlowDesk notifications by SMS, and for standby rosters.</span>
                   </div>
                 </SettingsAccordion>
+
+              {isAdminRole && (
+                <SettingsAccordion
+                  title="SMS notifications"
+                  subtitle="Send FlowDesk notifications by SMS as well as email - the gateway, a test SMS, and who has a phone number."
+                  open={smsAccordionOpen}
+                  onToggle={() => setSmsAccordionOpen((current) => !current)}
+                >
+                  <SmsSettingsCard />
+                </SettingsAccordion>
+              )}
 
               <SettingsAccordion
                 title="Display Size"
@@ -9847,6 +9861,7 @@ export default function App() {
           )}
           {historyOpen && renderAdvanceTrackingModal()}
           {clearanceTrackOpen && renderClearanceTrackingModal()}
+          <PhonePrompt profile={profile} onSaved={(phone) => { setProfile((p: any) => (p ? { ...p, phone } : p)); setPhoneDraft(phone); }} />
           {canAccessFeature("ai_assistant") && aiAssistantModuleEnabled && (
             <AiAssistant open={aiAssistantOpen} onClose={() => setAiAssistantOpen(false)} onDraftSaved={() => void reloadMyRequests()} onOpenDraft={(kind, id) => void openAssistantDraft(kind, id)} />
           )}

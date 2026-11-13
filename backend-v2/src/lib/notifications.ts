@@ -1,5 +1,6 @@
 import { filterEmailRecipients } from "./pushTokens.js";
 import nodemailer from "nodemailer";
+import { smsForEmail } from "./sms.js";
 import { env } from "../config/env.js";
 import { query } from "./db.js";
 import { logger, serializeError } from "./logger.js";
@@ -210,6 +211,10 @@ async function sendViaSmtp(to: string[], subject: string, text: string): Promise
 // ─── Unified send ─────────────────────────────────────────────────────────────
 
 async function sendMail(args: { to: string[]; subject: string; text: string }): Promise<void> {
+  // The same notification as a short SMS to recipients with a phone number
+  // (when switched on under Settings > SMS notifications). Sent first and on
+  // its own, so it still goes out when the email service is down.
+  void smsForEmail(args.to, args.subject);
   // Recipients who switched email notifications off (FlowDesk Mobile > Profile).
   // A subject is one line: the email API rejects line breaks ("not in the form
   // required for a subject"), and some are built from multi-line user text

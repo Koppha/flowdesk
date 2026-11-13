@@ -30,6 +30,7 @@ import { distributionsRouter } from "./modules/distributions/distributions.route
 import { emailActionsRouter } from "./modules/email-actions/email-actions.routes.js";
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
+import { smsRouter } from "./modules/sms/sms.routes.js";
 import { refundableRouter } from "./modules/refundable/refundable.routes.js";
 import { salariesRouter } from "./modules/salaries/salaries.routes.js";
 import { attendanceRouter } from "./modules/attendance/attendance.routes.js";
@@ -150,6 +151,8 @@ export function createApp() {
   app.use("/email-actions", emailActionsRouter);
   app.use("/pdf-templates", pdfTemplatesRouter);
   app.use("/deductions", deductionsRouter);
+  // SMS gateway settings and test (admin) - see lib/sms.ts.
+  app.use("/sms", smsRouter);
   app.use("/refundable", refundableRouter);
   app.use("/salaries", salariesRouter);
   app.use("/attendance", attendanceRouter);
