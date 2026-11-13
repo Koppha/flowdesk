@@ -11,7 +11,7 @@ import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
 import { BrsPeoplePicker, CR_PERMISSION_OPTIONS, CR_PRESETS } from "./components/BrsPeoplePicker";
 import OrgSearchModal, { type OrgEntry } from "./components/OrgSearchModal";
 import { confirmAction, showNotice } from "./alerts";
-import { ArrowDown, ArrowUp, Calendar, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, Share2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Calendar, CheckCircle2, ChevronDown, ClipboardList, Download, FileText, Inbox, Paperclip, Plus, Search, Trash2, UploadCloud, UserCheck, Users, Share2 } from "lucide-react";
 import { ApproverCombobox, COMBOBOX_DROPDOWN_HEIGHT, COMBOBOX_DROPDOWN_MIN_WIDTH, EMAIL_RE, userLabel, type DirectoryUser } from "./shared/ApproverCombobox";
 
 type TableFieldConfig = {
@@ -656,7 +656,7 @@ function computeTableSummary(cfg: TableFieldConfig | null | undefined, rows: Tab
 }
 
 export default function CustomRequestsHub({ profile, requestDirectory, onBack, deepLink, onDeepLinkConsumed, typeId }: CustomRequestsHubProps) {
-  const [tab, setTab] = useState<"NEW" | "MINE" | "ASSIGNED" | "SHARED">("NEW");
+  const [tab, setTab] = useState<"NEW" | "MINE" | "APPROVED" | "ASSIGNED" | "SHARED">("NEW");
   const [shared, setShared] = useState<Array<Submission & { requester_name?: string | null; distributed_at?: string; distributed_by_name?: string | null; distribution_message?: string | null }>>([]);
   const [sharedLoading, setSharedLoading] = useState(false);
   const [distributingId, setDistributingId] = useState<string | null>(null);
@@ -724,7 +724,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   const isChangeRequestType = selectedType?.code === "CHANGE_REQUEST";
   // The three lists: search + pages of 10.
   const crText = (s: any) => [s.data?.description_of_change, s.request_type_name, String(s.status || "").replace(/_/g, " "), s.requester_name, s.distributed_by_name, s.id].filter(Boolean).join(" ");
-  const minePaging = usePaging(mine, crText);
+  // Change Requests: approved (and closed) ones live under the Approved tab,
+  // not in My Requests.
+  const isApprovedCr = (st: string) => st === "APPROVED" || st === "CLOSED";
+  const mineShown = isChangeRequestType ? mine.filter((x) => isApprovedCr(x.status) === (tab === "APPROVED")) : mine;
+  const minePaging = usePaging(mineShown, crText);
   const assignedPaging = usePaging<any>(assignedToMe, crText);
   const sharedPaging = usePaging<any>(shared, crText);
   const listSearch = (p: { q: string; setQ: (v: string) => void }, placeholder: string) => (
@@ -943,8 +947,13 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   }
 
   useEffect(() => {
-    if (tab === "MINE") loadMine();
+    if (tab === "MINE" || tab === "APPROVED") loadMine();
   }, [tab, selectedTypeId]);
+
+  // Approved is a Change Request tab only.
+  useEffect(() => {
+    if (tab === "APPROVED" && selectedType && !isChangeRequestType) setTab("MINE");
+  }, [tab, selectedType, isChangeRequestType]);
 
   function setValue(key: string, value: any) {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -1610,6 +1619,11 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
         <a href="#" className={`ep-tab ${tab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("MINE"); }}>
           <Inbox size={14} /> My Requests
         </a>
+        {isChangeRequestType && (
+          <a href="#" className={`ep-tab ${tab === "APPROVED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("APPROVED"); }}>
+            <CheckCircle2 size={14} /> Approved
+          </a>
+        )}
         <a href="#" className={`ep-tab ${tab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setTab("ASSIGNED"); }}>
           <UserCheck size={14} /> Assigned to Me
         </a>
@@ -2173,14 +2187,14 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
       ) : (
         <div className="ep-panel">
           <div className="ep-panel-head" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div className="ep-panel-title">My {selectedType?.name || "Requests"}</div>
+            <div className="ep-panel-title">{tab === "APPROVED" ? `Approved ${selectedType?.name || "Requests"}s` : `My ${selectedType?.name || "Requests"}`}</div>
             {(selectedType?.code === "CHANGE_REQUEST" || selectedType?.code === "COMPUTER_REQUEST") && (
               <span style={{ marginLeft: "auto" }}><RaidRegisterButton docType={selectedType.code as "CHANGE_REQUEST" | "COMPUTER_REQUEST"} /></span>
             )}
           </div>
           <div className="ep-panel-body">
-            {!mine.length ? (
-              <div className="ep-empty"><p>{isChangeRequestType ? "You have no Change Requests or drafts yet." : "You haven't submitted any requests of this type yet."}</p></div>
+            {!mineShown.length ? (
+              <div className="ep-empty"><p>{tab === "APPROVED" ? "None of your Change Requests has been approved yet." : isChangeRequestType ? (mine.length ? "No Change Requests or drafts in progress. Approved ones are under the Approved tab." : "You have no Change Requests or drafts yet.") : "You haven't submitted any requests of this type yet."}</p></div>
             ) : (
               <>
               {listSearch(minePaging, "Search your requests: title, status, person…")}

@@ -85,7 +85,7 @@ type ChainDraft = { approver_id: string; position_name: string; decision_type: "
 
 export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: BrsStudioProps) {
   const [view, setView] = useState<"landing" | "workspace">("landing");
-  const [landingTab, setLandingTab] = useState<"MINE" | "ASSIGNED" | "SHARED">("MINE");
+  const [landingTab, setLandingTab] = useState<"MINE" | "APPROVED" | "ASSIGNED" | "SHARED">("MINE");
   const [mine, setMine] = useState<any[]>([]);
   const [assigned, setAssigned] = useState<any[]>([]);
   const [shared, setShared] = useState<any[]>([]);
@@ -156,7 +156,11 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   // Landing-page KPI/filter/table data - computed unconditionally (hooks
   // can't sit after the "landing" vs "workspace" early return below), even
   // though only the landing view ever reads them; cheap over these lists.
-  const rows = landingTab === "MINE" ? mine : landingTab === "ASSIGNED" ? assigned : shared;
+  // Approved (Baseline) BRS live under the Approved tab, not in My BRS.
+  const mineApproved = mine.filter((d: any) => d.phase === "BASELINE");
+  const rows = landingTab === "MINE" ? mine.filter((d: any) => d.phase !== "BASELINE")
+    : landingTab === "APPROVED" ? mineApproved
+    : landingTab === "ASSIGNED" ? assigned : shared;
 
   const kpiCounts = useMemo(() => {
     const counts = { total: rows.length, draft: 0, deptInput: 0, inApproval: 0, baseline: 0 };
@@ -790,6 +794,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
 
         <div className="ep-tabs custom-request-tabs">
           <a href="#" className={`ep-tab ${landingTab === "MINE" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("MINE"); }}>My BRS</a>
+          <a href="#" className={`ep-tab ${landingTab === "APPROVED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("APPROVED"); }}>Approved <span className="ep-tab-count">{mineApproved.length}</span></a>
           <a href="#" className={`ep-tab ${landingTab === "ASSIGNED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("ASSIGNED"); }}>Assigned to Me</a>
           <a href="#" className={`ep-tab ${landingTab === "SHARED" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); setLandingTab("SHARED"); }}>Shared with Me <span className="ep-tab-count">{shared.length}</span></a>
           <span style={{ marginLeft: "auto", alignSelf: "center" }}><RaidRegisterButton docType="BRS" /></span>
@@ -818,7 +823,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
             ) : !filteredRows.length ? (
               <FinanceEmptyState
                 icon={FileText}
-                title={rows.length ? "No BRS match your filters." : landingTab === "MINE" ? "You haven't opened a BRS yet." : landingTab === "SHARED" ? "No approved BRS has been distributed to you yet." : "No BRS sections have been assigned to you yet."}
+                title={rows.length ? "No BRS match your filters." : landingTab === "MINE" ? (mineApproved.length ? "No BRS in progress. Approved ones are under the Approved tab." : "You haven't opened a BRS yet.") : landingTab === "APPROVED" ? "None of your BRS has been approved yet." : landingTab === "SHARED" ? "No approved BRS has been distributed to you yet." : "No BRS sections have been assigned to you yet."}
                 hint={rows.length ? "Try adjusting your search criteria or filters." : undefined}
               />
             ) : (
@@ -827,7 +832,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                   <ListRow key={d.id} idx={idx} onClick={() => openDoc(d.id)} icon={<FileText size={20} />} tone={d.phase === "BASELINE" ? "green" : d.phase === "DRAFT" ? "gray" : "blue"}
                     title={<>
                       {d.title}
-                      {(landingTab === "MINE" || landingTab === "ASSIGNED") && d.my_role && d.my_role !== "CREATOR" && <span style={{ marginLeft: 8, verticalAlign: "middle" }}><BrsRoleBadge role={d.my_role} /></span>}
+                      {(landingTab === "MINE" || landingTab === "APPROVED" || landingTab === "ASSIGNED") && d.my_role && d.my_role !== "CREATOR" && <span style={{ marginLeft: 8, verticalAlign: "middle" }}><BrsRoleBadge role={d.my_role} /></span>}
                     </>}
                     lines={[<>
                       <span>{d.reference_no}</span>
