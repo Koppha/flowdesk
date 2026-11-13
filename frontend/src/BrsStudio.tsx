@@ -9,6 +9,7 @@ import { BrsPeoplePicker, BrsRoleBadge, describeBrsPermissions } from "./compone
 import OrgSearchModal, { OrgEntryChip, type OrgEntry } from "./components/OrgSearchModal";
 import { showNotice, confirmAction } from "./alerts";
 import { RichTextField } from "./shared/RichTextField";
+import { aiPost } from "./shared/AiCowriter";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { ArrowDown, ArrowUp, MessageSquare, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, History, MoreVertical, Pencil, Plus, Send, Trash2, Users } from "lucide-react";
 // Generic filter-bar/empty-state/page-header pieces built for the Finance
@@ -1124,6 +1125,8 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                           value={s.content_html || ""}
                           readOnly={!canEdit}
                           onChange={(html) => { s.content_html = html; }}
+                          aiTitle={s.title}
+                          ai={canEdit ? (p) => aiPost<{ html: string; model: string }>(`/brs/${doc.id}/sections/${s.id}/ai`, p).then((r) => ({ result: r.html, model: r.model })) : undefined}
                         />
 
                         {canEdit && (

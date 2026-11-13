@@ -7,6 +7,7 @@ import { confirmAction, showNotice } from "../alerts";
 import type { DirectoryUser } from "../shared/ApproverCombobox";
 import { BrsPeoplePicker, BrsRoleBadge, CR_PERMISSION_OPTIONS, CR_PRESETS, describeCrPermissions } from "./BrsPeoplePicker";
 import { OrgEntryChip, type OrgEntry } from "./OrgSearchModal";
+import { AiTextAssist, aiPost } from "../shared/AiCowriter";
 
 // One Change Request with everyone working on it: the form by section, extra
 // sections added to this request, owners and co-writers, comments, the full
@@ -397,6 +398,10 @@ export default function ChangeRequestWorkspace(props: {
                   <>
                     <textarea className="ep-form-textarea" rows={5} value={draft ?? s.content} onChange={(e) => setSectionDrafts((d) => ({ ...d, [s.id]: e.target.value }))}
                       placeholder="Write this section…" style={{ width: "100%" }} />
+                    <AiTextAssist label={s.title} value={draft ?? s.content} onChange={(v) => setSectionDrafts((d) => ({ ...d, [s.id]: v }))}
+                      request={(p) => aiPost<{ text: string; model: string }>("/custom-requests/ai-write", {
+                        ...p, field_key: `section:${s.id}`, field_label: (s.description ? `${s.title} (${s.description})` : s.title).slice(0, 200), values: detail.data || {}
+                      }).then((r) => ({ result: r.text, model: r.model }))} />
                     {draft !== undefined && draft !== s.content && (
                       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                         <button className="ep-btn" disabled={saving} onClick={() => void saveCustomSection(s)}>{saving ? "Saving…" : "Save section"}</button>

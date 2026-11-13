@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import { createPortal } from "react-dom";
 import { API, api, getToken, openBlobInNewTab } from "./api";
+import { AiTextAssist, aiPost } from "./shared/AiCowriter";
 import DistributeDialog from "./components/DistributeDialog";
 import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
 import { BrsPeoplePicker, CR_PERMISSION_OPTIONS, CR_PRESETS } from "./components/BrsPeoplePicker";
@@ -1502,8 +1503,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
       }
       case "section":
         return <ImplementorField value={String(value || "")} users={companyDirectorySorted} onChange={(v) => set(f.field_key, v)} />;
-      case "textarea":
-        return (
+      case "textarea": {
+        const box = (
           <textarea
             className="ep-form-textarea"
             rows={3}
@@ -1512,6 +1513,17 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             onChange={(e) => set(f.field_key, e.target.value)}
           />
         );
+        // Change Requests (new, draft or in the workspace): AI co-writing.
+        if (!(isChangeRequestType || workspaceId)) return box;
+        return (
+          <div>
+            {box}
+            <AiTextAssist label={f.field_label} value={String(value || "")} onChange={(v) => set(f.field_key, v)}
+              request={(p) => aiPost<{ text: string; model: string }>("/custom-requests/ai-write", { ...p, field_key: f.field_key, field_label: f.field_label, values: vals })
+                .then((r) => ({ result: r.text, model: r.model }))} />
+          </div>
+        );
+      }
       case "number":
         return (
           <input

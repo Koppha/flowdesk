@@ -3,7 +3,8 @@ import { hasDistributionAccess } from "../distributions/distributions.routes.js"
 import { z } from "zod";
 import fs from "fs";
 import multer from "multer";
-import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
+import { type AuthedRequest, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
+import { AI_COWRITER_FEATURE, AI_COWRITER_ROLES, CowriteSchema, cowriteChangeRequestField } from "../../lib/aiCowriter.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query, withTransaction } from "../../lib/db.js";
 import { notifyCustomRequestStep, notifyCustomRequestProgress, notifyCustomRequestDecision, notifyCustomRequestCancelled, notifyChangeRequestFollowUp, notifyCustomRequestUnregisteredAssignee, notifyCustomRequestAssigneeAssigned, notifyCustomRequestTeamAssigned, notifyCustomRequestSectionAssigned, notifySlaReminder, notifyCustomRequestAssigneeReminder } from "../../lib/notifications.js";
@@ -1509,6 +1510,36 @@ customRequestsRouter.post("/:id/remind", async (req: AuthedRequest, res, next) =
     );
 
     return res.json({ ok: true, approver_name: approverName });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /custom-requests/ai-write — AI co-writing for a Change Request text
+// field (or a section added to it): the form as filled in so far is the
+// context. Only a proposal - the writer decides whether to use it.
+const CrCowriteSchema = CowriteSchema.extend({
+  field_key: z.string().trim().min(1).max(120),
+  field_label: z.string().trim().max(200).optional(),
+  values: z.record(z.string(), z.any()).default({})
+});
+customRequestsRouter.post("/ai-write", requireFeatureAccess(AI_COWRITER_FEATURE, AI_COWRITER_ROLES), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = CrCowriteSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid request", parsed.error.flatten());
+    const fields = await query<{ field_key: string; field_label: string; field_type: string }>(
+      `SELECT f.field_key, f.field_label, f.field_type
+         FROM request_type_fields f JOIN custom_request_types t ON t.id = f.request_type_id
+        WHERE t.code = 'CHANGE_REQUEST' AND f.is_active
+        ORDER BY f.sort_order`
+    );
+    const field = fields.find((f) => f.field_key === parsed.data.field_key);
+    const label = field?.field_label || parsed.data.field_label;
+    if (!label) throw badRequest("Unknown field");
+    return res.json(await cowriteChangeRequestField({
+      userId: req.user!.userId, fields, values: parsed.data.values,
+      target: { key: parsed.data.field_key, label }, input: parsed.data
+    }));
   } catch (err) {
     return next(err);
   }

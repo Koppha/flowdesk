@@ -4,8 +4,9 @@ import {
   List, ListOrdered, Indent, Outdent,
   Table as TableIcon, Link as LinkIcon, Link2Off, Image as ImageIcon, Minus,
   Undo2, Redo2, Trash2, Eraser,
-  AlignLeft, AlignCenter, AlignRight, AlignJustify, BarChart3, Workflow
+  AlignLeft, AlignCenter, AlignRight, AlignJustify, BarChart3, Workflow, Sparkles
 } from "lucide-react";
+import { AiCowriterPanel, type ApplyHow, type CowriteRequest } from "./AiCowriter";
 import { ChartEditor, DiagramEditor, graphicToImgHtml, readGraphicSpec, type ChartSpec, type DiagramSpec, type GraphicSpec } from "./GraphicsEditors";
 
 // ── Pasting ────────────────────────────────────────────────────────────────
@@ -87,8 +88,12 @@ export function imageFileToDataUrl(file: File): Promise<string> {
 // Department Input) uses this same component rather than each screen
 // rolling its own contentEditable + toolbar.
 export function RichTextField({
-  value, onChange, readOnly, placeholder
-}: { value: string; onChange?: (html: string) => void; readOnly?: boolean; placeholder?: string }) {
+  value, onChange, readOnly, placeholder, ai, aiTitle
+}: {
+  value: string; onChange?: (html: string) => void; readOnly?: boolean; placeholder?: string;
+  // AI co-writing (BRS sections): asks the server for a proposal.
+  ai?: CowriteRequest; aiTitle?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   // Whether the caret currently sits inside a table cell — gates the second,
   // table-editing toolbar row so it's never shown (or clickable) against
@@ -100,6 +105,43 @@ export function RichTextField({
   const [graphicEditor, setGraphicEditor] = useState<{ kind: "chart" | "diagram"; spec: GraphicSpec | null; img: HTMLImageElement | null } | null>(null);
   const [pickedGraphic, setPickedGraphic] = useState<HTMLImageElement | null>(null);
   const savedRange = useRef<Range | null>(null);
+  // AI co-writing: what was selected when the panel opened.
+  const [aiOpen, setAiOpen] = useState<{ current: string; selection: string; range: Range | null } | null>(null);
+
+  function openAi() {
+    if (readOnly || !ai) return;
+    saveCaret();
+    const r = savedRange.current;
+    let selection = "";
+    if (r && !r.collapsed) {
+      const holder = document.createElement("div");
+      holder.appendChild(r.cloneContents());
+      selection = holder.innerHTML;
+    }
+    setAiOpen({ current: ref.current?.innerHTML || "", selection, range: r ? r.cloneRange() : null });
+  }
+
+  function applyAi(html: string, how: ApplyHow) {
+    const el = ref.current;
+    if (!el) return;
+    const range = aiOpen?.range;
+    if (how === "replace") {
+      el.innerHTML = html;
+    } else if (how === "append") {
+      el.insertAdjacentHTML("beforeend", html);
+    } else {
+      el.focus();
+      const sel = window.getSelection();
+      if (range && sel && el.contains(range.startContainer)) {
+        if (how === "insert") range.collapse(false);
+        sel.removeAllRanges(); sel.addRange(range);
+        if (!document.execCommand("insertHTML", false, html)) { range.deleteContents(); const frag = range.createContextualFragment(html); range.insertNode(frag); }
+      } else {
+        el.insertAdjacentHTML("beforeend", html);
+      }
+    }
+    onChange?.(el.innerHTML);
+  }
 
   // Only push `value` into the DOM when it actually differs from what's
   // already there — e.g. switching to a different section, or another
@@ -388,6 +430,10 @@ export function RichTextField({
           <button type="button" onClick={insertTable} title="Insert table"><TableIcon size={13} /></button>
           <button type="button" onClick={insertImage} title="Insert image"><ImageIcon size={13} /></button>
           <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => openGraphic("chart")} title="Insert a chart or graph (bar, line, area, pie...)"><BarChart3 size={13} /> Chart</button>
+          {ai && (
+            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={openAi} title="Write with AI: draft this section, or improve, expand or shorten the selected text"
+              style={{ color: "#6250d6", fontWeight: 600 }}><Sparkles size={13} /> AI</button>
+          )}
           <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => openGraphic("diagram")} title="Insert a diagram: flowchart, UML (class, use case, activity, sequence), shapes and connectors"><Workflow size={13} /> Diagram</button>
           <button type="button" onClick={insertLink} title="Insert link"><LinkIcon size={13} /></button>
           <button type="button" onClick={() => exec("unlink")} title="Remove link"><Link2Off size={13} /></button>
@@ -420,6 +466,10 @@ export function RichTextField({
           <span className="brs-richtext-sep" />
           <button type="button" className="brs-richtext-table-delete" onClick={removeGraphic}><Trash2 size={13} /> Remove</button>
         </div>
+      )}
+      {aiOpen && ai && (
+        <AiCowriterPanel kind="html" title={aiTitle || "this section"} current={aiOpen.current} selection={aiOpen.selection} request={ai}
+          onClose={() => setAiOpen(null)} onApply={applyAi} />
       )}
       {graphicEditor?.kind === "chart" && (
         <ChartEditor initial={graphicEditor.spec as ChartSpec | null} onCancel={() => setGraphicEditor(null)} onSave={(sp) => void saveGraphic(sp)} />

@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { hasDistributionAccess } from "../distributions/distributions.routes.js";
 import { z } from "zod";
-import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
+import { type AuthedRequest, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
+import { AI_COWRITER_FEATURE, AI_COWRITER_ROLES, CowriteSchema, cowriteBrsSection } from "../../lib/aiCowriter.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query, withTransaction } from "../../lib/db.js";
 import { notifyBrsPeopleAdded, notifyBrsReviewersAdded, notifyBrsSectionAssigned, notifyCustomRequestStep } from "../../lib/notifications.js";
@@ -615,6 +616,31 @@ brsRouter.patch("/:id/sections/:sectionId", async (req: AuthedRequest, res, next
       sectionId: section.id, sectionTitle: section.title, contentHtml: parsed.data.content_html
     });
     return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /brs/:id/sections/:sectionId/ai — AI co-writing for a section: drafts,
+// rewrites, expands... the selected text or the whole section, with the rest
+// of the document as context. Only a proposal - nothing is saved here. Open to
+// whoever may edit the section and use the AI Assistant.
+brsRouter.post("/:id/sections/:sectionId/ai", requireFeatureAccess(AI_COWRITER_FEATURE, AI_COWRITER_ROLES), async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = CowriteSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid request", parsed.error.flatten());
+    const doc = await loadDocumentOr404(req.params.id);
+    if (doc.phase === "BASELINE") throw badRequest("This BRS is approved — use Amend to make changes");
+    const section = (await query<{ id: string; title: string }>(
+      `SELECT id, title FROM brs_document_sections WHERE id = $1 AND document_id = $2`, [req.params.sectionId, doc.id]
+    ))[0];
+    if (!section) throw notFound();
+    await assertCanEditSection(doc, section.id, req.user!);
+    const others = await query<{ id: string; title: string; content_html: string | null }>(
+      `SELECT id, title, content_html FROM brs_document_sections WHERE document_id = $1
+        ORDER BY CASE owner_phase WHEN 'DRAFT' THEN 0 ELSE 1 END, sort_order`, [doc.id]
+    );
+    return res.json(await cowriteBrsSection({ userId: req.user!.userId, doc, section, others, input: parsed.data }));
   } catch (err) {
     return next(err);
   }
