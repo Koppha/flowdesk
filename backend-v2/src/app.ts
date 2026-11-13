@@ -82,7 +82,11 @@ export function createApp() {
       credentials: true
     })
   );
-  app.use(express.json({ limit: "2mb" }));
+  // BRS sections carry pasted tables, charts and screenshots (stored inline),
+  // so they get a bigger body than everything else.
+  const brsJson = express.json({ limit: "25mb" });
+  const defaultJson = express.json({ limit: "2mb" });
+  app.use((req, res, next) => (req.path.startsWith("/brs/") ? brsJson : defaultJson)(req, res, next));
   app.use(requestLogger);
 
   // Short cache for stable reference data — reduces repeat round-trips from

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import { createPortal } from "react-dom";
-import { api, openBlobInNewTab } from "./api";
+import { API, api, getToken, openBlobInNewTab } from "./api";
 import DistributeDialog from "./components/DistributeDialog";
 import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
 import { BrsPeoplePicker, CR_PERMISSION_OPTIONS, CR_PRESETS } from "./components/BrsPeoplePicker";
@@ -705,6 +705,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   const [cancelComment, setCancelComment] = useState("");
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  // The cancel panel doubles as "Recall for correction" (Change Request).
+  const [recallMode, setRecallMode] = useState(false);
   const [remindingId, setRemindingId] = useState<string | null>(null);
   // Change Request collaboration: the open workspace, the draft being
   // submitted through the wizard, and the "save as draft" people dialog.
@@ -1145,16 +1147,27 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
   }
 
   async function handleCancelSubmission(id: string) {
-    if (!cancelComment.trim()) { setCancelError("A comment is required to cancel a request."); return; }
+    if (!cancelComment.trim()) { setCancelError(recallMode ? "Say what needs correcting." : "A comment is required to cancel a request."); return; }
     setCancelError(null);
     setCancelling(true);
     try {
-      await api.cancelCustomRequest(id, cancelComment.trim());
+      if (recallMode) {
+        const token = getToken();
+        const r = await fetch(`${API}/custom-requests/${id}/recall`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ comment: cancelComment.trim() })
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || "Could not recall the request");
+        void showNotice("It's a draft again. Open it, make your corrections, then choose Submit for approval.");
+      } else {
+        await api.cancelCustomRequest(id, cancelComment.trim());
+      }
       setCancellingId(null);
       setCancelComment("");
       await loadMine();
     } catch (e: any) {
-      setCancelError(e?.message || "Failed to cancel the request.");
+      setCancelError(e?.message || (recallMode ? "Failed to recall the request." : "Failed to cancel the request."));
     } finally {
       setCancelling(false);
     }
@@ -2190,11 +2203,21 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                             {remindingId === s.id ? "Sending…" : "Send Reminder"}
                           </button>
                         )}
+                        {s.status === "IN_PROGRESS" && cancellingId !== s.id && s.request_type_code === "CHANGE_REQUEST" && (
+                          <button
+                            className="ep-btn-outline"
+                            style={{ fontSize: 12, padding: "4px 10px" }}
+                            onClick={(e) => { e.stopPropagation(); setRecallMode(true); setCancellingId(s.id); setCancelComment(""); setCancelError(null); }}
+                            title="Take it back as a draft to make corrections, then submit it for approval again"
+                          >
+                            Recall for Correction
+                          </button>
+                        )}
                         {s.status === "IN_PROGRESS" && cancellingId !== s.id && (
                           <button
                             className="ep-btn-danger"
                             style={{ fontSize: 12, padding: "4px 10px" }}
-                            onClick={(e) => { e.stopPropagation(); setCancellingId(s.id); setCancelComment(""); setCancelError(null); }}
+                            onClick={(e) => { e.stopPropagation(); setRecallMode(false); setCancellingId(s.id); setCancelComment(""); setCancelError(null); }}
                           >
                             Cancel Request
                           </button>
@@ -2224,20 +2247,25 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
 
                     {cancellingId === s.id && (
                       <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }} onClick={(e) => e.stopPropagation()}>
-                        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Cancel Request</div>
+                        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>{recallMode ? "Recall for Correction" : "Cancel Request"}</div>
+                        {recallMode && (
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+                            It goes back to you as a draft: the assignees' confirmations are cleared, you make the corrections with your co-writers, then submit it for approval again.
+                          </div>
+                        )}
                         <div className="ep-form-group">
-                          <label>Reason for cancelling <span className="ep-required">*</span></label>
+                          <label>{recallMode ? "What needs correcting" : "Reason for cancelling"} <span className="ep-required">*</span></label>
                           <textarea
                             className="ep-form-textarea"
                             rows={3}
-                            placeholder="Let the current approver know why you're withdrawing this request…"
+                            placeholder={recallMode ? "e.g. Wrong SMSC IP / port in the implementation plan…" : "Let the current approver know why you're withdrawing this request…"}
                             value={cancelComment}
                             onChange={(e) => setCancelComment(e.target.value)}
                           />
                         </div>
                         {cancelError && <div style={{ color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>{cancelError}</div>}
                         <div style={{ display: "flex", gap: 8 }}>
-                          <button className="ep-btn-danger" onClick={() => handleCancelSubmission(s.id)} disabled={cancelling}>{cancelling ? "Cancelling…" : "Confirm Cancellation"}</button>
+                          <button className="ep-btn-danger" onClick={() => handleCancelSubmission(s.id)} disabled={cancelling}>{cancelling ? (recallMode ? "Recalling…" : "Cancelling…") : (recallMode ? "Recall It" : "Confirm Cancellation")}</button>
                           <button className="ep-btn-outline" onClick={() => setCancellingId(null)} disabled={cancelling}>Back</button>
                         </div>
                       </div>

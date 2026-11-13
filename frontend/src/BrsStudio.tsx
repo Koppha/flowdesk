@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import Swal from "sweetalert2";
-import { api, openBlobInNewTab } from "./api";
+import { API, api, getToken, openBlobInNewTab } from "./api";
 import DistributeDialog from "./components/DistributeDialog";
 import BrsHistory from "./components/BrsHistory";
 import BrsComments from "./components/BrsComments";
@@ -110,7 +110,8 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   // Comment-only reviewers chosen while building the approval route.
   const [gateReviewers, setGateReviewers] = useState<OrgEntry[]>([]);
   const [reviewerModal, setReviewerModal] = useState<"gate" | "live" | null>(null);
-  const [newSection, setNewSection] = useState<{ phase: "DRAFT" | "DEPT_INPUT"; title: string; required: boolean } | null>(null);
+  // place: "" = at the end, "start", or the id of the section it goes after.
+  const [newSection, setNewSection] = useState<{ phase: "DRAFT" | "DEPT_INPUT"; title: string; required: boolean; place: string } | null>(null);
   const [addingSection, setAddingSection] = useState(false);
   const [peopleEdit, setPeopleEdit] = useState<{ ownerIds: string[]; coWriters: OrgEntry[] } | null>(null);
   const [deptModal, setDeptModal] = useState(false);
@@ -456,13 +457,34 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     if (!doc || !newSection?.title.trim()) return;
     setAddingSection(true);
     try {
-      await api.addBrsSection(doc.id, { title: newSection.title.trim(), owner_phase: newSection.phase, is_required: newSection.required });
+      await api.addBrsSection(doc.id, {
+        title: newSection.title.trim(), owner_phase: newSection.phase, is_required: newSection.required,
+        ...(newSection.place === "start" ? { at_start: true } : newSection.place ? { after_section_id: newSection.place } : {})
+      } as any);
       setNewSection(null);
       loadDoc(doc.id);
     } catch (e: any) {
       void showNotice(e?.message || "Failed to add the section");
     } finally {
       setAddingSection(false);
+    }
+  }
+
+  // Move a section up or down (within the list it's in); this is also its
+  // order in the PDF.
+  async function moveSection(section: any, direction: "up" | "down") {
+    if (!doc) return;
+    try {
+      const token = getToken();
+      const r = await fetch(`${API}/brs/${doc.id}/sections/${section.id}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ direction })
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || "Could not move the section");
+      loadDoc(doc.id);
+    } catch (e: any) {
+      void showNotice(e?.message || "Could not move the section");
     }
   }
 
@@ -1044,7 +1066,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
               <div className="ep-panel-body">
                 {doc.sections
                   .filter((s: any) => s.owner_phase === (activePhase === "DRAFT" ? "DRAFT" : "DEPT_INPUT"))
-                  .map((s: any) => {
+                  .map((s: any, idx: number, shown: any[]) => {
                     // Editable on the live step, and - so an approver's comments
                     // can be fixed without restarting - during Approval too.
                     const editingInApproval = doc.phase === "APPROVAL";
@@ -1059,6 +1081,12 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                               {!s.type_section_id && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "#6d28d9", background: "#ede9fe", padding: "1px 7px", borderRadius: 99 }}>Added to this BRS</span>}
                               {!s.type_section_id && canManage && doc.phase !== "BASELINE" && !(s.content_html || "").replace(/<[^>]*>/g, "").trim() && (
                                 <button type="button" onClick={() => void removeSection(s)} style={{ marginLeft: 8, border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 12 }}>Remove</button>
+                              )}
+                              {canManage && doc.phase !== "BASELINE" && shown.length > 1 && (
+                                <span style={{ marginLeft: 8, display: "inline-flex", gap: 2, verticalAlign: "middle" }}>
+                                  <button type="button" className="ep-icon-btn" style={{ padding: 2 }} disabled={idx === 0} onClick={() => void moveSection(s, "up")} title="Move this section up" aria-label={`Move ${s.title} up`}><ArrowUp size={13} /></button>
+                                  <button type="button" className="ep-icon-btn" style={{ padding: 2 }} disabled={idx === shown.length - 1} onClick={() => void moveSection(s, "down")} title="Move this section down" aria-label={`Move ${s.title} down`}><ArrowDown size={13} /></button>
+                                </span>
                               )}
                             </div>
                             {s.description && <div className="brs-section-card-meta">{s.description}</div>}
@@ -1140,6 +1168,14 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                           </select>
                         </div>
                       </div>
+                      <div className="ep-form-group" style={{ marginBottom: 8 }}>
+                        <label>Place it</label>
+                        <select className="ep-form-select" value={newSection.place} onChange={(e) => setNewSection({ ...newSection, place: e.target.value })}>
+                          <option value="">At the end</option>
+                          <option value="start">At the start</option>
+                          {doc.sections.map((x: any) => <option key={x.id} value={x.id}>After "{x.title}"</option>)}
+                        </select>
+                      </div>
                       <label className="ep-checkbox-label" style={{ marginBottom: 8 }}>
                         <input type="checkbox" checked={newSection.required} onChange={(e) => setNewSection({ ...newSection, required: e.target.checked })} />
                         Required (blocks the Consistency Gate if left blank)
@@ -1151,7 +1187,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                     </div>
                   ) : (
                     <button className="ep-btn-outline" style={{ fontSize: 12, padding: "5px 12px", marginBottom: 8 }}
-                      onClick={() => setNewSection({ phase: activePhase === "DRAFT" ? "DRAFT" : "DEPT_INPUT", title: "", required: false })}>
+                      onClick={() => setNewSection({ phase: activePhase === "DRAFT" ? "DRAFT" : "DEPT_INPUT", title: "", required: false, place: "" })}>
                       <Plus size={13} /> Add section
                     </button>
                   )

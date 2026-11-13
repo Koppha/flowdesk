@@ -148,7 +148,7 @@ export async function canWriteBrs(doc: { id: string } & BrsOwnedDoc, actor: { us
 // ── Audit trail ──────────────────────────────────────────────────────────────
 export async function recordBrsRevision(args: {
   documentId: string;
-  kind: "CREATED" | "SECTION_ADDED" | "SECTION_REMOVED" | "REVIEWERS_CHANGED" | "COMMENTED" | "SECTION_SAVED" | "INTAKE_SAVED" | "PEOPLE_CHANGED" | "PHASE" | "ROUTED" | "APPROVAL_ACTION" | "BASELINED" | "RETURNED" | "REOPENED" | "AMENDMENT_STARTED" | "RAID_CHANGED";
+  kind: "CREATED" | "SECTION_ADDED" | "SECTION_REMOVED" | "SECTION_MOVED" | "REVIEWERS_CHANGED" | "COMMENTED" | "SECTION_SAVED" | "INTAKE_SAVED" | "PEOPLE_CHANGED" | "PHASE" | "ROUTED" | "APPROVAL_ACTION" | "BASELINED" | "RETURNED" | "REOPENED" | "AMENDMENT_STARTED" | "RAID_CHANGED";
   actorId: string | null;
   actorRole: BrsActorRole | null;
   summary: string;

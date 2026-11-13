@@ -23,6 +23,7 @@ const KIND_LABEL: Record<string, string> = {
   AMENDMENT_STARTED: "Amendment started",
   SECTION_ADDED: "Section added",
   SECTION_REMOVED: "Section removed",
+  SECTION_MOVED: "Section moved",
   REVIEWERS_CHANGED: "Reviewers changed",
   COMMENTED: "Comment",
   RAID_CHANGED: "RAID log"

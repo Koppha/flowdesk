@@ -1514,6 +1514,50 @@ customRequestsRouter.post("/:id/remind", async (req: AuthedRequest, res, next) =
   }
 });
 
+// POST /custom-requests/:id/recall — the requester (or a co-owner) of a Change
+// Request still in progress takes it back for correction: it becomes a DRAFT
+// again (same as a roll back by an approver), they fix it with their
+// co-writers and submit it for approval again. A reason is required and is
+// kept in its history.
+customRequestsRouter.post("/:id/recall", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = CancelSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("A reason is required to recall a request for correction");
+    const submission = (await query<any>(
+      `SELECT s.*, rt.name AS request_type_name, rt.code AS request_type_code, u.full_name AS requester_name, u.email AS requester_email
+         FROM custom_request_submissions s
+         JOIN custom_request_types rt ON rt.id = s.request_type_id
+         JOIN users u ON u.id = s.requester_id
+        WHERE s.id = $1`,
+      [req.params.id]
+    ))[0];
+    if (!submission) throw notFound();
+    if (submission.request_type_code !== "CHANGE_REQUEST") throw badRequest("Only a Change Request can be recalled for correction");
+    if (req.user!.role !== "ADMIN" && submission.requester_id !== req.user!.userId && !(submission.owner_user_ids || []).includes(req.user!.userId)) {
+      throw forbidden("Only the requester (or a co-owner) can recall this Change Request");
+    }
+    if (submission.status !== "IN_PROGRESS") throw badRequest("Only a Change Request that is still in progress can be recalled");
+    const chain = (submission.approval_chain || []) as Array<{ approver_email: string | null; approver_name: string | null }>;
+    const pendingStep = chain[submission.current_step_order];
+    await rollBackChangeRequest({
+      submission, chain, actor: req.user!, comment: parsed.data.comment,
+      byLabel: `${req.user!.fullName ?? "the requester"} (initiator)`
+    });
+    // The approver it was waiting on no longer needs to act.
+    if (pendingStep?.approver_email) {
+      void notifyCustomRequestCancelled({
+        submissionId: submission.id, requestTypeName: submission.request_type_name,
+        requesterName: req.user!.fullName ?? null,
+        approverEmail: pendingStep.approver_email, approverName: pendingStep.approver_name,
+        comment: `Recalled for correction — ${parsed.data.comment}. It will come back to you when it is submitted again.`
+      });
+    }
+    return res.json({ ok: true, status: "DRAFT" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 customRequestsRouter.post("/:id/cancel", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = CancelSchema.safeParse(req.body);

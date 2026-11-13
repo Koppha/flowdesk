@@ -3,7 +3,7 @@ import { hasDistributionAccess } from "../distributions/distributions.routes.js"
 import { z } from "zod";
 import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
-import { query } from "../../lib/db.js";
+import { query, withTransaction } from "../../lib/db.js";
 import { notifyBrsPeopleAdded, notifyBrsReviewersAdded, notifyBrsSectionAssigned, notifyCustomRequestStep } from "../../lib/notifications.js";
 import {
   brsActorOrg, brsActorRole, brsOwnerIds, isBrsOwner, brsMemberMatch, brsMemberParams, brsPermissions, BRS_PERMISSIONS, canManageBrs, canWriteBrs, checkConsistencyGate,
@@ -1128,20 +1128,50 @@ brsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
 
     // The approval chain, once this BRS has actually been routed - not
     // reflected until then, same as the Approval Routing panel in BRS Studio.
-    let approvers: Array<{ position_name: string | null; approver_name: string | null; status: string | null; acted_at: string | null }> = [];
+    let approvers: Array<{ position_name: string | null; approver_name: string | null; status: string | null; acted_at: string | null; signature_image?: string | null }> = [];
     if (doc.brs_approval_submission_id) {
       const submission = (await query<{ approval_chain: any }>(
         `SELECT approval_chain FROM custom_request_submissions WHERE id = $1`, [doc.brs_approval_submission_id]
       ))[0];
-      approvers = (submission?.approval_chain || []).map((step: any) => ({
+      const chain: any[] = submission?.approval_chain || [];
+      // Each approver's saved signature, for the "Approval of implementation" table.
+      const ids = chain.map((st) => st.acted_by_id || st.approver_id).filter(Boolean);
+      const sigs = ids.length
+        ? await query<{ user_id: string; image_data_url: string | null }>(
+            `SELECT user_id, image_data_url FROM user_saved_signatures WHERE user_id = ANY($1::uuid[]) AND image_data_url IS NOT NULL`, [ids]
+          )
+        : [];
+      const sigBy = new Map(sigs.map((x) => [x.user_id, x.image_data_url]));
+      approvers = chain.map((step: any) => ({
         position_name: step.position_name ?? null,
         approver_name: step.approver_name ?? null,
         status: step.status ?? null,
-        acted_at: step.acted_at ?? null
+        acted_at: step.acted_at ?? null,
+        signature_image: sigBy.get(step.acted_by_id || step.approver_id) ?? null
       }));
     }
 
-    const pdfDoc = renderBrsPdf(letterhead, {
+    // Cover: version, when and by whom it last changed, and the reviewers.
+    const latestVersion = (await query<{ version_number: number; baselined_at: string; by_name: string | null }>(
+      `SELECT v.version_number, v.baselined_at, u.full_name AS by_name FROM brs_document_versions v LEFT JOIN users u ON u.id = v.baselined_by_id
+        WHERE v.document_id = $1 ORDER BY v.version_number DESC LIMIT 1`, [doc.id]
+    ))[0];
+    const lastEdit = (await query<{ created_at: string; actor_name: string | null }>(
+      `SELECT r.created_at, u.full_name AS actor_name FROM brs_document_revisions r LEFT JOIN users u ON u.id = r.actor_id
+        WHERE r.document_id = $1 ORDER BY r.created_at DESC LIMIT 1`, [doc.id]
+    ))[0];
+    const isBaseline = doc.phase === "BASELINE" && latestVersion;
+    const versionLabel = isBaseline ? `${latestVersion.version_number}.0` : `${(latestVersion?.version_number ?? 0) + 1}.0 (draft)`;
+    const reviewerRows = await query<{ name: string | null }>(
+      `SELECT COALESCE(u.full_name, sec.name, tm.name, r.division_name) AS name
+         FROM brs_document_reviewers r
+         LEFT JOIN users u ON u.id = r.user_id
+         LEFT JOIN sections sec ON sec.id = r.section_ref_id
+         LEFT JOIN teams tm ON tm.id = r.team_ref_id
+        WHERE r.document_id = $1 ORDER BY r.created_at`, [doc.id]
+    );
+
+    const pdfDoc = await renderBrsPdf(letterhead, {
       title: doc.title,
       reference_no: doc.reference_no,
       requester_name: requester?.full_name ?? null,
@@ -1153,7 +1183,11 @@ brsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
       product_owner: (await ownerNames(brsOwnerIds(doc))) ?? doc.intake_data?.product_owner ?? null,
       target_quarter: doc.intake_data?.target_quarter ?? null,
       departments_included: departmentsIncluded,
-      approvers
+      approvers,
+      version_label: versionLabel,
+      changed_on: isBaseline ? latestVersion.baselined_at : (lastEdit?.created_at ?? doc.updated_at),
+      changed_by: isBaseline ? latestVersion.by_name : (lastEdit?.actor_name ?? requester?.full_name ?? null),
+      reviewers: reviewerRows.filter((r) => r.name).map((r) => ({ name: r.name as string }))
     });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="brs-${doc.reference_no || doc.id}.pdf"`);
@@ -1434,7 +1468,10 @@ const AddSectionSchema = z.object({
   title: z.string().trim().min(1, "Give the section a title").max(200),
   description: z.string().trim().max(1000).nullish(),
   owner_phase: z.enum(["DRAFT", "DEPT_INPUT"]).default("DRAFT"),
-  is_required: z.boolean().default(false)
+  is_required: z.boolean().default(false),
+  // Where it goes in the document: after this section, or "start"; else at the end.
+  after_section_id: z.string().uuid().nullish(),
+  at_start: z.boolean().optional()
 });
 brsRouter.post("/:id/sections", async (req: AuthedRequest, res, next) => {
   try {
@@ -1444,18 +1481,72 @@ brsRouter.post("/:id/sections", async (req: AuthedRequest, res, next) => {
     if (!canManageBrs(doc, req.user!)) throw forbidden("Only the creator or owner can add sections");
     if (doc.phase === "BASELINE") throw badRequest("This BRS is approved — use Amend before adding sections");
     const key = `custom_${parsed.data.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40)}_${Date.now().toString(36)}`;
-    const row = (await query<{ id: string }>(
-      `INSERT INTO brs_document_sections (document_id, section_key, title, description, owner_phase, is_required, sort_order, added_by_id)
-       VALUES ($1, $2, $3, $4, $5, $6, (SELECT coalesce(max(sort_order), -1) + 1 FROM brs_document_sections WHERE document_id = $1), $7)
-       RETURNING id`,
-      [doc.id, key, parsed.data.title, parsed.data.description || null, parsed.data.owner_phase, parsed.data.is_required, req.user!.userId]
-    ))[0];
+    const row = await withTransaction(async (client) => {
+      // Position: right after the chosen section, at the start, or at the end.
+      let at: number;
+      if (parsed.data.at_start) {
+        at = 0;
+      } else if (parsed.data.after_section_id) {
+        const after = (await client.query<{ sort_order: number }>(
+          `SELECT sort_order FROM brs_document_sections WHERE id = $1 AND document_id = $2`, [parsed.data.after_section_id, doc.id]
+        )).rows[0];
+        if (!after) throw badRequest("The section to place it after isn't part of this BRS");
+        at = after.sort_order + 1;
+      } else {
+        at = (await client.query<{ n: number }>(`SELECT coalesce(max(sort_order), -1) + 1 AS n FROM brs_document_sections WHERE document_id = $1`, [doc.id])).rows[0].n;
+      }
+      await client.query(`UPDATE brs_document_sections SET sort_order = sort_order + 1 WHERE document_id = $1 AND sort_order >= $2`, [doc.id, at]);
+      return (await client.query<{ id: string }>(
+        `INSERT INTO brs_document_sections (document_id, section_key, title, description, owner_phase, is_required, sort_order, added_by_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [doc.id, key, parsed.data.title, parsed.data.description || null, parsed.data.owner_phase, parsed.data.is_required, at, req.user!.userId]
+      )).rows[0];
+    });
     await recordBrsRevision({
       documentId: doc.id, kind: "SECTION_ADDED", actorId: req.user!.userId, actorRole: await brsActorRole(doc, req.user!),
       summary: `Section added: "${parsed.data.title}" (${parsed.data.owner_phase === "DRAFT" ? "Draft" : "Department Input"}, ${parsed.data.is_required ? "required" : "optional"})`,
       sectionId: row.id, sectionTitle: parsed.data.title
     });
     return res.status(201).json({ id: row.id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /brs/:id/sections/:sectionId/move — move a section up or down (it
+// swaps places with the previous/next section in the same list - Draft or
+// Department Input). The order is the document's order, PDF included.
+const MoveSectionSchema = z.object({ direction: z.enum(["up", "down"]) });
+brsRouter.post("/:id/sections/:sectionId/move", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = MoveSectionSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("direction must be up or down");
+    const doc = await loadDocumentOr404(req.params.id);
+    if (!canManageBrs(doc, req.user!)) throw forbidden("Only the creator or owner can reorder sections");
+    if (doc.phase === "BASELINE") throw badRequest("This BRS is approved — use Amend before reordering sections");
+    const moved = await withTransaction(async (client) => {
+      const sec = (await client.query<{ id: string; title: string; sort_order: number; owner_phase: string }>(
+        `SELECT id, title, sort_order, owner_phase FROM brs_document_sections WHERE id = $1 AND document_id = $2 FOR UPDATE`, [req.params.sectionId, doc.id]
+      )).rows[0];
+      if (!sec) throw notFound("Section not found");
+      const other = (await client.query<{ id: string; title: string; sort_order: number }>(
+        parsed.data.direction === "up"
+          ? `SELECT id, title, sort_order FROM brs_document_sections WHERE document_id = $1 AND owner_phase = $2 AND sort_order < $3 ORDER BY sort_order DESC LIMIT 1`
+          : `SELECT id, title, sort_order FROM brs_document_sections WHERE document_id = $1 AND owner_phase = $2 AND sort_order > $3 ORDER BY sort_order ASC LIMIT 1`,
+        [doc.id, sec.owner_phase, sec.sort_order]
+      )).rows[0];
+      if (!other) return null; // already first/last
+      await client.query(`UPDATE brs_document_sections SET sort_order = $2 WHERE id = $1`, [sec.id, other.sort_order]);
+      await client.query(`UPDATE brs_document_sections SET sort_order = $2 WHERE id = $1`, [other.id, sec.sort_order]);
+      return { title: sec.title, other: other.title };
+    });
+    if (moved) {
+      await recordBrsRevision({
+        documentId: doc.id, kind: "SECTION_MOVED", actorId: req.user!.userId, actorRole: await brsActorRole(doc, req.user!),
+        summary: `Section moved ${parsed.data.direction}: "${moved.title}" (${parsed.data.direction === "up" ? "before" : "after"} "${moved.other}")`
+      });
+    }
+    return res.json({ ok: true, moved: Boolean(moved) });
   } catch (err) {
     return next(err);
   }
