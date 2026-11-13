@@ -48,6 +48,7 @@ import BrsAdmin from "./BrsAdmin";
 import SignDocument from "./SignDocument";
 import PhonePrompt from "./components/PhonePrompt";
 import SmsSettingsCard from "./components/SmsSettingsCard";
+import PhonePromptReport from "./components/PhonePromptReport";
 import EmailActionConfirm from "./EmailActionConfirm";
 import GuidedTour, { type TourStep } from "./GuidedTour";
 import CeoManagement from "./CeoManagement";
@@ -531,6 +532,7 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [profile, setProfile] = useState<any>(null);
   const [smsAccordionOpen, setSmsAccordionOpen] = useState(false);
+  const [phonePromptAccordionOpen, setPhonePromptAccordionOpen] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileFirstName, setProfileFirstName] = useState("");
@@ -9404,6 +9406,17 @@ export default function App() {
                   onToggle={() => setSmsAccordionOpen((current) => !current)}
                 >
                   <SmsSettingsCard />
+                </SettingsAccordion>
+              )}
+
+              {isAdminRole && (
+                <SettingsAccordion
+                  title="Phone number prompt"
+                  subtitle="Who got the ‘add your phone number’ prompt, who added their number, and who hasn't yet."
+                  open={phonePromptAccordionOpen}
+                  onToggle={() => setPhonePromptAccordionOpen((current) => !current)}
+                >
+                  {phonePromptAccordionOpen && <PhonePromptReport />}
                 </SettingsAccordion>
               )}
 

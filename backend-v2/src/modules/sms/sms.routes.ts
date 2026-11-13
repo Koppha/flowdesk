@@ -2,17 +2,32 @@ import { Router } from "express";
 import { z } from "zod";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest } from "../../lib/errors.js";
-import { getSmsSettings, normalizeMsisdn, saveSmsSettings, sendSms, smsStats } from "../../lib/sms.js";
+import { PROMPT_EVENTS, getSmsSettings, normalizeMsisdn, promptReport, recordPromptEvent, saveSmsSettings, sendSms, smsStats } from "../../lib/sms.js";
 
-// Admin: SMS gateway settings, a test SMS, and how many people can get SMS.
+// Admin: SMS gateway settings, a test SMS, how many people can get SMS, and
+// the phone-number prompt report. Everyone: the prompt reports what they did.
 export const smsRouter = Router();
-smsRouter.use(requireAuth, requireRole(["ADMIN"]));
+smsRouter.use(requireAuth);
+const admin = requireRole(["ADMIN"]);
+
+smsRouter.post("/prompt-event", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = z.object({ event: z.enum(PROMPT_EVENTS) }).safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid event");
+    await recordPromptEvent(req.user!.userId, parsed.data.event);
+    return res.json({ ok: true });
+  } catch (err) { return next(err); }
+});
+
+smsRouter.get("/prompt-report", admin, async (_req, res, next) => {
+  try { return res.json(await promptReport()); } catch (err) { return next(err); }
+});
 
 const view = (s: Awaited<ReturnType<typeof getSmsSettings>>) => ({
   enabled: s.enabled, notify: s.notify, url: s.url, sender: s.sender, username: s.username, has_password: Boolean(s.password)
 });
 
-smsRouter.get("/settings", async (_req, res, next) => {
+smsRouter.get("/settings", admin, async (_req, res, next) => {
   try { return res.json({ ...view(await getSmsSettings(true)), stats: await smsStats() }); } catch (err) { return next(err); }
 });
 
@@ -24,7 +39,7 @@ const SettingsSchema = z.object({
   username: z.string().trim().max(100).optional(),
   password: z.string().max(200).optional()
 });
-smsRouter.put("/settings", async (req: AuthedRequest, res, next) => {
+smsRouter.put("/settings", admin, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = SettingsSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message || "Invalid SMS settings");
@@ -34,7 +49,7 @@ smsRouter.put("/settings", async (req: AuthedRequest, res, next) => {
   } catch (err) { return next(err); }
 });
 
-smsRouter.post("/test", async (req: AuthedRequest, res, next) => {
+smsRouter.post("/test", admin, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = z.object({ msisdn: z.string().trim().min(8).max(20), msg: z.string().trim().max(160).optional() }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Give a phone number to send the test to");

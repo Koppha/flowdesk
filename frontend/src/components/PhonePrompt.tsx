@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import { MessageSquare, Smartphone } from "lucide-react";
-import { api, getToken } from "../api";
+import { API, api, getToken } from "../api";
+
+// What the person did with the prompt, for the admins' report.
+function report(event: "SHOWN" | "SAVED" | "LATER") {
+  const token = getToken();
+  void fetch(`${API}/sms/prompt-event`, {
+    method: "POST", keepalive: true,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ event })
+  }).catch(() => {});
+}
 
 // Asks everyone with no phone number on their profile to add one, so FlowDesk
 // notifications can reach them by SMS (e.g. while Outlook is down). It shows
@@ -28,6 +38,18 @@ export default function PhonePrompt({ profile, onSaved }: { profile: { id?: stri
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
 
+  const showing = !!profile?.id && !hidden && !(profile?.phone && profile.phone.trim()) && !done;
+  // Counted once per login.
+  useEffect(() => {
+    if (!showing) return;
+    try {
+      const key = "fd.phonePrompt.shownFor";
+      if (localStorage.getItem(key) === loginStamp()) return;
+      localStorage.setItem(key, loginStamp());
+    } catch { /* storage off */ }
+    report("SHOWN");
+  }, [showing]);
+
   if (!profile?.id || hidden || (profile.phone && profile.phone.trim() && !done)) return null;
 
   async function save() {
@@ -37,6 +59,7 @@ export default function PhonePrompt({ profile, onSaved }: { profile: { id?: stri
     try {
       await api.updateMyProfileContact({ phone: n });
       setDone(true);
+      report("SAVED");
       onSaved(n);
       window.setTimeout(() => setHidden(true), 2200);
     } catch (e: any) {
@@ -46,6 +69,7 @@ export default function PhonePrompt({ profile, onSaved }: { profile: { id?: stri
 
   function later() {
     try { localStorage.setItem(SNOOZE_KEY, loginStamp()); } catch { /* storage off */ }
+    report("LATER");
     setHidden(true);
   }
 

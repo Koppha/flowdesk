@@ -37,6 +37,14 @@ function ensureTables() {
         created_at timestamptz NOT NULL DEFAULT now()
       )`);
     await query(`CREATE INDEX IF NOT EXISTS sms_log_created_idx ON sms_log (created_at DESC)`);
+    await query(`
+      CREATE TABLE IF NOT EXISTS phone_prompt_events (
+        id bigserial PRIMARY KEY,
+        user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )`);
+    await query(`CREATE INDEX IF NOT EXISTS phone_prompt_events_user_idx ON phone_prompt_events (user_id, event)`);
   })().catch((err) => { ready = null; throw err; });
   return ready;
 }
@@ -153,4 +161,59 @@ export async function smsStats() {
   ]);
   const last = await query(`SELECT msisdn, kind, msg, ok, response, created_at FROM sms_log ORDER BY created_at DESC LIMIT 10`);
   return { active_users: Number(u.active), with_phone: Number(u.with_phone), valid_phone: Number(u.valid), sent_24h: Number(l.sent), failed_24h: Number(l.failed), last };
+}
+
+// ── The "add your phone number" prompt: who saw it, who added a number ─────
+export const PROMPT_EVENTS = ["SHOWN", "SAVED", "LATER"] as const;
+export async function recordPromptEvent(userId: string, event: (typeof PROMPT_EVENTS)[number]) {
+  await ensureTables();
+  // A page reload doesn't count as being asked again (10 minutes apart at least).
+  await query(
+    `INSERT INTO phone_prompt_events (user_id, event)
+     SELECT $1, $2 WHERE $2 <> 'SHOWN' OR NOT EXISTS (
+       SELECT 1 FROM phone_prompt_events WHERE user_id = $1 AND event = 'SHOWN' AND created_at > now() - interval '10 minutes')`,
+    [userId, event]
+  );
+}
+
+export type PromptPerson = {
+  id: string; full_name: string | null; email: string; employee_no: string | null; department: string | null;
+  phone: string | null; status: "ADDED" | "NOT_ADDED" | "NOT_SEEN" | "HAD_NUMBER";
+  times_shown: number; later: number; first_shown: string | null; last_shown: string | null; saved_at: string | null;
+};
+export async function promptReport() {
+  await ensureTables();
+  const rows = await query<any>(
+    `WITH ev AS (
+       SELECT user_id,
+              count(*) FILTER (WHERE event = 'SHOWN') AS times_shown,
+              count(*) FILTER (WHERE event = 'LATER') AS later,
+              min(created_at) FILTER (WHERE event = 'SHOWN') AS first_shown,
+              max(created_at) FILTER (WHERE event = 'SHOWN') AS last_shown,
+              min(created_at) FILTER (WHERE event = 'SAVED') AS saved_at
+         FROM phone_prompt_events GROUP BY user_id)
+     SELECT u.id, u.full_name, u.email, u.employee_no, u.department, nullif(trim(u.phone), '') AS phone,
+            coalesce(ev.times_shown, 0)::int AS times_shown, coalesce(ev.later, 0)::int AS later, ev.first_shown, ev.last_shown, ev.saved_at
+       FROM users u LEFT JOIN ev ON ev.user_id = u.id
+      WHERE u.is_active
+      ORDER BY u.full_name NULLS LAST, u.email`
+  );
+  const people: PromptPerson[] = rows.map((r: any) => {
+    const prompted = r.times_shown > 0 || !!r.saved_at;
+    const status = r.phone ? (prompted ? "ADDED" : "HAD_NUMBER") : (prompted ? "NOT_ADDED" : "NOT_SEEN");
+    return { ...r, status };
+  });
+  const n = (st: PromptPerson["status"]) => people.filter((p) => p.status === st).length;
+  return {
+    summary: {
+      active: people.length,
+      prompted: n("ADDED") + n("NOT_ADDED"),
+      added: n("ADDED"),
+      not_added: n("NOT_ADDED"),
+      not_seen: n("NOT_SEEN"),
+      had_number: n("HAD_NUMBER"),
+      saved_via_prompt: people.filter((p) => p.saved_at).length
+    },
+    people
+  };
 }
