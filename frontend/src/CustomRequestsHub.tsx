@@ -3,6 +3,9 @@ import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import { createPortal } from "react-dom";
 import { API, api, getToken, openBlobInNewTab } from "./api";
 import { AiTextAssist, aiPost } from "./shared/AiCowriter";
+import { Chevron, DateLine, IconTile, LIST_FRAME, Pager as RowPager, SearchBox, StatusPill, changeRequestIcon, rowStyle, usePaging } from "./shared/RowList";
+import { GuidedTour } from "./shared/GuidedTour";
+import { TOURS } from "./menu/menuTips";
 import DistributeDialog from "./components/DistributeDialog";
 import ChangeRequestWorkspace from "./components/ChangeRequestWorkspace";
 import { BrsPeoplePicker, CR_PERMISSION_OPTIONS, CR_PRESETS } from "./components/BrsPeoplePicker";
@@ -149,13 +152,9 @@ type CustomRequestsHubProps = {
 };
 
 function statusBadge(status: string) {
-  const normalized = status.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  return (
-    <span className={`custom-status-badge custom-status-${normalized || "default"}`}>
-      {status.replace(/_/g, " ")}
-    </span>
-  );
+  return <StatusPill status={status} label={status === "IN_PROGRESS" ? "Pending" : undefined} />;
 }
+const crDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 
 // Attachments are auth-gated, so a plain <a href> won't carry the bearer
 // token — fetch the blob first, then hand the browser an object URL.
@@ -723,6 +722,14 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
 
   const selectedType = types.find((t) => t.id === selectedTypeId) || null;
   const isChangeRequestType = selectedType?.code === "CHANGE_REQUEST";
+  // The three lists: search + pages of 10.
+  const crText = (s: any) => [s.data?.description_of_change, s.request_type_name, String(s.status || "").replace(/_/g, " "), s.requester_name, s.distributed_by_name, s.id].filter(Boolean).join(" ");
+  const minePaging = usePaging(mine, crText);
+  const assignedPaging = usePaging<any>(assignedToMe, crText);
+  const sharedPaging = usePaging<any>(shared, crText);
+  const listSearch = (p: { q: string; setQ: (v: string) => void }, placeholder: string) => (
+    <div style={{ display: "flex", marginBottom: 12 }}><SearchBox value={p.q} onChange={p.setQ} placeholder={placeholder} /></div>
+  );
   // Change Request: a Back-out Plan is required once Impact is Significant
   // or Major (RAID CR R3) - the server enforces the same rule.
   const isFieldRequired = (f: RequestField) =>
@@ -1590,7 +1597,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             Custom Processes — choose another process from the sidebar.
           </p>
         </div>
-        <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {isChangeRequestType && <GuidedTour id="change_request" {...TOURS.change_request} />}
+          <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
+        </div>
       </div>
 
       <div className="ep-tabs">
@@ -1622,15 +1632,20 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             ) : !shared.length ? (
               <div className="ep-empty"><p>Nothing has been distributed to you yet.</p></div>
             ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {shared.map((s) => (
-                  <div key={s.id} className="card" style={{ padding: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-                      <div>
-                        <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || s.request_type_name}</div>
-                        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              <>
+              {listSearch(sharedPaging, "Search shared requests: title, requester, who shared it…")}
+              <div style={LIST_FRAME}>
+                {sharedPaging.rows.map((s: any, idx: number) => (
+                  <div key={s.id} style={rowStyle(idx, false)}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0, flex: 1 }}>
+                        <IconTile tone="green">{changeRequestIcon(s.data, s.request_type_code)}</IconTile>
+                        <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 15 }}>{s.data?.description_of_change || s.request_type_name}</div>
+                        <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 3 }}>
                           {s.request_type_name} by {s.requester_name || "—"} · shared by {s.distributed_by_name || "—"}
                           {s.distributed_at ? ` on ${new Date(s.distributed_at).toLocaleDateString()}` : ""}
+                        </div>
                         </div>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1646,6 +1661,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                   </div>
                 ))}
               </div>
+              <RowPager paging={sharedPaging} noun="requests" />
+              </>
             )}
           </div>
         </div>
@@ -1663,8 +1680,10 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             ) : !assignedToMe.length ? (
               <div className="ep-empty"><p>No requests have assigned you as an implementer yet.</p></div>
             ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {assignedToMe.map((s) => {
+              <>
+              {listSearch(assignedPaging, "Search requests assigned to you…")}
+              <div style={LIST_FRAME}>
+                {assignedPaging.rows.map((s: any, idx: number) => {
                   const typeFields = assignedTypeFields[s.request_type_id] || [];
                   const multiFields = typeFields.filter((f) => f.field_type === "user_multi");
                   const isExpanded = expandedAssigned.has(s.id);
@@ -1676,20 +1695,21 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                     });
                   };
                   return (
-                    <div key={s.id} className="card" style={{ padding: 14 }}>
+                    <div key={s.id} style={rowStyle(idx, false)}>
                       <button
                         type="button"
                         onClick={toggleExpanded}
-                        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+                        style={{ display: "flex", alignItems: "center", gap: 14, width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "inherit", font: "inherit" }}
                       >
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <ChevronDown size={16} style={{ color: "var(--muted)", transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s", flexShrink: 0 }} />
-                          <div>
-                            <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || s.request_type_name}</div>
-                            <div style={{ fontSize: 12, color: "var(--muted)" }}>Submitted {new Date(s.created_at).toLocaleDateString()}</div>
+                        <IconTile>{changeRequestIcon(s.data, s.request_type_code)}</IconTile>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 15 }}>{s.data?.description_of_change || s.request_type_name}</div>
+                          <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 3, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                            <DateLine>Submitted {crDate(s.created_at)}</DateLine>{s.requester_name ? <span>By {s.requester_name}</span> : null}
                           </div>
                         </div>
                         {statusBadge(s.status)}
+                        <Chevron open={isExpanded} />
                       </button>
                       {isExpanded && (
                       <>
@@ -1856,6 +1876,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                   );
                 })}
               </div>
+              <RowPager paging={assignedPaging} noun="requests" />
+              </>
             )}
           </div>
         </div>
@@ -2160,18 +2182,23 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
             {!mine.length ? (
               <div className="ep-empty"><p>{isChangeRequestType ? "You have no Change Requests or drafts yet." : "You haven't submitted any requests of this type yet."}</p></div>
             ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {mine.map((s) => (
-                  <div key={s.id} className="card" style={{ padding: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setExpanded(expanded === s.id ? null : s.id)}>
-                      <div>
-                        <div style={{ fontWeight: 700 }}>{s.data?.description_of_change || (s.status === "DRAFT" ? "Untitled Change Request" : s.request_type_name)}</div>
-                        <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                          {s.status === "DRAFT" ? "Draft started" : "Submitted"} {new Date(s.created_at).toLocaleDateString()}
+              <>
+              {listSearch(minePaging, "Search your requests: title, status, person…")}
+              <div style={LIST_FRAME}>
+                {minePaging.rows.map((s, idx) => (
+                  <div key={s.id} style={rowStyle(idx, false)}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, cursor: "pointer" }} onClick={() => setExpanded(expanded === s.id ? null : s.id)}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0, flex: 1 }}>
+                        <IconTile tone={s.status === "DRAFT" ? "gray" : "blue"}>{changeRequestIcon(s.data, s.request_type_code)}</IconTile>
+                        <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 15 }}>{s.data?.description_of_change || (s.status === "DRAFT" ? "Untitled Change Request" : s.request_type_name)}</div>
+                        <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 3 }}>
+                          <DateLine>{s.status === "DRAFT" ? "Draft started" : "Submitted"} {crDate(s.created_at)}</DateLine>
                           {s.my_role && <> · You're {s.my_role === "OWNER" ? "a co-owner" : "a co-writer"}{s.requester_name ? ` — started by ${s.requester_name}` : ""}</>}
                         </div>
+                        </div>
                       </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         {s.request_type_code === "COMPUTER_REQUEST" && (
                           <RaidLogButton docType="COMPUTER_REQUEST" docId={s.id} title={`Computer Request CR-${s.id.slice(0, 8).toUpperCase()}`} users={companyDirectorySorted} small />
                         )}
@@ -2235,6 +2262,7 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                           </button>
                         )}
                         {statusBadge(s.status)}
+                        <Chevron open={expanded === s.id} />
                       </div>
                     </div>
 
@@ -2404,6 +2432,8 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
                   </div>
                 ))}
               </div>
+              <RowPager paging={minePaging} noun="requests" />
+              </>
             )}
           </div>
         </div>

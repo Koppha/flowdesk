@@ -1,3 +1,5 @@
+import { GuidedTour } from "./shared/GuidedTour";
+import { TOURS } from "./menu/menuTips";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import SignatureUpload from "./components/SignatureUpload";
 import PdfPlacePicker, { SignatureMarkPreview, type PlacePosition } from "./components/PdfPlacePicker";
@@ -307,6 +309,7 @@ export default function SignDocument() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
         <FileSignature size={22} color="#3b82f6" />
         <div style={{ fontWeight: 700, fontSize: 20, color: "var(--text)" }}>Sign a Document</div>
+        <span style={{ marginLeft: "auto" }}><GuidedTour id="signatures" {...TOURS.signatures} /></span>
       </div>
       <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>
         {mode === "quick"

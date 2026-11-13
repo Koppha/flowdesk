@@ -10,6 +10,9 @@ import OrgSearchModal, { OrgEntryChip, type OrgEntry } from "./components/OrgSea
 import { showNotice, confirmAction } from "./alerts";
 import { RichTextField } from "./shared/RichTextField";
 import { aiPost } from "./shared/AiCowriter";
+import { DateLine, ListRow, StatusPill } from "./shared/RowList";
+import { GuidedTour } from "./shared/GuidedTour";
+import { TOURS } from "./menu/menuTips";
 import { ConflictDialog, EditingBadge, PresenceBar, sendJson, usePresence, type PresentPerson } from "./shared/Coediting";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { ArrowDown, ArrowUp, MessageSquare, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, History, MoreVertical, Pencil, Plus, Send, Trash2, Users } from "lucide-react";
@@ -688,6 +691,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
           subtitle="Business Requirement Specifications — draft, route for department input, and baseline before approval."
           actions={
             <>
+              <GuidedTour id="brs" {...TOURS.brs} />
               <button className="ep-btn" onClick={() => setShowNewForm((v) => !v)}><Plus size={14} /> New BRS</button>
               <button onClick={onBack} className="ep-btn-outline custom-requests-back">Back</button>
             </>
@@ -818,50 +822,28 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                 hint={rows.length ? "Try adjusting your search criteria or filters." : undefined}
               />
             ) : (
-              <table className="ep-table">
-                <thead>
-                  <tr>
-                    <th>Title</th>
-                    <th>BRS No.</th>
-                    <th>Department</th>
-                    <th>Created By</th>
-                    <th>Last Updated</th>
-                    <th>Status</th>
-                    <th style={{ width: 80 }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedRows.map((d: any) => (
-                    <tr key={d.id} style={{ cursor: "pointer" }} onClick={() => openDoc(d.id)}>
-                      <td style={{ fontWeight: 600, fontSize: "0.87rem" }}>
-                        {d.title}
-                        {(landingTab === "MINE" || landingTab === "ASSIGNED") && d.my_role && d.my_role !== "CREATOR" && <span style={{ marginLeft: 8 }}><BrsRoleBadge role={d.my_role} /></span>}
-                      </td>
-                      <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.reference_no}</td>
-                      <td style={{ color: "var(--muted)", fontSize: 13 }}>{d.intake_data?.department || "—"}</td>
-                      <td style={{ fontSize: 13 }}>{d.requester_name || "—"}</td>
-                      <td style={{ fontSize: 13 }}>{fmtDateTime(d.updated_at)}</td>
-                      <td>{phaseBadge(d.phase)}</td>
-                      <td style={{ display: "flex", gap: 4 }}>
-                        <button className="ep-icon-btn" aria-label="Open BRS" onClick={(e) => { e.stopPropagation(); openDoc(d.id); }}>
-                          <MoreVertical size={16} />
+              <div>
+                {pagedRows.map((d: any, idx: number) => (
+                  <ListRow key={d.id} idx={idx} onClick={() => openDoc(d.id)} icon={<FileText size={20} />} tone={d.phase === "BASELINE" ? "green" : d.phase === "DRAFT" ? "gray" : "blue"}
+                    title={<>
+                      {d.title}
+                      {(landingTab === "MINE" || landingTab === "ASSIGNED") && d.my_role && d.my_role !== "CREATOR" && <span style={{ marginLeft: 8, verticalAlign: "middle" }}><BrsRoleBadge role={d.my_role} /></span>}
+                    </>}
+                    lines={[<>
+                      <span>{d.reference_no}</span>
+                      <DateLine>{new Date(d.updated_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</DateLine>
+                    </>]}
+                    right={<>
+                      <StatusPill status={d.phase} label={(STAGES as any[]).find((x) => x.key === d.phase)?.label} />
+                      {landingTab === "MINE" && d.phase === "DRAFT" && (
+                        <button className="ep-icon-btn" aria-label="Delete BRS" title="Delete this draft" disabled={deletingId === d.id}
+                          onClick={(e) => { e.stopPropagation(); void handleDeleteBrs(d); }}>
+                          <Trash2 size={16} />
                         </button>
-                        {landingTab === "MINE" && d.phase === "DRAFT" && (
-                          <button
-                            className="ep-icon-btn"
-                            aria-label="Delete BRS"
-                            title="Delete this draft"
-                            disabled={deletingId === d.id}
-                            onClick={(e) => { e.stopPropagation(); void handleDeleteBrs(d); }}
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      )}
+                    </>} />
+                ))}
+              </div>
             )}
           </div>
 
@@ -909,6 +891,7 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {doc && <GuidedTour id="brs_workspace" {...TOURS.brs_workspace} />}
           {doc && phaseBadge(doc.phase)}
           {doc && (
             <>

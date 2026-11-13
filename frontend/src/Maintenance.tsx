@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, ArrowLeft, Building2, CalendarCheck, CalendarDays, Camera, CheckCircle2, ClipboardList, Clock, FileText, Hash, History,
-  ImageIcon, Info, Lock, MapPin, MessageSquare, Paperclip, Phone, Plus, Send, Settings, ShieldCheck, Target, UserRound, Wrench, X, XCircle
+  ImageIcon, Info, Lock, MapPin, MessageSquare, Paperclip, Phone, Plus, Send, Settings, ShieldCheck, Target, UserRound, Wrench, X, XCircle,
+  Search, ChevronLeft, ChevronRight, Pencil
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, getUserFromToken } from "./api";
 import { displayOrgGroupName } from "./constants";
+import { DateLine, LIST_FRAME, ListRow, Pager as RowPager, SearchBox, StatusPill, maintenanceIcon, usePaging } from "./shared/RowList";
+import { GuidedTour } from "./shared/GuidedTour";
+import { TOURS } from "./menu/menuTips";
 
 // Maintenance Requests: staff log a problem with photos, the Admin Office
 // (step 1 of the "Maintenance Request" workflow in Workflow Builder) reviews
@@ -461,6 +465,7 @@ function RequestList({ scope, onOpen, showCounters }: { scope: Exclude<Tab, "NEW
   const shown = (rows || []).filter((r) => !q || `${r.request_no} ${r.site_name} ${r.location} ${r.description} ${r.category}`.toLowerCase().includes(q.toLowerCase()));
   // Needs-you-first: emergencies, then anything with a next step, then by date.
   const ordered = [...shown].sort((a, b) => Number(b.priority === "EMERGENCY") - Number(a.priority === "EMERGENCY") || Number(!!b.next_step) - Number(!!a.next_step) || b.created_at.localeCompare(a.created_at));
+  const paging = usePaging(ordered, () => "", 10);
   const today = new Date().toISOString().slice(0, 10);
   const counters = rows ? [
     ["To review", rows.filter((r) => r.status === "SUBMITTED").length, "#121826"],
@@ -483,36 +488,34 @@ function RequestList({ scope, onOpen, showCounters }: { scope: Exclude<Tab, "NEW
         </div>
       )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Request number, site or description" aria-label="Search" style={{ ...fieldStyle, fontSize: 14, flex: "1 1 220px", width: "auto" }} />
-        <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status" style={{ ...fieldStyle, fontSize: 14, width: "auto" }}>
+        <SearchBox value={q} onChange={(v) => { setQ(v); paging.setPage(1); }} placeholder="Search by request number, site, category or description" />
+        <select value={status} onChange={(e) => { setStatus(e.target.value); paging.setPage(1); }} aria-label="Status" style={{ ...fieldStyle, fontSize: 14, width: "auto" }}>
           <option value="open">Open</option><option value="closed">Closed</option><option value="cancelled">Cancelled</option><option value="all">All</option>
         </select>
       </div>
       {error && <div style={{ color: "#A12C2C" }}>{error}</div>}
       {!rows && !error && <div className="ep-loading"><p>Loading…</p></div>}
       {rows && !ordered.length && <div className="ep-empty"><p>Nothing here.</p></div>}
-      <div style={{ display: "grid", gap: 10 }}>
-        {ordered.map((r) => (
-          <button key={r.id} type="button" onClick={() => onOpen(r.id)}
-            style={{ textAlign: "left", font: "inherit", color: "var(--text)", background: "var(--surface)", border: r.priority === "EMERGENCY" && r.next_step ? "2px solid #B42318" : "1px solid var(--border)", borderRadius: 12, padding: "12px 14px", cursor: "pointer", display: "grid", gap: 6 }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-              <strong style={{ whiteSpace: "nowrap" }}>{r.request_no}</strong>
-              <Chip tone={STATUS_TONE[r.status]}>{r.status_label}</Chip>
-              <Chip tone={PRIORITY_TONE[r.priority]}>{r.priority_label}</Chip>
-              {r.update_requested && <UpdateFlag />}
-              <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: 12.5 }}>{fmt(r.created_at)}</span>
-            </div>
-            <div style={{ fontWeight: 600 }}>{r.site_name} · {r.location}</div>
-            <div style={{ color: "var(--muted)", fontSize: 13.5 }}>{r.category} · {r.description.slice(0, 120)}{r.description.length > 120 ? "…" : ""}</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 13, color: "var(--muted)" }}>
-              {scope !== "MINE" && <span>By {r.requester_name}</span>}
-              <span>Worker: {r.worker_name || "—"}</span>
-              <span>Target: {fmtDate(r.target_date)}</span>
-            </div>
-            {r.next_step && <div style={{ color: "#0B4F94", fontWeight: 700, fontSize: 13.5 }}>Your next step: {r.next_step}</div>}
-          </button>
-        ))}
-      </div>
+      {ordered.length > 0 && (
+        <div style={LIST_FRAME}>
+          {paging.rows.map((r, idx) => (
+            <ListRow key={r.id} idx={idx} onClick={() => onOpen(r.id)} icon={maintenanceIcon(r.category)} tone={r.priority === "EMERGENCY" ? "red" : "blue"}
+              accent={r.priority === "EMERGENCY" && r.next_step ? "#B42318" : undefined}
+              title={`${r.category} – ${r.description.slice(0, 90)}${r.description.length > 90 ? "…" : ""}`}
+              lines={[<><span>{r.location || r.site_name}</span><DateLine>{fmtDate(r.created_at)}</DateLine></>]}
+              right={<>
+                {r.next_step && (
+                  <span title={`Your next step: ${r.next_step}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: "#0B4F94" }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 99, background: "#2563eb" }} /> Your turn
+                  </span>
+                )}
+                {r.priority === "EMERGENCY" && <Chip tone={PRIORITY_TONE[r.priority]}>{r.priority_label}</Chip>}
+                <StatusPill status={r.status} label={r.status_label} />
+              </>} />
+          ))}
+        </div>
+      )}
+      {rows && <RowPager paging={paging} noun="requests" />}
     </div>
   );
 }
@@ -604,7 +607,7 @@ export function MaintenanceDetail({ id, onClose, onChanged }: { id: string; onCl
   return (
     <div style={{ display: "grid", gap: 14, maxWidth: 1100 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
-        <button type="button" className="ep-btn-outline" onClick={onClose} style={{ minHeight: 42, display: "inline-flex", alignItems: "center", gap: 8, borderRadius: 999, padding: "0 18px" }}>
+        <button type="button" onClick={onClose} style={{ minHeight: 42, display: "inline-flex", alignItems: "center", gap: 8, borderRadius: 999, padding: "0 18px", background: "#eaf2ff", color: "#1d4ed8", border: "1px solid #c7dbfb", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
           <ArrowLeft size={17} aria-hidden /> Back
         </button>
         <h2 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: "-0.01em" }}>{d.request_no}</h2>
@@ -923,6 +926,73 @@ export function MaintenanceDetailModal({ id, onClose, onDone }: { id: string; on
 }
 
 // ── Lists (Admin Office) ─────────────────────────────────────────────────────
+// A searchable, paged list: the search box (with an optional status filter)
+// and the pager under it.
+type ActiveFilter = "ALL" | "ACTIVE" | "INACTIVE";
+function usePagedList<T>(items: T[], text: (x: T) => string, isActive: (x: T) => boolean, pageSize = 10) {
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<ActiveFilter>("ALL");
+  const [page, setPage] = useState(1);
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const filtered = items.filter((x) => {
+    if (status === "ACTIVE" && !isActive(x)) return false;
+    if (status === "INACTIVE" && isActive(x)) return false;
+    const hay = text(x).toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const current = Math.min(page, pages);
+  const rows = filtered.slice((current - 1) * pageSize, current * pageSize);
+  return {
+    q, setQ: (v: string) => { setQ(v); setPage(1); }, status, setStatus: (v: ActiveFilter) => { setStatus(v); setPage(1); },
+    page: current, setPage, pages, rows, total: filtered.length, all: items.length, from: filtered.length ? (current - 1) * pageSize + 1 : 0, to: (current - 1) * pageSize + rows.length
+  };
+}
+
+function ListSearch({ list, placeholder }: { list: ReturnType<typeof usePagedList<any>>; placeholder: string }) {
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ position: "relative", flex: "1 1 240px" }}>
+        <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
+        <input style={{ ...fieldStyle, fontSize: 14, padding: "9px 32px 9px 32px" }} value={list.q} onChange={(e) => list.setQ(e.target.value)} placeholder={placeholder} aria-label={placeholder} />
+        {list.q && (
+          <button type="button" aria-label="Clear the search" onClick={() => list.setQ("")}
+            style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", border: "none", background: "none", cursor: "pointer", color: "var(--muted)", padding: 2 }}><X size={14} /></button>
+        )}
+      </div>
+      <select style={{ ...fieldStyle, fontSize: 14, padding: "9px 10px", width: "auto" }} value={list.status} onChange={(e) => list.setStatus(e.target.value as ActiveFilter)} aria-label="Show">
+        <option value="ALL">All</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
+      </select>
+    </div>
+  );
+}
+
+function Pager({ list, noun }: { list: ReturnType<typeof usePagedList<any>>; noun: string }) {
+  if (!list.all) return null;
+  const nums: Array<number | "…"> = [];
+  for (let i = 1; i <= list.pages; i++) {
+    if (i === 1 || i === list.pages || Math.abs(i - list.page) <= 1) nums.push(i);
+    else if (nums[nums.length - 1] !== "…") nums.push("…");
+  }
+  const btn = (on: boolean): React.CSSProperties => ({ minWidth: 32, height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)", background: on ? "var(--primary, #2563eb)" : "var(--surface)", color: on ? "#fff" : "var(--text)", cursor: "pointer", fontSize: 13 });
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13, color: "var(--muted)" }}>
+      <span style={{ flex: 1 }}>
+        {list.total ? `Showing ${list.from}–${list.to} of ${list.total} ${noun}` : `No ${noun} match`}{list.total !== list.all ? ` (${list.all} in all)` : ""}
+      </span>
+      {list.pages > 1 && (
+        <div style={{ display: "flex", gap: 4 }} role="navigation" aria-label={`${noun} pages`}>
+          <button type="button" style={btn(false)} disabled={list.page === 1} onClick={() => list.setPage(list.page - 1)} aria-label="Previous page"><ChevronLeft size={14} /></button>
+          {nums.map((n, i) => n === "…"
+            ? <span key={`e${i}`} style={{ alignSelf: "center", padding: "0 2px" }}>…</span>
+            : <button key={n} type="button" style={btn(n === list.page)} aria-current={n === list.page ? "page" : undefined} onClick={() => list.setPage(n)}>{n}</button>)}
+          <button type="button" style={btn(false)} disabled={list.page === list.pages} onClick={() => list.setPage(list.page + 1)} aria-label="Next page"><ChevronRight size={14} /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MaintenanceLists() {
   const [d, setD] = useState<any>(null);
   const [error, setError] = useState("");
@@ -938,6 +1008,11 @@ function MaintenanceLists() {
     setSettings({ spend_limit: r.settings.spend_limit ?? "", auto_close_working_days: r.settings.auto_close_working_days ?? "3" });
   }).catch((e: any) => setError(e.message));
   useEffect(() => { void load(); }, []);
+  const siteList = usePagedList<any>(d?.sites || [], (x) => [x.name, x.district, x.kind === "OFFICE" ? "office" : "store", ...(x.staff_groups || []).map(displayOrgGroupName)].join(" "), (x) => !!x.active);
+  const workerList = usePagedList<any>(d?.workers || [], (x) => [x.name, x.is_contractor ? "contractor" : "staff", x.contractor_company, x.contractor_phone, x.contractor_email].filter(Boolean).join(" "), (x) => !!x.active);
+  const catList = usePagedList<any>(d?.categories || [], (x) => x.name, (x) => !!x.active);
+  const siteFormRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (site) siteFormRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [site?.id, !!site]);
   const save = async (fn: () => Promise<any>, msg: string) => {
     setError(""); setNote("");
     try { await fn(); setNote(msg); await load(); } catch (e: any) { setError(e.message); }
@@ -946,7 +1021,7 @@ function MaintenanceLists() {
   const order = ["EMERGENCY", "HIGH", "MEDIUM", "LOW"];
 
   return (
-    <div style={{ display: "grid", gap: 16, maxWidth: 1000 }}>
+    <div style={{ display: "grid", gap: 16, width: "100%" }}>
       <p style={{ margin: 0, color: "var(--muted)" }}>Who is in the Admin Office is set in <strong>Workflow Builder</strong>: the step whose Action Label is <strong>Assigner</strong> in the <strong>Maintenance Request</strong> workflow (or its first step, if none is). Later steps there approve spend.</p>
       {note && <div style={{ color: "#1E6B34", fontWeight: 600 }}><CheckCircle2 size={14} style={{ verticalAlign: -2 }} /> {note}</div>}
       {error && <div role="alert" style={{ color: "#A12C2C", fontWeight: 600 }}>{error}</div>}
@@ -956,8 +1031,9 @@ function MaintenanceLists() {
           <h3 style={{ margin: 0, fontSize: 16, flex: 1 }}>Sites</h3>
           <button type="button" className="ep-btn" onClick={() => setSite({ id: null, name: "", district: "", kind: "STORE", staff_groups: [], active: true })}><Plus size={14} /> Add site</button>
         </div>
+        <ListSearch list={siteList} placeholder="Search sites by name, district or staff group" />
         {site && (
-          <div style={{ display: "grid", gap: 10, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
+          <div ref={siteFormRef} style={{ display: "grid", gap: 10, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               <label style={labelStyle}>Name *<input style={fieldStyle} value={site.name} onChange={(e) => setSite({ ...site, name: e.target.value })} /></label>
               <label style={labelStyle}>District<input style={fieldStyle} value={site.district} onChange={(e) => setSite({ ...site, district: e.target.value })} /></label>
@@ -988,20 +1064,25 @@ function MaintenanceLists() {
           <table style={{ width: "100%", minWidth: 520, borderCollapse: "collapse", fontSize: 13.5 }}>
             <thead><tr style={{ textAlign: "left", color: "var(--muted)", fontSize: 12.5 }}><th style={{ padding: 6 }}>Site</th><th style={{ padding: 6 }}>District</th><th style={{ padding: 6 }}>Staff based here</th><th style={{ padding: 6 }}></th></tr></thead>
             <tbody>
-              {d.sites.map((s: any) => (
+              {siteList.rows.map((s: any) => (
                 <tr key={s.id} style={{ borderTop: "1px solid var(--border)", opacity: s.active ? 1 : 0.55 }}>
                   <td style={{ padding: 6 }}>{s.name}{s.kind === "OFFICE" ? " (office)" : ""}{s.active ? "" : " · inactive"}</td>
                   <td style={{ padding: 6 }}>{s.district || "—"}</td>
                   <td style={{ padding: 6, color: "var(--muted)" }}>{s.staff_groups.length ? s.staff_groups.map(displayOrgGroupName).join(", ") : "—"}</td>
-                  <td style={{ padding: 6, textAlign: "right" }}><button type="button" className="ep-btn-outline" onClick={() => setSite({ ...s })}>Edit</button></td>
+                  <td style={{ padding: 6, textAlign: "right", width: 48 }}>
+                    <button type="button" className="ep-btn-outline" onClick={() => setSite({ ...s })} title={`Edit ${s.name}`} aria-label={`Edit ${s.name}`}
+                      style={{ width: 34, height: 34, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Pencil size={15} /></button>
+                  </td>
                 </tr>
               ))}
               {!d.sites.length && <tr><td colSpan={4} style={{ padding: 6, color: "var(--muted)" }}>No sites yet. Staff can't log a request until there's at least one.</td></tr>}
             </tbody>
           </table>
         </div>
+        <Pager list={siteList} noun="sites" />
       </section>
 
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 460px), 1fr))", gap: 16, alignItems: "start" }}>
       <section style={card} aria-label="Workers">
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <h3 style={{ margin: 0, fontSize: 16, flex: 1 }}>Workers</h3>
@@ -1035,8 +1116,9 @@ function MaintenanceLists() {
             <p style={{ margin: 0, color: "var(--muted)", fontSize: 12.5 }}>For a contractor, the Admin Office accepts, updates and completes the job on their behalf.</p>
           </div>
         )}
+        <ListSearch list={workerList} placeholder="Search workers by name, company or phone" />
         <div style={{ display: "grid", gap: 6 }}>
-          {d.workers.map((w: any) => (
+          {workerList.rows.map((w: any) => (
             <div key={w.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 0", borderTop: "1px solid var(--border)", opacity: w.active ? 1 : 0.55 }}>
               <span style={{ flex: 1 }}>{w.name}{w.is_contractor ? ` · contractor${w.contractor_company ? `, ${w.contractor_company}` : ""}${w.contractor_phone ? `, ${w.contractor_phone}` : ""}` : ""}</span>
               <button type="button" className="ep-btn-outline" onClick={() => void save(() => api.saveMaintenanceWorker(w.id, { active: !w.active }), w.active ? "Worker made inactive" : "Worker active again")}>{w.active ? "Make inactive" : "Make active"}</button>
@@ -1044,11 +1126,13 @@ function MaintenanceLists() {
           ))}
           {!d.workers.length && <span style={{ color: "var(--muted)" }}>No workers yet.</span>}
         </div>
+        <Pager list={workerList} noun="workers" />
       </section>
 
       <section style={card} aria-label="Categories">
         <h3 style={{ margin: 0, fontSize: 16 }}>Categories</h3>
-        {d.categories.map((c: any) => (
+        <ListSearch list={catList} placeholder="Search categories" />
+        {catList.rows.map((c: any) => (
           <div key={c.id} style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", padding: "6px 0", borderTop: "1px solid var(--border)", opacity: c.active ? 1 : 0.55 }}>
             <span style={{ flex: "1 1 160px" }}>{c.name}</span>
             <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13.5 }}>
@@ -1061,7 +1145,11 @@ function MaintenanceLists() {
           <input style={{ ...fieldStyle, fontSize: 14 }} value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="New category" aria-label="New category" />
           <button type="button" className="ep-btn" disabled={newCat.trim().length < 2} onClick={() => void save(() => api.saveMaintenanceCategory(null, { name: newCat.trim(), sort_order: d.categories.length }).then(() => setNewCat("")), "Category added")}>Add</button>
         </div>
+        <Pager list={catList} noun="categories" />
       </section>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 460px), 1fr))", gap: 16, alignItems: "start" }}>
 
       <section style={card} aria-label="Priority targets">
         <h3 style={{ margin: 0, fontSize: 16 }}>Priority targets</h3>
@@ -1099,6 +1187,7 @@ function MaintenanceLists() {
         </div>
         <button type="button" className="ep-btn" style={{ justifySelf: "start" }} onClick={() => void save(() => api.saveMaintenanceSettings({ spend_limit: settings.spend_limit.trim() === "" ? null : Number(settings.spend_limit), auto_close_working_days: Number(settings.auto_close_working_days) || 3 }), "Settings saved")}>Save settings</button>
       </section>
+      </div>
     </div>
   );
 }
@@ -1133,9 +1222,10 @@ export default function Maintenance({ openId, onOpenProcess }: { openId?: string
   if (!meta) return <div className="ep-loading" style={{ padding: 24 }}><p>Loading…</p></div>;
 
   return (
-    <div style={{ padding: "20px 16px 40px", maxWidth: 1200, boxSizing: "border-box", display: "grid", gap: 16 }}>
+    <div style={{ padding: "20px 16px 40px", width: "100%", boxSizing: "border-box", display: "grid", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h1 style={{ margin: 0, fontSize: 24, display: "flex", alignItems: "center", gap: 10, flex: 1 }}><Wrench size={22} /> Maintenance</h1>
+        <GuidedTour id="maintenance" {...TOURS.maintenance} />
       </div>
       {!meta.enabled && (
         <div role="status" style={{ padding: "12px 14px", borderRadius: 10, background: "#FFF4E5", border: "1px solid #F5C58A", color: "#6B3A00" }}>

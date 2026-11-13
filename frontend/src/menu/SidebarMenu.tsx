@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { menuTipFor, type MenuTip } from "./menuTips";
 import type { LucideIcon } from "lucide-react";
 import { ChevronDown } from "lucide-react";
 import type { MenuGroupNode, MenuLayout, MenuNode } from "./menuModel";
@@ -37,6 +39,26 @@ type Props = {
 type Stat = { visible: boolean; active: boolean; count: number; leaves: string[]; subgroups: number };
 
 export default function SidebarMenu({ layout, items, navItemClass, groupOpen, toggleGroup, groupExtraActive, onOpenPage }: Props) {
+  // Hover tips: what a page is for, shown beside the link after a short pause
+  // (not on phones, where the menu is a drawer).
+  const [tip, setTip] = useState<{ tip: MenuTip; rect: DOMRect } | null>(null);
+  const tipTimer = useRef<number | null>(null);
+  const clearTip = () => { if (tipTimer.current) window.clearTimeout(tipTimer.current); tipTimer.current = null; };
+  const showTip = (id: string, label: string) => (e: { currentTarget: HTMLElement }) => {
+    const t = menuTipFor(id, label);
+    clearTip();
+    if (!t || window.innerWidth < 760) return;
+    const el = e.currentTarget;
+    tipTimer.current = window.setTimeout(() => setTip({ tip: t, rect: el.getBoundingClientRect() }), 350);
+  };
+  const hideTip = () => { clearTip(); setTip(null); };
+  useEffect(() => {
+    if (!tip) return;
+    window.addEventListener("scroll", hideTip, true);
+    return () => window.removeEventListener("scroll", hideTip, true);
+  }, [tip]);
+  useEffect(() => () => clearTip(), []);
+
   // What each node contains that this user can see - computed bottom-up so a
   // group is only drawn when something inside it is visible.
   const stats = new Map<string, Stat>();
@@ -71,7 +93,8 @@ export default function SidebarMenu({ layout, items, navItemClass, groupOpen, to
   };
 
   const link = (key: string, depth: number, Icon: LucideIcon, label: string, active: boolean, onClick: () => void, badge?: number, trailing?: ReactNode) => (
-    <a key={key} href="#" className={navItemClass(active)} onClick={(e) => { e.preventDefault(); onClick(); }}>
+    <a key={key} href="#" className={navItemClass(active)} onClick={(e) => { e.preventDefault(); hideTip(); onClick(); }}
+      onMouseEnter={showTip(key, label)} onMouseLeave={hideTip} onFocus={showTip(key, label)} onBlur={hideTip}>
       {depth === 0 ? <span className="sidebar-nav-icon"><Icon size={18} aria-hidden /></span> : <Icon size={14} aria-hidden />}
       {label}
       {badge !== undefined && (depth === 0 ? <b>{badge}</b> : <span className="inbox-count-chip">{badge}</span>)}
@@ -110,5 +133,20 @@ export default function SidebarMenu({ layout, items, navItemClass, groupOpen, to
     return link(n.id, depth, d.icon, d.label, d.active, d.onClick, d.badge);
   };
 
-  return <>{layout.nodes.map((n) => render(n, 0))}</>;
+  const tipCard = tip && createPortal(
+    <div role="tooltip" style={{
+      position: "fixed", zIndex: 2500, left: tip.rect.right + 10, top: Math.max(8, Math.min(tip.rect.top - 6, window.innerHeight - 230)),
+      width: 300, background: "var(--surface, #fff)", color: "var(--text, #111827)", border: "1px solid var(--border, #e5e7eb)",
+      borderRadius: 12, boxShadow: "0 14px 34px rgba(0,0,0,.18)", padding: "12px 14px", pointerEvents: "none", fontSize: 12.5, lineHeight: 1.45
+    }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{tip.tip.title}</div>
+      <div style={{ color: "var(--muted, #6b7280)", marginBottom: 6 }}>{tip.tip.text}</div>
+      <ul style={{ margin: 0, paddingLeft: 16, display: "grid", gap: 3 }}>
+        {tip.tip.points.map((p) => <li key={p}>{p}</li>)}
+      </ul>
+    </div>,
+    document.body
+  );
+
+  return <>{layout.nodes.map((n) => render(n, 0))}{tipCard}</>;
 }
