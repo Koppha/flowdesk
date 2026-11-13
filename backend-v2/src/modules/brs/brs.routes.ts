@@ -3,6 +3,7 @@ import { hasDistributionAccess } from "../distributions/distributions.routes.js"
 import { z } from "zod";
 import { type AuthedRequest, requireAuth, requireFeatureAccess } from "../../lib/auth.js";
 import { AI_COWRITER_FEATURE, AI_COWRITER_ROLES, CowriteSchema, cowriteBrsSection } from "../../lib/aiCowriter.js";
+import { PresenceSchema, checkIn } from "../../lib/coediting.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query, withTransaction } from "../../lib/db.js";
 import { notifyBrsPeopleAdded, notifyBrsReviewersAdded, notifyBrsSectionAssigned, notifyCustomRequestStep } from "../../lib/notifications.js";
@@ -579,7 +580,9 @@ brsRouter.patch("/:id/intake", async (req: AuthedRequest, res, next) => {
 });
 
 // PATCH /brs/:id/sections/:sectionId — write a section's content.
-const UpdateSectionSchema = z.object({ content_html: z.string() });
+// base_updated_at: the version the writer started from - a save over a newer
+// save by someone else is refused (409, with theirs) unless force is set.
+const UpdateSectionSchema = z.object({ content_html: z.string(), base_updated_at: z.string().nullish(), force: z.boolean().optional() });
 brsRouter.patch("/:id/sections/:sectionId", async (req: AuthedRequest, res, next) => {
   try {
     const parsed = UpdateSectionSchema.safeParse(req.body);
@@ -602,12 +605,25 @@ brsRouter.patch("/:id/sections/:sectionId", async (req: AuthedRequest, res, next
     await assertCanEditSection(doc, section.id, req.user!);
 
     // Unchanged content isn't a new version.
-    if ((section.content_html ?? "") === parsed.data.content_html) return res.json({ ok: true, unchanged: true });
+    if ((section.content_html ?? "") === parsed.data.content_html) return res.json({ ok: true, unchanged: true, updated_at: section.updated_at });
 
-    await query(
+    // Someone else saved this section after this writer started editing it.
+    const base = parsed.data.base_updated_at ? new Date(parsed.data.base_updated_at).getTime() : NaN;
+    if (!parsed.data.force && Number.isFinite(base) && section.updated_at && new Date(section.updated_at).getTime() > base) {
+      const by = (await query<{ full_name: string | null }>(
+        `SELECT u.full_name FROM brs_document_revisions r LEFT JOIN users u ON u.id = r.actor_id
+          WHERE r.section_id = $1 AND r.kind = 'SECTION_SAVED' ORDER BY r.created_at DESC LIMIT 1`, [section.id]
+      ))[0]?.full_name ?? null;
+      return res.status(409).json({
+        error: `${by || "Someone"} saved this section while you were editing it`,
+        conflict: { by, updated_at: section.updated_at, content_html: section.content_html ?? "" }
+      });
+    }
+
+    const saved = await query<{ updated_at: string }>(
       `UPDATE brs_document_sections
           SET content_html = $1, status = CASE WHEN status = 'PENDING' THEN 'IN_PROGRESS' ELSE status END, updated_at = now()
-        WHERE id = $2`,
+        WHERE id = $2 RETURNING updated_at`,
       [parsed.data.content_html, section.id]
     );
     await recordBrsRevision({
@@ -615,7 +631,30 @@ brsRouter.patch("/:id/sections/:sectionId", async (req: AuthedRequest, res, next
       summary: `${doc.phase === "APPROVAL" ? "Edited during approval" : "Saved"}: ${section.title}`,
       sectionId: section.id, sectionTitle: section.title, contentHtml: parsed.data.content_html
     });
-    return res.json({ ok: true });
+    return res.json({ ok: true, updated_at: saved[0]?.updated_at ?? null });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /brs/:id/presence — working on the BRS together: check in (which
+// section you're editing), and get who else is here and when each section was
+// last saved (so open pages pick up each other's saves).
+brsRouter.post("/:id/presence", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = PresenceSchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw badRequest("Invalid presence");
+    const doc = await loadDocumentOr404(req.params.id);
+    await assertCanViewDocument(doc, req.user!);
+    const people = await checkIn("BRS", doc.id, req.user!.userId, parsed.data);
+    if (parsed.data.leaving) return res.json({ people: [] });
+    const sections = await query<{ id: string; updated_at: string; by: string | null }>(
+      `SELECT s.id, s.updated_at,
+              (SELECT u.full_name FROM brs_document_revisions r LEFT JOIN users u ON u.id = r.actor_id
+                WHERE r.section_id = s.id AND r.kind = 'SECTION_SAVED' ORDER BY r.created_at DESC LIMIT 1) AS by
+         FROM brs_document_sections s WHERE s.document_id = $1`, [doc.id]
+    );
+    return res.json({ people, phase: doc.phase, sections });
   } catch (err) {
     return next(err);
   }

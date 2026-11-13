@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { RaidLog } from "./RaidLog";
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, Download, FileText, History, MessageSquare, Pencil, Plus, Send, ShieldAlert, Trash2, Users, X } from "lucide-react";
@@ -8,6 +8,7 @@ import type { DirectoryUser } from "../shared/ApproverCombobox";
 import { BrsPeoplePicker, BrsRoleBadge, CR_PERMISSION_OPTIONS, CR_PRESETS, describeCrPermissions } from "./BrsPeoplePicker";
 import { OrgEntryChip, type OrgEntry } from "./OrgSearchModal";
 import { AiTextAssist, aiPost } from "../shared/AiCowriter";
+import { ConflictDialog, EditingBadge, PresenceBar, sendJson, usePresence } from "../shared/Coediting";
 
 // One Change Request with everyone working on it: the form by section, extra
 // sections added to this request, owners and co-writers, comments, the full
@@ -83,6 +84,25 @@ export default function ChangeRequestWorkspace(props: {
   const [commentFor, setCommentFor] = useState<string | null>(null);
   const [lastSeen, setLastSeen] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  // Working together: what each edit started from (to catch clashes), and a
+  // save that clashed with someone else's.
+  const [editBase, setEditBase] = useState<Record<string, any>>({});
+  const [sectionBase, setSectionBase] = useState<Record<string, string>>({});
+  const [conflict, setConflict] = useState<{ title: string; by: string | null; theirs: ReactNode; keepMine: () => void; takeTheirs: () => void } | null>(null);
+  const loadedAt = useRef<string | null>(null);
+  const draftIds = Object.keys(sectionDrafts);
+  const people = usePresence<{ people: any[]; updated_at: string | null }>(
+    `/custom-requests/${submissionId}/presence`,
+    { section_key: editingSection ?? draftIds[0] ?? null, editing: !!editingSection || draftIds.length > 0 },
+    (d) => {
+      // Someone saved: refresh. Edits in progress live apart (buffer and
+      // section drafts), so nothing being typed is lost.
+      if (d.updated_at && detail?.updated_at && new Date(d.updated_at) > new Date(detail.updated_at) && loadedAt.current !== d.updated_at) {
+        loadedAt.current = d.updated_at;
+        void load();
+      }
+    }
+  );
 
   async function load() {
     try {
@@ -139,15 +159,29 @@ export default function ChangeRequestWorkspace(props: {
   const isNew = (r: Revision) => !!lastSeen && r.actor_id !== currentUserId && new Date(r.created_at) > new Date(lastSeen);
   const afterChange = async () => { await load(); onChanged?.(); };
 
-  async function saveSection(keys: string[]) {
+  async function saveSection(keys: string[], force = false) {
     const data: Record<string, any> = {};
+    const base: Record<string, any> = {};
     for (const k of keys) {
       const f = fieldByKey.get(k);
-      if (f && !(f.field_type === "user_multi" && ws!.status !== "DRAFT")) data[k] = buffer[k] ?? null;
+      if (f && !(f.field_type === "user_multi" && ws!.status !== "DRAFT")) { data[k] = buffer[k] ?? null; base[k] = editBase[k] ?? null; }
     }
     setSaving(true);
     try {
-      await api.crSaveFields(submissionId, data);
+      const r = await sendJson("PATCH", `/custom-requests/${submissionId}/fields`, { data, base, force });
+      if (r.status === 409 && r.data?.conflict) {
+        const c = r.data.conflict;
+        setConflict({
+          title: c.fields.length === 1 ? `"${c.fields[0].label}"` : `${c.fields.length} fields`, by: c.by,
+          theirs: <div style={{ display: "grid", gap: 8 }}>{c.fields.map((x: any) => (
+            <div key={x.key}><div style={{ fontWeight: 700, fontSize: 12 }}>{x.label}</div><div style={{ whiteSpace: "pre-wrap" }}>{formatValue(fieldByKey.get(x.key), x.theirs)}</div></div>
+          ))}</div>,
+          keepMine: () => void saveSection(keys, true),
+          takeTheirs: () => { setEditingSection(null); void afterChange(); }
+        });
+        return;
+      }
+      if (!r.ok) throw new Error(r.data?.error || "Couldn't save.");
       setEditingSection(null);
       await afterChange();
     } catch (e: any) { void showNotice(e?.message || "Couldn't save."); } finally { setSaving(false); }
@@ -176,11 +210,26 @@ export default function ChangeRequestWorkspace(props: {
       await afterChange();
     } catch (e: any) { void showNotice(e?.message || "Couldn't add the section."); } finally { setSaving(false); }
   }
-  async function saveCustomSection(s: CustomSection) {
+  async function saveCustomSection(s: CustomSection, force = false) {
     setSaving(true);
-    try {
-      await api.crUpdateSection(submissionId, s.id, { content: sectionDrafts[s.id] ?? s.content });
+    const content = sectionDrafts[s.id] ?? s.content;
+    const done = () => {
       setSectionDrafts((d) => { const n = { ...d }; delete n[s.id]; return n; });
+      setSectionBase((b) => { const n = { ...b }; delete n[s.id]; return n; });
+    };
+    try {
+      const r = await sendJson("PATCH", `/custom-requests/${submissionId}/sections/${s.id}`, { content, base_content: sectionBase[s.id] ?? s.content, force });
+      if (r.status === 409 && r.data?.conflict) {
+        setConflict({
+          title: `"${s.title}"`, by: r.data.conflict.by,
+          theirs: <div style={{ whiteSpace: "pre-wrap" }}>{r.data.conflict.content || "(empty)"}</div>,
+          keepMine: () => void saveCustomSection(s, true),
+          takeTheirs: () => { done(); void afterChange(); }
+        });
+        return;
+      }
+      if (!r.ok) throw new Error(r.data?.error || "Couldn't save the section.");
+      done();
       await afterChange();
     } catch (e: any) { void showNotice(e?.message || "Couldn't save the section."); } finally { setSaving(false); }
   }
@@ -264,6 +313,13 @@ export default function ChangeRequestWorkspace(props: {
         <HistoryView submissionId={submissionId} fieldByKey={fieldByKey} formatValue={formatValue} lastSeen={lastSeen} currentUserId={currentUserId} />
       ) : (
         <div style={{ display: "grid", gap: 14 }}>
+          {conflict && (
+            <ConflictDialog title={conflict.title} by={conflict.by} theirs={conflict.theirs}
+              onCancel={() => setConflict(null)}
+              onTakeTheirs={() => { const c = conflict; setConflict(null); c.takeTheirs(); }}
+              onKeepMine={() => { const c = conflict; setConflict(null); c.keepMine(); }} />
+          )}
+          <PresenceBar people={people} sectionTitle={(k) => ws.form_sections.find((x) => x.key === k)?.title ?? ws.custom_sections.find((x) => x.id === k)?.title ?? null} />
           {/* Rolled back for correction: say who sent it back and why, until it's resubmitted. */}
           {(() => {
             if (ws.status !== "DRAFT") return null;
@@ -345,10 +401,11 @@ export default function ChangeRequestWorkspace(props: {
               <div key={s.key} className="card" style={{ padding: 14 }}>
                 {sectionHead(s.key, s.title, ws.can_edit_fields && renderFieldEditor && !isEditing && (
                   <button className="ep-btn-outline" style={{ fontSize: 12, padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 4 }}
-                    onClick={() => { setBuffer({ ...(detail.data || {}) }); setEditingSection(s.key); }}>
+                    onClick={() => { setBuffer({ ...(detail.data || {}) }); setEditBase({ ...(detail.data || {}) }); setEditingSection(s.key); }}>
                     <Pencil size={12} /> Edit
                   </button>
                 ))}
+                <EditingBadge people={people} sectionKey={s.key} />
                 {isEditing && renderFieldEditor ? (
                   <>
                     <div className="ep-form-fields-grid">
@@ -394,11 +451,13 @@ export default function ChangeRequestWorkspace(props: {
                   )}
                 </>)}
                 {s.description && <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>{s.description}</div>}
+                <EditingBadge people={people} sectionKey={s.id} />
                 {perms.edit && editable ? (
                   <>
-                    <textarea className="ep-form-textarea" rows={5} value={draft ?? s.content} onChange={(e) => setSectionDrafts((d) => ({ ...d, [s.id]: e.target.value }))}
+                    <textarea className="ep-form-textarea" rows={5} value={draft ?? s.content}
+                      onChange={(e) => { const v = e.target.value; setSectionBase((b) => (s.id in b ? b : { ...b, [s.id]: s.content })); setSectionDrafts((d) => ({ ...d, [s.id]: v })); }}
                       placeholder="Write this section…" style={{ width: "100%" }} />
-                    <AiTextAssist label={s.title} value={draft ?? s.content} onChange={(v) => setSectionDrafts((d) => ({ ...d, [s.id]: v }))}
+                    <AiTextAssist label={s.title} value={draft ?? s.content} onChange={(v) => { setSectionBase((b) => (s.id in b ? b : { ...b, [s.id]: s.content })); setSectionDrafts((d) => ({ ...d, [s.id]: v })); }}
                       request={(p) => aiPost<{ text: string; model: string }>("/custom-requests/ai-write", {
                         ...p, field_key: `section:${s.id}`, field_label: (s.description ? `${s.title} (${s.description})` : s.title).slice(0, 200), values: detail.data || {}
                       }).then((r) => ({ result: r.text, model: r.model }))} />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RaidLogButton, RaidRegisterButton } from "./components/RaidLog";
 import Swal from "sweetalert2";
 import { API, api, getToken, openBlobInNewTab } from "./api";
@@ -10,6 +10,7 @@ import OrgSearchModal, { OrgEntryChip, type OrgEntry } from "./components/OrgSea
 import { showNotice, confirmAction } from "./alerts";
 import { RichTextField } from "./shared/RichTextField";
 import { aiPost } from "./shared/AiCowriter";
+import { ConflictDialog, EditingBadge, PresenceBar, sendJson, usePresence, type PresentPerson } from "./shared/Coediting";
 import { ApproverCombobox, type DirectoryUser } from "./shared/ApproverCombobox";
 import { ArrowDown, ArrowUp, MessageSquare, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Clock, Download, FileText, History, MoreVertical, Pencil, Plus, Send, Trash2, Users } from "lucide-react";
 // Generic filter-bar/empty-state/page-header pieces built for the Finance
@@ -280,6 +281,58 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId]);
 
+  // ── Working together ──
+  // Sections with unsaved changes here (never overwritten by others' saves),
+  // the one being typed in, sections someone else saved meanwhile, and a
+  // save that clashed with theirs.
+  const dirtyRef = useRef(new Set<string>());
+  const [typingIn, setTypingIn] = useState<string | null>(null);
+  const [savedByOthers, setSavedByOthers] = useState<Record<string, string | null>>({});
+  const [conflict, setConflict] = useState<{ sectionId: string; title: string; mine: string; theirs: string; by: string | null; updated_at: string } | null>(null);
+  const norm = (h: string) => { const d = document.createElement("div"); d.innerHTML = h || ""; return d.innerHTML; };
+
+  function sectionEdited(s: any, html: string) {
+    if (s.__orig === undefined) s.__orig = norm(s.content_html || "");
+    s.content_html = html;
+    if (html !== s.__orig) { dirtyRef.current.add(s.id); if (typingIn !== s.id) setTypingIn(s.id); }
+    else { dirtyRef.current.delete(s.id); if (typingIn === s.id) setTypingIn(null); }
+  }
+
+  const people: PresentPerson[] = usePresence<{ people: PresentPerson[]; phase: string; sections: Array<{ id: string; updated_at: string; by: string | null }> }>(
+    view === "workspace" && doc?.id ? `/brs/${doc.id}/presence` : null,
+    { section_key: typingIn, editing: !!typingIn },
+    (d) => {
+      if (!doc || !Array.isArray(d.sections)) return;
+      const local = new Map<string, any>(doc.sections.map((s: any) => [s.id, s]));
+      const sameSet = d.sections.length === local.size && d.sections.every((x) => local.has(x.id));
+      if (!sameSet || d.phase !== doc.phase) { if (!dirtyRef.current.size) loadDoc(doc.id); return; }
+      const newer = d.sections.filter((x) => { const s = local.get(x.id); return s && x.updated_at && (!s.updated_at || new Date(x.updated_at) > new Date(s.updated_at)); });
+      if (!newer.length) return;
+      const mine = newer.filter((x) => dirtyRef.current.has(x.id));
+      if (mine.length) setSavedByOthers((m) => { const n = { ...m }; for (const x of mine) n[x.id] = x.by; return n; });
+      if (mine.length < newer.length) {
+        api.brsDetail(doc.id).then((fresh: any) => {
+          setDoc((cur: any) => {
+            if (!cur || cur.id !== fresh.id) return cur;
+            const fm = new Map<string, any>(fresh.sections.map((s: any) => [s.id, s]));
+            return { ...cur, sections: cur.sections.map((s: any) => (dirtyRef.current.has(s.id) ? s : fm.get(s.id) ?? s)) };
+          });
+        }).catch(() => {});
+      }
+    }
+  );
+  const sectionTitleOf = (id: string) => doc?.sections?.find((s: any) => s.id === id)?.title ?? null;
+
+  function takeTheirs(c: NonNullable<typeof conflict>) {
+    const s = doc?.sections?.find((x: any) => x.id === c.sectionId);
+    if (s) { s.content_html = c.theirs; s.updated_at = c.updated_at; s.__orig = undefined; }
+    dirtyRef.current.delete(c.sectionId);
+    if (typingIn === c.sectionId) setTypingIn(null);
+    setSavedByOthers((m) => { const n = { ...m }; delete n[c.sectionId]; return n; });
+    setDoc((cur: any) => (cur ? { ...cur, sections: [...cur.sections] } : cur));
+    setConflict(null);
+  }
+
   function openDoc(id: string) {
     setDocId(id);
     setChain([{ approver_id: "", position_name: "", decision_type: "APPROVE" }]);
@@ -328,11 +381,21 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
     }
   }
 
-  async function saveSection(sectionId: string, html: string) {
+  async function saveSection(sectionId: string, html: string, force = false) {
     if (!doc) return;
     setSavingSection(sectionId);
+    const s = doc.sections.find((x: any) => x.id === sectionId);
     try {
-      await api.updateBrsSection(doc.id, sectionId, html);
+      const r = await sendJson("PATCH", `/brs/${doc.id}/sections/${sectionId}`, { content_html: html, base_updated_at: s?.updated_at ?? null, force });
+      if (r.status === 409 && r.data?.conflict) {
+        setConflict({ sectionId, title: `"${s?.title || "this section"}"`, mine: html, theirs: r.data.conflict.content_html, by: r.data.conflict.by, updated_at: r.data.conflict.updated_at });
+        return;
+      }
+      if (!r.ok) throw new Error(r.data?.error || "Failed to save this section");
+      if (s) { s.updated_at = r.data?.updated_at ?? s.updated_at; s.__orig = undefined; }
+      dirtyRef.current.delete(sectionId);
+      if (typingIn === sectionId) setTypingIn(null);
+      setSavedByOthers((m) => { const n = { ...m }; delete n[sectionId]; return n; });
     } catch (e: any) {
       void showNotice(e?.message || "Failed to save this section");
     } finally {
@@ -827,6 +890,14 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
   // ── Workspace ──────────────────────────────────────────────────────────────
   return (
     <div className="custom-requests-page">
+      {conflict && (
+        <ConflictDialog title={conflict.title} by={conflict.by}
+          theirs={<div className="brs-richtext-editable" dangerouslySetInnerHTML={{ __html: conflict.theirs || "<p>(empty)</p>" }} />}
+          onCancel={() => setConflict(null)}
+          onTakeTheirs={() => takeTheirs(conflict)}
+          onKeepMine={() => { const c = conflict; setConflict(null); void saveSection(c.sectionId, c.mine, true); }} />
+      )}
+      {people.length > 0 && <div style={{ marginBottom: 10 }}><PresenceBar people={people} sectionTitle={sectionTitleOf} /></div>}
       <div className="custom-requests-header">
         <div>
           <div className="custom-requests-title-row">
@@ -1121,10 +1192,16 @@ export default function BrsStudio({ profile, onBack, onCreateChangeRequest }: Br
                           )}
                         </div>
 
+                        <EditingBadge people={people} sectionKey={s.id} />
+                        {s.id in savedByOthers && (
+                          <div style={{ fontSize: 12, color: "#9a3412", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 6, padding: "4px 8px", margin: "4px 0" }}>
+                            {savedByOthers[s.id] || "Someone"} saved this section after you started editing. When you save, you'll choose which version to keep.
+                          </div>
+                        )}
                         <RichTextField
                           value={s.content_html || ""}
                           readOnly={!canEdit}
-                          onChange={(html) => { s.content_html = html; }}
+                          onChange={(html) => sectionEdited(s, html)}
                           aiTitle={s.title}
                           ai={canEdit ? (p) => aiPost<{ html: string; model: string }>(`/brs/${doc.id}/sections/${s.id}/ai`, p).then((r) => ({ result: r.html, model: r.model })) : undefined}
                         />

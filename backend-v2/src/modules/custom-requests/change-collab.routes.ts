@@ -4,6 +4,7 @@ import { type AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { notifyChangeRequestPeopleAdded } from "../../lib/notifications.js";
+import { PresenceSchema, checkIn, sameValue } from "../../lib/coediting.js";
 import { renderChangeRequestRecordPdf } from "../../lib/pdf/changeRequestRecordPdf.js";
 import type { PdfLetterhead } from "../../lib/pdf/genericPdfRenderer.js";
 import { brsActorOrg, brsMemberMatch, brsMemberParams } from "../brs/brs.service.js";
@@ -360,9 +361,29 @@ changeCollabRouter.put("/:id/people", async (req: AuthedRequest, res, next) => {
 // rights changes anything; once submitted, Change Assignees go through the
 // assignee endpoints and the form's assignees may still fill in the
 // implementation side, as before.
+// POST /custom-requests/:id/presence — working on the Change Request
+// together: check in (which section you're editing) and get who else is here
+// and when it last changed, so open pages pick up each other's saves.
+changeCollabRouter.post("/:id/presence", async (req: AuthedRequest, res, next) => {
+  try {
+    const parsed = PresenceSchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw badRequest("Invalid presence");
+    const { sub, fields } = await loadChangeRequest(req.params.id);
+    await assertView(sub, fields, req);
+    const people = await checkIn("CR", sub.id, req.user!.userId, parsed.data);
+    if (parsed.data.leaving) return res.json({ people: [] });
+    return res.json({ people, status: sub.status, updated_at: sub.updated_at });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// base: the values the writer started from. Only the fields they changed are
+// saved (so others' saves to the rest of the section stay), and a field
+// someone else changed meanwhile is refused (409) unless force is set.
 changeCollabRouter.patch("/:id/fields", async (req: AuthedRequest, res, next) => {
   try {
-    const parsed = z.object({ data: z.record(z.string(), z.any()) }).safeParse(req.body);
+    const parsed = z.object({ data: z.record(z.string(), z.any()), base: z.record(z.string(), z.any()).optional(), force: z.boolean().optional() }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
     const { sub, fields } = await loadChangeRequest(req.params.id);
     if (!EDITABLE_STATUSES.includes(sub.status)) throw badRequest("This Change Request can no longer be edited");
@@ -377,6 +398,22 @@ changeCollabRouter.patch("/:id/fields", async (req: AuthedRequest, res, next) =>
       if (!type) throw badRequest(`Unknown field "${key}"`);
       if (type === "user_multi" && sub.status !== "DRAFT") throw badRequest(`"${key}" is changed through the assignee list once submitted`);
       updates[key] = value;
+    }
+    if (parsed.data.base) {
+      const base = parsed.data.base;
+      for (const k of Object.keys(updates)) if (sameValue(updates[k], base[k])) delete updates[k];
+      const clashes = Object.keys(updates).filter((k) => !sameValue(sub.data?.[k], base[k]) && !sameValue(sub.data?.[k], updates[k]));
+      if (clashes.length && !parsed.data.force) {
+        const by = (await query<{ full_name: string | null }>(
+          `SELECT u.full_name FROM cr_revisions r LEFT JOIN users u ON u.id = r.actor_id
+            WHERE r.submission_id = $1 AND r.kind = 'FIELDS_SAVED' AND r.actor_id <> $2 ORDER BY r.created_at DESC LIMIT 1`, [sub.id, req.user!.userId]
+        ))[0]?.full_name ?? null;
+        const label = new Map(fields.map((f) => [f.field_key, f.field_label]));
+        return res.status(409).json({
+          error: `${by || "Someone"} changed ${clashes.length === 1 ? "a field" : "fields"} you edited`,
+          conflict: { by, fields: clashes.map((k) => ({ key: k, label: label.get(k) || k, theirs: sub.data?.[k] ?? null, mine: updates[k] })) }
+        });
+      }
     }
     const changes = diffFields(sub.data || {}, updates, fields);
     if (!changes.length) return res.json({ ok: true, unchanged: true });
@@ -423,7 +460,10 @@ changeCollabRouter.post("/:id/sections", async (req: AuthedRequest, res, next) =
 
 changeCollabRouter.patch("/:id/sections/:sid", async (req: AuthedRequest, res, next) => {
   try {
-    const parsed = z.object({ content: z.string().max(20000).optional(), title: z.string().trim().min(1).max(120).optional() }).safeParse(req.body);
+    const parsed = z.object({
+      content: z.string().max(20000).optional(), title: z.string().trim().min(1).max(120).optional(),
+      base_content: z.string().optional(), force: z.boolean().optional()
+    }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid section", parsed.error.flatten());
     const { sub, fields } = await loadChangeRequest(req.params.id);
     if (!EDITABLE_STATUSES.includes(sub.status)) throw badRequest("This Change Request can no longer be edited");
@@ -432,6 +472,12 @@ changeCollabRouter.patch("/:id/sections/:sid", async (req: AuthedRequest, res, n
     if (parsed.data.title !== undefined && !perms.manage) throw forbidden("Only the creator or a co-owner can rename sections");
     const section = (await query<any>(`SELECT * FROM cr_custom_sections WHERE id = $1 AND submission_id = $2`, [req.params.sid, sub.id]))[0];
     if (!section) throw notFound("Section not found");
+    // Someone else saved this section after this writer started.
+    if (parsed.data.content !== undefined && parsed.data.base_content !== undefined && !parsed.data.force
+        && (section.content ?? "") !== parsed.data.base_content && (section.content ?? "") !== parsed.data.content) {
+      const by = (await query<{ full_name: string | null }>(`SELECT full_name FROM users WHERE id = $1`, [section.updated_by_id]))[0]?.full_name ?? null;
+      return res.status(409).json({ error: `${by || "Someone"} saved this section while you were editing it`, conflict: { by, content: section.content ?? "" } });
+    }
 
     const changes = [];
     if (parsed.data.title !== undefined && parsed.data.title !== section.title) changes.push({ key: "title", label: "Section title", before: section.title, after: parsed.data.title });
