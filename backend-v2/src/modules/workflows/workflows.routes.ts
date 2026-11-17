@@ -102,9 +102,15 @@ async function ensureActionTypesTable() {
     INSERT INTO workflow_action_types (code, label, is_system, sort_order) VALUES
       ('APPROVE',       'Approver',         true, 1),
       ('COUNTER_SIGN',  'Counter Signer',   true, 2),
-      ('MARK_PAID',     'Payment Officer',  true, 3)
+      ('MARK_PAID',     'Payment Officer',  true, 3),
+      ('ASSIGN',        'Assigner',         true, 4),
+      ('ASSIGNEE',      'Assignee',         true, 5)
     ON CONFLICT (code) DO NOTHING
   `);
+  // Maintenance finds its Admin Office (ASSIGN) and workers (ASSIGNEE) by
+  // these codes, so they're built in: environments where they were added by
+  // hand keep their label but can no longer delete them.
+  await query(`UPDATE workflow_action_types SET is_system = true WHERE code IN ('ASSIGN', 'ASSIGNEE') AND NOT is_system`);
 }
 
 async function ensureAssignedUserColumn() {
