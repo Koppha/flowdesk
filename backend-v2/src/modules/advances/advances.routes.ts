@@ -3,6 +3,7 @@ import { z } from "zod";
 import { destinationProblem, travelRegionOf } from "../../lib/travelRegions.js";
 import { tripDetailsForAdvances } from "../../lib/clearanceTrip.js";
 import { clearanceDueSql, isUnclearedSql, TODAY_SQL } from "../../lib/clearanceDue.js";
+import { assertNoRunningSalaryAdvance } from "../../lib/salaryAdvances.js";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
@@ -439,7 +440,9 @@ function travelAdvanceCap(requester: { employment_type?: string | null }): numbe
   return isPermanentEmployee({ employment_type: requester.employment_type ?? null }) ? 5 : 3;
 }
 
-async function assertSingleOutstandingTravelAdvance(requester: { id: string; employment_type?: string | null }, type: string, client?: PoolClient) {
+async function assertSingleOutstandingTravelAdvance(requester: { id: string; employment_type?: string | null }, type: string, client?: PoolClient, excludeId?: string) {
+  // Salary advances: one at a time, until it's repaid (lib/salaryAdvances.ts).
+  if (type === "SALARY") return assertNoRunningSalaryAdvance(requester.id, client, excludeId);
   if (isReservedAdvanceType(type)) return;
   const cap = travelAdvanceCap(requester);
   const outstanding = await countOutstandingTravelAdvances(requester.id, client);
@@ -1057,7 +1060,9 @@ advancesRouter.get("/payments", async (req: AuthedRequest, res, next) => {
          LEFT JOIN divisions dv ON dv.id = u.division_id
          LEFT JOIN external_payees ep ON ep.id = ar.external_beneficiary_id
         WHERE ar.status NOT IN ('DRAFT','REJECTED','CANCELLED')
-          AND ar.type <> 'SALARY'
+          -- Salary advances included: since Nov 2026 they go through Finance
+          -- like travel (workflow Capture step -> Capture Inbox -> Payments),
+          -- no longer paid from Salaries.
         ORDER BY ar.created_at DESC`
     );
 
@@ -1637,7 +1642,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     // checked here, when a draft would become a live request.
     if (adv.status === "DRAFT" && !adv.external_beneficiary_id) {
       const owner = await getUserAccountState(adv.requester_id);
-      await assertSingleOutstandingTravelAdvance(owner, adv.type);
+      await assertSingleOutstandingTravelAdvance(owner, adv.type, undefined, adv.id);
     }
     if (!String(adv.payment_account || "").trim()) throw badRequest("payment_account is required");
     let needsAccommodation = false;
@@ -1872,7 +1877,7 @@ advancesRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
           status: firstStatus,
           advanceType: notificationContext.type,
           requesterName: notificationContext.full_name,
-          requesterEmail: notificationContext.email,
+          requesterEmail: null, // the requester hears once, not once per approver
           department: notificationContext.department,
           requestedTotal: Number(notificationContext.requested_total),
           currency: notificationContext.currency,
@@ -2295,7 +2300,7 @@ export async function performAdvanceApprove(
           status: nextStatus,
           advanceType: notificationContext.type,
           requesterName: notificationContext.full_name,
-          requesterEmail: notificationContext.email,
+          requesterEmail: null, // the requester hears once, not once per approver
           department: notificationContext.department,
           stepOrder: newStepOrder,
           requestedTotal: Number(notificationContext.requested_total),

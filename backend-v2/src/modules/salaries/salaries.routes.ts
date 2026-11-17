@@ -55,12 +55,8 @@ salariesRouter.get("/access", async (req: AuthedRequest, res, next) => {
           [typeId]
         ))[0]
       : { count: "0" };
-    const pendingAdvances = (await query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM advance_requests ar
-        LEFT JOIN salary_payments sp ON sp.advance_request_id = ar.id
-       WHERE ar.type = 'SALARY' AND ar.status = 'APPROVED' AND sp.id IS NULL`
-    ))[0];
-    return res.json({ allowed, pendingCount: Number(pendingRegisters.count) + Number(pendingAdvances.count) });
+    // Salary advances are paid from Payments now (see POST /advances/:id/pay).
+    return res.json({ allowed, pendingCount: Number(pendingRegisters.count) });
   } catch (err) {
     return next(err);
   }
@@ -244,31 +240,13 @@ salariesRouter.post("/records/:submissionId/pay", async (req: AuthedRequest, res
   }
 });
 
-// Approved Salary Advance requests, awaiting payment out of Salaries rather
-// than the generic Payments queue (see GET /advances/payments, which now
-// excludes type='SALARY').
+// Salary advances used to be paid here. Since Nov 2026 they go through
+// Finance like travel advances - the workflow's Capture step (Capture Inbox),
+// then Payments (GET /advances/payments includes them) - so there is one
+// place to pay them. Past payments made here stay in History (salary_payments).
 salariesRouter.post("/advances/:id/pay", async (req: AuthedRequest, res, next) => {
   try {
-    const advance = (await query<any>(`SELECT * FROM advance_requests WHERE id = $1`, [req.params.id]))[0];
-    if (!advance) throw notFound("Advance not found");
-    if (advance.type !== "SALARY") throw badRequest("This is not a Salary Advance");
-    if (advance.status !== "APPROVED") throw badRequest("Only a fully-approved Salary Advance can be marked paid");
-    const existing = (await query<{ id: string }>(`SELECT id FROM salary_payments WHERE advance_request_id = $1`, [req.params.id]))[0];
-    if (existing) throw badRequest("This Salary Advance has already been paid");
-
-    const parsed = PaySchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest("Invalid payment payload", parsed.error.flatten());
-
-    await query(
-      `UPDATE advance_requests SET status = 'PAID', paid_reference = $2, paid_at = now(), updated_at = now() WHERE id = $1`,
-      [advance.id, parsed.data.payment_reference]
-    );
-    await query(
-      `INSERT INTO salary_payments (advance_request_id, employee_id, payment_reference, payment_date, comment, paid_by_id)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [advance.id, advance.requester_id, parsed.data.payment_reference, parsed.data.payment_date, parsed.data.comment ?? null, req.user!.userId]
-    );
-    return res.status(201).json({ ok: true });
+    throw badRequest("Salary advances are now captured and paid by Finance, like travel advances: Capture Inbox, then Payments.");
   } catch (err) {
     return next(err);
   }
@@ -312,18 +290,7 @@ salariesRouter.get("/ready-for-payment", async (req: AuthedRequest, res, next) =
       ...rest,
       converted_hours: convertedHoursFor(data?.attendance_grid?.rows?.[0]?.cells)
     }));
-    const advances = await query<any>(
-      `SELECT NULL::uuid AS submission_id, ar.id AS advance_request_id, 'ADVANCE' AS item_type,
-              u.full_name AS employee_name, u.employee_no,
-              NULL::text AS division, NULL::text AS department, to_char(ar.created_at, 'YYYY-MM') AS period,
-              ar.approved_total, 'LSL' AS currency
-         FROM advance_requests ar
-         JOIN users u ON u.id = ar.requester_id
-         LEFT JOIN salary_payments sp ON sp.advance_request_id = ar.id
-        WHERE ar.type = 'SALARY' AND ar.status = 'APPROVED' AND sp.id IS NULL
-        ORDER BY ar.created_at DESC`
-    );
-    return res.json({ items: [...registers, ...advances] });
+    return res.json({ items: registers });
   } catch (err) {
     return next(err);
   }

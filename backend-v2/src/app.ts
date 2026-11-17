@@ -31,6 +31,7 @@ import { emailActionsRouter } from "./modules/email-actions/email-actions.routes
 import { pdfTemplatesRouter } from "./modules/pdf-templates/pdf-templates.routes.js";
 import { deductionsRouter } from "./modules/deductions/deductions.routes.js";
 import { smsRouter } from "./modules/sms/sms.routes.js";
+import { salaryAdvancesRouter } from "./modules/salary-advances/salary-advances.routes.js";
 import { refundableRouter } from "./modules/refundable/refundable.routes.js";
 import { salariesRouter } from "./modules/salaries/salaries.routes.js";
 import { attendanceRouter } from "./modules/attendance/attendance.routes.js";
@@ -153,6 +154,8 @@ export function createApp() {
   app.use("/deductions", deductionsRouter);
   // SMS gateway settings and test (admin) - see lib/sms.ts.
   app.use("/sms", smsRouter);
+  // Salary advance repayments (employee pays, Finance accepts) - see the module.
+  app.use("/salary-advances", salaryAdvancesRouter);
   app.use("/refundable", refundableRouter);
   app.use("/salaries", salariesRouter);
   app.use("/attendance", attendanceRouter);

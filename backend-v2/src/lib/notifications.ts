@@ -374,6 +374,17 @@ export async function notifyAdvanceTask(args: {
   const requester = args.requesterName || "Requester";
   const department = args.department || null;
 
+  // Where the request is now. The advance's status is only a rough bucket by
+  // position type - every HOD/EXCO/CEO step is "COUNTERSIGNED", a Manager-type
+  // step (including a capture step) is "SUBMITTED" - so it read "COUNTERSIGNED"
+  // to the EXCO, the CFO and the requester alike. Name the step instead.
+  const waitingFor = !args.nextApprover ? null
+    : args.nextApprover.title && args.nextApprover.name && args.nextApprover.title.includes(args.nextApprover.name)
+      ? args.nextApprover.title // e.g. "Capture - Limakatso Peshoane"
+      : [args.nextApprover.title, args.nextApprover.name].filter(Boolean).join(" – ") || null;
+  const inProgress = Boolean(waitingFor) && ["SUBMITTED", "COUNTERSIGNED", "HR_OFFICER"].includes(args.status);
+  const statusText = inProgress ? `Awaiting ${waitingFor}` : statusLabel(args.status);
+
   // ── Determine who the next approver role is (legacy fallback) ──────────────
   let role: Role | null = null;
   if (args.status === "SUBMITTED")            role = "MANAGER";
@@ -389,7 +400,7 @@ export async function notifyAdvanceTask(args: {
     ...(Number(args.extraCostAmount || 0) > 0
       ? [["Extra Cost", `${fmt(Number(args.extraCostAmount), args.currency)}${args.extraCostDescription ? ` — ${args.extraCostDescription}` : ""}`] as [string, string]]
       : []),
-    ["Status",      statusLabel(args.status)],
+    ["Status",      statusText],
     ...(args.comments ? [["Comments", args.comments] as [string, string]] : [])
   ]);
 
@@ -441,7 +452,7 @@ export async function notifyAdvanceTask(args: {
           { name: "Division", value: department || "—" },
           { name: "Type", value: args.advanceType.replace(/_/g, " ") },
           { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
-          { name: "Status", value: statusLabel(args.status) },
+          { name: "Status", value: statusText },
           ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
         ]
       }).catch((e) => logger.warn("teams_advance_approver_failed", { error: serializeError(e) }));
@@ -499,7 +510,7 @@ export async function notifyAdvanceTask(args: {
             { name: "Division", value: department || "—" },
             { name: "Type", value: args.advanceType.replace(/_/g, " ") },
             { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
-            { name: "Status", value: statusLabel(args.status) },
+            { name: "Status", value: statusText },
             ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
           ]
         }).catch((e) => logger.warn("teams_advance_approver_failed", { error: serializeError(e) }));
@@ -523,13 +534,18 @@ export async function notifyAdvanceTask(args: {
         DRAFT:                `Your advance request has been sent back for correction.${args.comments ? `\n\nReason: ${args.comments}` : ""}`
       };
 
-      const statusMsg = requesterMessages[args.status];
+      const statusMsg = inProgress
+        ? (args.stepOrder === 0
+            ? `Your advance request has been submitted and is now with ${waitingFor}.`
+            : `Your advance request is moving through approval and is now with ${waitingFor}.`)
+        : requesterMessages[args.status];
       if (!statusMsg) return;
 
       const typeLabel = advanceTypeLabel(args.advanceType);
       const subject =
         args.status === "APPROVED"  ? `[Approved] Your ${typeLabel} has been approved` :
         args.status === "REJECTED"  ? `[Rejected] Your ${typeLabel} has been rejected` :
+        inProgress ? `${args.stepOrder === 0 ? "[Submitted]" : "[Update]"} ${typeLabel} — now with ${waitingFor}` :
         `[Update] ${typeLabel} status — ${statusLabel(args.status)}`;
 
       const requesterMsg = [
@@ -563,7 +579,7 @@ export async function notifyAdvanceTask(args: {
           { name: "Division", value: department || "—" },
           { name: "Type", value: args.advanceType.replace(/_/g, " ") },
           { name: "Amount", value: fmt(args.requestedTotal, args.currency) },
-          { name: "Status", value: statusLabel(args.status) },
+          { name: "Status", value: statusText },
           ...(args.comments ? [{ name: "Comments", value: args.comments }] : [])
         ]
       }).catch((e) => logger.warn("teams_advance_requester_failed", { error: serializeError(e) }));
@@ -3401,6 +3417,35 @@ export async function notifyVendorContractExpiring(args: {
   ].join("\n");
 
   await sendMail({ to: recipients, subject: `[Vendor Contracts] ${args.contractNumber} ${stageLabel}`, text: body });
+}
+
+// ─── Service Contracts — expiry digest ─────────────────────────────────────
+// One email per threshold hit per reminder-cycle run, not one per contract -
+// the recipients here are a shared distribution list (Settings-configured,
+// not a per-contract key_account_manager field, which the migrated legacy
+// data often left blank or inconsistent), so a contract-by-contract flood
+// isn't useful to them the way it is for a single named owner.
+export async function notifyServiceContractsExpiring(args: {
+  recipients: string[];
+  daysBefore: number;
+  contracts: Array<{ type: "individual" | "company"; contractNumber: string; name: string; expiryDate: string }>;
+}) {
+  if (!args.recipients.length || !args.contracts.length) return;
+  const stageLabel = args.daysBefore === 0 ? "expire today" : `expire in ${args.daysBefore} day${args.daysBefore === 1 ? "" : "s"}`;
+  const rows = args.contracts
+    .map((c) => `  - ${c.contractNumber} (${c.type === "individual" ? "Individual" : "Company"}) — ${c.name}, expiring ${c.expiryDate}`)
+    .join("\n");
+  const body = [
+    header("SERVICE CONTRACTS — EXPIRY REMINDER"),
+    ``,
+    `${args.contracts.length} service contract${args.contracts.length === 1 ? "" : "s"} ${stageLabel}:`,
+    ``,
+    rows,
+    ``,
+    footer()
+  ].join("\n");
+
+  await sendMail({ to: args.recipients, subject: `[Service Contracts] ${args.contracts.length} contract${args.contracts.length === 1 ? "" : "s"} ${stageLabel}`, text: body });
 }
 
 // ─── Electronic Signature — routing document approval route ────────────────

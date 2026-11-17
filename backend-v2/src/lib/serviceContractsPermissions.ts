@@ -10,6 +10,11 @@ import { getUserGroups } from "./permissionGroups.js";
 // only, regardless of a manage grant - see the routes file.
 const VIEW_DEFAULT_ROLES = ["ADMIN"];
 const MANAGE_DEFAULT_ROLES = ["ADMIN"];
+// Who can configure the expiry-notification digest (recipients, thresholds,
+// on/off) - deliberately its own, narrower grant: someone can manage
+// day-to-day contracts (service_contracts_manage) without being trusted to
+// redirect company-wide expiry alerts to a different mailing list.
+const NOTIFICATIONS_DEFAULT_ROLES = ["ADMIN"];
 
 async function hasFeatureGrant(userId: string, role: string, featureKey: string, defaultRoles: string[]): Promise<boolean> {
   if (role === "ADMIN") return true;
@@ -39,4 +44,10 @@ export async function canAccessServiceContracts(userId: string, role: string): P
 // lookups. A view grant does not imply a manage grant.
 export async function canManageServiceContracts(userId: string, role: string): Promise<boolean> {
   return hasFeatureGrant(userId, role, "service_contracts_manage", MANAGE_DEFAULT_ROLES);
+}
+
+// Narrowest gate: changing who the expiry-notification digest goes to, its
+// thresholds, and whether it's on at all.
+export async function canManageServiceContractNotifications(userId: string, role: string): Promise<boolean> {
+  return hasFeatureGrant(userId, role, "service_contracts_notifications", NOTIFICATIONS_DEFAULT_ROLES);
 }

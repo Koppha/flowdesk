@@ -244,6 +244,7 @@ export const api = {
     return req(`/auth/delegations${q.length ? `?${q.join("&")}` : ""}`);
   },
   delegationEligibility: () => req("/auth/delegations/eligibility"),
+  delegationCandidates: () => req("/auth/delegations/candidates"),
   workflows: (requestType?: string, department?: string) => {
     const params: string[] = [];
     if (requestType) params.push(`requestType=${encodeURIComponent(requestType)}`);
@@ -840,6 +841,9 @@ export const api = {
   createServiceContractApiKey: (label: string) => req("/service-contracts/api-keys", { method: "POST", body: JSON.stringify({ label }) }),
   setServiceContractApiKeyActive: (id: string, isActive: boolean) =>
     req(`/service-contracts/api-keys/${id}/active`, { method: "PATCH", body: JSON.stringify({ isActive }) }),
+  serviceContractNotificationSettings: () => req("/service-contracts/notification-settings"),
+  updateServiceContractNotificationSettings: (data: { enabled: boolean; recipients: string; daysBefore: string }) =>
+    req("/service-contracts/notification-settings", { method: "PUT", body: JSON.stringify(data) }),
 
   dataCleanupCategories: () => req("/admin/data-cleanup/categories"),
   dataCleanupWipe: (categories: string[]) =>

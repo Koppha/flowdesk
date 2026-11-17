@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import { AlarmClock, ArrowUp, CircleHelp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AlarmClock, ArrowUp, CircleHelp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X, Wallet, Users, Wifi, Clock3 } from "lucide-react";
 import { API, getToken, getUserFromToken } from "../api";
 import AssistantChart, { type AssistantChartData } from "./AssistantChart";
 
@@ -12,16 +12,47 @@ import AssistantChart, { type AssistantChartData } from "./AssistantChart";
 type Msg = { role: "user" | "assistant"; text: string; notes?: string[]; drafts?: Array<{ kind: string; id: string; label: string }>; charts?: AssistantChartData[]; error?: boolean };
 type Conv = { id: string; title: string | null; updated_at: string };
 type DueClearance = { advance_id: string; reference: string; type: string; amount: number; currency: string; due_text: string; due_on_text: string; overdue: boolean; days_left: number; draft_clearance_id: string | null };
-type Suggestion = { icon: typeof FileText; title: string; hint: string; ask: string };
+type Suggestion = {
+  icon: typeof FileText; title: string; hint: string; ask: string;
+  // Omitted = everyone. Otherwise only shown to a matching role or
+  // department (JWT's free-text `department` field, matched loosely).
+  forRoles?: string[];
+  forDepartments?: RegExp[];
+};
 
-const SUGGESTIONS: Suggestion[] = [
+// Always-eligible, everyone-sees-these questions.
+const GENERIC_SUGGESTIONS: Suggestion[] = [
   { icon: FileText, title: "How many advances do I have?", hint: "Totals and what's not cleared", ask: "How many advances do I have, and how many are not cleared?" },
   { icon: Inbox, title: "What's waiting for my approval?", hint: "Your Approval Inbox", ask: "What's waiting for my approval?" },
   { icon: MapPin, title: "Where is my latest advance?", hint: "Who it's with and since when", ask: "Where is my latest advance?" },
   { icon: CircleHelp, title: "How do I clear an advance?", hint: "Step-by-step help", ask: "How do I clear an advance?" }
 ];
-// Administrators get a usage question in place of the "latest advance" one.
-const ADMIN_SUGGESTION: Suggestion = { icon: Smartphone, title: "How many people use the app?", hint: "Users and mobile app usage", ask: "How many users are active, and how many use the mobile app?" };
+
+// Only shown when the signed-in person's role/department matches - mixed
+// into the pool below instead of always appearing, so two people in
+// different departments don't see an identical set of four every time.
+const TARGETED_SUGGESTIONS: Suggestion[] = [
+  { icon: Smartphone, title: "How many people use the app?", hint: "Users and mobile app usage", ask: "How many users are active, and how many use the mobile app?", forRoles: ["ADMIN"] },
+  { icon: Wallet, title: "What's waiting in Finance?", hint: "Capture, payments, deductions, refunds", ask: "What's waiting for Finance to action right now?", forDepartments: [/finance/i, /treasury/i] },
+  { icon: Users, title: "What's waiting on HR?", hint: "Requests and approvals for HR Operations", ask: "What's waiting on HR right now?", forDepartments: [/human resources/i, /^hr\b/i] },
+  { icon: Wifi, title: "Which service contracts are expiring soon?", hint: "Next 30 days, individual and company", ask: "Which service contracts are expiring in the next 30 days?", forDepartments: [/enterprise/i, /service/i] },
+  { icon: Clock3, title: "What's my team's standby schedule?", hint: "This month's standby and call-outs", ask: "What's my team's standby schedule this month?", forDepartments: [/technical/i, /operations/i, /network/i] }
+];
+
+function matchesSuggestion(s: Suggestion, role: string, department: string): boolean {
+  if (s.forRoles && !s.forRoles.includes(role)) return false;
+  if (s.forDepartments && !s.forDepartments.some((re) => re.test(department))) return false;
+  return true;
+}
+
+function shuffled<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 // Minimal, safe formatting for answers: paragraphs, bullet/numbered lists,
 // simple | tables | (some models answer with them) and **bold** - rendered
@@ -269,7 +300,18 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
   const notConfigured = Boolean(status && !status.configured);
   const switchedOff = status?.enabled === false;
   const left = status ? Math.max(0, status.daily_limit - status.used_today) : null;
-  const suggestions = getUserFromToken()?.role === "ADMIN" ? [SUGGESTIONS[0], SUGGESTIONS[1], ADMIN_SUGGESTION, SUGGESTIONS[3]] : SUGGESTIONS;
+  // Shuffled once per time the panel opens (not on every keystroke/render),
+  // from a pool mixing the everyday questions with the ones that match this
+  // person's role/department - so two people in different departments see
+  // a different set, and the same person sees some variety across visits.
+  const suggestions = useMemo(() => {
+    const me = getUserFromToken();
+    const role = me?.role || "";
+    const department = me?.department || "";
+    const eligible = TARGETED_SUGGESTIONS.filter((s) => matchesSuggestion(s, role, department));
+    return shuffled([...GENERIC_SUGGESTIONS, ...eligible]).slice(0, 4);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // "" = the admin's order; otherwise "service|model".
   const myModelValue = status?.my_model ? `${status.my_model.service}|${status.my_model.model}` : "";

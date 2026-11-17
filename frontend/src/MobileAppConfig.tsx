@@ -1,6 +1,10 @@
+import { GuidedTour } from "./shared/GuidedTour";
+import { TOURS } from "./menu/menuTips";
 import { useEffect, useState, type CSSProperties } from "react";
 import { API, api, getToken } from "./api";
 import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, MessageCircle, PanelBottom, Smartphone, User } from "lucide-react";
+// The mobile app's own icon (FlowDesk Mobile assets/icon.png, 256 px copy).
+import appIcon from "./assets/mobileAppIcon.png";
 
 type ModuleKey = "advances" | "clearances" | "createAdvance" | "createClearance" | "overtime" | "standby" | "customProcesses" | "signADocument" | "maintenance" | "myTeam" | "delegation";
 type Modules = Record<ModuleKey, boolean>;
@@ -511,6 +515,7 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 26, height: 26, borderRadius: 7, background: "linear-gradient(135deg,#c8102e,#8f0c1f)" }} />
           <span style={{ fontSize: 16, fontWeight: 700 }}>Mobile App Configuration</span>
+          <GuidedTour id="mobile_app" {...TOURS.mobile_app} />
           {dirty && (
             <span style={{ fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fef3e2", padding: "3px 9px", borderRadius: 999 }}>
               UNSAVED CHANGES
@@ -683,8 +688,16 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
                   <div style={{ width: 32, height: 32, borderRadius: 9, background: "#7c3aed" }} />
                 </div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 10 }}>App icon</div>
-                <div style={{ width: 64, height: 64, borderRadius: 14, border: "1.5px dashed var(--border)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "var(--muted)" }}>
-                  Upload
+                {/* The icon built into the app (FlowDesk Mobile's assets/icon.png). Android
+                    takes it from the installed APK, so it changes with a new app version,
+                    not from here. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <img src={appIcon} alt="FlowDesk app icon - Econet logo" width={64} height={64}
+                    style={{ width: 64, height: 64, borderRadius: 14, border: "1px solid var(--border)", background: "#fff", objectFit: "cover" }} />
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
+                    <div style={{ fontWeight: 600, color: "var(--text)" }}>Econet logo</div>
+                    Built into the app - a new icon arrives with the next app version.
+                  </div>
                 </div>
               </div>
             </div>

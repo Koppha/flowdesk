@@ -1360,6 +1360,10 @@ authRouter.get("/delegations/candidates", async (req: AuthedRequest, res, next) 
     const params: unknown[] = [me.id];
     if (me.role === "CEO") {
       scope = "";
+    } else if (me.role === "EXCO") {
+      // EXCO members delegate to another active EXCO member, regardless of
+      // division, so peers can cover one another across portfolios.
+      scope = `AND u.role = 'EXCO'`;
     } else if (!dept) {
       if (!me.division_id) return res.json([]);
       params.push(me.division_id);
@@ -1469,6 +1473,9 @@ authRouter.post("/delegations", async (req: AuthedRequest, res, next) => {
     if (!manager) throw badRequest("Manager not found");
     if (!delegate) throw badRequest("Delegate user not found");
     if (delegate.id === managerId) throw badRequest("Delegate cannot be the same user");
+    if (req.user!.role === "EXCO" && delegate.role !== "EXCO") {
+      throw badRequest("EXCO members may only delegate to another EXCO member");
+    }
 
     let managerDept = String(manager?.department || "").trim();
     let team: { id: string; name: string } | null = null;
@@ -1519,13 +1526,18 @@ authRouter.post("/delegations", async (req: AuthedRequest, res, next) => {
       if (!managerRoleEligible && !(await isDelegationEligible(manager.id))) {
         throw badRequest("User must be a Manager, Exco member, CEO, or assigned to a workflow step that allows delegation");
       }
+      // An EXCO member may delegate only to another EXCO member. EXCO peers
+      // can cover across divisions, which is why this branch precedes the
+      // ordinary same-department/section check.
+      if (manager.role === "EXCO" && req.user!.role !== "ADMIN") {
+        managerDept = String(manager.department || "EXCO");
       // CEO is an org-wide role with no single department, so any active
       // delegate is acceptable. Someone with no department of their own but
       // a division (e.g. a GM overseeing a whole division rather than one
       // department) is scoped to that division instead of one department/
       // section. Everyone else's delegate must share the manager's
       // department or section.
-      if (manager.role === "CEO") {
+      } else if (manager.role === "CEO") {
         managerDept = String(delegate.department || "").trim() || managerDept || "ORG-WIDE";
       } else if (!managerDept) {
         if (!manager.division_id || manager.division_id !== delegate.division_id) {

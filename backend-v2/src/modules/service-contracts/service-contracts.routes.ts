@@ -14,9 +14,13 @@ import { AuthedRequest, requireAuth } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { nextSequentialNumber } from "../../lib/sequentialNumbers.js";
-import { getBooleanSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
-import { canAccessServiceContracts, canManageServiceContracts } from "../../lib/serviceContractsPermissions.js";
+import {
+  getBooleanSystemSetting, setBooleanSystemSetting, getStringSystemSetting, setStringSystemSetting, SYSTEM_SETTING_KEYS
+} from "../../lib/systemSettings.js";
+import { canAccessServiceContracts, canManageServiceContracts, canManageServiceContractNotifications } from "../../lib/serviceContractsPermissions.js";
 import { generateApiKey } from "../../lib/apiKeyAuth.js";
+import { notifyServiceContractsExpiring } from "../../lib/notifications.js";
+import { logger } from "../../lib/logger.js";
 import {
   computeExpiryDate, resolveKeyAccountManagerId, mapIndividualContract, mapCompanyContract,
   INDIVIDUAL_CONTRACT_SELECT, COMPANY_CONTRACT_SELECT
@@ -38,7 +42,8 @@ serviceContractsRouter.get("/access", async (req: AuthedRequest, res, next) => {
     const allowed = await canAccessServiceContracts(req.user!.userId, req.user!.role);
     if (!allowed) return res.json({ allowed });
     const canManage = await canManageServiceContracts(req.user!.userId, req.user!.role);
-    return res.json({ allowed, canManage, isAdmin: req.user!.role === "ADMIN" });
+    const canManageNotifications = await canManageServiceContractNotifications(req.user!.userId, req.user!.role);
+    return res.json({ allowed, canManage, canManageNotifications, isAdmin: req.user!.role === "ADMIN" });
   } catch (err) {
     return next(err);
   }
@@ -70,6 +75,10 @@ function requireAdmin(req: AuthedRequest) {
 
 serviceContractsRouter.get("/dashboard", async (_req: AuthedRequest, res, next) => {
   try {
+    // is_active=false means archived (legacy duplicates found during the
+    // migration, or anything manually hidden via "Hide from Portal") - never
+    // counted in the headline numbers, same as they're excluded from the
+    // default list below. See GET /archive for the dedicated archive view.
     const [individual, company] = await Promise.all([
       query<any>(`
         SELECT count(*)::int AS total,
@@ -77,6 +86,7 @@ serviceContractsRouter.get("/dashboard", async (_req: AuthedRequest, res, next) 
                count(*) FILTER (WHERE expiry_date < current_date)::int AS expired,
                count(*) FILTER (WHERE status_code='OPEN' AND expiry_date >= current_date AND expiry_date <= current_date + interval '30 days')::int AS expiring_soon
           FROM individual_service_contracts
+         WHERE is_active = true
       `),
       query<any>(`
         SELECT count(*)::int AS total,
@@ -84,6 +94,7 @@ serviceContractsRouter.get("/dashboard", async (_req: AuthedRequest, res, next) 
                count(*) FILTER (WHERE expiry_date < current_date)::int AS expired,
                count(*) FILTER (WHERE status_code='OPEN' AND expiry_date >= current_date AND expiry_date <= current_date + interval '30 days')::int AS expiring_soon
           FROM company_service_contracts
+         WHERE is_active = true
       `)
     ]);
     const i = individual[0];
@@ -130,13 +141,18 @@ serviceContractsRouter.get("/individual", async (req: AuthedRequest, res, next) 
     const search = typeof req.query.search === "string" ? `%${req.query.search}%` : null;
     const statusCode = typeof req.query.statusCode === "string" ? req.query.statusCode : null;
     const categoryCode = typeof req.query.categoryCode === "string" ? req.query.categoryCode : null;
+    // Archived (is_active=false - legacy migration duplicates, or anything
+    // manually hidden) are excluded by default, same as the dashboard -
+    // only GET /archive (and this with includeInactive=true) surfaces them.
+    const includeInactive = req.query.includeInactive === "true";
     const rows = await query<any>(
       `SELECT ${INDIVIDUAL_CONTRACT_SELECT}
         WHERE ($1::text IS NULL OR c.first_name ILIKE $1 OR c.surname ILIKE $1 OR c.account_number ILIKE $1 OR c.contract_number ILIKE $1)
           AND ($2::text IS NULL OR c.status_code=$2)
           AND ($3::text IS NULL OR c.service_category_code=$3)
+          AND ($4::boolean OR c.is_active = true)
         ORDER BY c.created_at DESC`,
-      [search, statusCode, categoryCode]
+      [search, statusCode, categoryCode, includeInactive]
     );
     return res.json({ items: rows.map(mapIndividualContract) });
   } catch (err) {
@@ -262,13 +278,15 @@ serviceContractsRouter.get("/company", async (req: AuthedRequest, res, next) => 
     const search = typeof req.query.search === "string" ? `%${req.query.search}%` : null;
     const statusCode = typeof req.query.statusCode === "string" ? req.query.statusCode : null;
     const categoryCode = typeof req.query.categoryCode === "string" ? req.query.categoryCode : null;
+    const includeInactive = req.query.includeInactive === "true";
     const rows = await query<any>(
       `SELECT ${COMPANY_CONTRACT_SELECT}
         WHERE ($1::text IS NULL OR c.company_name ILIKE $1 OR c.account_number ILIKE $1 OR c.contract_number ILIKE $1)
           AND ($2::text IS NULL OR c.status_code=$2)
           AND ($3::text IS NULL OR c.service_category_code=$3)
+          AND ($4::boolean OR c.is_active = true)
         ORDER BY c.created_at DESC`,
-      [search, statusCode, categoryCode]
+      [search, statusCode, categoryCode, includeInactive]
     );
     return res.json({ items: rows.map(mapCompanyContract) });
   } catch (err) {
@@ -378,6 +396,7 @@ serviceContractsRouter.get("/reports", async (req: AuthedRequest, res, next) => 
     const contractType = req.query.contractType === "company" ? "company" : "individual";
     const from = typeof req.query.from === "string" ? req.query.from : null;
     const to = typeof req.query.to === "string" ? req.query.to : null;
+    const statusCode = typeof req.query.statusCode === "string" && req.query.statusCode ? req.query.statusCode : null;
     const dateCol = type === "expiry" ? "expiry_date" : "created_at::date";
     const table = contractType === "company" ? "company_service_contracts" : "individual_service_contracts";
     const nameCol = contractType === "company" ? "company_name" : "first_name || ' ' || surname";
@@ -386,8 +405,10 @@ serviceContractsRouter.get("/reports", async (req: AuthedRequest, res, next) => 
          FROM ${table}
         WHERE ($1::date IS NULL OR ${dateCol} >= $1)
           AND ($2::date IS NULL OR ${dateCol} <= $2)
+          AND ($3::text IS NULL OR status_code=$3)
+          AND is_active = true
         ORDER BY ${dateCol} DESC`,
-      [from, to]
+      [from, to, statusCode]
     );
     return res.json({ items: rows });
   } catch (err) {
@@ -538,3 +559,124 @@ serviceContractsRouter.patch("/api-keys/:id/active", async (req: AuthedRequest, 
     return res.json({ ok: true });
   } catch (err) { return next(err); }
 });
+
+// ── Expiry notification settings (its own, narrower permission - see
+// canManageServiceContractNotifications's own comment) ─────────────────
+
+const DEFAULT_NOTIFICATION_DAYS = "90,30,7,1,0";
+
+function parseDaysBefore(raw: string): number[] {
+  return raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n >= 0 && n <= 3650);
+}
+
+async function requireManageNotifications(req: AuthedRequest) {
+  if (!(await canManageServiceContractNotifications(req.user!.userId, req.user!.role))) {
+    throw forbidden("You do not have permission to manage Service Contracts notification settings");
+  }
+}
+
+serviceContractsRouter.get("/notification-settings", async (req: AuthedRequest, res, next) => {
+  try {
+    await requireManageNotifications(req);
+    const enabled = await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationsEnabled, false);
+    const recipients = await getStringSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationRecipients, "");
+    const daysBefore = await getStringSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationDaysBefore, DEFAULT_NOTIFICATION_DAYS);
+    return res.json({ enabled, recipients: recipients || "", daysBefore: daysBefore || DEFAULT_NOTIFICATION_DAYS });
+  } catch (err) { return next(err); }
+});
+
+const NotificationSettingsSchema = z.object({
+  enabled: z.boolean(),
+  recipients: z.string().trim(),
+  daysBefore: z.string().trim()
+});
+
+serviceContractsRouter.put("/notification-settings", async (req: AuthedRequest, res, next) => {
+  try {
+    await requireManageNotifications(req);
+    const parsed = NotificationSettingsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    const recipientList = parsed.data.recipients.split(/[;,]/).map((e) => e.trim()).filter(Boolean);
+    if (parsed.data.enabled && recipientList.length === 0) {
+      throw badRequest("At least one recipient email is required to enable notifications");
+    }
+    if (!recipientList.every((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))) {
+      throw badRequest("One or more recipient emails look invalid");
+    }
+    const daysList = parseDaysBefore(parsed.data.daysBefore);
+    if (daysList.length === 0) throw badRequest("Enter at least one valid number of days (0-3650)");
+
+    await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationsEnabled, parsed.data.enabled);
+    await setStringSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationRecipients, recipientList.join(", "));
+    await setStringSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationDaysBefore, daysList.join(","));
+    return res.json({ enabled: parsed.data.enabled, recipients: recipientList.join(", "), daysBefore: daysList.join(",") });
+  } catch (err) { return next(err); }
+});
+
+// ── Expiry reminder worker ──────────────────────────────────────────────
+// In-process interval, same pattern as Vendor Contracts' own reminder
+// worker (vendor-contracts.routes.ts) - except settings-driven (global
+// recipients + configurable thresholds) rather than per-contract, since
+// the migrated legacy data's key_account_manager field is often blank or
+// unreliable free text (see the service contract migration's own findings).
+async function runServiceContractReminderCycle() {
+  try {
+    const enabled = await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationsEnabled, false);
+    if (!enabled) return;
+    const recipientsRaw = await getStringSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationRecipients, "");
+    const recipients = (recipientsRaw || "").split(/[;,]/).map((e) => e.trim()).filter(Boolean);
+    if (!recipients.length) return;
+    const daysBeforeRaw = await getStringSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsNotificationDaysBefore, DEFAULT_NOTIFICATION_DAYS);
+    const daysBeforeList = parseDaysBefore(daysBeforeRaw || DEFAULT_NOTIFICATION_DAYS);
+    if (!daysBeforeList.length) return;
+
+    const individualRows = await query<any>(
+      `SELECT id, contract_number, first_name, surname, expiry_date::text AS expiry_date FROM individual_service_contracts WHERE status_code='OPEN'`
+    );
+    const companyRows = await query<any>(
+      `SELECT id, contract_number, company_name, expiry_date::text AS expiry_date FROM company_service_contracts WHERE status_code='OPEN'`
+    );
+    const allContracts = [
+      ...individualRows.map((r) => ({ type: "individual" as const, id: r.id, contractNumber: r.contract_number, name: `${r.first_name} ${r.surname}`, expiryDate: r.expiry_date })),
+      ...companyRows.map((r) => ({ type: "company" as const, id: r.id, contractNumber: r.contract_number, name: r.company_name, expiryDate: r.expiry_date }))
+    ];
+
+    const today = new Date().toISOString().slice(0, 10);
+    for (const daysBefore of daysBeforeList) {
+      const due = allContracts.filter((c) => {
+        const expiry = new Date(c.expiryDate + "T00:00:00Z");
+        const remindOn = new Date(expiry);
+        remindOn.setUTCDate(remindOn.getUTCDate() - daysBefore);
+        return remindOn.toISOString().slice(0, 10) === today;
+      });
+      if (!due.length) continue;
+
+      // Skip ones already logged as sent for this exact (contract, threshold, day).
+      const notYetSent: typeof due = [];
+      for (const c of due) {
+        const existing = await query<{ id: string }>(
+          `SELECT id FROM service_contract_reminder_log WHERE contract_type=$1 AND contract_id=$2 AND days_before=$3 AND remind_on=$4`,
+          [c.type, c.id, daysBefore, today]
+        );
+        if (!existing[0]) notYetSent.push(c);
+      }
+      if (!notYetSent.length) continue;
+
+      await notifyServiceContractsExpiring({ recipients, daysBefore, contracts: notYetSent });
+      for (const c of notYetSent) {
+        await query(
+          `INSERT INTO service_contract_reminder_log (contract_type, contract_id, days_before, remind_on) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+          [c.type, c.id, daysBefore, today]
+        );
+      }
+    }
+  } catch (err) {
+    logger.warn("service_contract_reminder_cycle_failed", { error: String(err) });
+  }
+}
+
+export function startServiceContractReminderWorker() {
+  const intervalMinutes = Number(process.env.SERVICE_CONTRACT_REMINDER_INTERVAL_MINUTES || 60);
+  runServiceContractReminderCycle().catch(() => {});
+  setInterval(() => { runServiceContractReminderCycle().catch(() => {}); }, intervalMinutes * 60_000);
+}

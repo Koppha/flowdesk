@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { formatMoney, travelTypeLabel, travelTypeCurrency, isTravelTypeCode, TravelType, currentApprovalStepLabel, isAdvancePastApproval } from "./constants";
 import { getUserFromToken } from "./api";
 import { FileText, Clock3, CheckCircle2, XCircle, Edit3, RefreshCw, Plus, ChevronLeft, ChevronRight } from "lucide-react";
+import SalaryAdvanceRepayments from "./SalaryAdvanceRepayments";
 
 interface Props {
   advances: any[];
@@ -168,6 +169,9 @@ export default function MyAdvances({ advances, travelTypes, claims = [], onNew, 
           </button>
         </div>
       </div>
+
+      {/* Salary advance still being repaid: balance, months left, "Make a repayment". */}
+      <SalaryAdvanceRepayments />
 
       <div className="ep-kpi-row">
         <div className="stat-card stat-card-blue">

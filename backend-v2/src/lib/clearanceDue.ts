@@ -3,7 +3,7 @@
 // Clearance Status report and the clearance reminders, so they all agree.
 //
 // Rule: an advance must be cleared within the clearance window (Settings >
-// "clearance duration", 7 days) after the traveller RETURNS. Past that, with
+// "clearance duration" - 14 days on PROD) after the traveller RETURNS. Past that, with
 // no clearance submitted (a draft doesn't count; a rejected one doesn't
 // either), it is uncleared.
 //   - Return date: the last day of the trip - the latest of the advance's

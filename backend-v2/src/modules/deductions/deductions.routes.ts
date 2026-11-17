@@ -15,6 +15,8 @@ import { withTripDetails } from "../../lib/clearanceTrip.js";
 import { canAccessDeductions } from "../../lib/deductionsPermissions.js";
 import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 import { clearanceDueSql, isUnclearedSql, TODAY_SQL } from "../../lib/clearanceDue.js";
+import { formatRequestNumber } from "../../lib/pdf/pdfHelpers.js";
+import { acceptedRepayments, cents, ensureSalaryAdvanceColumns, maseruMonth, salaryAdvanceAmount, salaryAdvancePlan, salaryAdvanceSchedule } from "../../lib/salaryAdvances.js";
 
 export const deductionsRouter = Router();
 deductionsRouter.use(requireAuth);
@@ -133,6 +135,157 @@ viewClearancesRouter.use(async (req: AuthedRequest, _res, next) => {
   }
 });
 deductionsRouter.use("/all-clearances", viewClearancesRouter);
+
+// ── Salary Advances report (Finance) ──────────────────────────────────────
+// Every salary advance with its repayment plan. Same audience and company
+// scoping as View Clearances. Deductions start in the pay cycle AFTER the
+// month it was requested (requested in November -> first deduction in
+// December), one installment a month for the payback period: amount /
+// months, the last one taking the rounding so they add up exactly.
+// "Deducted so far" is by the schedule (months already past), not a payroll
+// record - FlowDesk doesn't receive payroll's actual deductions.
+const salaryAdvancesReportRouter = Router();
+salaryAdvancesReportRouter.use(async (req: AuthedRequest, _res, next) => {
+  try {
+    if (!(await canViewClearances(req))) throw forbidden("You do not have access to the Salary Advances report");
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+deductionsRouter.use("/salary-advances", salaryAdvancesReportRouter);
+
+// Recording "paid in full" (and undoing it) is Finance's: ADMIN or a
+// compensation-finance section, as for recording refunds.
+async function canRecordSalarySettlement(req: AuthedRequest) {
+  return req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
+}
+
+salaryAdvancesReportRouter.get("/", async (req: AuthedRequest, res, next) => {
+  try {
+    await ensureSalaryAdvanceColumns();
+    const isFinanceAuthority = req.user!.role === "ADMIN" || (await isCompensationFinanceSection(req.user!.sectionId));
+    const allowedDivisions = isFinanceAuthority ? null : await getViewerDivisionScope(req.user!.userId, false);
+    const rows = await query<any>(
+      `SELECT ar.id, ar.created_at, ar.submitted_at, ar.status::text AS status,
+              ar.requested_total, ar.approved_total, ar.payback_months, ar.salary_month, ar.purpose,
+              ar.payment_method::text AS payment_method, ar.approved_at, ar.paid_at, ar.paid_reference,
+              ar.workflow_step_order, ar.approval_chain,
+              ar.salary_paid_in_full_at, ar.salary_paid_in_full_reference, ar.salary_paid_in_full_note,
+              pf.full_name AS salary_paid_in_full_by,
+              u.full_name AS employee_name, u.employee_no, u.email,
+              dv.name AS division_name,
+              nullif(trim(u.department), '') AS org_division,
+              (SELECT s.name FROM sections s WHERE s.id = coalesce(u.section_id, (SELECT t.section_id FROM teams t WHERE t.id = u.team_id))) AS department_name
+         FROM advance_requests ar
+         JOIN users u ON u.id = ar.requester_id
+         LEFT JOIN users pf ON pf.id = ar.salary_paid_in_full_by_id
+         LEFT JOIN divisions dv ON dv.id = u.division_id
+        WHERE ar.type = 'SALARY' AND ar.status <> 'DRAFT'
+        ORDER BY coalesce(ar.submitted_at, ar.created_at) DESC`
+    );
+    const thisMonth = maseruMonth(new Date());
+    const scoped = rows.filter((r) => !allowedDivisions || (r.division_name && allowedDivisions.includes(r.division_name)));
+    // Accepted repayments shorten the plan; the installment stays (lib/salaryAdvances.ts).
+    const accepted = await acceptedRepayments(scoped.map((r) => r.id));
+    const pendingRows = await query<{ advance_id: string; n: string; s: string }>(
+      `SELECT advance_id, count(*)::text AS n, sum(amount)::text AS s FROM salary_advance_repayments WHERE status = 'SUBMITTED' GROUP BY advance_id`
+    );
+    const pendingBy = new Map(pendingRows.map((p) => [p.advance_id, { count: Number(p.n), amount: Number(p.s) }]));
+    const items = scoped
+      .map((r) => {
+        const amount = salaryAdvanceAmount(r);
+        const months = Number(r.payback_months) || 1;
+        const requestedAt = new Date(r.submitted_at || r.created_at);
+        const paid = r.status === "PAID";
+        const plan = salaryAdvancePlan({ amount, months, requestedAt, repayments: accepted.get(r.id), paidInFullAt: r.salary_paid_in_full_at, paid });
+        const schedule = plan.schedule;
+        const live = schedule.filter((s) => !s.cancelled);
+        const deducted = plan.deducted;
+        const deductionStatus = !paid ? null
+          : plan.paidInFull ? "PAID_IN_FULL"
+          : thisMonth < schedule[0].month ? "NOT_STARTED"
+          : plan.finished ? "COMPLETED"
+          : "DEDUCTING";
+        // Where it is while still in approval / capture / payment.
+        const chain = Array.isArray(r.approval_chain) ? r.approval_chain : [];
+        const step = !paid && !["REJECTED", "CANCELLED"].includes(r.status) ? chain[r.workflow_step_order ?? 0] : null;
+        return {
+          id: r.id,
+          reference: formatRequestNumber("ADV", r.id, r.created_at),
+          employee_name: r.employee_name, employee_no: r.employee_no, email: r.email,
+          division_name: r.division_name, org_division: r.org_division, department_name: r.department_name,
+          status: r.status,
+          purpose: r.purpose,
+          payment_method: r.payment_method,
+          salary_month: r.salary_month,
+          requested_total: Number(r.requested_total) || 0,
+          approved_total: Number(r.approved_total) || 0,
+          amount,
+          payback_months: months,
+          installment: schedule[0].planned,
+          request_month: maseruMonth(requestedAt),
+          first_deduction: schedule[0].month,
+          last_deduction: schedule[schedule.length - 1].month,
+          schedule,
+          this_month_installment: live.find((s) => s.month === thisMonth)?.amount ?? 0,
+          deducted_to_date: deducted,
+          balance: plan.outstanding,
+          // Repaid by the employee (accepted repayments), or - when Finance
+          // marked it paid in full without one - the rest of the balance.
+          repaid_directly: paid ? (plan.repaid > 0 ? plan.repaid : plan.paidInFull ? cents(amount - deducted) : null) : null,
+          pending_repayments: pendingBy.get(r.id) ?? null,
+          deduction_status: deductionStatus,
+          paid_in_full_at: r.salary_paid_in_full_at, paid_in_full_reference: r.salary_paid_in_full_reference,
+          paid_in_full_note: r.salary_paid_in_full_note, paid_in_full_by: r.salary_paid_in_full_by,
+          submitted_at: r.submitted_at, approved_at: r.approved_at, paid_at: r.paid_at, paid_reference: r.paid_reference,
+          waiting_with: step ? [step.position_name, step.approver_name].filter(Boolean).join(" – ") || null : null,
+          currency: "LSL"
+        };
+      });
+    return res.json({ items, this_month: thisMonth, can_record_settlement: await canRecordSalarySettlement(req) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const PaidInFullSchema = z.object({
+  reference: z.string().trim().min(1, "A payment reference is required").max(120),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose the date it was repaid"),
+  note: z.string().trim().max(500).optional()
+});
+
+// The employee repaid the rest early: stop the remaining deductions. Only for
+// a paid salary advance that's still being repaid.
+salaryAdvancesReportRouter.post("/:id/paid-in-full", async (req: AuthedRequest, res, next) => {
+  try {
+    if (!(await canRecordSalarySettlement(req))) throw forbidden("Only Finance can record a salary advance as paid in full");
+    const parsed = PaidInFullSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    await ensureSalaryAdvanceColumns();
+    const adv = (await query<any>(`SELECT * FROM advance_requests WHERE id = $1 AND type = 'SALARY'`, [req.params.id]))[0];
+    if (!adv) throw notFound("Salary advance not found");
+    if (adv.status !== "PAID") throw badRequest("Only a salary advance that has been paid out can be marked paid in full");
+    if (adv.salary_paid_in_full_at) throw badRequest("This salary advance is already marked paid in full");
+    const schedule = salaryAdvanceSchedule(salaryAdvanceAmount(adv), Number(adv.payback_months) || 1, new Date(adv.submitted_at || adv.created_at));
+    if (maseruMonth(new Date()) > schedule[schedule.length - 1].month) throw badRequest("This salary advance's deductions have already finished");
+    const settledAt = new Date(`${parsed.data.date}T12:00:00+02:00`);
+    if (Number.isNaN(settledAt.getTime()) || settledAt.getTime() > Date.now() + 86_400_000) throw badRequest("The repayment date can't be in the future");
+    await query(
+      `UPDATE advance_requests SET salary_paid_in_full_at = $2, salary_paid_in_full_by_id = $3, salary_paid_in_full_reference = $4,
+              salary_paid_in_full_note = $5, updated_at = now() WHERE id = $1`,
+      [adv.id, settledAt.toISOString(), req.user!.userId, parsed.data.reference, parsed.data.note ?? null]
+    );
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, before_json, after_json) VALUES ($1, 'SALARY_ADVANCE_PAID_IN_FULL', 'advance_requests', $2, NULL, $3)`,
+      [req.user!.userId, adv.id, JSON.stringify({ date: parsed.data.date, reference: parsed.data.reference, note: parsed.data.note ?? null })]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 
 // Every route below requires module access (ADMIN or an assigned group).
 deductionsRouter.use(async (req: AuthedRequest, res, next) => {
@@ -264,7 +417,9 @@ viewClearancesRouter.get("/", async (req: AuthedRequest, res, next) => {
     const rows = [...uncleared, ...claims];
     const items = await withTripDetails(allowedDivisions ? rows.filter((r) => r.division_name && allowedDivisions.includes(r.division_name)) : rows);
     // Everyone who can open View Clearances (the router gate) can query.
-    return res.json({ items, can_query_payback: true });
+    // The clearance window (Settings > clearance duration), for the page's wording.
+    const windowDays = Number((await query<{ d: number }>(`SELECT clearance_duration_days AS d FROM advance_recovery_settings ORDER BY updated_at DESC LIMIT 1`))[0]?.d) || null;
+    return res.json({ items, can_query_payback: true, clearance_window_days: windowDays });
   } catch (err) {
     return next(err);
   }

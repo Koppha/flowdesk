@@ -7,6 +7,7 @@ import Inbox, { isAwaitingMyAction, isCaptureItem, isCapturePendingItem, isPayme
 import Payments from "./Payments";
 import Deductions from "./Deductions";
 import ViewClearances from "./ViewClearances";
+import SalaryAdvancesReport from "./SalaryAdvancesReport";
 import Refundable from "./Refundable";
 import Accommodation from "./Accommodation";
 import PaybackReview from "./PaybackReview";
@@ -468,7 +469,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "AI_ASSISTANT_CONFIG" | "MENU_EDITOR" | "GET_THE_APP" | "ORG_GAPS" | "MAINTENANCE";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "SALARY_ADVANCES_REPORT" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "AI_ASSISTANT_CONFIG" | "MENU_EDITOR" | "GET_THE_APP" | "ORG_GAPS" | "MAINTENANCE";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -711,6 +712,7 @@ export default function App() {
   const [featureAccessGroupsPage, setFeatureAccessGroupsPage] = useState(1);
   const [featureAccessGroupsPageSize, setFeatureAccessGroupsPageSize] = useState(8);
   const [delegations, setDelegations] = useState<any[]>([]);
+  const [delegationCandidates, setDelegationCandidates] = useState<any[]>([]);
   const [delegationsLoading, setDelegationsLoading] = useState(false);
   // Whether the current (non-ADMIN) user is assigned to any active workflow
   // step with "Allow Delegation" on — gates self-service delegation visibility.
@@ -791,6 +793,18 @@ export default function App() {
   const toggleGroup = (key: string, inGroup: boolean) =>
     setGroupOverride((prev) => ({ ...prev, [key]: !(prev[key] ?? inGroup) }));
   useEffect(() => { setGroupOverride({}); }, [page]);
+  // Salary/loan settings (on, payback limit) are read at startup; re-read them
+  // whenever a page opens so a change on the Processes page applies without
+  // reloading the browser (it used to keep offering the old 3 months).
+  useEffect(() => {
+    api.moduleFlags().then((f: any) => {
+      if (!f) return;
+      setSalaryAdvanceEnabled(f.salary_advance_enabled !== false);
+      setLoanAdvanceEnabled(f.loan_advance_enabled !== false);
+      setSalaryAdvanceMaxMonths(Number(f.salary_advance_max_payback_months) || 6);
+      setLoanAdvanceMaxMonths(Number(f.loan_advance_max_payback_months) || 6);
+    }).catch(() => { /* keep what's loaded */ });
+  }, [page]);
 
   // The app is a single-page client that switches "pages" via state only, with
   // no URL changes. Without pushing history entries, the browser back button
@@ -1421,7 +1435,7 @@ export default function App() {
     pdf_designer:           ["ADMIN"],
     claims_sla_report:      ["ADMIN", "FINANCE"],
     advance_recovery_settings: ["ADMIN", "FINANCE"],
-    manager_delegations:    ["ADMIN"],
+    manager_delegations:    ["ADMIN", "EXCO"],
     deductions:             ["ADMIN"],
     refundable:             ["ADMIN"],
     it_provisioning:        ["ADMIN"],
@@ -2580,6 +2594,7 @@ export default function App() {
   useEffect(() => {
     if (page !== "MANAGER_DELEGATIONS") return;
     if (delegations.length === 0 && !delegationsLoading) void loadDelegations();
+    api.delegationCandidates().then((rows: any) => setDelegationCandidates(Array.isArray(rows) ? rows : [])).catch(() => setDelegationCandidates([]));
     if (customRequestTypeOptions.length === 0) void loadCustomRequestTypeOptions();
   }, [page]);
 
@@ -4101,6 +4116,7 @@ export default function App() {
     payments: { label: "Payments", icon: Wallet, visible: hasPaymentsAccess, active: page === "PAYMENTS", onClick: go("PAYMENTS"), badge: paymentsCount },
     deductions: { label: "Deductions", icon: MinusCircle, visible: hasDeductionsAccess, active: page === "DEDUCTIONS", onClick: go("DEDUCTIONS"), badge: deductionsCount },
     view_clearances: { label: "View Clearances", icon: Eye, visible: hasViewClearancesAccess, active: page === "VIEW_CLEARANCES", onClick: go("VIEW_CLEARANCES") },
+    salary_advances: { label: "Salary Advances", icon: Banknote, visible: hasViewClearancesAccess, active: page === "SALARY_ADVANCES_REPORT", onClick: go("SALARY_ADVANCES_REPORT") },
     refundable: { label: "Refundable", icon: PlusCircle, visible: hasRefundableAccess, active: page === "REFUNDABLE", onClick: go("REFUNDABLE"), badge: refundableCount },
     // Finance's own shortcut to the Reports hub - only for people with some
     // Finance access, and it doesn't open Finance on every report page.
@@ -4120,7 +4136,7 @@ export default function App() {
     report_tour_engagement: { label: "Tooltip Engagement", icon: PlayCircle, visible: isAdminRole, active: page === "REPORT_TOUR_ENGAGEMENT", onClick: go("REPORT_TOUR_ENGAGEMENT") },
     users: { label: "Users", icon: Users, visible: canAccessFeature("user_management"), active: page === "USER_MANAGEMENT", onClick: go("USER_MANAGEMENT") },
     roles_permissions: { label: "Roles & Permissions", icon: ShieldCheck, visible: canAccessFeature("roles_permissions"), active: page === "ROLES_PERMISSIONS", onClick: go("ROLES_PERMISSIONS") },
-    manager_delegations: { label: "Manager Delegations", icon: Users, visible: canAccessFeature("manager_delegations") || delegationEligible, active: page === "MANAGER_DELEGATIONS", onClick: go("MANAGER_DELEGATIONS") },
+    manager_delegations: { label: "Manager Delegations", icon: Users, visible: canAccessFeature("manager_delegations") || delegationEligible || role === "EXCO", active: page === "MANAGER_DELEGATIONS", onClick: go("MANAGER_DELEGATIONS") },
     external_payees: { label: "External Payees", icon: Building2, visible: isAdminRole, active: page === "EXTERNAL_PAYEES", onClick: go("EXTERNAL_PAYEES") },
     my_team: { label: "My Team", icon: Users, visible: ["MANAGER", "HOD", "EXCO", "CEO", "ADMIN"].includes(role), active: page === "MY_TEAM", onClick: go("MY_TEAM") },
     travel_setup: { label: "Travel Setup", icon: BriefcaseBusiness, visible: canManageTravelSettings, active: page === "TRAVEL_SETUP", onClick: go("TRAVEL_SETUP") },
@@ -5103,7 +5119,7 @@ export default function App() {
           {(hasSalariesAccess || ((canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled) || standbyModuleEnabled) && (
             <div className={`sidebar-group ${groupOpen("salaries", SALARIES_GROUP_PAGES.includes(page)) ? "open" : ""}`}>
               <a href="#" className={navItemClass(SALARIES_GROUP_PAGES.includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("salaries", SALARIES_GROUP_PAGES.includes(page)); }}>
-                <span className="sidebar-nav-icon"><Banknote size={18} aria-hidden /></span>Salaries
+                <span className="sidebar-nav-icon"><Banknote size={18} aria-hidden /></span>Allowances
                 {salariesCount > 0 && <b>{salariesCount}</b>}
                 <strong><ChevronDown size={14} aria-hidden /></strong>
               </a>
@@ -5168,8 +5184,8 @@ export default function App() {
           {signatureModuleEnabled && <a href="#" className={navItemClass(page === "SIGNATURES")} onClick={(e) => { e.preventDefault(); setPage("SIGNATURES"); }}><span className="sidebar-nav-icon"><FileSignature size={18} aria-hidden /></span>Sign a Document</a>}
           <a href="#" className={navItemClass(page === "INBOX")} onClick={(e) => { e.preventDefault(); setPage("INBOX"); }}><span className="sidebar-nav-icon"><Mail size={18} aria-hidden /></span>Approval Inbox <b>{inboxCount}</b></a>
           {(canAccessFeature("capture") || hasPaymentsAccess || hasDeductionsAccess || hasViewClearancesAccess || hasRefundableAccess) && (
-            <div className={`sidebar-group ${groupOpen("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
-              <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","REFUNDABLE"].includes(page)); }}>
+            <div className={`sidebar-group ${groupOpen("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","SALARY_ADVANCES_REPORT","REFUNDABLE"].includes(page)) ? "open" : ""}`}>
+              <a href="#" className={navItemClass(["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","SALARY_ADVANCES_REPORT","REFUNDABLE"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("finance", ["CAPTURE","PAYMENTS","DEDUCTIONS","VIEW_CLEARANCES","SALARY_ADVANCES_REPORT","REFUNDABLE"].includes(page)); }}>
                 <span className="sidebar-nav-icon"><Wallet size={18} aria-hidden /></span>Finance
                 {(() => {
                   // Only sum counts for sub-items this user can actually see below —
@@ -5196,6 +5212,9 @@ export default function App() {
                 )}
                 {hasViewClearancesAccess && (
                   <a href="#" className={navItemClass(page === "VIEW_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("VIEW_CLEARANCES"); }}><Eye size={14} aria-hidden />View Clearances</a>
+                )}
+                {hasViewClearancesAccess && (
+                  <a href="#" className={navItemClass(page === "SALARY_ADVANCES_REPORT")} onClick={(e) => { e.preventDefault(); setPage("SALARY_ADVANCES_REPORT"); }}><Banknote size={14} aria-hidden />Salary Advances</a>
                 )}
                 {hasRefundableAccess && (
                   <a href="#" className={navItemClass(page === "REFUNDABLE")} onClick={(e) => { e.preventDefault(); setPage("REFUNDABLE"); }}><PlusCircle size={14} aria-hidden />Refundable <span className="inbox-count-chip">{refundableCount}</span></a>
@@ -5253,13 +5272,13 @@ export default function App() {
             </div>
           </div>
           <div className="sidebar-section-label">Administration</div>
-          {(canAccessFeature("user_management") || canAccessFeature("roles_permissions") || canAccessFeature("manager_delegations") || delegationEligible || role === "ADMIN") && (
+          {(canAccessFeature("user_management") || canAccessFeature("roles_permissions") || canAccessFeature("manager_delegations") || delegationEligible || role === "ADMIN" || role === "EXCO") && (
             <div className={`sidebar-group ${groupOpen("users", ["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page)) ? "open" : ""}`}>
               <a href="#" className={navItemClass(["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page))} onClick={(e) => { e.preventDefault(); if (["USER_MANAGEMENT", "ROLES_PERMISSIONS", "MANAGER_DELEGATIONS", "EXTERNAL_PAYEES"].includes(page)) toggleGroup("users", true); else setPage("USER_MANAGEMENT"); }}><span className="sidebar-nav-icon"><Users size={18} aria-hidden /></span>User Management <strong><ChevronDown size={14} aria-hidden /></strong></a>
               <div className="sidebar-subnav">
                 {canAccessFeature("user_management") && <a href="#" className={navItemClass(page === "USER_MANAGEMENT")} onClick={(e) => { e.preventDefault(); setPage("USER_MANAGEMENT"); }}><Users size={14} aria-hidden />Users</a>}
                 {canAccessFeature("roles_permissions") && <a href="#" className={navItemClass(page === "ROLES_PERMISSIONS")} onClick={(e) => { e.preventDefault(); setPage("ROLES_PERMISSIONS"); }}><ShieldCheck size={14} aria-hidden />Roles & Permissions</a>}
-                {(canAccessFeature("manager_delegations") || delegationEligible) && <a href="#" className={navItemClass(page === "MANAGER_DELEGATIONS")} onClick={(e) => { e.preventDefault(); setPage("MANAGER_DELEGATIONS"); }}><Users size={14} aria-hidden />Manager Delegations</a>}
+                {(canAccessFeature("manager_delegations") || delegationEligible || role === "EXCO") && <a href="#" className={navItemClass(page === "MANAGER_DELEGATIONS")} onClick={(e) => { e.preventDefault(); setPage("MANAGER_DELEGATIONS"); }}><Users size={14} aria-hidden />Manager Delegations</a>}
                 {role === "ADMIN" && <a href="#" className={navItemClass(page === "EXTERNAL_PAYEES")} onClick={(e) => { e.preventDefault(); setPage("EXTERNAL_PAYEES"); }}><Building2 size={14} aria-hidden />External Payees</a>}
               </div>
             </div>
@@ -5343,6 +5362,8 @@ export default function App() {
             <Deductions />
           ) : page === "VIEW_CLEARANCES" ? (
             <ViewClearances />
+          ) : page === "SALARY_ADVANCES_REPORT" ? (
+            <SalaryAdvancesReport />
           ) : page === "REFUNDABLE" ? (
             <Refundable />
           ) : page === "ACCOMMODATION" && canAccessFeature("accommodation") ? (
@@ -5726,7 +5747,7 @@ export default function App() {
                               value={delegationDelegateId}
                               onChange={setDelegationDelegateId}
                               placeholder="Search or browse users…"
-                              users={adminUsers.filter((user) => {
+                              users={role === "EXCO" ? delegationCandidates : adminUsers.filter((user) => {
                                 const selfId = profile?.id || me?.userId;
                                 if (user.is_active === false || user.id === selfId) return false;
                                 const selfInfo = adminUsers.find((u) => u.id === selfId);
@@ -5938,6 +5959,7 @@ export default function App() {
                       { key: "payback_query",          label: "View Clearances + Query Payback Proof", group: "Finance Operations" },
                       { key: "refundable",             label: "Refundable",               group: "Finance Operations" },
                       { key: "salaries",               label: "Salaries",                 group: "Finance Operations" },
+                      { key: "salary_advance_repayments", label: "Salary Advance Repayments (accept / reject)", group: "Finance Operations" },
                       { key: "it_provisioning",        label: "IT Provisioning",          group: "IT" },
                       { key: "payments",               label: "Payments",                 group: "Finance Operations" },
                       { key: "capture",                label: "Capture Inbox",            group: "Finance Operations" },
@@ -5952,6 +5974,7 @@ export default function App() {
                       { key: "vendor_contracts_manage",  label: "Vendor Contracts (Manage)", group: "Contracts" },
                       { key: "service_contracts",        label: "Service Contracts (View)",   group: "Contracts" },
                       { key: "service_contracts_manage", label: "Service Contracts (Manage)", group: "Contracts" },
+                      { key: "service_contracts_notifications", label: "Service Contracts (Notification Settings)", group: "Contracts" },
                     ];
                     const draft = featurePermDraft;
                     const DEFAULTS: Record<string, string[]> = {
@@ -5976,11 +5999,12 @@ export default function App() {
                       claims_sla_report:      ["ADMIN","FINANCE"],
                       clearance_status_report: ["ADMIN","Department: Finance","Section: Treasury & Financial Accounting","Department: Human Resource","Department: Human Resources","Section: Human Resources Operations"],
                       advance_recovery_settings: ["ADMIN","FINANCE"],
-                      manager_delegations:    ["ADMIN"],
+                      manager_delegations:    ["ADMIN", "EXCO"],
                       deductions:             ["ADMIN"],
                       payback_query:          ["ADMIN","Section: Treasury & Financial Accounting"],
                       refundable:             ["ADMIN"],
                       salaries:               ["ADMIN"],
+                      salary_advance_repayments: ["ADMIN","Section: Treasury & Financial Accounting","Team: Treasury & Financial Accounting"],
     it_provisioning:        ["ADMIN"],
                       payments:               ["ADMIN","Department: Finance"],
                       capture:                ["ADMIN","Section: Treasury & Financial Accounting"],

@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maintenance Requests mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#E6EAF0;font-family:Inter,system-ui,sans-serif;color:#121826}
+a{color:#0B5CAD}a:hover{color:#08467F}
+.top{max-width:1500px;margin:0 auto;padding:28px 24px 8px}
+.top h1{margin:0 0 6px;font-size:30px}
+.top p{margin:0 0 10px;color:#334155;max-width:900px;line-height:1.5}
+.toc{font-size:14px;line-height:1.9}
+.band{max-width:1500px;margin:0 auto;padding:16px 24px 8px}
+.band h2{font-size:22px;margin:28px 0 14px}
+.shot{margin:0 0 40px}
+.shot h3{margin:0 0 10px;font-size:15px;color:#334155}
+.web{border:1px solid #C3CBD6;border-radius:12px;overflow:hidden;background:#F4F6F9;box-shadow:0 8px 24px rgba(15,23,42,.08)}
+.phones{display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start}
+.phones .shot{width:410px;max-width:100%}
+.phone{width:390px;max-width:100%;border:10px solid #1F2937;border-radius:38px;overflow:hidden;background:#F4F6F9;box-shadow:0 12px 32px rgba(15,23,42,.18)}
+.prio{font:inherit;min-height:48px;border-radius:10px;cursor:pointer}
+.wst{font:inherit;min-height:48px;border-radius:10px;cursor:pointer;text-align:left;padding:0 14px}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Maintenance Requests — mockup</h1>
+  <p>Draft screens for the FlowDesk Maintenance module. The Admin Office is any one member of Administration (Business Continuity &amp; Company Performance), set as step 1 of the Maintenance Request workflow in Workflow Builder. All names, sites, numbers and targets are sample data; [brackets] are still to confirm. Screens 4 and 7 are clickable.</p>
+  <nav class="toc" aria-label="Screens"><a href="#web-queue">Admin Office queue</a> · <a href="#web-request">Request detail (Admin Office)</a> · <a href="#web-workflow">Workflow Builder and lists</a> · <a href="#phone-new">New request (clickable)</a> · <a href="#phone-request">My request: confirm or reopen</a> · <a href="#phone-jobs">Worker: my jobs</a> · <a href="#phone-worker">Worker: update and complete (clickable)</a></nav>
+</header>
+<div class="band"><h2>Web (desktop)</h2><section class="shot" id="web-queue" aria-label="1 · Admin Office queue"><h3>1 · Admin Office queue</h3><div class="web"><div style="min-height: 1080px; background: #F4F6F9; font-family: Inter, system-ui, sans-serif; color: #121826; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px 24px; background: #FFFFFF; border-bottom: 1px solid #DCE1E8">
+    <div style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px">
+      <span style="display: inline-flex; width: 30px; height: 30px; border-radius: 8px; background: #0B5CAD; color: #FFFFFF; align-items: center; justify-content: center; font-size: 14px">FD</span>
+      FlowDesk
+    </div>
+    <label style="flex: 1 1 260px; max-width: 420px; display: flex; align-items: center; gap: 8px; border: 1px solid #DCE1E8; border-radius: 8px; padding: 8px 12px; color: #556070">
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+      <input type="search" placeholder="Search FlowDesk" aria-label="Search FlowDesk" style="border: none; outline: none; font: inherit; flex: 1; min-width: 0; background: transparent">
+    </label>
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 10px; color: #556070">
+      <span style="width: 32px; height: 32px; border-radius: 50%; background: #E8F1FB; color: #0B4F94; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">AO</span>
+      [Admin officer]
+    </div>
+  </header>
+
+  <div style="display: flex; flex-wrap: wrap; align-items: flex-start">
+    <nav aria-label="Main" style="flex: 1 1 220px; max-width: 260px; box-sizing: border-box; padding: 20px 12px; display: flex; flex-direction: column; gap: 2px">
+      <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: #121826">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>
+        Approval Inbox <span style="margin-left: auto; background: #B42318; color: #FFFFFF; border-radius: 999px; padding: 1px 8px; font-size: 12px; font-weight: 600">5</span>
+      </a>
+      <div style="padding: 16px 12px 6px; font-size: 12px; font-weight: 600; color: #556070; text-transform: uppercase; letter-spacing: 0.04em">Maintenance</div>
+      <a href="#" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; background: #E8F1FB; color: #0B4F94; font-weight: 600">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg>
+        Admin Office queue <span style="margin-left: auto; font-size: 12px">8</span>
+      </a>
+      <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: #121826">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+        New request
+      </a>
+      <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: #121826">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"></path><circle cx="12" cy="10" r="2.5"></circle></svg>
+        My site's requests
+      </a>
+      <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: #121826">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"></path></svg>
+        My jobs
+      </a>
+      <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: #121826">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path></svg>
+        Reports
+      </a>
+      <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: #121826">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><path d="M6 9v3a3 3 0 0 0 3 3h6"></path></svg>
+        Sites and lists
+      </a>
+    </nav>
+
+    <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 24px 28px 40px">
+      <div style="max-width: 1180px; display: flex; flex-direction: column; gap: 20px">
+
+        <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+          <div style="flex: 1 1 360px">
+            <h1 style="margin: 0; font-size: 26px; font-weight: 700">Admin Office queue</h1>
+            <p style="margin: 4px 0 0; color: #556070">Administration · Business Continuity &amp; Company Performance · set in Workflow Builder</p>
+          </div>
+          <a href="#" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 8px; background: #0B5CAD; color: #FFFFFF; text-decoration: none; font-weight: 600">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path></svg>
+            Monthly report
+          </a>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px">
+          <div style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 14px 16px">
+            <div style="font-size: 28px; font-weight: 700">3</div>
+            <div style="color: #556070">To review</div>
+          </div>
+          <div style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 14px 16px">
+            <div style="font-size: 28px; font-weight: 700; color: #9A3412">2</div>
+            <div style="color: #556070">Update requested</div>
+          </div>
+          <div style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 14px 16px">
+            <div style="font-size: 28px; font-weight: 700; color: #0F6B5C">2</div>
+            <div style="color: #556070">To verify</div>
+          </div>
+          <div style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 14px 16px">
+            <div style="font-size: 28px; font-weight: 700; color: #5B3AA8">1</div>
+            <div style="color: #556070">Awaiting approval</div>
+          </div>
+          <div style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 14px 16px">
+            <div style="font-size: 28px; font-weight: 700; color: #B42318">1</div>
+            <div style="color: #556070">Past target date</div>
+          </div>
+        </div>
+
+        <section aria-label="Requests" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px">
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 16px 0; border-bottom: 1px solid #DCE1E8">
+            <a href="#" style="padding: 8px 12px 12px; border-bottom: 2px solid #0B5CAD; color: #0B4F94; font-weight: 600; text-decoration: none">Needs action (8)</a>
+            <a href="#" style="padding: 8px 12px 12px; color: #556070; text-decoration: none">All open (21)</a>
+            <a href="#" style="padding: 8px 12px 12px; color: #556070; text-decoration: none">Closed</a>
+            <a href="#" style="padding: 8px 12px 12px; color: #556070; text-decoration: none">Cancelled</a>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px">
+            <label style="flex: 1 1 220px; display: flex; align-items: center; gap: 8px; border: 1px solid #DCE1E8; border-radius: 8px; padding: 8px 12px; color: #556070">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+              <input type="search" placeholder="Request number, site or description" aria-label="Search requests" style="border: none; outline: none; font: inherit; flex: 1; min-width: 0; background: transparent">
+            </label>
+            <select aria-label="Site" style="font: inherit; padding: 8px 10px; border: 1px solid #DCE1E8; border-radius: 8px; background: #FFFFFF; color: #121826"><option>All sites</option></select>
+            <select aria-label="District" style="font: inherit; padding: 8px 10px; border: 1px solid #DCE1E8; border-radius: 8px; background: #FFFFFF; color: #121826"><option>All districts</option></select>
+            <select aria-label="Category" style="font: inherit; padding: 8px 10px; border: 1px solid #DCE1E8; border-radius: 8px; background: #FFFFFF; color: #121826"><option>All categories</option></select>
+            <select aria-label="Priority" style="font: inherit; padding: 8px 10px; border: 1px solid #DCE1E8; border-radius: 8px; background: #FFFFFF; color: #121826"><option>All priorities</option></select>
+            <select aria-label="Status" style="font: inherit; padding: 8px 10px; border: 1px solid #DCE1E8; border-radius: 8px; background: #FFFFFF; color: #121826"><option>All statuses</option></select>
+          </div>
+
+          <div style="overflow-x: auto">
+            <table style="width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13.5px">
+              <thead>
+                <tr style="text-align: left; color: #556070; font-size: 12.5px; background: #F8FAFC">
+                  <th style="padding: 10px 16px">Request</th>
+                  <th style="padding: 10px 12px">Site · location</th>
+                  <th style="padding: 10px 12px">Category</th>
+                  <th style="padding: 10px 12px">Priority</th>
+                  <th style="padding: 10px 12px">Status</th>
+                  <th style="padding: 10px 12px">Worker</th>
+                  <th style="padding: 10px 12px">Target</th>
+                  <th style="padding: 10px 16px">Your next step</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0152</a><div style="color: #556070; font-size: 12px">Today 09:48</div></td>
+                  <td style="padding: 12px">Mafeteng store<div style="color: #556070; font-size: 12px">Banking hall, socket</div></td>
+                  <td style="padding: 12px">Electrical</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #B42318; color: #FFFFFF; font-weight: 600; font-size: 12px">Emergency</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #EEF2F7; color: #334155; font-weight: 600; font-size: 12px">Submitted</span></td>
+                  <td style="padding: 12px; color: #556070">—</td>
+                  <td style="padding: 12px; color: #556070">—</td>
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600">Review and assign</a></td>
+                </tr>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0148</a><div style="color: #556070; font-size: 12px">22 Oct 09:14</div></td>
+                  <td style="padding: 12px">Leribe store<div style="color: #556070; font-size: 12px">Back office, basin</div></td>
+                  <td style="padding: 12px">Plumbing</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 12px">High</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FFF7D6; color: #7A5A00; font-weight: 600; font-size: 12px">In Progress</span><div style="margin-top: 4px"><span style="display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid #F0A26B; color: #9A3412; font-size: 11.5px; font-weight: 600">Update requested</span></div></td>
+                  <td style="padding: 12px">[Worker A]</td>
+                  <td style="padding: 12px">25 Oct</td>
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600">Reply to the user</a></td>
+                </tr>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0146</a><div style="color: #556070; font-size: 12px">21 Oct 15:20</div></td>
+                  <td style="padding: 12px">Mohale's Hoek store<div style="color: #556070; font-size: 12px">Front door lock</div></td>
+                  <td style="padding: 12px">Building</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 12px">High</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #E3F6F3; color: #0F6B5C; font-weight: 600; font-size: 12px">Completed – Pending Verification</span></td>
+                  <td style="padding: 12px">[Worker B]</td>
+                  <td style="padding: 12px">23 Oct</td>
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600">Verify the work</a></td>
+                </tr>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0151</a><div style="color: #556070; font-size: 12px">Yesterday 16:02</div></td>
+                  <td style="padding: 12px">Maseru Head Office<div style="color: #556070; font-size: 12px">3rd floor kitchen</div></td>
+                  <td style="padding: 12px">Plumbing</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #E8F1FB; color: #0B4F94; font-weight: 600; font-size: 12px">Medium</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FFF4E5; color: #8A4B00; font-weight: 600; font-size: 12px">Pending Information</span></td>
+                  <td style="padding: 12px; color: #556070">—</td>
+                  <td style="padding: 12px; color: #556070">—</td>
+                  <td style="padding: 12px 16px; color: #556070">Waiting on the user</td>
+                </tr>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0144</a><div style="color: #556070; font-size: 12px">20 Oct 11:05</div></td>
+                  <td style="padding: 12px">Maseru Head Office<div style="color: #556070; font-size: 12px">Server room air conditioner</div></td>
+                  <td style="padding: 12px">Equipment</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 12px">High</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #F3EDFF; color: #5B3AA8; font-weight: 600; font-size: 12px">Awaiting Approval</span></td>
+                  <td style="padding: 12px">[Contractor C]</td>
+                  <td style="padding: 12px">30 Oct</td>
+                  <td style="padding: 12px 16px; color: #556070">With [Approver], step 1 of 2</td>
+                </tr>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0139</a><div style="color: #556070; font-size: 12px">17 Oct 08:30</div></td>
+                  <td style="padding: 12px">Butha-Buthe store<div style="color: #556070; font-size: 12px">Shop floor lights</div></td>
+                  <td style="padding: 12px">Electrical</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #EEF2F7; color: #334155; font-weight: 600; font-size: 12px">Low</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDECEC; color: #A12C2C; font-weight: 600; font-size: 12px">Reopened</span></td>
+                  <td style="padding: 12px">[Worker A]</td>
+                  <td style="padding: 12px; color: #B42318; font-weight: 600">24 Oct · late</td>
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600">Check the reopen reason</a></td>
+                </tr>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0150</a><div style="color: #556070; font-size: 12px">Yesterday 10:41</div></td>
+                  <td style="padding: 12px">Qacha's Nek store<div style="color: #556070; font-size: 12px">Rear window</div></td>
+                  <td style="padding: 12px">Building</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #EEF2F7; color: #334155; font-weight: 600; font-size: 12px">Low</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #EEF2F7; color: #334155; font-weight: 600; font-size: 12px">Submitted</span></td>
+                  <td style="padding: 12px; color: #556070">—</td>
+                  <td style="padding: 12px; color: #556070">—</td>
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600">Review and assign</a></td>
+                </tr>
+                <tr style="border-top: 1px solid #E8ECF1">
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600; white-space: nowrap">MR-2026-0142</a><div style="color: #556070; font-size: 12px">18 Oct 13:12</div></td>
+                  <td style="padding: 12px">Teyateyaneng store<div style="color: #556070; font-size: 12px">Staff toilet cistern</div></td>
+                  <td style="padding: 12px">Plumbing</td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #E8F1FB; color: #0B4F94; font-weight: 600; font-size: 12px">Medium</span></td>
+                  <td style="padding: 12px"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FFF7D6; color: #7A5A00; font-weight: 600; font-size: 12px">Waiting for Materials</span><div style="margin-top: 4px"><span style="display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid #F0A26B; color: #9A3412; font-size: 11.5px; font-weight: 600">Update requested</span></div></td>
+                  <td style="padding: 12px">[Worker B]</td>
+                  <td style="padding: 12px">29 Oct</td>
+                  <td style="padding: 12px 16px"><a href="#" style="font-weight: 600">Reply to the user</a></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style="padding: 12px 16px; color: #556070; font-size: 12.5px; border-top: 1px solid #E8ECF1">Sorted by what needs you first: emergencies, update requests, work to verify, then the rest by target date.</div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div></div></section>
+<section class="shot" id="web-request" aria-label="2 · Request detail (Admin Office)"><h3>2 · Request detail (Admin Office)</h3><div class="web"><div style="min-height: 1560px; background: #F4F6F9; font-family: Inter, system-ui, sans-serif; color: #121826; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px 24px; background: #FFFFFF; border-bottom: 1px solid #DCE1E8">
+    <div style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px">
+      <span style="display: inline-flex; width: 30px; height: 30px; border-radius: 8px; background: #0B5CAD; color: #FFFFFF; align-items: center; justify-content: center; font-size: 14px">FD</span>
+      FlowDesk
+    </div>
+    <nav aria-label="Breadcrumb" style="display: flex; align-items: center; gap: 8px; color: #556070">
+      <a href="#web-queue">Admin Office queue</a>
+      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>
+      <span style="color: #121826; font-weight: 600">MR-2026-0148</span>
+    </nav>
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 10px; color: #556070">
+      <span style="width: 32px; height: 32px; border-radius: 50%; background: #E8F1FB; color: #0B4F94; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">AO</span>
+      [Admin officer]
+    </div>
+  </header>
+
+  <div style="max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 24px 28px 48px; display: flex; flex-direction: column; gap: 18px">
+
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+      <div style="flex: 1 1 420px; display: flex; flex-direction: column; gap: 8px">
+        <h1 style="margin: 0; font-size: 26px; font-weight: 700">MR-2026-0148 · Basin leaking in back office</h1>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
+          <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #FFF7D6; color: #7A5A00; font-weight: 600; font-size: 12.5px">In Progress</span>
+          <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 12.5px">High</span>
+          <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; border: 1px solid #F0A26B; color: #9A3412; font-size: 12px; font-weight: 600">Update requested</span>
+          <span style="color: #556070">Leribe store · Leribe district</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+        <button type="button" style="font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; border: 1px solid #C8D0DA; background: #FFFFFF; color: #121826; cursor: pointer">Ask the user for information</button>
+        <button type="button" style="font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; border: 1px solid #C8D0DA; background: #FFFFFF; color: #121826; cursor: pointer">Escalate</button>
+        <button type="button" style="font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; border: 1px solid #E5B4B0; background: #FFFFFF; color: #A12C2C; cursor: pointer">Cancel with reason</button>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start">
+
+      <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+
+        <div role="status" style="display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 12px; background: #FFF4E5; border: 1px solid #F5C58A; color: #6B3A00">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+          <div><strong>[Contact name] asked for an update</strong> · 22 Oct, 12:30. [Worker A] and the Admin Office were notified. Reply below, or the worker's next update clears it. Unanswered after [4 working hours] it escalates.</div>
+        </div>
+
+        <section aria-labelledby="req-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px">
+          <h2 id="req-h" style="margin: 0; font-size: 16px">Request</h2>
+          <dl style="margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 24px">
+            <div><dt style="color: #556070; font-size: 12.5px">Site</dt><dd style="margin: 2px 0 0">Leribe store, Leribe</dd></div>
+            <div><dt style="color: #556070; font-size: 12.5px">Location within site</dt><dd style="margin: 2px 0 0">Back office, basin</dd></div>
+            <div><dt style="color: #556070; font-size: 12.5px">Category</dt><dd style="margin: 2px 0 0">Plumbing</dd></div>
+            <div><dt style="color: #556070; font-size: 12.5px">Contact on site</dt><dd style="margin: 2px 0 0">[Contact name] · [phone]</dd></div>
+            <div><dt style="color: #556070; font-size: 12.5px">Submitted by</dt><dd style="margin: 2px 0 0">[Staff name] · 22 Oct 2026, 09:14</dd></div>
+            <div><dt style="color: #556070; font-size: 12.5px">Preferred access</dt><dd style="margin: 2px 0 0">Weekdays before 10:00</dd></div>
+          </dl>
+          <div>
+            <div style="color: #556070; font-size: 12.5px">Description</div>
+            <p style="margin: 2px 0 0">Pipe under the basin is leaking; water on the floor since this morning. Staff are using the shop toilet meanwhile.</p>
+          </div>
+          <div>
+            <div style="color: #556070; font-size: 12.5px; margin-bottom: 8px">Photos · open full size</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px">
+              <a href="#" style="text-decoration: none; color: #556070; display: flex; flex-direction: column; gap: 4px; width: 132px">
+                <span style="height: 96px; border-radius: 8px; background: #D5DBE3; display: flex; align-items: center; justify-content: center; color: #556070"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg></span>
+                <span style="font-size: 11.5px">Photo 1 · [Staff name] · 22 Oct 09:14</span>
+              </a>
+              <a href="#" style="text-decoration: none; color: #556070; display: flex; flex-direction: column; gap: 4px; width: 132px">
+                <span style="height: 96px; border-radius: 8px; background: #D5DBE3; display: flex; align-items: center; justify-content: center; color: #556070"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg></span>
+                <span style="font-size: 11.5px">Photo 2 · [Staff name] · 22 Oct 09:14</span>
+              </a>
+              <a href="#" style="text-decoration: none; color: #556070; display: flex; flex-direction: column; gap: 4px; width: 132px">
+                <span style="height: 96px; border-radius: 8px; background: #D5DBE3; display: flex; align-items: center; justify-content: center; color: #556070"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg></span>
+                <span style="font-size: 11.5px">Update photo · [Worker A] · 22 Oct 14:05</span>
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="hist-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+            <h2 id="hist-h" style="margin: 0; font-size: 16px">History</h2>
+            <span style="color: #556070; font-size: 12.5px">Every status change, comment and photo, with who and when</span>
+          </div>
+
+          <form style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid #DCE1E8; border-radius: 10px; background: #F8FAFC">
+            <label for="reply" style="font-weight: 600">Reply on the request</label>
+            <textarea id="reply" rows="3" placeholder="The user, the worker and the Admin Office see this" style="font: inherit; padding: 10px 12px; border: 1px solid #C8D0DA; border-radius: 8px; resize: vertical; background: #FFFFFF"></textarea>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <button type="button" style="font: inherit; font-weight: 600; padding: 9px 14px; border-radius: 8px; border: 1px dashed #7FA7D6; background: #EEF5FC; color: #0B4F94; cursor: pointer">Add photo</button>
+              <button type="button" style="font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 8px; border: none; background: #0B5CAD; color: #FFFFFF; cursor: pointer; margin-left: auto">Post reply</button>
+            </div>
+          </form>
+
+          <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column">
+            <li style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E8ECF1">
+              <span style="flex: none; width: 10px; height: 10px; border-radius: 50%; background: #F0A26B; margin-top: 5px"></span>
+              <div><strong>Update requested</strong> by [Contact name]<div style="color: #556070; font-size: 12.5px">22 Oct, 12:30 · "Is someone coming today? The floor is wet."</div></div>
+            </li>
+            <li style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E8ECF1">
+              <span style="flex: none; width: 10px; height: 10px; border-radius: 50%; background: #C9A400; margin-top: 5px"></span>
+              <div><strong>Update</strong> by [Worker A] · status In Progress<div style="color: #556070; font-size: 12.5px">22 Oct, 14:05 · "Leak isolated; washer and pipe fitting needed." · 1 photo</div></div>
+            </li>
+            <li style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E8ECF1">
+              <span style="flex: none; width: 10px; height: 10px; border-radius: 50%; background: #0B5CAD; margin-top: 5px"></span>
+              <div><strong>Accepted</strong> by [Worker A]<div style="color: #556070; font-size: 12.5px">22 Oct, 10:02 · "Visit today." · responded in 22 min (target [4 h])</div></div>
+            </li>
+            <li style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E8ECF1">
+              <span style="flex: none; width: 10px; height: 10px; border-radius: 50%; background: #0B5CAD; margin-top: 5px"></span>
+              <div><strong>Assigned</strong> to [Worker A] by [Admin officer]<div style="color: #556070; font-size: 12.5px">22 Oct, 09:40 · target 25 Oct · instructions: "Isolate the water first; store opens 08:00."</div></div>
+            </li>
+            <li style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E8ECF1">
+              <span style="flex: none; width: 10px; height: 10px; border-radius: 50%; background: #64748B; margin-top: 5px"></span>
+              <div><strong>Reviewed</strong> by [Admin officer]<div style="color: #556070; font-size: 12.5px">22 Oct, 09:31 · priority kept at High</div></div>
+            </li>
+            <li style="display: flex; gap: 12px; padding: 12px 0">
+              <span style="flex: none; width: 10px; height: 10px; border-radius: 50%; background: #64748B; margin-top: 5px"></span>
+              <div><strong>Submitted</strong> by [Staff name] with 2 photos<div style="color: #556070; font-size: 12.5px">22 Oct, 09:14 · MR-2026-0148 confirmed to the user by email and in-app</div></div>
+            </li>
+          </ol>
+        </section>
+      </div>
+
+      <aside style="flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+
+        <section aria-labelledby="asg-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+          <h2 id="asg-h" style="margin: 0; font-size: 16px">Assignment</h2>
+          <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Worker
+            <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>[Worker A] · internal</option></select>
+          </label>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap">
+            <label style="flex: 1 1 120px; display: flex; flex-direction: column; gap: 4px; font-weight: 600">Target date
+              <input type="text" value="25 Oct 2026" style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px">
+            </label>
+            <label style="flex: 1 1 120px; display: flex; flex-direction: column; gap: 4px; font-weight: 600">Priority
+              <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>High</option></select>
+            </label>
+          </div>
+          <p style="margin: 0; color: #556070; font-size: 12.5px">Target filled in from the High priority target ([3 working days]); you can change it.</p>
+          <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Instructions to worker
+            <textarea rows="3" style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; resize: vertical">Isolate the water first; store opens 08:00.</textarea>
+          </label>
+          <button type="button" style="font: inherit; font-weight: 600; padding: 11px 16px; border-radius: 8px; border: none; background: #0B5CAD; color: #FFFFFF; cursor: pointer">Save assignment</button>
+        </section>
+
+        <section aria-labelledby="apr-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px">
+          <h2 id="apr-h" style="margin: 0; font-size: 16px">Approval</h2>
+          <p style="margin: 0; color: #556070">Not needed so far. Needed for a replacement, a contractor, or spend from [SPEND LIMIT].</p>
+          <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Estimated cost (M)
+            <input type="text" placeholder="0.00" style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px">
+          </label>
+          <button type="button" style="font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; border: 1px solid #B9A6E8; background: #F7F3FF; color: #5B3AA8; cursor: pointer">Request approval</button>
+          <p style="margin: 0; color: #556070; font-size: 12.5px">Goes through the approval steps of the Maintenance Request workflow. Work pauses as Awaiting Approval, then carries on where it was.</p>
+        </section>
+
+        <section aria-labelledby="ver-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px">
+          <h2 id="ver-h" style="margin: 0; font-size: 16px">Verification</h2>
+          <button type="button" disabled="disabled" style="font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; border: 1px solid #DCE1E8; background: #F1F4F8; color: #6B7684">Verify completed work</button>
+          <p style="margin: 0; color: #556070; font-size: 12.5px">Opens when the worker marks it completed with at least one completion photo. Then it goes to the user to confirm or reopen.</p>
+        </section>
+
+        <section aria-labelledby="sla-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px">
+          <h2 id="sla-h" style="margin: 0; font-size: 16px">Targets</h2>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span>Response</span><span style="color: #1E6B34; font-weight: 600">Met · 22 min</span></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span>Fix by</span><span style="font-weight: 600">25 Oct · 2 working days left</span></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span>Last update</span><span>22 Oct, 14:05</span></div>
+        </section>
+      </aside>
+    </div>
+  </div>
+</div></div></section>
+<section class="shot" id="web-workflow" aria-label="3 · Workflow Builder and lists"><h3>3 · Workflow Builder and lists</h3><div class="web"><div style="min-height: 1400px; background: #F4F6F9; font-family: Inter, system-ui, sans-serif; color: #121826; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px 24px; background: #FFFFFF; border-bottom: 1px solid #DCE1E8">
+    <div style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px">
+      <span style="display: inline-flex; width: 30px; height: 30px; border-radius: 8px; background: #0B5CAD; color: #FFFFFF; align-items: center; justify-content: center; font-size: 14px">FD</span>
+      FlowDesk
+    </div>
+    <nav aria-label="Breadcrumb" style="display: flex; align-items: center; gap: 8px; color: #556070">
+      <span>Org Structure</span>
+      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>
+      <span style="color: #121826; font-weight: 600">Workflow Builder</span>
+    </nav>
+  </header>
+
+  <div style="max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 24px 28px 48px; display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start">
+
+    <section aria-labelledby="wf-h" style="flex: 999 1 600px; min-width: 0; background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 20px 22px; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+        <h1 id="wf-h" style="margin: 0; font-size: 22px; flex: 1 1 300px">Maintenance — company-wide</h1>
+        <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #E6F4EA; color: #1E6B34; font-weight: 600; font-size: 12.5px">Active</span>
+        <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #EEF2F7; color: #334155; font-weight: 600; font-size: 12.5px">Sticky</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px">
+        <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Request type
+          <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>Maintenance Request</option></select>
+        </label>
+        <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Division
+          <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>All divisions</option></select>
+        </label>
+        <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Department
+          <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>All departments</option></select>
+        </label>
+      </div>
+      <p style="margin: 0; color: #556070">Matched on the requester's org like other workflows: a Section, Department or Division workflow wins over this company-wide one.</p>
+
+      <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px">
+        <li style="border: 2px solid #0B5CAD; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; background: #F7FAFE">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+            <span style="display: inline-flex; width: 28px; height: 28px; border-radius: 50%; background: #0B5CAD; color: #FFFFFF; align-items: center; justify-content: center; font-weight: 700">1</span>
+            <strong style="font-size: 15.5px; flex: 1 1 240px">Admin Office — review &amp; assign</strong>
+            <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #E8F1FB; color: #0B4F94; font-weight: 600; font-size: 12px">Always first</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px">
+            <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Action type
+              <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>Review &amp; assign (Maintenance)</option></select>
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Who
+              <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>Any one member of Department: Administration</option></select>
+            </label>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; color: #334155">
+            <span style="padding: 4px 10px; border-radius: 8px; background: #FFFFFF; border: 1px solid #DCE1E8">Business Continuity &amp; Company Performance › Administration</span>
+            <span style="padding: 4px 10px; border-radius: 8px; background: #FFFFFF; border: 1px solid #DCE1E8">Includes the department's manager</span>
+            <span style="padding: 4px 10px; border-radius: 8px; background: #FFF4E5; border: 1px solid #F5C58A; color: #6B3A00">1 person today — add a backup</span>
+          </div>
+          <p style="margin: 0; color: #556070; font-size: 13px">This group receives new requests, asks for information, assigns workers, verifies completed work, cancels, and manages the lists on the right.</p>
+        </li>
+
+        <li style="border: 1px solid #DCE1E8; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+            <span style="display: inline-flex; width: 28px; height: 28px; border-radius: 50%; background: #5B3AA8; color: #FFFFFF; align-items: center; justify-content: center; font-weight: 700">2</span>
+            <strong style="font-size: 15.5px; flex: 1 1 240px">Approve spend — Head of Business Continuity</strong>
+            <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #F3EDFF; color: #5B3AA8; font-weight: 600; font-size: 12px">Only when approval is needed</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px">
+            <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Action type
+              <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>Approve</option></select>
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Who
+              <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>[HOD / named approver]</option></select>
+            </label>
+          </div>
+        </li>
+
+        <li style="border: 1px solid #DCE1E8; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+            <span style="display: inline-flex; width: 28px; height: 28px; border-radius: 50%; background: #5B3AA8; color: #FFFFFF; align-items: center; justify-content: center; font-weight: 700">3</span>
+            <strong style="font-size: 15.5px; flex: 1 1 240px">Approve spend — EXCO</strong>
+            <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #F3EDFF; color: #5B3AA8; font-weight: 600; font-size: 12px">Only when approval is needed</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px">
+            <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Action type
+              <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>Approve</option></select>
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 4px; font-weight: 600">Who
+              <select style="font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #C8D0DA; border-radius: 8px; background: #FFFFFF"><option>[EXCO member]</option></select>
+            </label>
+          </div>
+        </li>
+      </ol>
+
+      <button type="button" style="align-self: flex-start; font: inherit; font-weight: 600; padding: 9px 14px; border-radius: 8px; border: 1px dashed #7FA7D6; background: #EEF5FC; color: #0B4F94; cursor: pointer">Add approval step</button>
+      <div style="display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; border-top: 1px solid #E8ECF1; padding-top: 14px">
+        <button type="button" style="font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 8px; border: 1px solid #C8D0DA; background: #FFFFFF; color: #121826; cursor: pointer">Preview for a person</button>
+        <button type="button" style="font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 8px; border: none; background: #0B5CAD; color: #FFFFFF; cursor: pointer">Save workflow</button>
+      </div>
+    </section>
+
+    <aside style="flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+
+      <section aria-labelledby="sites-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <h2 id="sites-h" style="margin: 0; font-size: 16px; flex: 1">Sites</h2>
+          <button type="button" style="font: inherit; font-weight: 600; padding: 7px 12px; border-radius: 8px; border: 1px solid #C8D0DA; background: #FFFFFF; color: #121826; cursor: pointer">Add site</button>
+        </div>
+        <div style="overflow-x: auto">
+          <table style="width: 100%; min-width: 340px; border-collapse: collapse; font-size: 13px">
+            <thead>
+              <tr style="text-align: left; color: #556070; font-size: 12px">
+                <th style="padding: 6px 8px 6px 0; font-weight: 600">Site</th>
+                <th style="padding: 6px 8px; font-weight: 600">District</th>
+                <th style="padding: 6px 0 6px 8px; font-weight: 600">Staff based here</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0">Leribe store</td><td style="padding: 8px">Leribe</td><td style="padding: 8px 0 8px 8px; color: #556070">[org unit]</td></tr>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0">Mafeteng store</td><td style="padding: 8px">Mafeteng</td><td style="padding: 8px 0 8px 8px; color: #556070">[org unit]</td></tr>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0">Maseru Head Office</td><td style="padding: 8px">Maseru</td><td style="padding: 8px 0 8px 8px; color: #556070">[org units]</td></tr>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0">[Next site]</td><td style="padding: 8px">[District]</td><td style="padding: 8px 0 8px 8px; color: #556070">[org unit]</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="margin: 0; color: #556070; font-size: 12.5px">Linking a site to the org units based there lets staff see their site's requests automatically.</p>
+      </section>
+
+      <section aria-labelledby="tgt-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+        <h2 id="tgt-h" style="margin: 0; font-size: 16px">Priority targets</h2>
+        <div style="overflow-x: auto">
+          <table style="width: 100%; min-width: 320px; border-collapse: collapse; font-size: 13px">
+            <thead>
+              <tr style="text-align: left; color: #556070; font-size: 12px">
+                <th style="padding: 6px 8px 6px 0; font-weight: 600">Priority</th>
+                <th style="padding: 6px 8px; font-weight: 600">Respond within</th>
+                <th style="padding: 6px 0 6px 8px; font-weight: 600">Fix within</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #B42318; color: #FFFFFF; font-weight: 600; font-size: 12px">Emergency</span></td><td style="padding: 8px">[2 h]</td><td style="padding: 8px 0 8px 8px">[24 h]</td></tr>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 12px">High</span></td><td style="padding: 8px">[4 h]</td><td style="padding: 8px 0 8px 8px">[3 working days]</td></tr>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #E8F1FB; color: #0B4F94; font-weight: 600; font-size: 12px">Medium</span></td><td style="padding: 8px">[1 working day]</td><td style="padding: 8px 0 8px 8px">[7 working days]</td></tr>
+              <tr style="border-top: 1px solid #E8ECF1"><td style="padding: 8px 8px 8px 0"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #EEF2F7; color: #334155; font-weight: 600; font-size: 12px">Low</span></td><td style="padding: 8px">[3 working days]</td><td style="padding: 8px 0 8px 8px">[14 working days]</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="margin: 0; color: #556070; font-size: 12.5px">Working days skip weekends and Lesotho public holidays.</p>
+      </section>
+
+      <section aria-labelledby="lists-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px">
+        <h2 id="lists-h" style="margin: 0; font-size: 16px">Other lists</h2>
+        <div style="display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid #E8ECF1">
+          <div><strong>Categories</strong><div style="color: #556070; font-size: 12.5px">Plumbing, Electrical, Equipment, Building, General · per category: "photo not required"</div></div>
+          <a href="#" style="font-weight: 600">Edit</a>
+        </div>
+        <div style="display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid #E8ECF1">
+          <div><strong>Workers</strong><div style="color: #556070; font-size: 12.5px">Internal staff (FlowDesk login) or contractors (no login; Admin Office posts for them)</div></div>
+          <a href="#" style="font-weight: 600">Edit</a>
+        </div>
+        <div style="display: flex; justify-content: space-between; gap: 10px; padding: 10px 0">
+          <div><strong>Approval spend limit</strong><div style="color: #556070; font-size: 12.5px">From [SPEND LIMIT], approval is required before work goes on</div></div>
+          <a href="#" style="font-weight: 600">Edit</a>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div></div></section></div>
+<div class="band"><h2>Mobile (phone browser)</h2><div class="phones"><section class="shot" id="phone-new" aria-label="4 · New request (clickable)"><h3>4 · New request (clickable)</h3><div class="phone"><div style="box-sizing: border-box; background: #F4F6F9; font-family: Inter, system-ui, sans-serif; color: #121826; font-size: 15px; display: flex; flex-direction: column">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #DCE1E8; padding: 12px 16px; display: flex; align-items: center; gap: 10px">
+    <a href="#phone-request" aria-label="Back to my requests" style="display: inline-flex; width: 44px; height: 44px; align-items: center; justify-content: center; margin-left: -10px; color: #121826">
+      <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>
+    </a>
+    <div style="font-weight: 700; font-size: 17px">FlowDesk · Maintenance</div>
+  </header>
+
+  <div style="padding: 18px 16px 8px; display: flex; flex-direction: column; gap: 4px">
+    <h1 style="margin: 0; font-size: 24px; font-weight: 700">New maintenance request</h1>
+    <p style="margin: 0; color: #556070; font-size: 13.5px">You get a request number when you submit. * required</p>
+    <p style="margin: 4px 0 0; color: #1E6B34; font-size: 13px; display: flex; align-items: center; gap: 6px">
+      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+      Draft kept on this phone if the connection drops
+    </p>
+  </div>
+
+  <div style="padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 14px; flex: 1">
+
+    <section aria-labelledby="where-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+      <h2 id="where-h" style="margin: 0; font-size: 17px">Where is the problem?</h2>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Site *
+        <select style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px; background: #FFFFFF; color: #121826"><option>Leribe store</option></select>
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">District
+        <input type="text" value="Leribe" readonly="readonly" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #DCE1E8; border-radius: 10px; background: #F1F4F8; color: #334155">
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Location within site *
+        <input type="text" placeholder="Room, counter, floor or area" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px">
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Contact person *
+        <input type="text" placeholder="On-site person who can give access" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px">
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Contact phone *
+        <input type="tel" placeholder="Phone number" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px">
+      </label>
+    </section>
+
+    <section aria-labelledby="what-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+      <h2 id="what-h" style="margin: 0; font-size: 17px">What needs fixing?</h2>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Category *
+        <select style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px; background: #FFFFFF; color: #121826"><option>Plumbing</option></select>
+      </label>
+      <fieldset style="border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px">
+        <legend style="font-weight: 600; font-size: 14px; padding: 0; margin-bottom: 8px">Priority *</legend>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+          <button type="button" class="prio" data-prio="Emergency" aria-pressed="false">Emergency</button><button type="button" class="prio" data-prio="High" aria-pressed="false">High</button><button type="button" class="prio" data-prio="Medium" aria-pressed="false">Medium</button><button type="button" class="prio" data-prio="Low" aria-pressed="false">Low</button>
+        </div>
+        <div id="new-emg" hidden role="status" style="padding: 10px 12px; border-radius: 10px; background: #FDECEC; border: 1px solid #F1B4AE; color: #8F1F15; font-size: 13.5px">Emergency: the Admin Office is alerted at once by email and on their phones. If anyone is in danger, also call [Admin Office number].</div><p id="new-emg-hint" style="margin: 0; font-size: 13.5px; color: #334155"><strong>Emergency:</strong> safety risk or the store cannot trade.</p>
+      </fieldset>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Asset tag (if equipment)
+        <input type="text" placeholder="Tag number on the item" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px">
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Description *
+        <textarea rows="4" placeholder="What is wrong, since when, and the impact on trading or staff" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px; resize: vertical"></textarea>
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Preferred access times
+        <input type="text" placeholder="e.g. weekdays before 10:00" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px">
+      </label>
+    </section>
+
+    <section aria-labelledby="ph-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; align-items: baseline; gap: 8px">
+        <h2 id="ph-h" style="margin: 0; font-size: 17px; flex: 1">Photos *</h2>
+        <span id="new-count" style="color: #556070; font-size: 13px">2 of 5</span>
+      </div>
+      <p style="margin: 0; color: #334155; font-size: 13.5px">At least 1 photo is required. Up to 5 · JPG, PNG, HEIC · 10 MB each. Big photos are made smaller before they upload.</p>
+      <button id="new-add" type="button" style="font: inherit; font-weight: 600; min-height: 56px; border-radius: 12px; border: 1.5px dashed #6F9BD1; background: #EEF5FC; color: #0B4F94; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+          Take photo or choose from gallery
+        </button>
+      <div id="new-photos" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+      </div>
+    </section>
+
+    <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px">
+      <div id="new-submit" style="display: flex; flex-direction: column; gap: 8px"></div>
+      <p style="margin: 0; text-align: center; color: #556070; font-size: 12.5px">Goes to the Admin Office for review before anyone is assigned.</p>
+    </div>
+  </div>
+</div></div></section>
+<section class="shot" id="phone-request" aria-label="5 · My request: confirm or reopen"><h3>5 · My request: confirm or reopen</h3><div class="phone"><div style="box-sizing: border-box; background: #F4F6F9; font-family: Inter, system-ui, sans-serif; color: #121826; font-size: 15px; display: flex; flex-direction: column">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #DCE1E8; padding: 12px 16px; display: flex; align-items: center; gap: 10px">
+    <a href="#" aria-label="Back to my requests" style="display: inline-flex; width: 44px; height: 44px; align-items: center; justify-content: center; margin-left: -10px; color: #121826">
+      <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>
+    </a>
+    <div style="font-weight: 700; font-size: 17px; flex: 1">My requests</div>
+    <a href="#phone-new" style="display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; border-radius: 10px; background: #0B5CAD; color: #FFFFFF; text-decoration: none; font-weight: 600; font-size: 14px">
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+      New
+    </a>
+  </header>
+
+  <div style="padding: 18px 16px 24px; display: flex; flex-direction: column; gap: 14px">
+
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <h1 style="margin: 0; font-size: 24px; font-weight: 700">MR-2026-0148</h1>
+      <div style="display: flex; flex-wrap: wrap; gap: 6px">
+        <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #E3F6F3; color: #0F6B5C; font-weight: 600; font-size: 13px">Waiting for you to confirm</span>
+        <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 13px">High</span>
+      </div>
+      <p style="margin: 0; color: #556070; font-size: 14px">Leribe store · Back office, basin · Plumbing</p>
+    </div>
+
+    <ol aria-label="Progress" style="list-style: none; margin: 0; padding: 14px 16px; background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 14px">
+      <li style="display: flex; align-items: center; gap: 10px"><span style="width: 22px; height: 22px; border-radius: 50%; background: #1E6B34; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>Submitted<span style="margin-left: auto; color: #556070; font-size: 12.5px">22 Oct 09:14</span></li>
+      <li style="display: flex; align-items: center; gap: 10px"><span style="width: 22px; height: 22px; border-radius: 50%; background: #1E6B34; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>Reviewed and assigned<span style="margin-left: auto; color: #556070; font-size: 12.5px">22 Oct 09:40</span></li>
+      <li style="display: flex; align-items: center; gap: 10px"><span style="width: 22px; height: 22px; border-radius: 50%; background: #1E6B34; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>Work in progress<span style="margin-left: auto; color: #556070; font-size: 12.5px">22 Oct 10:02</span></li>
+      <li style="display: flex; align-items: center; gap: 10px"><span style="width: 22px; height: 22px; border-radius: 50%; background: #1E6B34; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>Completed and verified<span style="margin-left: auto; color: #556070; font-size: 12.5px">23 Oct 11:20</span></li>
+      <li style="display: flex; align-items: center; gap: 10px; font-weight: 700"><span style="width: 22px; height: 22px; border-radius: 50%; border: 3px solid #0B5CAD; box-sizing: border-box; background: #FFFFFF"></span>Your confirmation</li>
+      <li style="display: flex; align-items: center; gap: 10px; color: #556070"><span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #A9B4C2; box-sizing: border-box"></span>Closed</li>
+    </ol>
+
+    <section aria-labelledby="done-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <h2 id="done-h" style="margin: 0; font-size: 17px">Work done</h2>
+      <p style="margin: 0">Replaced the basin washer and the pipe fitting under the basin. No more leak; floor dried.</p>
+      <p style="margin: 0; color: #556070; font-size: 13.5px">[Worker A] · 23 Oct, 10:45 · verified by the Admin Office 23 Oct, 11:20</p>
+      <div style="display: flex; gap: 10px">
+        <a href="#" style="text-decoration: none; color: #556070; display: flex; flex-direction: column; gap: 4px; width: 104px">
+          <span style="height: 84px; border-radius: 10px; background: #D5DBE3; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg></span>
+          <span style="font-size: 12px">After 1</span>
+        </a>
+        <a href="#" style="text-decoration: none; color: #556070; display: flex; flex-direction: column; gap: 4px; width: 104px">
+          <span style="height: 84px; border-radius: 10px; background: #D5DBE3; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg></span>
+          <span style="font-size: 12px">After 2</span>
+        </a>
+      </div>
+    </section>
+
+    <section aria-labelledby="act-h" style="background: #FFFFFF; border: 2px solid #0B5CAD; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <h2 id="act-h" style="margin: 0; font-size: 17px">Is it fixed?</h2>
+      <button type="button" style="font: inherit; font-weight: 700; font-size: 16px; min-height: 52px; border-radius: 12px; border: none; background: #0B5CAD; color: #FFFFFF; cursor: pointer">Yes, confirm resolved</button>
+      <button type="button" style="font: inherit; font-weight: 600; font-size: 16px; min-height: 52px; border-radius: 12px; border: 1.5px solid #A12C2C; background: #FFFFFF; color: #A12C2C; cursor: pointer">No, reopen it</button>
+      <p style="margin: 0; color: #556070; font-size: 13px">Reopening asks you why and sends it back to [Worker A]. If you don't answer, it closes by itself on 28 Oct (3 working days).</p>
+    </section>
+
+    <section aria-labelledby="upd-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px">
+        <h2 id="upd-h" style="margin: 0; font-size: 17px; flex: 1">Updates</h2>
+        <button type="button" style="font: inherit; font-weight: 600; font-size: 14px; min-height: 44px; padding: 0 12px; border-radius: 10px; border: 1px dashed #6F9BD1; background: #EEF5FC; color: #0B4F94; cursor: pointer">Add photo</button>
+      </div>
+      <div style="padding: 10px 0; border-top: 1px solid #E8ECF1"><div>Completed: washer and pipe fitting replaced.</div><div style="color: #556070; font-size: 13px">[Worker A] · 23 Oct, 10:45 · 2 photos</div></div>
+      <div style="padding: 10px 0; border-top: 1px solid #E8ECF1"><div>Parts collected; coming tomorrow 08:30.</div><div style="color: #556070; font-size: 13px">[Worker A] · 22 Oct, 16:10 · answered your update request</div></div>
+      <div style="padding: 10px 0; border-top: 1px solid #E8ECF1"><div>You asked for an update.</div><div style="color: #556070; font-size: 13px">You · 22 Oct, 12:30</div></div>
+      <div style="padding: 10px 0; border-top: 1px solid #E8ECF1"><div>Leak isolated; washer and pipe fitting needed.</div><div style="color: #556070; font-size: 13px">[Worker A] · 22 Oct, 14:05 · 1 photo</div></div>
+      <div style="padding: 10px 0; border-top: 1px solid #E8ECF1"><div>Task accepted; visit today.</div><div style="color: #556070; font-size: 13px">[Worker A] · 22 Oct, 10:02</div></div>
+    </section>
+
+    <section aria-labelledby="myreq-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 8px; font-size: 14px">
+      <h2 id="myreq-h" style="margin: 0; font-size: 17px">Your request</h2>
+      <div><span style="color: #556070">Submitted</span> · 22 Oct 2026, 09:14</div>
+      <div><span style="color: #556070">Contact</span> · [Contact name], [phone]</div>
+      <div><span style="color: #556070">Description</span> · Pipe under the basin is leaking; water on the floor.</div>
+      <div><span style="color: #556070">Photos</span> · 2 (open full size)</div>
+    </section>
+  </div>
+</div></div></section>
+<section class="shot" id="phone-jobs" aria-label="6 · Worker: my jobs"><h3>6 · Worker: my jobs</h3><div class="phone"><div style="box-sizing: border-box; background: #F4F6F9; font-family: Inter, system-ui, sans-serif; color: #121826; font-size: 15px; display: flex; flex-direction: column">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #DCE1E8; padding: 14px 16px; display: flex; align-items: center; gap: 10px">
+    <div style="font-weight: 700; font-size: 17px; flex: 1">FlowDesk · My jobs</div>
+    <span style="width: 34px; height: 34px; border-radius: 50%; background: #E8F1FB; color: #0B4F94; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">WA</span>
+  </header>
+
+  <nav aria-label="Job lists" style="display: flex; gap: 6px; padding: 12px 16px 0; background: #FFFFFF; border-bottom: 1px solid #DCE1E8">
+    <a href="#" aria-current="page" style="flex: 1; text-align: center; padding: 10px 0 12px; border-bottom: 3px solid #0B5CAD; color: #0B4F94; font-weight: 700; text-decoration: none">New (1)</a>
+    <a href="#" style="flex: 1; text-align: center; padding: 10px 0 12px; color: #556070; text-decoration: none">Active (2)</a>
+    <a href="#" style="flex: 1; text-align: center; padding: 10px 0 12px; color: #556070; text-decoration: none">Done</a>
+  </nav>
+
+  <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px">
+
+    <article aria-labelledby="new-h" style="background: #FFFFFF; border: 2px solid #B42318; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+        <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #B42318; color: #FFFFFF; font-weight: 600; font-size: 13px">Emergency</span>
+        <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #E8F1FB; color: #0B4F94; font-weight: 600; font-size: 13px">Assigned to you</span>
+      </div>
+      <h2 id="new-h" style="margin: 0; font-size: 18px">MR-2026-0152 · Sparking socket</h2>
+      <p style="margin: 0; color: #334155; font-size: 14px">Mafeteng store · Banking hall · Electrical</p>
+      <p style="margin: 0; font-size: 14px">"Socket behind the teller counter sparks when the till is plugged in."</p>
+      <div style="padding: 10px 12px; border-radius: 10px; background: #F1F4F8; font-size: 14px">
+        <div style="font-weight: 600">From the Admin Office</div>
+        <div style="color: #334155">Switch off that circuit first. Contact on site: [Contact name], [phone].</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; color: #8F1F15; font-weight: 600; font-size: 14px">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        Respond by 11:48 · fix by tomorrow 09:48
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 4px">
+        <a href="#phone-worker" style="display: flex; align-items: center; justify-content: center; min-height: 52px; border-radius: 12px; background: #0B5CAD; color: #FFFFFF; font-weight: 700; text-decoration: none">Accept</a>
+        <button type="button" style="font: inherit; font-weight: 600; min-height: 52px; border-radius: 12px; border: 1.5px solid #A9B4C2; background: #FFFFFF; color: #121826; cursor: pointer">Decline</button>
+      </div>
+      <p style="margin: 0; color: #556070; font-size: 13px">Declining asks for a reason and sends it back to the Admin Office.</p>
+    </article>
+
+    <h2 style="margin: 6px 0 0; font-size: 15px; color: #556070; font-weight: 600">Active</h2>
+
+    <a href="#phone-worker" style="text-decoration: none; color: #121826; background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+        <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FFF7D6; color: #7A5A00; font-weight: 600; font-size: 12.5px">In Progress</span>
+        <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 12.5px">High</span>
+        <span style="display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid #F0A26B; color: #9A3412; font-size: 12px; font-weight: 600">Update requested</span>
+      </div>
+      <strong style="font-size: 16px">MR-2026-0148 · Basin leaking</strong>
+      <span style="color: #334155; font-size: 14px">Leribe store · Back office · fix by 25 Oct</span>
+      <span style="color: #0B4F94; font-weight: 600; font-size: 14px">The user asked for an update — post one</span>
+    </a>
+
+    <a href="#phone-worker" style="text-decoration: none; color: #121826; background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+        <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDECEC; color: #A12C2C; font-weight: 600; font-size: 12.5px">Reopened</span>
+        <span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #EEF2F7; color: #334155; font-weight: 600; font-size: 12.5px">Low</span>
+      </div>
+      <strong style="font-size: 16px">MR-2026-0139 · Shop floor lights</strong>
+      <span style="color: #334155; font-size: 14px">Butha-Buthe store · was due 24 Oct</span>
+      <span style="color: #A12C2C; font-weight: 600; font-size: 14px">Reopened by the user: "Two lights still flicker."</span>
+    </a>
+  </div>
+</div></div></section>
+<section class="shot" id="phone-worker" aria-label="7 · Worker: update and complete (clickable)"><h3>7 · Worker: update and complete (clickable)</h3><div class="phone"><div style="box-sizing: border-box; background: #F4F6F9; font-family: Inter, system-ui, sans-serif; color: #121826; font-size: 15px; display: flex; flex-direction: column">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #DCE1E8; padding: 12px 16px; display: flex; align-items: center; gap: 10px">
+    <a href="#phone-jobs" aria-label="Back to my jobs" style="display: inline-flex; width: 44px; height: 44px; align-items: center; justify-content: center; margin-left: -10px; color: #121826">
+      <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>
+    </a>
+    <div style="font-weight: 700; font-size: 17px">My jobs</div>
+  </header>
+
+  <div style="padding: 18px 16px 24px; display: flex; flex-direction: column; gap: 14px">
+
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <h1 style="margin: 0; font-size: 24px; font-weight: 700">MR-2026-0148</h1>
+      <div style="display: flex; flex-wrap: wrap; gap: 6px">
+        <span id="w-status" style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #FFF7D6; color: #7A5A00; font-weight: 600; font-size: 13px">In Progress</span>
+        <span style="display: inline-block; padding: 3px 12px; border-radius: 999px; background: #FDE7D9; color: #9A3412; font-weight: 600; font-size: 13px">High</span>
+      </div>
+      <p style="margin: 0; color: #334155; font-size: 14px">Leribe store · Back office, basin · Plumbing · fix by 25 Oct</p>
+      <p style="margin: 0; font-size: 14px">Contact on site: [Contact name] · <a href="#">[phone]</a></p>
+    </div>
+
+    <div role="status" style="padding: 12px 14px; border-radius: 12px; background: #FFF4E5; border: 1px solid #F5C58A; color: #6B3A00; font-size: 14px"><strong>[Contact name] asked for an update</strong> at 12:30. Your next update answers it.</div>
+
+    <section aria-labelledby="st-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <h2 id="st-h" style="margin: 0; font-size: 17px">Where is the work?</h2>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <button type="button" class="wst" data-st="In Progress" aria-pressed="false">In Progress</button><button type="button" class="wst" data-st="Waiting for Materials" aria-pressed="false">Waiting for Materials</button><button type="button" class="wst" data-st="Awaiting Contractor" aria-pressed="false">Awaiting Contractor</button>
+      </div>
+      <a href="#" style="font-weight: 600; font-size: 14px">Needs a replacement or a contractor? Ask for approval</a>
+    </section>
+
+    <section aria-labelledby="pu-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <h2 id="pu-h" style="margin: 0; font-size: 17px">Progress update</h2>
+      <label for="upd" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Progress update</label>
+      <textarea id="upd" rows="3" placeholder="Findings, next step, parts needed" style="font: inherit; font-size: 16px; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px; resize: vertical"></textarea>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <button type="button" style="font: inherit; font-weight: 600; min-height: 48px; border-radius: 10px; border: 1.5px dashed #6F9BD1; background: #EEF5FC; color: #0B4F94; cursor: pointer">Add photo</button>
+        <button type="button" style="font: inherit; font-weight: 600; min-height: 48px; border-radius: 10px; border: 1.5px solid #0B5CAD; background: #FFFFFF; color: #0B4F94; cursor: pointer">Post update</button>
+      </div>
+      <p style="margin: 0; color: #556070; font-size: 13px">The user and the Admin Office are notified.</p>
+    </section>
+
+    <section aria-labelledby="cp-h" style="background: #FFFFFF; border: 1px solid #DCE1E8; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+      <h2 id="cp-h" style="margin: 0; font-size: 17px">Completion</h2>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Work done *
+        <textarea rows="3" placeholder="What was fixed or replaced" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px; resize: vertical"></textarea>
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px">Parts used
+        <input type="text" placeholder="Item and quantity" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px">
+      </label>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; min-width: 0">Time spent (h)
+          <input type="text" inputmode="decimal" placeholder="0.0" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px; min-width: 0">
+        </label>
+        <label style="display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; min-width: 0">Cost (M)
+          <input type="text" inputmode="decimal" placeholder="Amount" style="font: inherit; font-size: 16px; font-weight: 400; padding: 12px; border: 1px solid #A9B4C2; border-radius: 10px; min-width: 0">
+        </label>
+      </div>
+
+      <div style="display: flex; align-items: baseline; gap: 8px">
+        <span style="font-weight: 600; font-size: 14px; flex: 1">Completion photos * (at least 1)</span>
+        <span id="w-count" style="color: #556070; font-size: 13px">0 of 5</span>
+      </div>
+      <div id="w-photos" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+        <button id="w-add" type="button" aria-label="Add a completion photo" style="font: inherit; height: 90px; border-radius: 10px; border: 1.5px dashed #6F9BD1; background: #EEF5FC; color: #0B4F94; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-weight: 600; font-size: 13px">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+            Add
+          </button>
+      </div>
+
+      <div id="w-complete" style="display: flex; flex-direction: column; gap: 8px"></div>
+    </section>
+  </div>
+</div></div></section></div></div>
+<script>
+(function () {
+  var on = 'font-weight:600;border:2px solid #0B5CAD;';
+  // 4 · New request: priority, photos (add / remove / retry), Submit locked until one photo has uploaded.
+  var prio = 'Medium', photos = [{id: 1, ok: true}, {id: 2, ok: false}], next = 3;
+  function photoTile(p, i, kind) {
+    var label = (kind === 'new' ? 'Photo ' : 'After ') + (i + 1);
+    var st = kind !== 'new' ? '' : p.ok
+      ? '<span style="font-size:12px;color:#1E6B34">Uploaded</span>'
+      : '<span style="font-size:12px;color:#A12C2C">Upload failed</span><button type="button" data-retry="' + p.id + '" style="font:inherit;font-size:12.5px;font-weight:600;min-height:32px;border-radius:8px;border:1px solid #A9B4C2;background:#fff;color:#0B4F94;cursor:pointer">Retry</button>';
+    return '<div style="display:flex;flex-direction:column;gap:4px"><div style="position:relative;height:' + (kind === 'new' ? 96 : 90) + 'px;border-radius:10px;background:#D5DBE3;display:flex;align-items:center;justify-content:center;color:#556070">'
+      + '<svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>'
+      + '<button type="button" data-remove="' + p.id + '" aria-label="Remove ' + label.toLowerCase() + '" style="position:absolute;top:-6px;right:-6px;width:30px;height:30px;border-radius:50%;border:2px solid #fff;background:#334155;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>'
+      + '</div><span style="font-size:12.5px;font-weight:600">' + label + '</span>' + st + '</div>';
+  }
+  function drawNew() {
+    document.querySelectorAll('.prio').forEach(function (b) {
+      var sel = b.dataset.prio === prio;
+      b.setAttribute('aria-pressed', sel ? 'true' : 'false');
+      b.style.cssText = sel ? on + 'background:#0B5CAD;color:#fff' : 'font-weight:500;border:1px solid #A9B4C2;background:#fff;color:#121826';
+    });
+    document.getElementById('new-emg').hidden = prio !== 'Emergency';
+    document.getElementById('new-emg-hint').hidden = prio === 'Emergency';
+    document.getElementById('new-count').textContent = photos.length + ' of 5';
+    document.getElementById('new-add').hidden = photos.length >= 5;
+    document.getElementById('new-photos').innerHTML = photos.map(function (p, i) { return photoTile(p, i, 'new'); }).join('');
+    var ok = photos.some(function (p) { return p.ok; });
+    document.getElementById('new-submit').innerHTML = ok
+      ? '<button type="button" style="font:inherit;font-weight:700;font-size:16px;min-height:54px;border-radius:12px;border:none;background:#0B5CAD;color:#fff;cursor:pointer">Submit request</button>'
+      : '<button type="button" disabled style="font:inherit;font-weight:700;font-size:16px;min-height:54px;border-radius:12px;border:none;background:#CBD3DD;color:#4A5563">Submit request</button><p role="status" style="margin:0;text-align:center;color:#A12C2C;font-size:13.5px;font-weight:600">' + (photos.length ? 'Waiting for a photo to finish uploading.' : 'Add at least 1 photo to submit.') + '</p>';
+  }
+  document.getElementById('phone-new').addEventListener('click', function (e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.prio) prio = t.dataset.prio;
+    else if (t.id === 'new-add' && photos.length < 5) photos.push({id: next++, ok: true});
+    else if (t.dataset.remove) photos = photos.filter(function (p) { return String(p.id) !== t.dataset.remove; });
+    else if (t.dataset.retry) photos.forEach(function (p) { if (String(p.id) === t.dataset.retry) p.ok = true; });
+    else return;
+    drawNew();
+  });
+  // 7 · Worker: work status, completion photos, Mark completed locked until one completion photo.
+  var wst = 'In Progress', after = [], wnext = 1;
+  function drawWorker() {
+    document.querySelectorAll('.wst').forEach(function (b) {
+      var sel = b.dataset.st === wst;
+      b.setAttribute('aria-pressed', sel ? 'true' : 'false');
+      b.style.cssText = sel ? on + 'background:#E8F1FB;color:#0B4F94' : 'font-weight:500;border:1px solid #A9B4C2;background:#fff;color:#121826';
+    });
+    document.getElementById('w-status').textContent = wst;
+    document.getElementById('w-count').textContent = after.length + ' of 5';
+    document.getElementById('w-add').hidden = after.length >= 5;
+    var grid = document.getElementById('w-photos'), add = document.getElementById('w-add');
+    grid.querySelectorAll('[data-tile]').forEach(function (n) { n.remove(); });
+    after.forEach(function (p, i) {
+      var d = document.createElement('div');
+      d.setAttribute('data-tile', '');
+      d.innerHTML = photoTile(p, i, 'after');
+      grid.insertBefore(d, add);
+    });
+    document.getElementById('w-complete').innerHTML = after.length
+      ? '<button type="button" style="font:inherit;font-weight:700;font-size:16px;min-height:54px;border-radius:12px;border:none;background:#0B5CAD;color:#fff;cursor:pointer">Mark completed</button><p style="margin:0;text-align:center;color:#556070;font-size:13px">The Admin Office verifies it, then the user confirms or reopens.</p>'
+      : '<button type="button" disabled style="font:inherit;font-weight:700;font-size:16px;min-height:54px;border-radius:12px;border:none;background:#CBD3DD;color:#4A5563">Mark completed</button><p role="status" style="margin:0;text-align:center;color:#A12C2C;font-size:13.5px;font-weight:600">Add at least 1 completion photo first.</p>';
+  }
+  document.getElementById('phone-worker').addEventListener('click', function (e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.st) wst = t.dataset.st;
+    else if (t.id === 'w-add' && after.length < 5) after.push({id: wnext++});
+    else if (t.dataset.remove) after = after.filter(function (p) { return String(p.id) !== t.dataset.remove; });
+    else return;
+    drawWorker();
+  });
+  drawNew();
+  drawWorker();
+})();
+</script>
+</body>
+</html>

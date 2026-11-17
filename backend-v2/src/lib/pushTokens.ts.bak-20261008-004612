@@ -1,0 +1,29 @@
+import { query } from "./db.js";
+
+// Expo push tokens for the FlowDesk Mobile app - one row per (user, device),
+// since the same person can be signed in on more than one phone. Storage
+// only for now; nothing sends through these yet (see the FlowDesk Mobile
+// write-up's Notification delivery section) - a later change wires
+// notifications.ts's existing call sites to push a message here too,
+// alongside the emails/in-app notices they already send.
+export async function ensurePushTokensSchema() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS mobile_push_tokens (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expo_push_token text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (user_id, expo_push_token)
+    )
+  `);
+}
+
+export async function saveMobilePushToken(userId: string, expoPushToken: string) {
+  await query(
+    `INSERT INTO mobile_push_tokens (user_id, expo_push_token)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, expo_push_token) DO UPDATE SET updated_at = now()`,
+    [userId, expoPushToken]
+  );
+}

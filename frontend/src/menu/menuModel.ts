@@ -49,14 +49,14 @@ export const DEFAULT_LAYOUT: MenuLayout = {
     item("dashboard"),
     item("ai_assistant"),
     group("advances", "Advances", "ClipboardList", ["advance_requests", "clearances"]),
-    group("salaries", "Salaries", "Banknote", [
+    group("salaries", "Allowances", "Banknote", [
       "salaries_dashboard", "salary_registers", "salaries_attendance", "salaries_ready", "salaries_history",
       "overtime", "standby", "call_out"
     ]),
     group("custom", "Custom Processes", "GitBranch", ["brs", "maintenance"]),
     item("signatures"),
     item("inbox"),
-    group("finance", "Finance", "Wallet", ["capture", "payments", "deductions", "view_clearances", "refundable", "finance_reports"]),
+    group("finance", "Finance", "Wallet", ["capture", "payments", "deductions", "view_clearances", "salary_advances", "refundable", "finance_reports"]),
     item("it_provisioning"),
     group("contracts", "Contracts", "FileText", ["vendor_contracts", "service_contracts", "employee_contracts"]),
     group("reports", "Reports", "BarChart3", [

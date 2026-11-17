@@ -103,7 +103,7 @@ Approval Inbox: everything waiting for your action (approve, countersign, reject
 
 Finance (for those with access): Capture Inbox (Treasury captures approved advances), Payments, Deductions (salary deductions for paybacks), Refundable, View Clearances, and Finance > Reports (Clearance Summary, Refunds Due, Employee Paybacks, Fully Cleared Trips, Outstanding Clearances, Ageing, Audit & Reconciliation, Department & Division). Report columns can be chosen with the Columns button; Export CSV saves the columns shown. "VR Date" is when the advance was approved. "Amount To Be Expensed" is the advance amount when the balance is zero, otherwise the amount cleared.
 
-Other modules: Overtime (request and claim overtime), Standby and Call-Outs, Custom Processes (BRS - business requirement specifications written by several departments and routed for approval; Change Requests; Computer Requests; Attendance Register), Contracts (Vendor, Service, and Employee Contracts for interns and temporary staff, managed by HR), IT Provisioning, Sign a Document, and the FlowDesk mobile app.
+Other modules: Overtime (request and claim overtime), Standby and Call-Outs, Custom Processes (BRS - business requirement specifications written by several departments and routed for approval; Change Requests; Computer Requests; Attendance Register), Contracts (Vendor, Service, and Employee Contracts for interns and temporary staff, managed by HR), IT Provisioning, Sign a Document, and the FlowDesk mobile app. Service Contracts (telecom plans for individual customers and companies - Fibre, LTE, ADSL, Mobile Postpaid, Hybrid, Leased Lines, PABX) has its own tool, service_contracts, for counts, what's expiring in the next 30 days, and finding a specific contract by name/account/contract number - only for people with access.
 
 Administration (administrators only): user accounts are managed under User Management; an "active" user is an account that is switched on. The FlowDesk mobile app's usage is under Settings > Mobile App (Mobile Analytics). Website logins are not recorded, so "who used the website recently" can't be answered - say so.
 
@@ -296,6 +296,20 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
     eager_input_streaming: true
   },
   {
+    name: "service_contracts",
+    description: "Telecom Service Contracts (individual customers and companies: Fibre, LTE, ADSL, Mobile Postpaid, Hybrid, Leased Lines, PABX) - only for people with access to this module; others get 'no access'. With no input, returns company-wide counts (individual contracts, company contracts, expiring in 30 days, expired) and the next contracts due to expire. Pass query (a name, account number or contract number) to search; contract_type narrows to individual or company. Use for 'how many service contracts do we have', 'which contracts are expiring soon', 'find the contract for <name/account number>'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: str,
+        contract_type: { type: "string", enum: ["individual", "company"] }
+      },
+      additionalProperties: false
+    },
+    strict: true,
+    eager_input_streaming: true
+  },
+  {
     name: "create_advance_draft",
     description: "Save a DRAFT travel advance for the signed-in person (never submitted). Only after the person has confirmed the details. travel_type_code from get_travel_types. For per-meal local travel each line has date, from and to (Lesotho districts) and meals_or_days = meals that day (1-3). For per-day travel each line has date, country, city and meals_or_days = number of days. Payment: EcoCash number, or bank name + account number + branch.",
     input_schema: {
@@ -347,6 +361,7 @@ const TOOL_LABEL: Record<string, string> = {
   get_custom_request: "Opening the request",
   list_my_recent_actions: "Checking what you've actioned",
   finance_queue: "Checking the finance queue",
+  service_contracts: "Looking up service contracts",
   create_advance_draft: "Saving a draft advance",
   create_clearance_draft: "Starting a draft clearance"
 };
@@ -746,6 +761,12 @@ async function listMyRequests(token: string, proc: (typeof PROCESSES)[number], r
 const FINANCE_QUEUES = ["capture", "payments", "deductions", "refundable", "treasury", "payback_review", "salaries_ready"] as const;
 const FinanceQueueInput = z.object({ queue: z.enum(FINANCE_QUEUES), status: z.enum(["pending", "done", "all"]).optional() }).strict();
 
+// ── Service Contracts ────────────────────────────────────────────────────
+const ServiceContractsInput = z.object({
+  query: z.string().optional(),
+  contract_type: z.enum(["individual", "company"]).optional()
+}).strict();
+
 // Totals per currency - amounts in different currencies are never added together.
 function totalsByCurrency(rows: any[], amountKey: string) {
   const out: Record<string, number> = {};
@@ -851,6 +872,69 @@ async function financeQueue(token: string, queue: (typeof FINANCE_QUEUES)[number
       }), { where: "Salaries" });
     }
   }
+}
+
+// Mirrors the Service Contracts dashboard's own "expiring soon" computation
+// (ServiceContracts.tsx) - open contracts due to lapse in the next 30 days,
+// soonest first.
+function compactServiceContract(type: "individual" | "company", c: any) {
+  return {
+    type,
+    id: c.id,
+    contract_number: c.contractNumber,
+    name: type === "individual" ? `${c.firstName} ${c.surname}` : c.companyName,
+    account_number: c.accountNumber,
+    msisdn: c.msisdn,
+    category: c.serviceCategoryCode,
+    package: c.servicePackageCode,
+    duration_months: c.contractDurationMonths,
+    status: c.statusCode,
+    expiry_date: day(c.expiryDate),
+    active_in_portal: c.isActive
+  };
+}
+
+async function serviceContractsTool(token: string, input: { query?: string; contract_type?: "individual" | "company" }) {
+  const access = await api(token, "GET", "/service-contracts/access");
+  if (access.status !== 200 || !access.data?.allowed) return { content: JSON.stringify({ error: "The person does not have access to Service Contracts in FlowDesk." }), isError: true };
+
+  if (input.query) {
+    const types: Array<"individual" | "company"> = input.contract_type ? [input.contract_type] : ["individual", "company"];
+    const results: any[] = [];
+    for (const t of types) {
+      const r = await api(token, "GET", `/service-contracts/${t}?search=${encodeURIComponent(input.query)}`);
+      if (r.status === 200) results.push(...(r.data?.items || []).map((c: any) => compactServiceContract(t, c)));
+    }
+    return { content: JSON.stringify({ query: input.query, count: results.length, contracts: results.slice(0, MAX_ITEMS) }) };
+  }
+
+  const dash = await api(token, "GET", "/service-contracts/dashboard");
+  if (dash.status !== 200) return { content: JSON.stringify(apiError(dash)), isError: true };
+
+  const [indiv, company] = await Promise.all([
+    api(token, "GET", "/service-contracts/individual"),
+    api(token, "GET", "/service-contracts/company")
+  ]);
+  const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+  const horizon = new Date(today); horizon.setUTCDate(horizon.getUTCDate() + 30);
+  const all = [
+    ...(indiv.status === 200 ? (indiv.data?.items || []).map((c: any) => ({ ...compactServiceContract("individual", c), _raw: c })) : []),
+    ...(company.status === 200 ? (company.data?.items || []).map((c: any) => ({ ...compactServiceContract("company", c), _raw: c })) : [])
+  ];
+  const expiringSoon = all
+    .filter((c) => c._raw.statusCode === "OPEN" && c.expiry_date)
+    .map((c) => ({ ...c, _expiry: new Date(c.expiry_date + "T00:00:00Z") }))
+    .filter((c) => c._expiry >= today && c._expiry <= horizon)
+    .sort((a, b) => a._expiry.getTime() - b._expiry.getTime())
+    .slice(0, MAX_ITEMS)
+    .map(({ _raw, _expiry, ...rest }) => rest);
+
+  return {
+    content: JSON.stringify({
+      stats: dash.data?.stats ?? null,
+      expiring_in_30_days: expiringSoon
+    })
+  };
 }
 
 export async function runTool(name: string, rawInput: unknown, token: string, drafts: DraftNote[], onChart?: (c: Chart) => void): Promise<{ content: string; isError?: boolean }> {
@@ -981,6 +1065,11 @@ export async function runTool(name: string, rawInput: unknown, token: string, dr
       const p = FinanceQueueInput.safeParse(rawInput);
       if (!p.success) return fail(`queue must be one of: ${FINANCE_QUEUES.join(", ")}`);
       return financeQueue(token, p.data.queue, p.data.status ?? "pending");
+    }
+    case "service_contracts": {
+      const p = ServiceContractsInput.safeParse(rawInput ?? {});
+      if (!p.success) return fail("Invalid input.");
+      return serviceContractsTool(token, p.data);
     }
     case "list_my_recent_actions": {
       if (!NoInput.safeParse(rawInput ?? {}).success) return fail("This tool takes no input.");

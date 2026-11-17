@@ -60,7 +60,18 @@ export const SYSTEM_SETTING_KEYS = {
   // door to arbitrarily old backdating. Configured from Travel Setup
   // (travel.routes.ts), not a code constant, so an admin can change it
   // without a deploy.
-  advanceBackdatingGraceDays: "advance_backdating_grace_days"
+  advanceBackdatingGraceDays: "advance_backdating_grace_days",
+  // Service Contracts expiry reminders - a global digest (not per-contract,
+  // since the migrated contracts' key_account_manager field is often blank
+  // or unreliable free text - see service-contracts.routes.ts's reminder
+  // worker). Gated behind its own feature permission
+  // (service_contracts_notifications), separate from general manage access.
+  serviceContractsNotificationsEnabled: "service_contracts_notifications_enabled",
+  // Comma-separated email addresses the digest goes to.
+  serviceContractsNotificationRecipients: "service_contracts_notification_recipients",
+  // Comma-separated whole numbers - how many days before expiry_date to
+  // send a reminder (e.g. "90,30,7,1,0" - 0 means "expires today").
+  serviceContractsNotificationDaysBefore: "service_contracts_notification_days_before"
 } as const;
 
 export async function getStringSystemSetting(key: string, fallback: string | null = null) {

@@ -1,0 +1,42 @@
+import { query } from "./db.js";
+import { logger, serializeError } from "./logger.js";
+
+const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+
+// Sends to every device FlowDesk Mobile has registered for this user (see
+// POST /auth/push-token, backend-v2/src/modules/auth/auth.routes.ts) via
+// Expo's push service - the same delivery path notifications.ts's existing
+// notify*() functions call alongside sendMail()/sendTeamsCard(), never
+// instead of them. Best-effort: a push failure is logged, never thrown, so
+// it can't break the email/Teams side a caller already depends on.
+export async function sendPushToUser(userId: string, message: { title: string; body: string; data?: Record<string, unknown> }) {
+  try {
+    const rows = await query<{ id: string; expo_push_token: string }>(
+      `SELECT id, expo_push_token FROM mobile_push_tokens WHERE user_id = $1`,
+      [userId]
+    );
+    if (!rows.length) return;
+
+    const res = await fetch(EXPO_PUSH_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(
+        rows.map((r) => ({ to: r.expo_push_token, title: message.title, body: message.body, data: message.data || {}, sound: "default" }))
+      )
+    });
+    const json: any = await res.json().catch(() => null);
+    const tickets: any[] = Array.isArray(json?.data) ? json.data : [];
+
+    // A device that uninstalled the app (or reinstalled, minting a new
+    // token) reports DeviceNotRegistered - the token is permanently dead,
+    // so drop it rather than retrying it forever on every future send.
+    const deadTokenIds = tickets
+      .map((ticket, i) => (ticket?.status === "error" && ticket?.details?.error === "DeviceNotRegistered" ? rows[i]?.id : null))
+      .filter((id): id is string => Boolean(id));
+    if (deadTokenIds.length) {
+      await query(`DELETE FROM mobile_push_tokens WHERE id = ANY($1::uuid[])`, [deadTokenIds]);
+    }
+  } catch (error) {
+    logger.warn("push_send_failed", { user_id: userId, error: serializeError(error) });
+  }
+}

@@ -114,6 +114,22 @@ export async function ensureServiceContractsSchema() {
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_company_service_contracts_expiry ON company_service_contracts(expiry_date)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_company_service_contracts_status ON company_service_contracts(status_code)`);
+
+  // Dedup log for the expiry-digest reminder worker - one row per
+  // (contract, threshold, day) it's actually sent for, so a restart of the
+  // in-process worker (or it simply running more than once a day) never
+  // re-sends the same reminder.
+  await query(`
+    CREATE TABLE IF NOT EXISTS service_contract_reminder_log (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_type text NOT NULL,
+      contract_id uuid NOT NULL,
+      days_before int NOT NULL,
+      remind_on date NOT NULL,
+      sent_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (contract_type, contract_id, days_before, remind_on)
+    )
+  `);
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────

@@ -30,7 +30,8 @@ const STATUS_LABEL: Record<string, string> = {
   FINANCE_TREASURY_REVIEW: "With Finance Treasury",
   COMPLETED: "Fully Cleared",
   CANCELLED: "Cancelled",
-  // Not a clearance: a paid advance past its clearance deadline (7 days
+  // Not a clearance: a paid advance past its clearance deadline (the
+  // clearance window - Settings, 14 days on PROD -
   // after the return date) with nothing submitted.
   UNCLEARED: "Uncleared"
 };
@@ -119,7 +120,7 @@ const COLUMNS: ColumnOption[] = [
   { key: "destination", label: "Destination" },
   { key: "departure", label: "Departure" },
   { key: "return", label: "Return" },
-  { key: "due", label: "Clearance Due (return + 7 days)" },
+  { key: "due", label: "Clearance Due (return + clearance window)" },
   { key: "daysOverdue", label: "Days Overdue" },
   { key: "vrDate", label: "VR Date (advance approved)" },
   { key: "submitted", label: "Clearance Submitted" },
@@ -144,6 +145,8 @@ export default function ViewClearances() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canQuery, setCanQuery] = useState(false);
+  // The clearance window in days (Settings > clearance duration).
+  const [windowDays, setWindowDays] = useState<number | null>(null);
   const [queryingId, setQueryingId] = useState<string | null>(null);
 
   const [companyFilter, setCompanyFilter] = useState<BusinessUnit>("ALL");
@@ -162,7 +165,7 @@ export default function ViewClearances() {
 
   function load() {
     return api.allClearances()
-      .then((resp: any) => { setItems(resp.items || []); setCanQuery(Boolean(resp.can_query_payback)); })
+      .then((resp: any) => { setItems(resp.items || []); setCanQuery(Boolean(resp.can_query_payback)); setWindowDays(Number(resp.clearance_window_days) || null); })
       .catch((e: any) => setError(String(e.message)))
       .finally(() => setLoading(false));
   }
@@ -336,7 +339,7 @@ export default function ViewClearances() {
       <div className="ep-header">
         <div className="ep-header-text">
           <h1 className="ep-title">View Clearances</h1>
-          <p className="ep-subtitle">Every clearance company-wide, at whatever stage it's currently at, plus paid advances still uncleared 7 days after the traveller returned.{canQuery ? " Finance can open and query an employee's payback proof." : ""}</p>
+          <p className="ep-subtitle">Every clearance company-wide, at whatever stage it's currently at, plus paid advances still uncleared {windowDays ? `${windowDays} days` : "the clearance window"} after the traveller returned.{canQuery ? " Finance can open and query an employee's payback proof." : ""}</p>
         </div>
         <div className="ep-actions">
           <ColumnChooser columns={COLUMNS} show={columns.show} toggle={columns.toggle} reset={columns.reset} />
@@ -493,7 +496,7 @@ export default function ViewClearances() {
                         ) : item.status === "UNCLEARED" ? (
                           <>
                             <span
-                              title={`Not cleared within 7 days of returning${item.clearance_due_at ? ` (due ${fmtDate(item.clearance_due_at)})` : ""}`}
+                              title={`Not cleared within ${windowDays ? `${windowDays} days` : "the clearance window"} of returning${item.clearance_due_at ? ` (due ${fmtDate(item.clearance_due_at)})` : ""}`}
                               style={{ padding: "2px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "#fee2e2", color: "#991b1b", whiteSpace: "nowrap" }}
                             >
                               Uncleared
