@@ -129,7 +129,10 @@ const CreateSchema = z.object({
 const ActionSchema = z.object({
   // ROLLBACK (Change Request only): back to its owners as a draft, for correction.
   action: z.enum(["APPROVE", "REJECT", "ROLLBACK"]),
-  comment: z.string().trim().nullish()
+  comment: z.string().trim().nullish(),
+  // Fields this step's approver writes (request_type_fields.filled_at_step),
+  // e.g. Computer Request's Justification by Supervisor.
+  field_values: z.record(z.string(), z.unknown()).optional()
 });
 
 // A Change Request assignee at step 1 (before the approvers) can stop it for
@@ -263,11 +266,16 @@ customRequestsRouter.post("/", uploadAttachments.array("files", 10), async (req:
       }
     }
 
-    const fields = await query<{ field_key: string; field_label: string; is_required: boolean; field_type: string }>(
-      `SELECT field_key, field_label, is_required, field_type FROM request_type_fields WHERE request_type_id = $1 AND is_active = true`,
+    const fields = await query<{ field_key: string; field_label: string; is_required: boolean; field_type: string; filled_at_step: number | null }>(
+      `SELECT field_key, field_label, is_required, field_type, filled_at_step FROM request_type_fields WHERE request_type_id = $1 AND is_active = true`,
       [requestType.id]
     );
     for (const f of fields) {
+      // An approver writes this one when it reaches them - not the requester.
+      if (f.filled_at_step !== null && f.filled_at_step !== undefined) {
+        delete (parsed.data.data as Record<string, unknown>)[f.field_key];
+        continue;
+      }
       if (f.is_required) {
         const val = parsed.data.data[f.field_key];
         const isEmpty = f.field_type === "user_multi" ? !Array.isArray(val) || val.length === 0 : (val === undefined || val === null || val === "");
@@ -1225,7 +1233,8 @@ export async function performCustomRequestAction(
   submissionId: string,
   actor: { userId: string; role: string; fullName: string | null },
   action: "APPROVE" | "REJECT" | "ROLLBACK",
-  comment?: string | null
+  comment?: string | null,
+  fieldValues?: Record<string, unknown> | null
 ): Promise<{ status: string }> {
   const submission = (await query<any>(
     `SELECT s.*, rt.name AS request_type_name, rt.code AS request_type_code, u.full_name AS requester_name, u.email AS requester_email
@@ -1274,6 +1283,33 @@ export async function performCustomRequestAction(
       const unconfirmed = assignees.filter((a) => !a.confirmed);
       if (unconfirmed.length) {
         throw badRequest(`All assignees for "${f.field_label}" must confirm the implementation plan is ready before this request can be approved (waiting on: ${unconfirmed.map((a) => assigneeLabel(a)).join(", ")})`);
+      }
+    }
+  }
+
+  // Fields this step's approver writes (e.g. Computer Request's Justification
+  // by Supervisor, by the requester's supervisor or manager). Approving needs
+  // them; rejecting doesn't. Email approval sends none, so for such a step it
+  // is refused and the approver writes it in FlowDesk instead.
+  if (action === "APPROVE") {
+    const stepFields = await query<{ field_key: string; field_label: string; is_required: boolean }>(
+      `SELECT field_key, field_label, is_required FROM request_type_fields
+        WHERE request_type_id = $1 AND is_active = true AND filled_at_step = $2`,
+      [submission.request_type_id, stepIdx]
+    );
+    if (stepFields.length) {
+      const updates: Record<string, unknown> = {};
+      for (const f of stepFields) {
+        const given = fieldValues?.[f.field_key];
+        const value = typeof given === "string" ? given.trim() : given ?? submission.data?.[f.field_key];
+        if (f.is_required && (value === undefined || value === null || value === "")) {
+          throw badRequest(`Write the "${f.field_label}" before approving - open the request in FlowDesk to add it`);
+        }
+        if (value !== undefined) updates[f.field_key] = value;
+      }
+      if (Object.keys(updates).length) {
+        submission.data = { ...(submission.data || {}), ...updates };
+        await query(`UPDATE custom_request_submissions SET data = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(submission.data), submission.id]);
       }
     }
   }
@@ -1415,7 +1451,8 @@ customRequestsRouter.post("/:id/action", async (req: AuthedRequest, res, next) =
       req.params.id,
       { userId: req.user!.userId, role: req.user!.role, fullName: req.user!.fullName ?? null },
       parsed.data.action,
-      parsed.data.comment
+      parsed.data.comment,
+      parsed.data.field_values
     );
     return res.json({ ok: true, status: result.status });
   } catch (err) {

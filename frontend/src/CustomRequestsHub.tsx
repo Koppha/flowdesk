@@ -37,6 +37,8 @@ type RequestField = {
   options: { label: string; value: string }[] | TableFieldConfig | null;
   sort_order: number;
   wizard_step: number;
+  // Written by that approval step's approver, not on this form.
+  filled_at_step?: number | null;
 };
 
 type Attachment = { id: string; original_name: string; content_type?: string | null; size_bytes?: number | null; uploaded_at?: string };
@@ -842,7 +844,9 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
       setLoading(true);
       try {
         const detail = await api.requestTypeDetail(selectedTypeId);
-        const sorted = [...(detail.fields || [])].sort((a: any, b: any) => a.sort_order - b.sort_order);
+        const sorted = [...(detail.fields || [])]
+          .filter((f: any) => f.filled_at_step === null || f.filled_at_step === undefined)
+          .sort((a: any, b: any) => a.sort_order - b.sort_order);
         setFields(sorted);
         setWizardStep(1);
         setAttachmentFiles([]);

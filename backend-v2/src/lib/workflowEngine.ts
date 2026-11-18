@@ -46,6 +46,9 @@ export interface ChainStep {
   // every step that isn't round-robin-restricted, including all chains
   // built before this field existed — fully backward compatible.
   assigned_user_id?: string | null;
+  // Set on a step added because the workflow's own step would have had the
+  // requester approve their own request (see selfApprovalStandIns).
+  stands_in_for_requester?: boolean;
 }
 
 // Shared by the advances and claims SLA-report endpoints.
@@ -202,6 +205,31 @@ export async function resolveCeo(): Promise<{ id: string; full_name: string | nu
       `SELECT id, full_name, title, email FROM users WHERE role = 'CEO' AND is_active = true LIMIT 1`
     ))[0] ?? null
   );
+}
+
+// The GM of Human Resources: the EXCO recorded on the Human Resources
+// department, else the EXCO-role user placed in it (resolveDeptExco's own
+// fallback). PROD names it "Human Resources", UAT "Human Resource".
+export async function resolveHrExco() {
+  const departments = await query<{ name: string }>(`SELECT name FROM departments WHERE name ILIKE 'human resource%' ORDER BY name`);
+  for (const d of departments) {
+    const exco = await resolveDeptExco(d.name);
+    if (exco) return exco;
+  }
+  return null;
+}
+
+// Nobody approves their own request (user's rule, 2026-11-18). A sign-off
+// step that would land on the requester goes instead to the GM of Human
+// Resources, then the CEO - the route EXCO-level requests already take (see
+// the "Salary Advance - Exco" workflow) - skipping the requester and anyone
+// who already signed earlier in the same request.
+export async function selfApprovalStandIns() {
+  const [hr, ceo] = await Promise.all([resolveHrExco(), resolveCeo()]);
+  return [
+    hr && { person: hr, code: "EXCO", label: hr.title || "GM - Human Resource" },
+    ceo && { person: ceo, code: "CEO", label: "CEO" }
+  ].filter((s): s is NonNullable<typeof s> => !!s);
 }
 
 export async function resolveWorkflowChain(params: {
@@ -433,6 +461,8 @@ export async function resolveWorkflowChain(params: {
   // their own approval is a distinct real action, not a repeated decision,
   // so it's left alone.
   let lastApproveApproverId: string | null = null;
+  // Looked up the first time a step lands on the requester (see below).
+  let standIns: Awaited<ReturnType<typeof selfApprovalStandIns>> | null = null;
   let secondLevelManager: Awaited<ReturnType<typeof resolveRequesterManager>> | undefined;
   // The last plain (dynamic) HOD step, if any - see the no-manager skip below.
   const lastDynamicHodIndex = steps.reduce((last, s, i) => {
@@ -462,12 +492,8 @@ export async function resolveWorkflowChain(params: {
     const isHrCode = code.startsWith("HR_");
     const isDeptExcoCode = code === "EXCO" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
 
-    // An EXCO-role requester (e.g. a GM) submitting their own request would
-    // otherwise resolve this step back to themselves - they're their own
-    // department's EXCO member - which isn't a real second review. Skip the
-    // step entirely rather than have someone approve their own request; the
-    // CEO/Manager step above already covers their sign-off.
-    if (isDeptExcoCode && requesterId && deptExco?.id === requesterId) { previousStepPushed = false; continue; }
+    // An EXCO-role requester (e.g. a GM) is their own department's EXCO, so
+    // this step resolves back to them - handed to the stand-ins below.
 
     const isDeptManagerCode = code === "MANAGER" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
     const isDeptHodCode = code === "HOD" && !(step.approval_mode === "ANY_ONE" && step.approval_group_name);
@@ -479,8 +505,7 @@ export async function resolveWorkflowChain(params: {
     // manual review (unlike the same null result for a plain EMPLOYEE/
     // MANAGER-role requester, which almost always means their reporting
     // line genuinely hasn't been set up yet and should keep blocking).
-    // Skip the step outright, the same way the EXCO/CEO self-approval
-    // guards above bypass a step that can't meaningfully apply to this
+    // Skip the step outright: it can't meaningfully apply to this
     // requester - regardless of this step's own skip_if_unassigned flag.
     if (isDeptManagerCode && !requesterManager && ["HOD", "EXCO", "CEO", "ADMIN"].includes(requesterRole)) {
       previousStepPushed = false;
@@ -505,11 +530,8 @@ export async function resolveWorkflowChain(params: {
       continue;
     }
 
+    // The CEO's own request resolves this back to them - stand-ins below.
     const isDynamicCeoCode = code === "CEO" && !hasFixedAssignees;
-    // The CEO submitting their own request would otherwise resolve this
-    // step back to themselves - same self-approval guard as the EXCO one
-    // above.
-    if (isDynamicCeoCode && requesterId && ceo?.id === requesterId) { previousStepPushed = false; continue; }
 
     // A chain with a distinct earlier MANAGER step already used
     // requesterManager - resolving HOD to that same person would put the
@@ -547,15 +569,23 @@ export async function resolveWorkflowChain(params: {
     const isFixedDeptExcoCode = code === "FIXED_DEPT_EXCO";
     let fixedSectionManagers: { id: string; full_name: string | null; title: string | null; email: string | null }[] = [];
     let fixedDeptExcos: { id: string; full_name: string | null; title: string | null; email: string | null }[] = [];
+    // The requester was one of the people this step names (fixed by name or
+    // by position). They're taken off it; if nobody else is left, the
+    // stand-ins below take it.
+    let requesterTakenOff = false;
     if (isFixedSectionManagerCode && step.approval_group_name) {
       const sectionRow = (await query<{ id: string }>(`SELECT id FROM sections WHERE lower(trim(name)) = lower(trim($1))`, [step.approval_group_name]))[0];
       const leadership = sectionRow ? await getSectionLeadership(sectionRow.id) : null;
       fixedSectionManagers = (leadership?.managers ?? []).filter((m) => m.id !== requesterId);
+      requesterTakenOff = (leadership?.managers ?? []).some((m) => m.id === requesterId);
     }
     if (isFixedDeptExcoCode && step.approval_group_name) {
       const leadership = await getDepartmentLeadership(step.approval_group_name);
       fixedDeptExcos = (leadership?.excos ?? []).filter((m) => m.id !== requesterId);
+      requesterTakenOff = (leadership?.excos ?? []).some((m) => m.id === requesterId);
     }
+    const fixedIds = (step.assigned_user_ids ?? []).filter((id) => id !== requesterId);
+    if (hasFixedAssignees && fixedIds.length < step.assigned_user_ids!.length) requesterTakenOff = true;
 
     // A step whose approver is a FIXED, single named pick in the workflow
     // (e.g. a specific EXCO hardcoded on this step) is a deliberate choice
@@ -571,7 +601,7 @@ export async function resolveWorkflowChain(params: {
     // person, so they stay single-element arrays.
     const approverIds: string[] =
       override               ? (override.id ? [override.id] : []) :
-      hasFixedAssignees      ? step.assigned_user_ids! :
+      hasFixedAssignees      ? fixedIds :
       isFixedSectionManagerCode ? fixedSectionManagers.map((m) => m.id) :
       isFixedDeptExcoCode     ? fixedDeptExcos.map((m) => m.id) :
       isHrCode               ? (hrLeadership?.hod_user_id ? [hrLeadership.hod_user_id] : hrLeadership?.manager_user_id ? [hrLeadership.manager_user_id] : []) :
@@ -621,6 +651,53 @@ export async function resolveWorkflowChain(params: {
       isDeptHodCode           ? (hodManager?.email ?? null) :
       isDynamicCeoCode        ? (ceo?.email ?? null) :
                                 null;
+
+    // A sign-off that lands on the requester (fixed to them, their own
+    // department's EXCO, the CEO's own request, or a self-override) goes to
+    // the GM of Human Resources, then the CEO, each skipped if they're the
+    // requester or already signed earlier in this request (see
+    // selfApprovalStandIns; e.g. Moeketsi Mafereka's own SEFS travel advance
+    // reached the EXCO step fixed to him, Nov 2026).
+    const isSignOff = !step.action_type || step.action_type === "APPROVE" || step.action_type === "COUNTER_SIGN";
+    const landsOnRequester = !!requesterId &&
+      ((approverIds.length === 1 && approverId === requesterId) || (approverIds.length === 0 && requesterTakenOff));
+    if (isSignOff && landsOnRequester) {
+      if (!standIns) standIns = await selfApprovalStandIns();
+      let pushed = false;
+      for (const s of standIns) {
+        const signedEarlier = chain.some((c) =>
+          (c.action_type === "APPROVE" || c.action_type === "COUNTER_SIGN") &&
+          (c.approver_ids?.length ? c.approver_ids : [c.approver_id]).includes(s.person.id));
+        if (s.person.id === requesterId || signedEarlier) continue;
+        chain.push({
+          step_order: step.step_order,
+          position_type_code: s.code,
+          position_name: s.label,
+          approver_id: s.person.id,
+          approver_ids: [s.person.id],
+          approvers: [{ id: s.person.id, name: s.person.full_name, email: s.person.email, title: s.person.title }],
+          approver_name: s.person.full_name,
+          approver_title: s.person.title,
+          approver_email: s.person.email,
+          required: step.is_required,
+          final_approval: false,
+          approval_mode: "SINGLE",
+          approval_group_name: null,
+          requires_accommodation: false,
+          parallel_with_previous: false,
+          action_type: "APPROVE",
+          can_reject: step.can_reject ?? true,
+          can_rollback: step.can_rollback ?? true,
+          assigned_user_id: null,
+          stands_in_for_requester: true
+        });
+        lastApproveApproverId = s.person.id;
+        pushed = true;
+      }
+      if (pushed && step.is_final_approval) chain[chain.length - 1].final_approval = true;
+      previousStepPushed = pushed;
+      continue;
+    }
 
     // Same person, same kind of decision, back to back - not a real second
     // review. Applies regardless of how each side resolved (dynamic lookup
@@ -729,7 +806,15 @@ export async function resolveWorkflowChain(params: {
     if (step.action_type === "APPROVE" || step.action_type === "COUNTER_SIGN") lastApproveApproverId = approverId;
   }
 
-  return { workflowId: (workflow as any).id, chain };
+  // A stand-in who signs later in this request anyway (e.g. the SEFS
+  // international workflow already has GM HR and CEO steps) isn't asked twice.
+  const signers = (s: ChainStep) =>
+    s.action_type === "APPROVE" || s.action_type === "COUNTER_SIGN" ? (s.approver_ids?.length ? s.approver_ids : [s.approver_id]) : [];
+  const finalChain = chain.filter((s, i) =>
+    !s.stands_in_for_requester ||
+    !chain.slice(i + 1).some((later) => !later.stands_in_for_requester && signers(later).includes(s.approver_id)));
+
+  return { workflowId: (workflow as any).id, chain: finalChain };
 }
 
 // Synthesizes a 4-step chain for a requester whose department/section has no

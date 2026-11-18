@@ -81,6 +81,9 @@ async function classifyDynamicStep(
   workflowId: string,
   step: ChainStep
 ): Promise<{ code: "MANAGER" | "HOD" | "EXCO"; positionName: string } | null> {
+  // Stands in for the requester: re-resolving it from its workflow step
+  // would hand it straight back to them.
+  if (step.stands_in_for_requester) return null;
   const rows = await query<{
     position_type_code: string | null;
     position_name: string;

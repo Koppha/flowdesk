@@ -735,6 +735,10 @@ async function ensureRequestTypesSchema() {
   // Groups fields into pages of the submission wizard ("Details", "Implementation", …).
   // The final "Approvals" page is always implicit and not represented here.
   await query(`ALTER TABLE request_type_fields ADD COLUMN IF NOT EXISTS wizard_step integer NOT NULL DEFAULT 1`);
+  // Written by an approver, not the requester: the approval step index (0 =
+  // first approver) whose approver fills it in when approving. Null = the
+  // requester fills it on the form, as every field did before.
+  await query(`ALTER TABLE request_type_fields ADD COLUMN IF NOT EXISTS filled_at_step integer`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS custom_request_submissions (
@@ -1325,7 +1329,7 @@ async function seedComputerRequestType() {
     [typeId]
   );
 
-  const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: { label: string; value: string }[] }> = [
+  const fields: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string; options?: { label: string; value: string }[]; filled_at_step?: number }> = [
     { key: "position", label: "Position", type: "text", required: true },
     { key: "department", label: "Division", type: "text", required: true },
     { key: "phone_no", label: "Phone No.", type: "text" },
@@ -1336,9 +1340,12 @@ async function seedComputerRequestType() {
     { key: "request_type", label: "Type of Request", type: "select", required: true, options: [
       { label: "New", value: "NEW" }, { label: "Replacement", value: "REPLACEMENT" }, { label: "Upgrade", value: "UPGRADE" }
     ] },
-    { key: "justification", label: "Justification by Supervisor", type: "textarea", required: true,
+    // Written by the requester's supervisor (or manager) - the first approval
+    // step, "Requester's Manager" - when they approve, not by the requester.
+    { key: "justification", label: "Justification by Supervisor", type: "textarea", required: true, filled_at_step: 0,
       placeholder: "Include information about how the computer will be used. If requesting high-end specifications, be explicit about the function that requires and justifies the cost." }
   ];
+  await query(`ALTER TABLE request_type_fields ADD COLUMN IF NOT EXISTS filled_at_step integer`);
 
   for (let i = 0; i < fields.length; i++) {
     const f = fields[i];
@@ -1349,15 +1356,15 @@ async function seedComputerRequestType() {
     if (existingField[0]) {
       await query(
         `UPDATE request_type_fields
-            SET field_label = $1, field_type = $2, is_required = $3, placeholder = $4, options = $5, sort_order = $6
+            SET field_label = $1, field_type = $2, is_required = $3, placeholder = $4, options = $5, sort_order = $6, filled_at_step = $8
           WHERE id = $7`,
-        [f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i, existingField[0].id]
+        [f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i, existingField[0].id, f.filled_at_step ?? null]
       );
     } else {
       await query(
-        `INSERT INTO request_type_fields (request_type_id, field_key, field_label, field_type, is_required, placeholder, options, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [typeId, f.key, f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i]
+        `INSERT INTO request_type_fields (request_type_id, field_key, field_label, field_type, is_required, placeholder, options, sort_order, filled_at_step)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [typeId, f.key, f.label, f.type, f.required ?? false, f.placeholder ?? null, f.options ? JSON.stringify(f.options) : null, i, f.filled_at_step ?? null]
       );
     }
   }

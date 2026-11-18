@@ -2773,6 +2773,8 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  // Fields this step's approver writes (e.g. Justification by Supervisor).
+  const [stepValues, setStepValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     (async () => {
@@ -2812,12 +2814,24 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
     return r.isConfirmed;
   }
 
+  const stepFields: any[] = (detail?.fields || []).filter((f: any) => f.filled_at_step !== null && f.filled_at_step !== undefined && f.filled_at_step === detail?.current_step_order);
+  // Requests sent before this change already carry the requester's text:
+  // start from it, so the approver confirms or edits rather than retypes.
+  const stepValue = (key: string) => stepValues[key] ?? String(detail?.data?.[key] ?? "");
+
   async function act(action: "APPROVE" | "REJECT" | "ROLLBACK") {
     if (isChangeRequest && action !== "APPROVE" && !(await confirmStop(action))) return;
+    if (action === "APPROVE") {
+      const missing = stepFields.find((f) => f.is_required && !stepValue(f.field_key).trim());
+      if (missing) { setError(`Write the "${missing.field_label}" before approving.`); return; }
+    }
     setBusy(true);
     setError(null);
     try {
-      await api.actionCustomRequest(item.id, { action, comment: comment.trim() || undefined });
+      const field_values = action === "APPROVE" && stepFields.length
+        ? Object.fromEntries(stepFields.map((f) => [f.field_key, stepValue(f.field_key).trim()]))
+        : undefined;
+      await api.actionCustomRequest(item.id, { action, comment: comment.trim() || undefined, field_values });
       await props.onDone();
     } catch (e: any) {
       setError(String(e.message));
@@ -3088,6 +3102,24 @@ function CustomRequestReviewModal(props: { item: InboxItem; onClose: () => void;
 
               {canAct && (
                 <div style={{ padding: "0 14px 16px" }}>
+                  {stepFields.map((f) => (
+                    <label key={f.field_key} style={{ display: "block", marginTop: 14 }}>
+                      <span style={{ display: "block", fontWeight: 600, fontSize: 13.5, marginBottom: 6 }}>
+                        {f.field_label}{f.is_required && <span style={{ color: "#dc2626" }}> *</span>}
+                      </span>
+                      <span style={{ display: "block", fontSize: 12.5, color: "var(--muted)", marginBottom: 6 }}>
+                        You write this as {detail.approval_chain?.[detail.current_step_order]?.position_name || "the approver"}. It's needed to approve, not to reject.
+                      </span>
+                      <textarea
+                        className="ep-form-textarea"
+                        rows={4}
+                        placeholder={f.placeholder || ""}
+                        value={stepValue(f.field_key)}
+                        onChange={(e) => setStepValues((v) => ({ ...v, [f.field_key]: e.target.value }))}
+                        style={{ width: "100%" }}
+                      />
+                    </label>
+                  ))}
                   <textarea
                     className="ep-form-textarea"
                     rows={2}
