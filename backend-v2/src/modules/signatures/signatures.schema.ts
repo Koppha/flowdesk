@@ -47,6 +47,10 @@ export async function ensureSignaturesSchema() {
       updated_at    timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // A saved TYPED signature may still be used this many more times once
+  // drawn/uploaded signatures are required (NULL = not used since: the full
+  // allowance). See claimTypedSigning in signatures.service.ts.
+  await query(`ALTER TABLE user_saved_signatures ADD COLUMN IF NOT EXISTS typed_signs_left integer`);
 
   // A "routing document" carries multiple signers over time (the paper
   // multi-GM sign-off sheet this was built for) - one shared verification

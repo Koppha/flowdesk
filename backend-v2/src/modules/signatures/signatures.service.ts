@@ -34,15 +34,16 @@ export type SignatureNotation = "AI" | "PP";
 // specific signature - two separate settings, not one, exactly as scoped:
 // an admin can lock the notation entirely, or set a default the signer can
 // still change at the point of signing.
-export async function getSignatureNotationPolicy(): Promise<{ default: SignatureNotation; overridable: boolean }> {
+export async function getSignatureNotationPolicy(): Promise<{ default: SignatureNotation; overridable: boolean; requireImage: boolean }> {
   const raw = await getStringSystemSetting(SYSTEM_SETTING_KEYS.signatureDelegationNotation, "PP");
   const overridable = await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureDelegationNotationOverridable, true);
-  return { default: raw === "AI" ? "AI" : "PP", overridable };
+  return { default: raw === "AI" ? "AI" : "PP", overridable, requireImage: await requireSignatureImage() };
 }
 
-export async function setSignatureNotationPolicy(input: { notation: SignatureNotation; overridable: boolean }) {
+export async function setSignatureNotationPolicy(input: { notation: SignatureNotation; overridable: boolean; requireImage?: boolean }) {
   await setStringSystemSetting(SYSTEM_SETTING_KEYS.signatureDelegationNotation, input.notation);
   await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureDelegationNotationOverridable, input.overridable);
+  if (input.requireImage !== undefined) await setBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureRequireImage, input.requireImage);
 }
 
 export function verificationUrlFor(code: string): string {
@@ -166,19 +167,68 @@ export interface SavedSignature {
   imageDataUrl: string | null;
 }
 
-export async function getSavedSignature(userId: string): Promise<SavedSignature | null> {
-  const row = (await query<any>(`SELECT signature_type, typed_name, image_data_url FROM user_saved_signatures WHERE user_id = $1`, [userId]))[0];
+export async function getSavedSignature(userId: string): Promise<(SavedSignature & { typedSigningsLeft: number | null }) | null> {
+  const row = (await query<any>(`SELECT signature_type, typed_name, image_data_url, typed_signs_left FROM user_saved_signatures WHERE user_id = $1`, [userId]))[0];
   if (!row) return null;
-  return { signatureType: row.signature_type, typedName: row.typed_name, imageDataUrl: row.image_data_url };
+  const typed = row.signature_type === "type" && !!row.typed_name;
+  return {
+    signatureType: row.signature_type, typedName: row.typed_name, imageDataUrl: row.image_data_url,
+    // Only meaningful while drawn/uploaded signatures are required.
+    typedSigningsLeft: typed && (await requireSignatureImage()) ? row.typed_signs_left ?? TYPED_SIGNINGS_ALLOWED : null
+  };
 }
 
 export async function saveSavedSignature(userId: string, input: SavedSignature): Promise<void> {
+  if (input.signatureType === "type" && (await requireSignatureImage())) {
+    // Someone still using up their typed signature keeps it as it is (the
+    // count isn't reset); nobody can save a new typed one.
+    const current = (await query<{ signature_type: string }>(`SELECT signature_type FROM user_saved_signatures WHERE user_id = $1`, [userId]))[0];
+    if (current?.signature_type === "type") return;
+    throw badRequest("Typed signatures can't be saved any more. Draw or upload your signature instead.");
+  }
   await query(
     `INSERT INTO user_saved_signatures (user_id, signature_type, typed_name, image_data_url, updated_at)
      VALUES ($1,$2,$3,$4,now())
-     ON CONFLICT (user_id) DO UPDATE SET signature_type = $2, typed_name = $3, image_data_url = $4, updated_at = now()`,
+     ON CONFLICT (user_id) DO UPDATE SET signature_type = $2, typed_name = $3, image_data_url = $4, typed_signs_left = NULL, updated_at = now()`,
     [userId, input.signatureType, input.typedName, input.imageDataUrl]
   );
+}
+
+// ── Drawn or uploaded signatures only (user's rule, 2026-11-18) ──────────────
+// Once an admin switches the setting on (it ships off), a signature must
+// be drawn or uploaded. Anyone who had saved a TYPED signature gets a warning
+// when they open Sign a Document and may still sign with it this many more
+// times; then it's deleted. Everyone else can't sign with a typed name at all.
+export const TYPED_SIGNINGS_ALLOWED = 2;
+
+export async function requireSignatureImage(): Promise<boolean> {
+  return getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureRequireImage, false);
+}
+
+// Checked before a signature is applied. Returns null when no typed
+// allowance is used (an image, or the rule is off). Otherwise it has taken
+// one of the person's remaining typed signings - only for their own saved
+// typed signature - and the caller must call settle() once the signing
+// either succeeds or fails.
+export async function claimTypedSigning(userId: string, input: { typedSignatureText?: string | null; signatureImageDataUrl?: string | null }) {
+  if (input.signatureImageDataUrl || !(await requireSignatureImage())) return null;
+  const claimed = (await query<{ left: number }>(
+    `UPDATE user_saved_signatures SET typed_signs_left = coalesce(typed_signs_left, $3) - 1
+      WHERE user_id = $1 AND signature_type = 'type' AND lower(trim(typed_name)) = lower(trim($2)) AND coalesce(typed_signs_left, $3) > 0
+      RETURNING typed_signs_left AS left`,
+    [userId, input.typedSignatureText ?? "", TYPED_SIGNINGS_ALLOWED]
+  ))[0];
+  if (!claimed) throw badRequest("Draw or upload your signature to sign. Typed signatures are no longer accepted.");
+  return {
+    left: claimed.left,
+    async settle(signed: boolean) {
+      if (!signed) {
+        await query(`UPDATE user_saved_signatures SET typed_signs_left = typed_signs_left + 1 WHERE user_id = $1 AND signature_type = 'type'`, [userId]);
+      } else if (claimed.left <= 0) {
+        await query(`DELETE FROM user_saved_signatures WHERE user_id = $1 AND signature_type = 'type'`, [userId]);
+      }
+    }
+  };
 }
 
 export async function clearSavedSignature(userId: string): Promise<void> {

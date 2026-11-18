@@ -9,6 +9,7 @@ import { FileSignature, Upload, Eraser, CheckCircle2, Copy, Download, Eye, Shiel
 import SignRoutingDocument from "./SignRoutingDocument";
 import PdfTextEditor from "./PdfTextEditor";
 import SignPerformance from "./SignPerformance";
+import Swal from "sweetalert2";
 
 // Tier A (audit-trail based) electronic signature: no third-party provider,
 // no separate portal — this screen IS the signing surface, reusing the
@@ -148,7 +149,7 @@ export default function SignDocument() {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [consentChecked, setConsentChecked] = useState(false);
-  const [signMode, setSignMode] = useState<"type" | "draw" | "upload">("type");
+  const [signMode, setSignMode] = useState<"type" | "draw" | "upload">("draw");
   // A picture of the signature someone uploaded (see SignatureUpload).
   const [uploadedDataUrl, setUploadedDataUrl] = useState<string | null>(null);
   const [typedName, setTypedName] = useState(me?.fullName || "");
@@ -165,7 +166,13 @@ export default function SignDocument() {
   const [placePos, setPlacePos] = useState<PlacePosition | null>(null);
   const [markWidthPct, setMarkWidthPct] = useState(0.2);
 
-  const [policy, setPolicy] = useState<{ default: "AI" | "PP"; overridable: boolean } | null>(null);
+  const [policy, setPolicy] = useState<{ default: "AI" | "PP"; overridable: boolean; requireImage?: boolean } | null>(null);
+  // Signatures must be drawn or uploaded once an admin switches that on.
+  // Someone with a saved TYPED signature may still use it this many
+  // more times (null = no typed allowance) - see claimTypedSigning.
+  const [typedLeft, setTypedLeft] = useState<number | null>(null);
+  const requireImage = policy?.requireImage === true;
+  const typedAllowed = !requireImage || (typedLeft ?? 0) > 0;
   const [mine, setMine] = useState<SignatureRow[]>([]);
   // Routed documents I've signed (from /signatures/documents/mine), listed
   // with the one-off ones so "Documents you've signed" is complete.
@@ -174,6 +181,7 @@ export default function SignDocument() {
 
   const [adminNotation, setAdminNotation] = useState<"AI" | "PP">("PP");
   const [adminOverridable, setAdminOverridable] = useState(true);
+  const [adminRequireImage, setAdminRequireImage] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // The saved signature is a convenience cache only — canvasSeed feeds the
@@ -203,12 +211,27 @@ export default function SignDocument() {
       setRequestedNotation(p.default);
       setAdminNotation(p.default);
       setAdminOverridable(Boolean(p.overridable));
+      setAdminRequireImage(p.requireImage === true);
     }).catch(() => {});
     api.mySavedSignature().then((saved) => {
       if (!saved) return;
       setHasSavedSignature(true);
-      setSignMode(saved.signatureType);
+      const left: number | null = saved.typedSigningsLeft ?? null;
+      setTypedLeft(left);
+      // A typed signature still usable (rule off, or allowance left) opens
+      // as before; otherwise start on Draw.
+      setSignMode(saved.signatureType === "type" && left !== 0 ? "type" : "draw");
       if (saved.signatureType === "type") setTypedName(saved.typedName || me?.fullName || "");
+      if (saved.signatureType === "type" && left !== null && left > 0) {
+        void Swal.fire({
+          icon: "warning",
+          title: "Please draw or upload your signature",
+          html: `Typed signatures are being retired. You can still sign with your typed signature <b>${left} more time${left === 1 ? "" : "s"}</b>. After that it will be removed, and you'll need to draw or upload your signature to sign.`,
+          confirmButtonText: "Draw or upload now",
+          showCancelButton: true,
+          cancelButtonText: "Later"
+        }).then((r) => { if (r.isConfirmed) setSignMode("draw"); });
+      }
       if (saved.signatureType === "draw" && saved.imageDataUrl) {
         setDrawnDataUrl(saved.imageDataUrl);
         setCanvasSeed(saved.imageDataUrl);
@@ -274,7 +297,8 @@ export default function SignDocument() {
     try {
       const resp = await api.uploadAndSignDocument(form);
       setResult({ id: resp.id, verificationCode: resp.verificationCode });
-      if (rememberSignature) {
+      afterTypedSigning(resp.typedSigningsLeft);
+      if (rememberSignature && !(signMode === "type" && requireImage)) {
         await api.saveMySavedSignature({
           signatureType: signMode === "type" ? "type" : "draw",
           typedName: signMode === "type" ? typedName.trim() : null,
@@ -290,10 +314,21 @@ export default function SignDocument() {
     }
   }
 
+  // The server says how many typed signings are left after one was used;
+  // at 0 the saved typed signature is gone and Type disappears.
+  function afterTypedSigning(left: number | undefined) {
+    if (left === undefined) return;
+    setTypedLeft(left);
+    if (left > 0) return;
+    setSignMode("draw");
+    setHasSavedSignature(false);
+    void Swal.fire({ icon: "info", title: "That was your last typed signature", text: "Next time, draw or upload your signature to sign." });
+  }
+
   async function handleSaveSettings() {
     setSavingSettings(true);
     try {
-      const p = await api.updateSignatureNotationPolicy({ notation: adminNotation, overridable: adminOverridable });
+      const p = await api.updateSignatureNotationPolicy({ notation: adminNotation, overridable: adminOverridable, requireImage: adminRequireImage });
       setPolicy(p);
     } catch (e: any) {
       alert("Error saving settings: " + e.message);
@@ -401,7 +436,7 @@ export default function SignDocument() {
             )}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            {(["type", "draw", "upload"] as const).map((m) => (
+            {(typedAllowed ? ["type", "draw", "upload"] as const : ["draw", "upload"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -418,7 +453,12 @@ export default function SignDocument() {
             ))}
           </div>
           {signMode === "type" ? (
-            <input style={{ ...fieldStyle, maxWidth: 420, fontFamily: "'Brush Script MT', cursive", fontSize: 22 }} value={typedName} onChange={(e) => setTypedName(e.target.value)} placeholder="Your full name" />
+            <>
+              <input style={{ ...fieldStyle, maxWidth: 420, fontFamily: "'Brush Script MT', cursive", fontSize: 22 }} value={typedName} readOnly={requireImage} onChange={(e) => setTypedName(e.target.value)} placeholder="Your full name" />
+              {requireImage && typedLeft !== null && typedLeft > 0 && (
+                <div style={{ fontSize: 11.5, color: "#b45309", marginTop: 6 }}>Your saved typed signature can be used {typedLeft} more time{typedLeft === 1 ? "" : "s"}. Please draw or upload your signature instead.</div>
+              )}
+            </>
           ) : signMode === "draw" ? (
             <SignatureCanvas key={canvasSeed ? "seeded" : "blank"} onChange={setDrawnDataUrl} initialDataUrl={canvasSeed} />
           ) : (
@@ -531,6 +571,10 @@ export default function SignDocument() {
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, paddingBottom: 8 }}>
               <input type="checkbox" checked={adminOverridable} onChange={(e) => setAdminOverridable(e.target.checked)} />
               Let the signer override this per signature
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, paddingBottom: 8 }}>
+              <input type="checkbox" checked={adminRequireImage} onChange={(e) => setAdminRequireImage(e.target.checked)} />
+              Signers must draw or upload a signature (no typed names)
             </label>
             <button
               onClick={handleSaveSettings}

@@ -982,7 +982,7 @@ export const api = {
   signatureFileBlob: (id: string) => fetchBlob(`/signatures/${id}/file`),
   uploadAndSignDocument: (form: FormData) => req("/signatures/upload-and-sign", { method: "POST", body: form }),
   signatureNotationPolicy: () => req("/signatures/settings"),
-  updateSignatureNotationPolicy: (data: { notation: "AI" | "PP"; overridable: boolean }) =>
+  updateSignatureNotationPolicy: (data: { notation: "AI" | "PP"; overridable: boolean; requireImage?: boolean }) =>
     req("/signatures/settings", { method: "PUT", body: JSON.stringify(data) }),
 
   mySavedSignature: () => req("/signatures/my-saved-signature"),

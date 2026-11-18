@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { consentStatement, currentUser, type Placement, type Position, type SignatureInput } from "../api";
 import PdfPlacer from "./PdfPlacer";
-import SignatureChooser, { SignatureMark, isComplete, toInput, useSignatureChoice } from "./SignatureChooser";
+import SignatureChooser, { SignatureMark, TypedSignatureWarning, isComplete, toInput, useSignatureChoice } from "./SignatureChooser";
 
 export type SignRequest = SignatureInput & Position & { widthPct: number; consentStatement: string };
 
@@ -15,7 +15,7 @@ export default function SignFlow({ data, placements, submitLabel = "Sign", onSub
 }) {
   const me = currentUser();
   const name = me?.fullName || "";
-  const { choice, setChoice, saved } = useSignatureChoice(name);
+  const { choice, setChoice, saved, rules } = useSignatureChoice(name);
   const [position, setPosition] = useState<Position | null>(null);
   const [widthPct, setWidthPct] = useState(0.22);
   const [consent, setConsent] = useState(false);
@@ -44,9 +44,10 @@ export default function SignFlow({ data, placements, submitLabel = "Sign", onSub
 
   return (
     <div className="stack">
+      <TypedSignatureWarning rules={rules} onDrawNow={() => setChoice({ ...choice, mode: "draw" })} />
       <section className="card stack">
         <h3>1. Your signature</h3>
-        <SignatureChooser choice={choice} onChange={setChoice} saved={saved} />
+        <SignatureChooser choice={choice} onChange={setChoice} saved={saved} rules={rules} />
       </section>
 
       <section className="card stack">

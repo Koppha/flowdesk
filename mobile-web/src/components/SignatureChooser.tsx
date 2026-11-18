@@ -30,32 +30,59 @@ export function toSaved(c: SignatureChoice): SavedSignature {
     : { signatureType: "draw", typedName: null, imageDataUrl: imageOf(c) };
 }
 
+// Signatures must be drawn or uploaded once an admin switches that on (same
+// rule as the web portal and the server). Someone who saved a TYPED
+// signature may still sign with it typedLeft more times, then it's removed.
+export type SignatureRules = { requireImage: boolean; typedLeft: number | null; typedAllowed: boolean };
+
 /** Starts from the saved signature (shared with the web portal) when there is one. */
 export function useSignatureChoice(defaultName: string) {
-  const [choice, setChoice] = useState<SignatureChoice>({ mode: "type", typed: defaultName, drawn: null, uploaded: null });
+  const [choice, setChoice] = useState<SignatureChoice>({ mode: "draw", typed: defaultName, drawn: null, uploaded: null });
   const [saved, setSaved] = useState<SavedSignature | null>(null);
+  const [requireImage, setRequireImage] = useState(false);
 
   useEffect(() => {
+    api.signaturePolicy().then((p) => setRequireImage(p.requireImage === true)).catch(() => {});
     api
       .savedSignature()
       .then((s) => {
         if (!s) return;
         setSaved(s);
+        const typedUsable = s.signatureType === "type" && s.typedSigningsLeft !== 0;
         setChoice(
           s.signatureType === "draw"
             ? { mode: "draw", typed: defaultName, drawn: s.imageDataUrl, uploaded: null }
-            : { mode: "type", typed: s.typedName || defaultName, drawn: null, uploaded: null }
+            : { mode: typedUsable ? "type" : "draw", typed: s.typedName || defaultName, drawn: null, uploaded: null }
         );
       })
       .catch(() => {
-        // No saved signature to start from - the typed name default stands.
+        // No saved signature to start from - Draw it is.
       });
   }, [defaultName]);
 
-  return { choice, setChoice, saved, setSaved };
+  const typedLeft = saved?.signatureType === "type" ? saved.typedSigningsLeft ?? null : null;
+  const rules: SignatureRules = { requireImage, typedLeft, typedAllowed: !requireImage || (typedLeft ?? 0) > 0 };
+  return { choice, setChoice, saved, setSaved, rules };
 }
 
-export default function SignatureChooser({ choice, onChange, saved }: { choice: SignatureChoice; onChange: (c: SignatureChoice) => void; saved: SavedSignature | null }) {
+/** The warning for someone still using up a saved typed signature, once per visit to the sign screen. */
+export function TypedSignatureWarning({ rules, onDrawNow }: { rules: SignatureRules; onDrawNow: () => void }) {
+  const [open, setOpen] = useState(true);
+  if (!open || !rules.requireImage || !rules.typedLeft || rules.typedLeft <= 0) return null;
+  const left = rules.typedLeft;
+  return (
+    <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="typed-sig-title">
+      <div className="dialog stack">
+        <h3 id="typed-sig-title">Please draw or upload your signature</h3>
+        <p>Typed signatures are being retired. You can still sign with your typed signature <b>{left} more time{left === 1 ? "" : "s"}</b>. After that it will be removed, and you'll need to draw or upload your signature to sign.</p>
+        <button type="button" className="primary" onClick={() => { setOpen(false); onDrawNow(); }}>Draw or upload now</button>
+        <button type="button" className="secondary" onClick={() => setOpen(false)}>Later</button>
+      </div>
+    </div>
+  );
+}
+
+export default function SignatureChooser({ choice, onChange, saved, rules }: { choice: SignatureChoice; onChange: (c: SignatureChoice) => void; saved: SavedSignature | null; rules: SignatureRules }) {
   // A saved image (drawn here or on the web, or uploaded) is shown as-is
   // until the user chooses to replace it.
   const [replace, setReplace] = useState(false);
@@ -70,14 +97,17 @@ export default function SignatureChooser({ choice, onChange, saved }: { choice: 
   return (
     <div className="stack">
       <div className="segmented" role="tablist">
-        {tab("type", "Type")}
+        {rules.typedAllowed && tab("type", "Type")}
         {tab("draw", "Draw")}
         {tab("upload", "Upload")}
       </div>
       {choice.mode === "type" ? (
         <label className="field">
           <span>Your signature</span>
-          <input value={choice.typed} onChange={(e) => onChange({ ...choice, typed: e.target.value })} placeholder="Type your full name" autoComplete="name" />
+          <input value={choice.typed} readOnly={rules.requireImage} onChange={(e) => onChange({ ...choice, typed: e.target.value })} placeholder="Type your full name" autoComplete="name" />
+          {rules.requireImage && rules.typedLeft !== null && rules.typedLeft > 0 && (
+            <span className="warn-text">Your saved typed signature can be used {rules.typedLeft} more time{rules.typedLeft === 1 ? "" : "s"}. Please draw or upload instead.</span>
+          )}
         </label>
       ) : choice.mode === "upload" ? (
         <SignatureUpload value={choice.uploaded} onChange={(uploaded) => onChange({ ...choice, uploaded })} />

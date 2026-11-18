@@ -49,6 +49,9 @@ export const SYSTEM_SETTING_KEYS = {
   // when false, every delegated signature uses the admin's chosen notation
   // with no per-signature choice offered.
   signatureDelegationNotationOverridable: "signature_delegation_notation_overridable",
+  // Signers must draw or upload a signature; a typed name is no longer
+  // enough. Off until an admin switches it on (Sign a Document policy).
+  signatureRequireImage: "signature_require_image",
   // Hours a step can sit with no action before the current approver gets a
   // reminder email (SLA reminder worker - see lib/slaReminders.ts). Purely
   // a nudge, never a reassignment.

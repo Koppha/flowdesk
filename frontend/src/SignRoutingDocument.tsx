@@ -112,7 +112,7 @@ export default function SignRoutingDocument() {
   const [myDocs, setMyDocs] = useState<any[]>([]);
   const [loadingMyDocs, setLoadingMyDocs] = useState(true);
 
-  const [policy, setPolicy] = useState<{ default: "AI" | "PP"; overridable: boolean } | null>(null);
+  const [policy, setPolicy] = useState<{ default: "AI" | "PP"; overridable: boolean; requireImage?: boolean } | null>(null);
 
   // PDF rendering
   const containerRef = useRef<HTMLDivElement>(null);
@@ -175,7 +175,12 @@ export default function SignRoutingDocument() {
   // anchor dot (see the canvas overlay below) shows exactly that point.
   const [markWidthPct, setMarkWidthPct] = useState(0.1);
   const [consentChecked, setConsentChecked] = useState(false);
-  const [signMode, setSignMode] = useState<"type" | "draw" | "upload">("type");
+  const [signMode, setSignMode] = useState<"type" | "draw" | "upload">("draw");
+  // Drawn/uploaded signatures only, with a short allowance for a saved typed
+  // one (see the same logic in SignDocument.tsx and claimTypedSigning).
+  const [typedLeft, setTypedLeft] = useState<number | null>(null);
+  const requireImage = policy?.requireImage === true;
+  const typedAllowed = !requireImage || (typedLeft ?? 0) > 0;
   // A picture of the signature someone uploaded (see SignatureUpload).
   const [uploadedDataUrl, setUploadedDataUrl] = useState<string | null>(null);
   const [typedName, setTypedName] = useState(me?.fullName || "");
@@ -206,7 +211,9 @@ export default function SignRoutingDocument() {
     api.signatureNotationPolicy().then((p) => setPolicy(p)).catch(() => {});
     api.mySavedSignature().then((saved) => {
       if (!saved) return;
-      setSignMode(saved.signatureType);
+      const left: number | null = saved.typedSigningsLeft ?? null;
+      setTypedLeft(left);
+      setSignMode(saved.signatureType === "type" && left !== 0 ? "type" : "draw");
       if (saved.signatureType === "type") setTypedName(saved.typedName || me?.fullName || "");
       if (saved.signatureType === "draw" && saved.imageDataUrl) {
         setDrawnDataUrl(saved.imageDataUrl);
@@ -573,7 +580,7 @@ export default function SignRoutingDocument() {
 
     setPlacing(true);
     try {
-      await api.signPlacement(docId, {
+      const placed = await api.signPlacement(docId, {
         consentStatement,
         pageNumber: pageNum,
         xPct: pendingClick.xPct,
@@ -584,7 +591,14 @@ export default function SignRoutingDocument() {
         authorityUserId: onBehalfOf ? authorityUserId : undefined,
         requestedNotation: onBehalfOf && policy?.overridable ? requestedNotation : undefined
       });
-      if (rememberSignature) {
+      if (placed?.typedSigningsLeft !== undefined) {
+        setTypedLeft(placed.typedSigningsLeft);
+        if (placed.typedSigningsLeft === 0) {
+          setSignMode("draw");
+          void Swal.fire({ icon: "info", title: "That was your last typed signature", text: "Next time, draw or upload your signature to sign." });
+        }
+      }
+      if (rememberSignature && !(signMode === "type" && requireImage)) {
         await api.saveMySavedSignature({
           signatureType: signMode === "type" ? "type" : "draw",
           typedName: signMode === "type" ? typedName.trim() : null,
@@ -1192,14 +1206,19 @@ export default function SignRoutingDocument() {
                   <div>
                     <label style={labelStyle}>Your signature</label>
                     <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                      {(["type", "draw", "upload"] as const).map((m) => (
+                      {(typedAllowed ? ["type", "draw", "upload"] as const : ["draw", "upload"] as const).map((m) => (
                         <button key={m} type="button" onClick={() => setSignMode(m)} style={{ padding: "5px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: signMode === m ? "1px solid #3b82f6" : "1px solid var(--border)", background: signMode === m ? "#eff6ff" : "var(--surface-soft)", color: signMode === m ? "#1d4ed8" : "var(--text)", fontWeight: 600 }}>
                           {m === "type" ? "Type" : m === "draw" ? "Draw" : "Upload"}
                         </button>
                       ))}
                     </div>
                     {signMode === "type" ? (
-                      <input style={{ ...fieldStyle, fontFamily: "'Brush Script MT', cursive", fontSize: 20 }} value={typedName} onChange={(e) => setTypedName(e.target.value)} placeholder="Your full name" />
+                      <>
+                        <input style={{ ...fieldStyle, fontFamily: "'Brush Script MT', cursive", fontSize: 20 }} value={typedName} readOnly={requireImage} onChange={(e) => setTypedName(e.target.value)} placeholder="Your full name" />
+                        {requireImage && typedLeft !== null && typedLeft > 0 && (
+                          <div style={{ fontSize: 11, color: "#b45309", marginTop: 4 }}>Your saved typed signature can be used {typedLeft} more time{typedLeft === 1 ? "" : "s"}. Please draw or upload instead.</div>
+                        )}
+                      </>
                     ) : signMode === "draw" ? (
                       <SignatureCanvas key={canvasSeed ? "seeded" : "blank"} onChange={setDrawnDataUrl} initialDataUrl={canvasSeed} />
                     ) : (

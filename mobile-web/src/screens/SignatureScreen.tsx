@@ -5,7 +5,10 @@ import SignatureChooser, { isComplete, toSaved, useSignatureChoice } from "../co
 // My saved signature - the same one the web portal prefills from (typed,
 // drawn or uploaded there or here).
 export default function SignatureScreen() {
-  const { choice, setChoice, saved, setSaved } = useSignatureChoice(currentUser()?.fullName || "");
+  const { choice, setChoice, saved, setSaved, rules } = useSignatureChoice(currentUser()?.fullName || "");
+  // A new typed signature can't be saved while drawn/uploaded ones are required.
+  const saveRules = { ...rules, typedAllowed: !rules.requireImage };
+  const current = choice.mode === "type" && !saveRules.typedAllowed ? { ...choice, mode: "draw" as const } : choice;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -15,7 +18,7 @@ export default function SignatureScreen() {
     setError("");
     setMessage("");
     try {
-      const next = toSaved(choice);
+      const next = toSaved(current);
       await api.saveSignature(next);
       setSaved(next);
       setMessage("Saved. It'll be filled in for you next time you sign, here and on the web.");
@@ -42,12 +45,12 @@ export default function SignatureScreen() {
       <h1>My signature</h1>
       <p className="muted">Save it once and it's filled in whenever you sign.</p>
       <section className="card">
-        <SignatureChooser choice={choice} onChange={setChoice} saved={saved} />
+        <SignatureChooser choice={current} onChange={setChoice} saved={saved} rules={saveRules} />
       </section>
       {message && <p className="notice">{message}</p>}
       {error && <p className="error">{error}</p>}
       <div className="sticky-actions">
-        <button type="button" className="primary" onClick={save} disabled={busy || !isComplete(choice)}>
+        <button type="button" className="primary" onClick={save} disabled={busy || !isComplete(current)}>
           {busy ? "Saving…" : "Save signature"}
         </button>
         {saved && <button type="button" className="secondary danger" onClick={remove}>Remove</button>}

@@ -15,7 +15,7 @@ import { persistentDiskStorage, ensureLocalFile } from "../../lib/fileStore.js";
 import {
   performSignDocument, getSignatureRecord, getSignatureByCode, verifyFileIntegrity,
   getSignatureNotationPolicy, setSignatureNotationPolicy, signatureUploadDir,
-  getSavedSignature, saveSavedSignature, clearSavedSignature,
+  getSavedSignature, saveSavedSignature, clearSavedSignature, claimTypedSigning,
   createSignableDocument, getSignableDocument, getSignableDocumentByCode,
   listSignableDocumentsForUser, listPlacementsForDocument, addSignaturePlacement,
   rejectSignableDocument, addTextToDocument, finishSignableDocument, addTickToDocument,
@@ -99,6 +99,8 @@ signaturesRouter.post("/upload-and-sign", async (req: AuthedRequest, res, next) 
     }
 
     const originalBuffer = fs.readFileSync(req.file.path);
+    // A typed name only counts while the signer still has typed signings left.
+    const typedClaim = await claimTypedSigning(req.user!.userId, parsed.data);
     const result = await performSignDocument({
       title: parsed.data.title,
       originalBuffer,
@@ -117,14 +119,15 @@ signaturesRouter.post("/upload-and-sign", async (req: AuthedRequest, res, next) 
       placement: parsed.data.pageNumber && parsed.data.xPct !== undefined && parsed.data.yPct !== undefined
         ? { pageNumber: parsed.data.pageNumber, xPct: parsed.data.xPct, yPct: parsed.data.yPct, widthPct: parsed.data.widthPct ?? 0.18 }
         : null
-    });
+    }).catch(async (e) => { await typedClaim?.settle(false); throw e; });
+    await typedClaim?.settle(true);
 
     // The freshly-uploaded temp file has now been copied into
     // signatureUploadDir as the "original" copy on record - remove multer's
     // own copy so the same content isn't kept twice under different names.
     try { fs.unlinkSync(req.file.path); } catch { /* best effort */ }
 
-    return res.status(201).json(result);
+    return res.status(201).json({ ...result, typedSigningsLeft: typedClaim ? typedClaim.left : undefined });
   } catch (err) {
     return next(err);
   }
@@ -161,7 +164,7 @@ signaturesRouter.get("/settings", async (_req: AuthedRequest, res, next) => {
   }
 });
 
-const SettingsSchema = z.object({ notation: z.enum(["AI", "PP"]), overridable: z.boolean() });
+const SettingsSchema = z.object({ notation: z.enum(["AI", "PP"]), overridable: z.boolean(), requireImage: z.boolean().optional() });
 signaturesRouter.put("/settings", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
   try {
     const parsed = SettingsSchema.safeParse(req.body);
@@ -465,6 +468,7 @@ signaturesRouter.post("/documents/:id/sign", async (req: AuthedRequest, res, nex
       authorityName = authority.full_name;
     }
 
+    const typedClaim = await claimTypedSigning(req.user!.userId, parsed.data);
     const result = await addSignaturePlacement({
       documentId: req.params.id,
       signerId: req.user!.userId,
@@ -480,9 +484,10 @@ signaturesRouter.post("/documents/:id/sign", async (req: AuthedRequest, res, nex
       signatureImageDataUrl: parsed.data.signatureImageDataUrl || null,
       authorityUserId: parsed.data.authorityUserId || null,
       authorityName
-    });
+    }).catch(async (e) => { await typedClaim?.settle(false); throw e; });
+    await typedClaim?.settle(true);
 
-    return res.status(201).json(result);
+    return res.status(201).json({ ...result, typedSigningsLeft: typedClaim ? typedClaim.left : undefined });
   } catch (err) {
     return next(err);
   }

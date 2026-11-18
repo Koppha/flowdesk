@@ -91,7 +91,11 @@ export type DocDetail = {
 
 export type SignedRecord = { id: string; title: string; verification_code: string; signed_at: string };
 
-export type SavedSignature = { signatureType: "type" | "draw"; typedName: string | null; imageDataUrl: string | null };
+export type SavedSignature = {
+  signatureType: "type" | "draw"; typedName: string | null; imageDataUrl: string | null;
+  /** Typed signings still allowed while drawn/uploaded signatures are required (null = not limited). */
+  typedSigningsLeft?: number | null;
+};
 
 export type Person = { id: string; full_name: string | null; email: string; department: string | null };
 
@@ -119,6 +123,8 @@ export const api = {
   signedPdf: (id: string) => pdf(pdfPath.signed(id)),
 
   savedSignature: () => req<SavedSignature | null>("/signatures/my-saved-signature"),
+  /** requireImage: signatures must be drawn or uploaded (admin setting). */
+  signaturePolicy: () => req<{ requireImage?: boolean }>("/signatures/settings"),
   saveSignature: (s: SavedSignature) => req("/signatures/my-saved-signature", { method: "PUT", body: JSON.stringify(s) }),
   clearSignature: () => req("/signatures/my-saved-signature", { method: "DELETE" }),
 
