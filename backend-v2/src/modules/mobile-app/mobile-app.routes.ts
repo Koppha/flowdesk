@@ -12,7 +12,7 @@ import { ensureMobileAppBuildsSchema, getLatestMobileAppBuild, saveMobileAppBuil
 import { ensureLocalFile, persistFile, storeKey } from "../../lib/fileStore.js";
 import { query } from "../../lib/db.js";
 import { logger, serializeError } from "../../lib/logger.js";
-import { clientInfo, ensureMobileAppEventsSchema, getMobileAppAnalytics, recordMobileAppEvent, recordMobileAppOpen } from "../../lib/mobileAppEvents.js";
+import { clientInfo, ensureMobileAppEventsSchema, getMobileAppAnalytics, listMobileAppEvents, recordMobileAppEvent, recordMobileAppOpen } from "../../lib/mobileAppEvents.js";
 import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
 import { mobileUpdatesRouter } from "./mobile-updates.routes.js";
 import { getPhoneCampaign, runPhoneCampaignNow, setPhoneCampaign, startPhoneCampaign } from "../../lib/phoneCampaign.js";
@@ -173,6 +173,20 @@ mobileAppRouter.get("/analytics", requireRole(["ADMIN"]), async (_req: AuthedReq
   try {
     await ensureMobileAppEventsSchema();
     return res.json(await getMobileAppAnalytics());
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Mobile Analytics: downloads or logins, a page at a time, with a name search.
+mobileAppRouter.get("/analytics/events", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const type = String(req.query.type || "").toUpperCase();
+    if (type !== "DOWNLOAD" && type !== "LOGIN") throw badRequest("type must be download or login");
+    const page = Math.max(1, Math.min(10_000, Number(req.query.page) || 1));
+    const pageSize = Math.max(5, Math.min(50, Number(req.query.pageSize) || 10));
+    await ensureMobileAppEventsSchema();
+    return res.json(await listMobileAppEvents(type, page, pageSize, String(req.query.q || "").slice(0, 100)));
   } catch (err) {
     return next(err);
   }

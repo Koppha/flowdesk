@@ -2,6 +2,7 @@ import { GuidedTour } from "./shared/GuidedTour";
 import { TOURS } from "./menu/menuTips";
 import { useEffect, useState, type CSSProperties } from "react";
 import { API, api, getToken } from "./api";
+import { Pager, SearchBox, usePaging } from "./shared/RowList";
 import { BarChart3, Bell, ChevronDown, ChevronUp, GripVertical, Home, Inbox, LayoutGrid, MessageCircle, PanelBottom, Smartphone, User } from "lucide-react";
 // The mobile app's own icon (FlowDesk Mobile assets/icon.png, 256 px copy).
 import appIcon from "./assets/mobileAppIcon.png";
@@ -38,6 +39,124 @@ type Analytics = {
 const statCard: CSSProperties = { flex: "1 1 120px", border: "1px solid var(--border)", borderRadius: 10, padding: 14 };
 const sectionLabel: CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 };
 const shortDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
+// ── Mobile Analytics lists: they only grow, so they come in pages ──
+type AppUser = NonNullable<Analytics["users"]>[number];
+type AppDevice = NonNullable<Analytics["devices"]>[number];
+const DEVICES_SHOWN = 12;
+
+function DeviceChips({ devices }: { devices: AppDevice[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? devices : devices.slice(0, DEVICES_SHOWN);
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={sectionLabel}>Devices in use ({devices.length})</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {shown.map((d) => (
+          <span key={(d.brand || "") + d.model + (d.os || "")} style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "4px 10px", fontSize: 12 }}>
+            {[d.brand, d.model].filter(Boolean).join(" ")}{d.os ? <span style={{ color: "var(--muted)" }}> · {d.os}</span> : null} · <b>{d.users}</b>
+          </span>
+        ))}
+        {devices.length > DEVICES_SHOWN && (
+          <button type="button" className="ep-btn-outline" style={{ fontSize: 12, padding: "3px 10px", borderRadius: 999 }} onClick={() => setAll(!all)}>
+            {all ? "Show fewer" : `Show all ${devices.length}`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PeopleTable({ users }: { users: AppUser[] }) {
+  const paging = usePaging(users, (u) => [u.fullName, u.department, u.device, u.version].filter(Boolean).join(" "), 10);
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ ...sectionLabel, marginBottom: 0 }}>People using the app ({users.length})</div>
+        {users.length > 10 && (
+          <SearchBox value={paging.q} onChange={paging.setQ} placeholder="Search name, division or phone" style={{ flex: "0 1 300px", marginLeft: "auto" }} />
+        )}
+      </div>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: "var(--muted)" }}>
+              {["Name", "Last used", "First used", "Requests (30 days)", "Sign-ins", "Opens", "Version", "Device", "Push"].map((h) => (
+                <th key={h} style={{ padding: "8px 10px", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {paging.rows.length === 0 && (
+              <tr><td colSpan={9} style={{ padding: 12, color: "var(--muted)" }}>{users.length ? "Nobody matches the search" : "Nobody yet"}</td></tr>
+            )}
+            {paging.rows.map((u) => (
+              <tr key={u.userId} style={{ borderTop: "1px solid var(--border)" }}>
+                <td style={{ padding: "7px 10px", minWidth: 200 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                    {u.online && <span title="Online now" style={{ width: 7, height: 7, borderRadius: 999, background: "#0f9d58", flex: "none" }} />}
+                    {u.fullName || "Unknown"}
+                  </div>
+                  {u.department && <div style={{ fontSize: 11, color: "var(--muted)" }}>{u.department}</div>}
+                </td>
+                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{new Date(u.lastActive).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "var(--muted)" }}>{shortDate(u.firstSeen)}</td>
+                <td style={{ padding: "7px 10px" }} title={`${u.requestsTotal ?? 0} in total`}>{u.requests30d ?? 0}</td>
+                <td style={{ padding: "7px 10px" }}>{u.logins}</td>
+                <td style={{ padding: "7px 10px" }}>{u.opens}</td>
+                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.version ? `v${u.version}` : "–"}</td>
+                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.device || "–"}</td>
+                <td style={{ padding: "7px 10px" }}>{u.push ? "On" : "–"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Pager paging={paging} noun="people" />
+    </div>
+  );
+}
+
+// Downloads or logins from the server, 10 a page, with a name search. The
+// analytics summary's latest rows show until the first page arrives.
+function EventList({ type, title, latest }: { type: "download" | "login"; title: string; latest: { createdAt: string; fullName: string | null; version?: string | null }[] }) {
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [data, setData] = useState<{ total: number; items: { createdAt: string; fullName: string | null; version: string | null }[] } | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const t = window.setTimeout(() => {
+      api.mobileAppEvents(type, page, q)
+        .then((d) => { if (live) { setData(d); setFailed(false); } })
+        .catch(() => { if (live) setFailed(true); });
+    }, q ? 300 : 0);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [type, page, q]);
+  const rows = data ? data.items : latest.slice(0, 10);
+  const total = data ? data.total : latest.length;
+  const pageSize = 10;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  return (
+    <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ ...sectionLabel, marginBottom: 0 }}>{title}{data ? ` (${data.total})` : ""}</div>
+        <SearchBox value={q} onChange={(v) => { setQ(v); setPage(1); }} placeholder="Search by name" style={{ flex: "0 1 200px", marginLeft: "auto" }} />
+      </div>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+        {rows.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>{q ? "Nobody matches the search" : "None yet"}</div>}
+        {rows.map((d, i) => (
+          <div key={`${d.createdAt}-${i}`} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderTop: i > 0 ? "1px solid var(--border)" : undefined, fontSize: 12.5 }}>
+            <span>{d.fullName || "Unknown"}{d.version ? ` · v${d.version}` : ""}</span>
+            <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>{new Date(d.createdAt).toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+      {failed && <div style={{ fontSize: 12, color: "var(--muted)", paddingTop: 6 }}>Couldn't load more just now - showing the latest.</div>}
+      {data && total > 0 && <Pager paging={{ page, pages, total, all: total, pageSize, setPage }} noun={type === "download" ? "downloads" : "logins"} />}
+    </div>
+  );
+}
 
 function Stat({ value, label, hint }: { value: number | string; label: string; hint?: string }) {
   return (
@@ -816,85 +935,13 @@ export default function MobileAppConfig({ isAdmin }: { isAdmin?: boolean }) {
                     </div>
                   )}
 
-                  {analytics.devices && analytics.devices.length > 0 && (
-                    <div style={{ marginBottom: 18 }}>
-                      <div style={sectionLabel}>Devices in use</div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {analytics.devices.map((d) => (
-                          <span key={(d.brand || "") + d.model} style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "4px 10px", fontSize: 12 }}>
-                            {[d.brand, d.model].filter(Boolean).join(" ")}{d.os ? <span style={{ color: "var(--muted)" }}> · {d.os}</span> : null} · <b>{d.users}</b>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {analytics.devices && analytics.devices.length > 0 && <DeviceChips devices={analytics.devices} />}
 
-                  {analytics.users && (
-                    <div style={{ marginBottom: 18 }}>
-                      <div style={sectionLabel}>People using the app ({analytics.users.length})</div>
-                      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "auto", maxHeight: 360 }}>
-                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-                          <thead>
-                            <tr style={{ textAlign: "left", color: "var(--muted)", position: "sticky", top: 0, background: "var(--surface, #fff)" }}>
-                              {["Name", "Last used", "First used", "Requests (30 days)", "Sign-ins", "Opens", "Version", "Device", "Push"].map((h) => (
-                                <th key={h} style={{ padding: "8px 10px", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {analytics.users.length === 0 && (
-                              <tr><td colSpan={9} style={{ padding: 12, color: "var(--muted)" }}>Nobody yet</td></tr>
-                            )}
-                            {analytics.users.map((u) => (
-                              <tr key={u.userId} style={{ borderTop: "1px solid var(--border)" }}>
-                                <td style={{ padding: "7px 10px" }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                    {u.online && <span title="Online now" style={{ width: 7, height: 7, borderRadius: 999, background: "#0f9d58", flex: "none" }} />}
-                                    {u.fullName || "Unknown"}
-                                  </div>
-                                  {u.department && <div style={{ fontSize: 11, color: "var(--muted)" }}>{u.department}</div>}
-                                </td>
-                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{new Date(u.lastActive).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
-                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "var(--muted)" }}>{shortDate(u.firstSeen)}</td>
-                                <td style={{ padding: "7px 10px" }} title={`${u.requestsTotal ?? 0} in total`}>{u.requests30d ?? 0}</td>
-                                <td style={{ padding: "7px 10px" }}>{u.logins}</td>
-                                <td style={{ padding: "7px 10px" }}>{u.opens}</td>
-                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.version ? `v${u.version}` : "–"}</td>
-                                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{u.device || "–"}</td>
-                                <td style={{ padding: "7px 10px" }}>{u.push ? "On" : "–"}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
+                  {analytics.users && <PeopleTable users={analytics.users} />}
 
                   <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-                    <div style={{ flex: "1 1 240px" }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>Recent downloads</div>
-                      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-                        {analytics.recentDownloads.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>None yet</div>}
-                        {analytics.recentDownloads.map((d, i) => (
-                          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderTop: i > 0 ? "1px solid var(--border)" : undefined, fontSize: 12.5 }}>
-                            <span>{d.fullName || "Unknown"}{d.version ? ` · v${d.version}` : ""}</span>
-                            <span style={{ color: "var(--muted)" }}>{new Date(d.createdAt).toLocaleString()}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div style={{ flex: "1 1 240px" }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>Recent logins</div>
-                      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-                        {analytics.recentLogins.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "var(--muted)" }}>None yet</div>}
-                        {analytics.recentLogins.map((l, i) => (
-                          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderTop: i > 0 ? "1px solid var(--border)" : undefined, fontSize: 12.5 }}>
-                            <span>{l.fullName || "Unknown"}</span>
-                            <span style={{ color: "var(--muted)" }}>{new Date(l.createdAt).toLocaleString()}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <EventList type="download" title="Recent downloads" latest={analytics.recentDownloads} />
+                    <EventList type="login" title="Recent logins" latest={analytics.recentLogins} />
                   </div>
                 </>
               )}

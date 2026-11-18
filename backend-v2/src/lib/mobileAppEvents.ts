@@ -188,3 +188,20 @@ export async function getMobileAppAnalytics(): Promise<MobileAppAnalytics> {
     recentLogins: recentLogins.map((r) => ({ createdAt: r.created_at, fullName: r.full_name }))
   };
 }
+
+// Mobile Analytics "Recent downloads" / "Recent logins", a page at a time
+// (newest first), optionally narrowed by the person's name - these lists
+// only grow, so the analytics summary keeps just the latest 20.
+export async function listMobileAppEvents(type: "DOWNLOAD" | "LOGIN", page: number, pageSize: number, search: string) {
+  const words = search.trim().split(/\s+/).filter(Boolean).slice(0, 5);
+  const params: unknown[] = [type];
+  const nameFilter = words.map((w) => { params.push(`%${w}%`); return `AND u.full_name ILIKE $${params.length}`; }).join(" ");
+  const where = `FROM mobile_app_events e LEFT JOIN users u ON u.id = e.user_id WHERE e.event_type = $1 ${nameFilter}`;
+  const [{ total }] = await query<{ total: number }>(`SELECT count(*)::int AS total ${where}`, params);
+  const rows = await query<{ created_at: string; full_name: string | null; version: string | null }>(
+    `SELECT e.created_at, u.full_name, e.metadata->>'version' AS version ${where}
+      ORDER BY e.created_at DESC LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
+    params
+  );
+  return { total, page, pageSize, items: rows.map((r) => ({ createdAt: r.created_at, fullName: r.full_name, version: r.version })) };
+}

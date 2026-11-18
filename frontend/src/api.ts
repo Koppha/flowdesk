@@ -529,6 +529,9 @@ export const api = {
   latestMobileAppBuild: (platform = "ANDROID") => req(`/mobile-app/latest?platform=${platform}`),
   mobileAppDownloadToken: () => req("/mobile-app/download-token") as Promise<{ token: string }>,
   mobileAppAnalytics: () => req("/mobile-app/analytics"),
+  // Downloads or logins, 10 a page, newest first, optionally by name.
+  mobileAppEvents: (type: "download" | "login", page: number, q: string) =>
+    req(`/mobile-app/analytics/events?type=${type}&page=${page}&pageSize=10${q.trim() ? `&q=${encodeURIComponent(q.trim())}` : ""}`) as Promise<{ total: number; page: number; pageSize: number; items: { createdAt: string; fullName: string | null; version: string | null }[] }>,
   uploadMobileAppApk: (file: File, version: string) => {
     const form = new FormData();
     form.append("file", file);
