@@ -23,7 +23,7 @@ import { getViewerDivisionScope } from "../../lib/divisionScope.js";
 export const treasuryRouter = Router();
 treasuryRouter.use(requireAuth);
 
-const TREASURY_FEATURE_DEFAULTS = ["ADMIN", "Section: Treasury & Financial Accounting"];
+export const TREASURY_FEATURE_DEFAULTS = ["ADMIN", "Section: Treasury & Financial Accounting"];
 
 // Acting on a claim (completing it) is meant to stay slightly narrower than
 // just seeing the queue (mirroring Deductions/Refundable's own view-vs-act

@@ -1524,17 +1524,22 @@ export default function CustomRequestsHub({ profile, requestDirectory, onBack, d
       case "section":
         return <ImplementorField value={String(value || "")} users={companyDirectorySorted} onChange={(v) => set(f.field_key, v)} />;
       case "textarea": {
+        const isCr = Boolean(isChangeRequestType || workspaceId);
         const box = (
           <textarea
             className="ep-form-textarea"
-            rows={3}
+            rows={isCr ? 5 : 3}
             placeholder={f.placeholder || ""}
             value={value}
             onChange={(e) => set(f.field_key, e.target.value)}
+            // Change Requests hold long plans: the box grows with its text
+            // (up to a limit) instead of a tiny scrolling window.
+            ref={isCr ? (el) => { if (el) { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight + 2, 480)}px`; } } : undefined}
+            style={isCr ? { width: "100%", minHeight: 110, maxHeight: 480, resize: "vertical", lineHeight: 1.5, overflowY: "auto" } : undefined}
           />
         );
         // Change Requests (new, draft or in the workspace): AI co-writing.
-        if (!(isChangeRequestType || workspaceId)) return box;
+        if (!isCr) return box;
         return (
           <div>
             {box}

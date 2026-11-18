@@ -374,8 +374,9 @@ export async function resolveAdvancePdfData(id: string): Promise<ResolvedPdfData
       status: adv.status || "",
       type_label: isReserved ? "" : (adv.travel_type_name || adv.type || ""),
       destination: isReserved ? "" : locations.join(", "),
-      departure_date: isReserved ? "" : formatDateTime(dateFrom),
-      return_date: isReserved ? "" : formatDateTime(dateTo),
+      // Trip dates are calendar days: no time (it printed a meaningless "02:00").
+      departure_date: isReserved ? "" : formatDate(dateFrom),
+      return_date: isReserved ? "" : formatDate(dateTo),
       travel_duration: isReserved || !durationDays ? "" : `${durationDays} day${durationDays === 1 ? "" : "s"}`,
       accommodation_summary: isReserved || nights == null ? "" : `${nights} night${nights === 1 ? "" : "s"}`,
       // DAILY-rate travel types (per diem, e.g. international travel) pay a

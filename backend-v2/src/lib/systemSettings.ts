@@ -133,6 +133,27 @@ export async function getBooleanSystemSetting(key: string, fallback = true) {
   return row.value === "true";
 }
 
+// Several settings in one query (one database connection) instead of one
+// query each - read with the helpers below, same defaults as the single getters.
+export async function getSystemSettingValues(keys: readonly string[]) {
+  const rows = await query<{ key: string; value: string | null }>(
+    `SELECT key, value FROM system_state WHERE key = ANY($1::text[])`,
+    [keys]
+  );
+  return new Map(rows.map((r) => [r.key, r.value]));
+}
+
+export function readBooleanSetting(values: Map<string, string | null>, key: string, fallback = true) {
+  const value = values.get(key);
+  if (value === undefined || value === null) return fallback;
+  return value === "true";
+}
+
+export function readNumericSetting(values: Map<string, string | null>, key: string, fallback = 0) {
+  const value = Number(values.get(key));
+  return Number.isFinite(value) ? value : fallback;
+}
+
 export async function setBooleanSystemSetting(key: string, value: boolean) {
   await query(
     `INSERT INTO system_state (key, value)

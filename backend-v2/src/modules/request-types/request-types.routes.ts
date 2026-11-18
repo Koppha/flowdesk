@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
 import { badRequest, forbidden, notFound } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
-import { getBooleanSystemSetting, setBooleanSystemSetting, getNumericSystemSetting, setNumericSystemSetting, getStringSystemSetting, setStringSystemSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
+import { setBooleanSystemSetting, setNumericSystemSetting, getStringSystemSetting, setStringSystemSetting, getSystemSettingValues, readBooleanSetting, readNumericSetting, SYSTEM_SETTING_KEYS } from "../../lib/systemSettings.js";
 import { logger } from "../../lib/logger.js";
 import { loadAiConfig, setAiAssistantEnabled } from "../ai/ai-settings.js";
 
@@ -117,36 +117,56 @@ requestTypesRouter.get("/", async (req: AuthedRequest, res, next) => {
   }
 });
 
+// Every screen reads these switches when it opens, so they're read in one
+// query, kept for a few seconds, and - if the database can't be reached -
+// answered from the last good read. A failed read used to hide Maintenance
+// (off by default) for that page load while the database was full (Nov 2026).
+const MODULE_FLAG_KEYS = [
+  SYSTEM_SETTING_KEYS.overtimeModuleEnabled, SYSTEM_SETTING_KEYS.standbyModuleEnabled,
+  SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, SYSTEM_SETTING_KEYS.loanAdvanceEnabled,
+  SYSTEM_SETTING_KEYS.salaryAdvanceMaxPaybackMonths, SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths,
+  SYSTEM_SETTING_KEYS.vendorContractsModuleEnabled, SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled,
+  SYSTEM_SETTING_KEYS.signatureModuleEnabled, SYSTEM_SETTING_KEYS.maintenanceModuleEnabled,
+  SYSTEM_SETTING_KEYS.clearanceRemindersEnabled
+];
+const MODULE_FLAGS_FRESH_MS = 10_000;
+let moduleFlagsCache: { at: number; flags: Record<string, boolean | number> } | null = null;
+
+async function readModuleFlags() {
+  const values = await getSystemSettingValues(MODULE_FLAG_KEYS);
+  // The AI Assistant's own on/off (Settings > AI Assistant), shown and
+  // switched here too - one setting, two screens.
+  const ai_assistant_enabled = (await loadAiConfig()).settings.enabled;
+  return {
+    clearance_reminders_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.clearanceRemindersEnabled, false),
+    overtime_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.overtimeModuleEnabled, true),
+    standby_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.standbyModuleEnabled, true),
+    salary_advance_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, true),
+    loan_advance_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.loanAdvanceEnabled, true),
+    salary_advance_max_payback_months: readNumericSetting(values, SYSTEM_SETTING_KEYS.salaryAdvanceMaxPaybackMonths, 6),
+    loan_advance_max_payback_months: readNumericSetting(values, SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths, 6),
+    vendor_contracts_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.vendorContractsModuleEnabled, true),
+    service_contracts_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled, true),
+    signature_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.signatureModuleEnabled, true),
+    // A new process: off until an admin switches it on.
+    maintenance_enabled: readBooleanSetting(values, SYSTEM_SETTING_KEYS.maintenanceModuleEnabled, false),
+    ai_assistant_enabled
+  };
+}
+
 // GET /request-types/module-flags — any authed user (used to gate nav). Fixed
 // path, must precede /:id so it isn't swallowed by the :id param.
 requestTypesRouter.get("/module-flags", async (_req: AuthedRequest, res, next) => {
+  if (moduleFlagsCache && Date.now() - moduleFlagsCache.at < MODULE_FLAGS_FRESH_MS) return res.json(moduleFlagsCache.flags);
   try {
-    const [overtime_enabled, standby_enabled, salary_advance_enabled, loan_advance_enabled, salary_advance_max_payback_months, loan_advance_max_payback_months, vendor_contracts_enabled, service_contracts_enabled, signature_enabled, maintenance_enabled] = await Promise.all([
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.overtimeModuleEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.standbyModuleEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceEnabled, true),
-      getNumericSystemSetting(SYSTEM_SETTING_KEYS.salaryAdvanceMaxPaybackMonths, 6),
-      getNumericSystemSetting(SYSTEM_SETTING_KEYS.loanAdvanceMaxPaybackMonths, 6),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.vendorContractsModuleEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.serviceContractsModuleEnabled, true),
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.signatureModuleEnabled, true),
-      // A new process: off until an admin switches it on.
-      getBooleanSystemSetting(SYSTEM_SETTING_KEYS.maintenanceModuleEnabled, false)
-    ]);
-    // The AI Assistant's own on/off (Settings > AI Assistant), shown and
-    // switched here too - one setting, two screens.
-    const ai_assistant_enabled = (await loadAiConfig()).settings.enabled;
-    const clearance_reminders_enabled = await getBooleanSystemSetting(SYSTEM_SETTING_KEYS.clearanceRemindersEnabled, false);
-    return res.json({
-      clearance_reminders_enabled,
-      overtime_enabled, standby_enabled,
-      salary_advance_enabled, loan_advance_enabled,
-      salary_advance_max_payback_months, loan_advance_max_payback_months,
-      vendor_contracts_enabled, service_contracts_enabled,
-      signature_enabled, maintenance_enabled, ai_assistant_enabled
-    });
+    const flags = await readModuleFlags();
+    moduleFlagsCache = { at: Date.now(), flags };
+    return res.json(flags);
   } catch (err) {
+    if (moduleFlagsCache) {
+      logger.warn("Module flags: database read failed, answering from the last good read", { error: String((err as Error)?.message ?? err) });
+      return res.json(moduleFlagsCache.flags);
+    }
     return next(err);
   }
 });
@@ -211,8 +231,10 @@ requestTypesRouter.put("/module-flags", requireRole(["ADMIN"]), async (req: Auth
       }
       logger.info("ai_settings_updated", { by: req.user!.userId, enabled: parsed.data.ai_assistant_enabled, from: "process_page" });
     }
+    moduleFlagsCache = null;
     return res.json({ ok: true });
   } catch (err) {
+    moduleFlagsCache = null;
     return next(err);
   }
 });

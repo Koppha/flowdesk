@@ -848,7 +848,7 @@ const OVERDUE_SELECT = `
 //                    hasn't been submitted yet but the window hasn't lapsed
 // Mirrors the same "overdue" definition already used for the recovery
 // workflow (OVERDUE_SELECT) so the two stay consistent.
-const CLEARANCE_STATUS_REPORT_DEFAULT_ROLES = [
+export const CLEARANCE_STATUS_REPORT_DEFAULT_ROLES = [
   "ADMIN", "Department: Finance", "Section: Treasury & Financial Accounting",
   "Department: Human Resource", "Department: Human Resources", "Section: Human Resources Operations"
 ];

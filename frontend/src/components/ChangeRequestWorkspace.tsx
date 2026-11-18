@@ -287,7 +287,15 @@ export default function ChangeRequestWorkspace(props: {
         </button>
         {ws.status === "DRAFT" && perms.submit && onSubmitDraft && (
           <button className="ep-btn" style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }}
-            onClick={() => onSubmitDraft({ id: submissionId, data: detail.data || {}, approval_chain: Array.isArray(detail.approval_chain) ? detail.approval_chain : [] })}>
+            onClick={() => {
+              // Submit sends what's saved - text still in an open section would be lost.
+              if (editingSection || editingPeople) {
+                const open = ws.form_sections.find((x) => x.key === editingSection)?.title;
+                void showNotice(`${open ? `"${open}" is still open.` : "A section is still open."} Choose Save section (or Cancel) first, then Submit for approval.`);
+                return;
+              }
+              onSubmitDraft({ id: submissionId, data: detail.data || {}, approval_chain: Array.isArray(detail.approval_chain) ? detail.approval_chain : [] });
+            }}>
             <Send size={13} /> Submit for approval
           </button>
         )}
@@ -410,7 +418,7 @@ export default function ChangeRequestWorkspace(props: {
                   <>
                     <div className="ep-form-fields-grid">
                       {sectionFields.map((f) => (
-                        <div key={f.field_key} className="ep-form-group">
+                        <div key={f.field_key} className="ep-form-group" style={f.field_type === "textarea" ? { gridColumn: "1 / -1" } : undefined}>
                           {f.field_type !== "checkbox" && <label>{f.field_label}{f.is_required && <span className="ep-required"> *</span>}</label>}
                           {lockedMulti(f)
                             ? <div style={{ fontSize: 13 }}>{formatValue(f, detail.data?.[f.field_key])} <span style={{ color: "var(--muted)", fontSize: 12 }}>— changed from the assignee list</span></div>

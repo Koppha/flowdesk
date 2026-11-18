@@ -28,6 +28,8 @@ import { formatRequestNumber } from "../../lib/pdf/pdfHelpers.js";
 import { loadAiConfig, targetsFor, userModelPick, type AiModelTarget } from "./ai-settings.js";
 import { clearancesDue, remindersForAssistant } from "./clearance-reminders.js";
 import { isCaptureActionType } from "../inbox/inbox.routes.js";
+import { hasFeatureAccess } from "../../lib/auth.js";
+import { CLEARANCE_STATUS_REPORT_DEFAULT_ROLES } from "../advances/advances.routes.js";
 
 const MAX_TOOL_ROUNDS = 8;
 const MAX_TURNS_PER_CONVERSATION = 40;
@@ -101,21 +103,79 @@ Salary advances and loans: requested for yourself only, with an amount, the sala
 
 Approval Inbox: everything waiting for your action (approve, countersign, reject, roll back with a comment). "View" items are for information only. Managers can delegate approvals while away (Manager Delegations). Approvers also get emails with action links.
 
-Finance (for those with access): Capture Inbox (Treasury captures approved advances), Payments, Deductions (salary deductions for paybacks), Refundable, View Clearances, and Finance > Reports (Clearance Summary, Refunds Due, Employee Paybacks, Fully Cleared Trips, Outstanding Clearances, Ageing, Audit & Reconciliation, Department & Division). Report columns can be chosen with the Columns button; Export CSV saves the columns shown. "VR Date" is when the advance was approved. "Amount To Be Expensed" is the advance amount when the balance is zero, otherwise the amount cleared.
-
-Other modules: Overtime (request and claim overtime), Standby and Call-Outs, Custom Processes (BRS - business requirement specifications written by several departments and routed for approval; Change Requests; Computer Requests; Attendance Register), Contracts (Vendor, Service, and Employee Contracts for interns and temporary staff, managed by HR), IT Provisioning, Sign a Document, and the FlowDesk mobile app. Service Contracts (telecom plans for individual customers and companies - Fibre, LTE, ADSL, Mobile Postpaid, Hybrid, Leased Lines, PABX) has its own tool, service_contracts, for counts, what's expiring in the next 30 days, and finding a specific contract by name/account/contract number - only for people with access.
-
-Administration (administrators only): user accounts are managed under User Management; an "active" user is an account that is switched on. The FlowDesk mobile app's usage is under Settings > Mobile App (Mobile Analytics). Website logins are not recorded, so "who used the website recently" can't be answered - say so.
+Other modules: Overtime (request and claim overtime), Standby and Call-Outs, Custom Processes (BRS - business requirement specifications written by several departments and routed for approval; Change Requests; Computer Requests; Attendance Register), Contracts (Vendor, Service, and Employee Contracts for interns and temporary staff, managed by HR), IT Provisioning, Sign a Document, and the FlowDesk mobile app.
 
 Reporting lines: each person's manager comes from Organisation Structure automatically (their Section, then Department, then Division leadership); HR or an admin can set a different manager by hand. Approval workflows route "Manager" steps to that person.
 
 If you don't know how something works in FlowDesk, say so and suggest asking the system administrator rather than guessing.
 
-Finance staff (Treasury, Financial Accounting, HR Operations, Finance): use finance_queue for their work queues (capture, payments, deductions, refundable, treasury, payback_review, salaries_ready) and run_report for reports. Lead with the totals per currency and the oldest items waiting, point to the FlowDesk page that does the work (Capture Inbox, Payments, Deductions, Refundable, Treasury, View Clearances, Finance > Reports), and offer a chart when comparing amounts. Never total amounts across different currencies.
-
 Every other process: list_active_processes says which processes are switched on in FlowDesk and which custom processes (e.g. Change Request, Computer Request, Attendance Register, BRS Approval) the person can use - use it for "what processes are there", "is maintenance on", "what can I request". For the person's items in any process other than travel/salary/loan advances and clearances, use list_my_requests with the process: custom (all custom-process requests - pass request_type to narrow to one, e.g. "Change Request"), brs, overtime (requests and claims), standby, maintenance (reported by them and jobs assigned to them), signatures (documents they signed), it_provisioning, compensation_claims, accommodation, vendor_contracts, employee_contracts. Then get_custom_request for one custom-process request's approval steps (who it is with). list_my_recent_actions is what the person has approved, rejected or otherwise actioned recently. The lists show what the person can see in FlowDesk - their own items, or more where their role sees more (e.g. HR, IT or an administrator); say which when it matters. If a process is switched off or they have no access, say so plainly. Use the counts the tools return (count, by_status) rather than counting rows yourself.
 
 Charts: when an answer compares or trends numbers (totals by department, status, month or type; counts over time; shares of a whole) or the person asks for a chart or graph, call show_chart once you have the numbers (the chat can only show a chart through show_chart - never say "here's the chart" without calling it) - bar for comparing categories, line for change over time, pie for parts of one whole (up to 8 slices). Only chart numbers a lookup returned, exactly as returned; never estimate or invent values. Still give a short written summary of what the chart shows.`;
+
+// ── Parts of the guide only some people get ─────────────────────────────
+// Finance, admin and Service Contracts know-how (and their lookups) reach
+// only people with that access in FlowDesk - everyone else's assistant
+// doesn't know those reports and queues exist (Nov 2026).
+const FINANCE_PAGES_GUIDE = `Finance (for those with access): Capture Inbox (Treasury captures approved advances), Payments, Deductions (salary deductions for paybacks), Refundable, View Clearances, and Finance > Reports (Clearance Summary, Refunds Due, Employee Paybacks, Fully Cleared Trips, Outstanding Clearances, Ageing, Audit & Reconciliation, Department & Division). Report columns can be chosen with the Columns button; Export CSV saves the columns shown. "VR Date" is when the advance was approved. "Amount To Be Expensed" is the advance amount when the balance is zero, otherwise the amount cleared.`;
+const FINANCE_STAFF_GUIDE = `Finance staff (Treasury, Financial Accounting, HR Operations, Finance): use finance_queue for their work queues (capture, payments, deductions, refundable, treasury, payback_review, salaries_ready) and run_report for reports. Lead with the totals per currency and the oldest items waiting, point to the FlowDesk page that does the work (Capture Inbox, Payments, Deductions, Refundable, Treasury, View Clearances, Finance > Reports), and offer a chart when comparing amounts. Never total amounts across different currencies.`;
+const ADMIN_GUIDE = `Administration (administrators only): user accounts are managed under User Management; an "active" user is an account that is switched on. The FlowDesk mobile app's usage is under Settings > Mobile App (Mobile Analytics). Website logins are not recorded, so "who used the website recently" can't be answered - say so.`;
+const SERVICE_CONTRACTS_GUIDE = `Service Contracts (telecom plans for individual customers and companies - Fibre, LTE, ADSL, Mobile Postpaid, Hybrid, Leased Lines, PABX) has its own tool, service_contracts, for counts, what's expiring in the next 30 days, and finding a specific contract by name/account/contract number - only for people with access.`;
+const NO_FINANCE_GUIDE = `This person has no access to FlowDesk's finance pages, finance queues or finance reports. Their own advances, clearances, paybacks and refunds are fine to discuss. If they ask about finance reports, finance queues or other people's money figures, say only that those are for Finance staff and they can ask Finance or their manager - don't name, list or describe the reports.`;
+
+export type AssistantAccess = { finance: boolean; reports: boolean; admin: boolean; serviceContracts: boolean };
+// Lookups that need one of those accesses; every other lookup is for everyone.
+const RESTRICTED_TOOLS: Record<string, keyof AssistantAccess> = {
+  finance_queue: "finance", run_report: "reports", get_user_and_app_stats: "admin", service_contracts: "serviceContracts"
+};
+const toolAllowed = (name: string, a: AssistantAccess) => !RESTRICTED_TOOLS[name] || a[RESTRICTED_TOOLS[name]];
+
+function accessGuide(a: AssistantAccess) {
+  const parts: string[] = [];
+  if (a.finance || a.reports) parts.push(FINANCE_PAGES_GUIDE);
+  if (a.finance) parts.push(FINANCE_STAFF_GUIDE);
+  if (!a.finance && !a.reports) parts.push(NO_FINANCE_GUIDE);
+  if (a.admin) parts.push(ADMIN_GUIDE);
+  if (a.serviceContracts) parts.push(SERVICE_CONTRACTS_GUIDE);
+  return parts.join("\n\n");
+}
+
+// Asked the way the FlowDesk screens ask it (the same access checks), kept
+// a few minutes per person. Anything that can't be checked counts as no access.
+const accessCache = new Map<string, { at: number; access: AssistantAccess }>();
+const ACCESS_CACHE_MS = 5 * 60_000;
+export async function assistantAccess(userId: string, role: string, token: string): Promise<AssistantAccess> {
+  const hit = accessCache.get(userId);
+  if (hit && Date.now() - hit.at < ACCESS_CACHE_MS) return hit.access;
+  let unsure = false;
+  const probe = async (path: string, ok: (d: any) => boolean) => {
+    try {
+      const r = await api(token, "GET", path);
+      if (r.status >= 500) unsure = true;
+      return r.status === 200 && ok(r.data);
+    } catch { unsure = true; return false; }
+  };
+  const feature = (key: string, roles: string[]) => hasFeatureAccess(userId, role, key, roles).catch(() => { unsure = true; return false; });
+  const allowed = (d: any) => d?.allowed === true;
+  const [payments, deductions, refundable, treasury, salaries, serviceContracts, allAdvances, clearanceStatus] = await Promise.all([
+    probe("/advances/payments/access", allowed),
+    probe("/deductions/access", (d) => d?.allowed === true || d?.viewClearances === true),
+    probe("/refundable/access", allowed),
+    probe("/treasury/access", allowed),
+    probe("/salaries/access", allowed),
+    probe("/service-contracts/access", allowed),
+    feature("report_advances", ["ADMIN"]),
+    feature("clearance_status_report", CLEARANCE_STATUS_REPORT_DEFAULT_ROLES)
+  ]);
+  const access: AssistantAccess = {
+    finance: payments || deductions || refundable || treasury || salaries,
+    reports: treasury || allAdvances || clearanceStatus,
+    admin: role === "ADMIN",
+    serviceContracts
+  };
+  if (!unsure) accessCache.set(userId, { at: Date.now(), access });
+  return access;
+}
 
 // ── Tools ─────────────────────────────────────────────────────────────────
 const NoInput = z.object({}).strict();
@@ -343,8 +403,19 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
     eager_input_streaming: true
   }
 ];
-// The prefix (tools + guide) is identical for everyone, so it caches.
-TOOLS[TOOLS.length - 1] = { ...TOOLS[TOOLS.length - 1], cache_control: { type: "ephemeral" } };
+// The tools + guide prefix is the same for everyone with the same access, so
+// it caches (at most 16 variants).
+const toolsCache = new Map<string, Anthropic.Beta.BetaTool[]>();
+function toolsFor(a: AssistantAccess): Anthropic.Beta.BetaTool[] {
+  const key = [a.finance, a.reports, a.admin, a.serviceContracts].map(Number).join("");
+  let tools = toolsCache.get(key);
+  if (!tools) {
+    tools = TOOLS.filter((t) => toolAllowed(t.name, a));
+    tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: { type: "ephemeral" } };
+    toolsCache.set(key, tools);
+  }
+  return tools;
+}
 
 const TOOL_LABEL: Record<string, string> = {
   list_my_advances: "Looking up your advances",
@@ -937,9 +1008,11 @@ async function serviceContractsTool(token: string, input: { query?: string; cont
   };
 }
 
-export async function runTool(name: string, rawInput: unknown, token: string, drafts: DraftNote[], onChart?: (c: Chart) => void): Promise<{ content: string; isError?: boolean }> {
+export async function runTool(name: string, rawInput: unknown, token: string, drafts: DraftNote[], onChart?: (c: Chart) => void, access?: AssistantAccess): Promise<{ content: string; isError?: boolean }> {
   const ok = (v: unknown) => ({ content: JSON.stringify(v) });
   const fail = (msg: string) => ({ content: JSON.stringify({ error: msg }), isError: true });
+  // Never offered to this person - refuse even if a model asks for it anyway.
+  if (access && !toolAllowed(name, access)) return fail("The person does not have access to this in FlowDesk.");
   switch (name) {
     case "show_chart": {
       const p = ChartInput.safeParse(rawInput);
@@ -1244,7 +1317,7 @@ function plainSchema(schema: any): any {
   for (const [k, v] of Object.entries(schema)) if (k !== "additionalProperties") out[k] = plainSchema(v);
   return out;
 }
-const OPENAI_TOOLS = TOOLS.map((t) => ({
+const OPENAI_TOOLS_ALL = TOOLS.map((t) => ({
   type: "function",
   function: {
     name: t.name,
@@ -1280,14 +1353,15 @@ function toOpenAiMessages(system: string, messages: Anthropic.Beta.BetaMessagePa
   return out;
 }
 
-async function openAiCompatibleTurn(target: AiModelTarget, system: string, messages: Anthropic.Beta.BetaMessageParam[], onText: (delta: string) => void, onAbort: (abort: () => void) => void): Promise<Turn> {
+async function openAiCompatibleTurn(target: AiModelTarget, system: string, messages: Anthropic.Beta.BetaMessageParam[], onText: (delta: string) => void, onAbort: (abort: () => void) => void, access: AssistantAccess): Promise<Turn> {
+  const tools = OPENAI_TOOLS_ALL.filter((t) => toolAllowed(t.function.name, access));
   const controller = new AbortController();
   onAbort(() => controller.abort());
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 120_000);
   try {
     const key = target.apiKey;
-    const body = JSON.stringify({ model: target.model, stream: true, messages: toOpenAiMessages(system, messages, target.service === "gemini"), tools: OPENAI_TOOLS });
+    const body = JSON.stringify({ model: target.model, stream: true, messages: toOpenAiMessages(system, messages, target.service === "gemini"), tools });
     // Free tiers often answer "busy" (429/503) for a moment - one quick retry
     // (none for a used-up daily quota) before the next model is tried.
     let r: globalThis.Response;
@@ -1534,8 +1608,10 @@ export async function streamChat(args: {
     const messages = await loadHistory(conversationId);
 
     // Who is asking, and today's date - after the cached prefix.
+    const access = await assistantAccess(userId, user.role, token);
     const system: Anthropic.Beta.BetaTextBlockParam[] = [
-      { type: "text", text: SYSTEM_GUIDE, cache_control: { type: "ephemeral" } },
+      { type: "text", text: SYSTEM_GUIDE },
+      { type: "text", text: accessGuide(access), cache_control: { type: "ephemeral" } },
       // Lesotho's date, not UTC's - UTC is still "yesterday" until 02:00 here.
       { type: "text", text: `Signed-in person: ${user.fullName || "a FlowDesk user"} (role ${user.role}). Today is ${new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Maseru" })}.` }
     ];
@@ -1569,7 +1645,7 @@ ${first
         const onText = (delta: string) => { streamed = true; send({ type: "text", delta }); };
         try {
           if (target.provider === "openai") {
-            return await openAiCompatibleTurn(target, system.map((b) => b.text).join("\n\n"), messages, onText, (abort) => { current = { abort }; });
+            return await openAiCompatibleTurn(target, system.map((b) => b.text).join("\n\n"), messages, onText, (abort) => { current = { abort }; }, access);
           }
           const stream = getClient(target.apiKey || "").beta.messages.stream({
             model: target.model,
@@ -1578,7 +1654,7 @@ ${first
             fallbacks: "default",
             output_config: { effort: "medium" },
             system,
-            tools: TOOLS,
+            tools: toolsFor(access),
             // Lookups made on Gemini carry its thought signatures - Claude
             // rejects the extra field.
             messages: messages.map((m) => (Array.isArray(m.content)
@@ -1634,7 +1710,7 @@ ${first
         send({ type: "tool", name: t.name, label: TOOL_LABEL[t.name] || "Working" });
         let r: { content: string; isError?: boolean };
         try {
-          r = await runTool(t.name, t.input, token, drafts, (chart) => { chartsShown++; send({ type: "chart", chart }); });
+          r = await runTool(t.name, t.input, token, drafts, (chart) => { chartsShown++; send({ type: "chart", chart }); }, access);
         } catch (err) {
           logger.warn("ai_assistant_tool_failed", { tool: t.name, error: String(err) });
           r = { content: JSON.stringify({ error: "That lookup failed - try again in a moment." }), isError: true };

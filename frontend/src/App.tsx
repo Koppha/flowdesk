@@ -457,6 +457,49 @@ async function optionalStartupData<T>(promise: Promise<T>, fallback: T, label: s
   }
 }
 
+// The on/off switches every screen reads (Maintenance, Overtime, Sign a
+// Document...). The last good answer is kept in this browser, so a failed
+// load shows the menu as it was instead of the defaults - in Nov 2026 a full
+// database made the load fail now and then and Maintenance (off by default)
+// vanished from the menu for that page load.
+type ModuleFlags = {
+  overtime_enabled?: boolean; standby_enabled?: boolean;
+  salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
+  salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
+  signature_enabled?: boolean;
+  maintenance_enabled?: boolean;
+  ai_assistant_enabled?: boolean;
+};
+const MODULE_FLAGS_STORAGE_KEY = "flowdesk.moduleFlags";
+const DEFAULT_MODULE_FLAGS: ModuleFlags = { overtime_enabled: true, standby_enabled: true, signature_enabled: true, maintenance_enabled: false };
+
+function storedModuleFlags(): ModuleFlags | null {
+  try {
+    const raw = localStorage.getItem(MODULE_FLAGS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Asks the server, once more after a short pause if the server failed (not
+// for a refused sign-in), and remembers a good answer.
+async function fetchModuleFlags(retries: number): Promise<ModuleFlags> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const flags = await api.moduleFlags();
+      if (!flags || typeof flags !== "object") throw new Error("Module flags: empty answer");
+      try { localStorage.setItem(MODULE_FLAGS_STORAGE_KEY, JSON.stringify(flags)); } catch { /* storage off - fine */ }
+      return flags as ModuleFlags;
+    } catch (error) {
+      const status = Number((error as any)?.status) || 0;
+      if (attempt >= retries || (status >= 400 && status < 500)) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+  }
+}
+
 function isAuthOrTimeoutError(error: unknown) {
   const message = String((error as any)?.message || "").toLowerCase();
   return (
@@ -569,18 +612,20 @@ export default function App() {
   const hotelFileInputRef = useRef<HTMLInputElement>(null);
   const [hasActiveCustomRequestTypes, setHasActiveCustomRequestTypes] = useState(false);
   const [hasActiveBrsTypes, setHasActiveBrsTypes] = useState(false);
-  const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(true);
-  const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(true);
-  const [signatureModuleEnabled, setSignatureModuleEnabled] = useState(true);
-  const [maintenanceModuleEnabled, setMaintenanceModuleEnabled] = useState(false);
+  // Start from the switches this browser last saw (see storedModuleFlags).
+  const [initialModuleFlags] = useState<ModuleFlags>(() => storedModuleFlags() ?? DEFAULT_MODULE_FLAGS);
+  const [overtimeModuleEnabled, setOvertimeModuleEnabled] = useState(initialModuleFlags.overtime_enabled !== false);
+  const [standbyModuleEnabled, setStandbyModuleEnabled] = useState(initialModuleFlags.standby_enabled !== false);
+  const [signatureModuleEnabled, setSignatureModuleEnabled] = useState(initialModuleFlags.signature_enabled !== false);
+  const [maintenanceModuleEnabled, setMaintenanceModuleEnabled] = useState(initialModuleFlags.maintenance_enabled === true);
   // AI Assistant on/off (Process > Built-in Processes, same as Settings > AI Assistant).
-  const [aiAssistantModuleEnabled, setAiAssistantModuleEnabled] = useState(true);
+  const [aiAssistantModuleEnabled, setAiAssistantModuleEnabled] = useState(initialModuleFlags.ai_assistant_enabled !== false);
   // Admin-arranged sidebar (Settings > Menu); null = the default menu.
   const [savedMenuLayout, setSavedMenuLayout] = useState<MenuLayout | null>(null);
-  const [salaryAdvanceEnabled, setSalaryAdvanceEnabled] = useState(true);
-  const [loanAdvanceEnabled, setLoanAdvanceEnabled] = useState(true);
-  const [salaryAdvanceMaxMonths, setSalaryAdvanceMaxMonths] = useState(6);
-  const [loanAdvanceMaxMonths, setLoanAdvanceMaxMonths] = useState(6);
+  const [salaryAdvanceEnabled, setSalaryAdvanceEnabled] = useState(initialModuleFlags.salary_advance_enabled !== false);
+  const [loanAdvanceEnabled, setLoanAdvanceEnabled] = useState(initialModuleFlags.loan_advance_enabled !== false);
+  const [salaryAdvanceMaxMonths, setSalaryAdvanceMaxMonths] = useState(Number(initialModuleFlags.salary_advance_max_payback_months) || 6);
+  const [loanAdvanceMaxMonths, setLoanAdvanceMaxMonths] = useState(Number(initialModuleFlags.loan_advance_max_payback_months) || 6);
   const [hasDeductionsAccess, setHasDeductionsAccess] = useState(false);
   // View Clearances (and its Query button) has a wider audience than
   // Deductions - see canViewClearances in deductions.routes.ts.
@@ -793,18 +838,25 @@ export default function App() {
   const toggleGroup = (key: string, inGroup: boolean) =>
     setGroupOverride((prev) => ({ ...prev, [key]: !(prev[key] ?? inGroup) }));
   useEffect(() => { setGroupOverride({}); }, [page]);
-  // Salary/loan settings (on, payback limit) are read at startup; re-read them
-  // whenever a page opens so a change on the Processes page applies without
-  // reloading the browser (it used to keep offering the old 3 months).
+  // The switches are read at startup; re-read them whenever a page opens so
+  // a change on the Processes page applies without reloading the browser (it
+  // used to keep offering the old 3 months), and a menu item a failed load
+  // hid comes back on the next click.
+  const applyModuleFlags = useCallback((f: ModuleFlags) => {
+    setOvertimeModuleEnabled(f.overtime_enabled !== false);
+    setStandbyModuleEnabled(f.standby_enabled !== false);
+    setSignatureModuleEnabled(f.signature_enabled !== false);
+    setMaintenanceModuleEnabled(f.maintenance_enabled === true);
+    setAiAssistantModuleEnabled(f.ai_assistant_enabled !== false);
+    setSalaryAdvanceEnabled(f.salary_advance_enabled !== false);
+    setLoanAdvanceEnabled(f.loan_advance_enabled !== false);
+    setSalaryAdvanceMaxMonths(Number(f.salary_advance_max_payback_months) || 6);
+    setLoanAdvanceMaxMonths(Number(f.loan_advance_max_payback_months) || 6);
+  }, []);
   useEffect(() => {
-    api.moduleFlags().then((f: any) => {
-      if (!f) return;
-      setSalaryAdvanceEnabled(f.salary_advance_enabled !== false);
-      setLoanAdvanceEnabled(f.loan_advance_enabled !== false);
-      setSalaryAdvanceMaxMonths(Number(f.salary_advance_max_payback_months) || 6);
-      setLoanAdvanceMaxMonths(Number(f.loan_advance_max_payback_months) || 6);
-    }).catch(() => { /* keep what's loaded */ });
-  }, [page]);
+    if (!getToken()) return;
+    fetchModuleFlags(0).then(applyModuleFlags).catch(() => { /* keep what's loaded */ });
+  }, [page, applyModuleFlags]);
 
   // The app is a single-page client that switches "pages" via state only, with
   // no URL changes. Without pushing history entries, the browser back button
@@ -1728,14 +1780,8 @@ export default function App() {
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.refundableAccess(), { allowed: false }, "Refundable access"),
       optionalStartupData<{ allowed?: boolean; pendingCount?: number }>(api.treasuryAccess(), { allowed: false }, "Treasury access"),
       optionalStartupData<{ allowed?: boolean; awaitingProvisioning?: number; inProgress?: number }>(api.itProvisioningAccess(), { allowed: false }, "IT Provisioning access"),
-      optionalStartupData<{
-        overtime_enabled?: boolean; standby_enabled?: boolean;
-        salary_advance_enabled?: boolean; loan_advance_enabled?: boolean;
-        salary_advance_max_payback_months?: number; loan_advance_max_payback_months?: number;
-        signature_enabled?: boolean;
-        maintenance_enabled?: boolean;
-        ai_assistant_enabled?: boolean;
-      }>(api.moduleFlags(), { overtime_enabled: true, standby_enabled: true, signature_enabled: true, maintenance_enabled: false }, "Module flags"),
+      // Fallback: what this browser last saw, not "Maintenance off".
+      optionalStartupData<ModuleFlags>(fetchModuleFlags(1), storedModuleFlags() ?? DEFAULT_MODULE_FLAGS, "Module flags"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.vendorContractsAccess(), { allowed: false }, "Vendor Contracts access"),
       optionalStartupData<{ allowed?: boolean; canManage?: boolean }>(api.serviceContractsAccess(), { allowed: false }, "Service Contracts access"),
       optionalStartupData<{ is_finance?: boolean }>(api.overtimeDashboard(), { is_finance: false }, "Overtime dashboard"),
@@ -1808,15 +1854,7 @@ export default function App() {
     // Same reasoning as BRS/airports above - Salaries is its own optional
     // module, so a failure here should just leave the nav item hidden.
     api.salariesAccess().then((r: any) => { setHasSalariesAccess(Boolean(r?.allowed)); setSalariesCount(r?.pendingCount || 0); }).catch(() => setHasSalariesAccess(false));
-    setOvertimeModuleEnabled(moduleFlagsResp?.overtime_enabled !== false);
-    setStandbyModuleEnabled(moduleFlagsResp?.standby_enabled !== false);
-    setSignatureModuleEnabled(moduleFlagsResp?.signature_enabled !== false);
-    setMaintenanceModuleEnabled(moduleFlagsResp?.maintenance_enabled === true);
-    setAiAssistantModuleEnabled(moduleFlagsResp?.ai_assistant_enabled !== false);
-    setSalaryAdvanceEnabled(moduleFlagsResp?.salary_advance_enabled !== false);
-    setLoanAdvanceEnabled(moduleFlagsResp?.loan_advance_enabled !== false);
-    setSalaryAdvanceMaxMonths(Number(moduleFlagsResp?.salary_advance_max_payback_months) || 6);
-    setLoanAdvanceMaxMonths(Number(moduleFlagsResp?.loan_advance_max_payback_months) || 6);
+    applyModuleFlags(moduleFlagsResp ?? DEFAULT_MODULE_FLAGS);
     setHasDeductionsAccess(Boolean(deductionsAccessResp?.allowed));
     setHasViewClearancesAccess(Boolean(deductionsAccessResp?.viewClearances ?? deductionsAccessResp?.allowed));
     setDeductionsCount(deductionsAccessResp?.pendingCount || 0);
