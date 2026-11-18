@@ -16,6 +16,10 @@ export type Route =
   | { name: "mlist" }
   | { name: "mnew" }
   | { name: "mreq"; id: string }
+  // Custom Processes (Change Request, Computer Request, every Request Types process)
+  | { name: "clist" }
+  | { name: "cnew"; typeId?: string }
+  | { name: "creq"; id: string }
   // Account
   | { name: "phone" }
   | { name: "support" }
@@ -29,6 +33,11 @@ export function parse(hash: string): Route {
     if (parts[1] === "inbox") return { name: "supportInbox" };
     if (parts[1] === "c" && parts[2]) return { name: "supportChat", id: parts[2] };
     return { name: "support" };
+  }
+  if (parts[0] === "c") {
+    if (parts[1] === "new") return parts[2] ? { name: "cnew", typeId: parts[2] } : { name: "cnew" };
+    if (parts[1] === "req" && parts[2]) return { name: "creq", id: parts[2] };
+    return { name: "clist" };
   }
   if (parts[0] === "m") {
     if (parts[1] === "new") return { name: "mnew" };
@@ -50,6 +59,9 @@ export function href(r: Route) {
     case "mlist": return "#/m";
     case "mnew": return "#/m/new";
     case "mreq": return `#/m/req/${r.id}`;
+    case "clist": return "#/c";
+    case "cnew": return r.typeId ? `#/c/new/${r.typeId}` : "#/c/new";
+    case "creq": return `#/c/req/${r.id}`;
     case "supportInbox": return "#/support/inbox";
     case "supportChat": return `#/support/c/${r.id}`;
     default: return `#/${r.name}`;
@@ -58,6 +70,7 @@ export function href(r: Route) {
 
 export function sectionOf(r: Route): Section {
   if (r.name === "phone" || r.name === "support" || r.name === "supportInbox" || r.name === "supportChat") return "account";
+  if (r.name === "clist" || r.name === "cnew" || r.name === "creq") return "custom";
   return r.name === "mlist" || r.name === "mnew" || r.name === "mreq" ? "maintenance" : "sign";
 }
 

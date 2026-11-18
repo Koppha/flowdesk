@@ -17,6 +17,7 @@ import { mobileSignPageRouter } from "./mobile-sign-page.routes.js";
 import { mobileUpdatesRouter } from "./mobile-updates.routes.js";
 import { getPhoneCampaign, runPhoneCampaignNow, setPhoneCampaign, startPhoneCampaign } from "../../lib/phoneCampaign.js";
 import { supportRouter } from "../support/support.routes.js";
+import { notifyMobileRelease } from "../../lib/mobileReleasePush.js";
 
 export const mobileAppUploadDir = path.join(process.env.UPLOAD_DIR || "uploads", "mobile-app");
 
@@ -235,6 +236,7 @@ mobileAppRouter.post(
       // the usual file limit), or the other server says "No build available".
       await persistFile(req.file.path, { maxBytes: APP_BUILD_MAX_DB_BYTES, required: true });
 
+      const previous = await getLatestMobileAppBuild(parsed.data.platform);
       const build = await saveMobileAppBuild({
         platform: parsed.data.platform,
         version: parsed.data.version,
@@ -244,6 +246,8 @@ mobileAppRouter.post(
         uploadedById: req.user!.userId
       });
       await pruneStoredAppBuilds();
+      // A new version (not a re-upload of the same one): tell the phones.
+      if (previous?.version !== build.version) void notifyMobileRelease(build.version);
 
       return res.status(201).json({
         build: {

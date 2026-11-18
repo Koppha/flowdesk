@@ -1611,6 +1611,14 @@ export async function notifyCustomRequestStep(args: {
   stepOrder?: number;
 }) {
   try {
+    // FlowDesk Mobile: tapping it opens the request (app /custom-processes).
+    if (args.approverId) {
+      void sendPushToUser(args.approverId, {
+        title: `${args.requestTypeName} awaiting your approval`,
+        body: `${args.requesterName || "An employee"} · ${args.stepLabel}`,
+        data: { docType: "CUSTOM_REQUEST", docId: args.submissionId }
+      });
+    }
     if (!args.approverEmail) return;
 
     let emailActionLine = "";
@@ -1752,6 +1760,15 @@ export async function notifyCustomRequestAssigneeAssigned(args: {
       subject: `[Action Required] ${args.requestTypeName} — ${args.fieldLabel}`,
       text: body
     });
+    // FlowDesk Mobile: they confirm from the app too.
+    const assignee = (await query<{ id: string }>(`SELECT id FROM users WHERE lower(email) = lower($1) AND is_active LIMIT 1`, [args.assigneeEmail]))[0];
+    if (assignee) {
+      void sendPushToUser(assignee.id, {
+        title: `${args.requestTypeName}: you're an assignee`,
+        body: `${args.requesterName || "An employee"} listed you as "${args.fieldLabel}". Confirm when you're ready.`,
+        data: { docType: "CUSTOM_REQUEST", docId: args.submissionId }
+      });
+    }
   } catch (error) {
     logger.warn("custom_request_assignee_assigned_notification_failed", {
       submission_id: args.submissionId, error: serializeError(error)

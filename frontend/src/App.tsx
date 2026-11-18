@@ -38,6 +38,7 @@ import PdfDesigner from "./PdfDesigner";
 import MobileAppConfig from "./MobileAppConfig";
 import AiAssistantSettings from "./AiAssistantSettings";
 import GetTheApp from "./GetTheApp";
+import MobileReleaseTip from "./components/MobileReleaseTip";
 import DataCleanup from "./DataCleanup";
 import RequestTypes from "./RequestTypes";
 import SidebarMenu, { type MenuItemDef } from "./menu/SidebarMenu";
@@ -9937,6 +9938,7 @@ export default function App() {
           {historyOpen && renderAdvanceTrackingModal()}
           {clearanceTrackOpen && renderClearanceTrackingModal()}
           <PhonePrompt profile={profile} onSaved={(phone) => { setProfile((p: any) => (p ? { ...p, phone } : p)); setPhoneDraft(phone); }} />
+          <MobileReleaseTip onOpen={() => setPage("GET_THE_APP")} onGetTheAppPage={page === "GET_THE_APP"} />
           {canAccessFeature("ai_assistant") && aiAssistantModuleEnabled && (
             <AiAssistant open={aiAssistantOpen} onClose={() => setAiAssistantOpen(false)} onDraftSaved={() => void reloadMyRequests()} onOpenDraft={(kind, id) => void openAssistantDraft(kind, id)} />
           )}

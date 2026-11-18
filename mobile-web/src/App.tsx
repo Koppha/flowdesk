@@ -11,6 +11,9 @@ import SignatureScreen from "./screens/SignatureScreen";
 import MaintenanceList from "./maintenance/ListScreen";
 import MaintenanceNew from "./maintenance/NewScreen";
 import MaintenanceRequest from "./maintenance/RequestScreen";
+import CustomList from "./custom/ListScreen";
+import CustomNew from "./custom/NewScreen";
+import CustomRequest from "./custom/RequestScreen";
 import PhoneScreen from "./screens/PhoneScreen";
 import SupportScreen, { SupportChat, SupportInbox } from "./screens/SupportScreen";
 
@@ -28,6 +31,8 @@ const TABS: Record<Section, Tab[]> = {
   // Like My Advances / My Clearances: one list with "+ New" at the top
   // right, no tab bar.
   maintenance: [],
+  // Custom Processes: one list with To do / My requests / ... chips and "+ New".
+  custom: [],
   account: []
 };
 
@@ -36,6 +41,8 @@ const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
   signed: { to: { name: "list" }, label: "Documents" },
   mreq: { to: { name: "mlist" }, label: "Requests" },
   mnew: { to: { name: "mlist" }, label: "Requests" },
+  creq: { to: { name: "clist" }, label: "Requests" },
+  cnew: { to: { name: "clist" }, label: "Requests" },
   supportInbox: { to: { name: "support" }, label: "Help & support" },
   supportChat: { to: { name: "supportInbox" }, label: "Support inbox" }
 };
@@ -46,7 +53,8 @@ const START_ROUTES: Record<string, Route> = { phone: { name: "phone" }, signatur
 
 // Header titles for the app (capability "title"); others keep the app's own.
 const TITLES: Partial<Record<Route["name"], string>> = {
-  phone: "Phone number", signature: "Saved signature", support: "Help & support", supportInbox: "Support inbox", supportChat: "Support chat"
+  phone: "Phone number", signature: "Saved signature", support: "Help & support", supportInbox: "Support inbox", supportChat: "Support chat",
+  clist: "Custom Processes", cnew: "New request", creq: "Request"
 };
 
 export default function App() {
@@ -78,6 +86,10 @@ export default function App() {
         const start = START_ROUTES[initialStart() || ""];
         if (start) {
           location.replace(href(start));
+        } else if (initialSection() === "custom") {
+          location.replace(href({ name: "clist" }));
+          const reqId = initialRequestId();
+          if (reqId) location.hash = href({ name: "creq", id: reqId });
         } else if (initialSection() === "maintenance") {
           location.replace(href({ name: "mlist" }));
           const reqId = initialRequestId();
@@ -119,6 +131,9 @@ export default function App() {
         {route.name === "mlist" && <MaintenanceList />}
         {route.name === "mnew" && <MaintenanceNew />}
         {route.name === "mreq" && <MaintenanceRequest key={route.id} id={route.id} />}
+        {route.name === "clist" && <CustomList />}
+        {route.name === "cnew" && <CustomNew key={route.typeId || "pick"} typeId={route.typeId} />}
+        {route.name === "creq" && <CustomRequest key={route.id} id={route.id} />}
         {route.name === "phone" && <PhoneScreen />}
         {route.name === "support" && <SupportScreen />}
         {route.name === "supportInbox" && <SupportInbox />}
