@@ -950,7 +950,8 @@ async function financeQueue(token: string, queue: (typeof FINANCE_QUEUES)[number
       const r = await get("/inbox");
       if (r.status !== 200) return failed(r);
       const all = rowsOf(r.data?.items ?? r.data).filter((i: any) => i.doc_type === "ACCOMMODATION" || (i.doc_type === "ADVANCE" && (isCaptureActionType(i.current_step_action_type) || i.capture_done === true)));
-      const rows = pick(all, (i) => i.current_step_actionable_by_me !== true);
+      // Captured = done, even while it still sits on its capture step.
+      const rows = pick(all, (i) => i.current_step_actionable_by_me !== true || i.capture_done === true);
       return queueResult(queue, status, rows, null, "created_at", (i: any) => ({
         id: i.id, kind: i.doc_type, requester: i.requester_name, type: i.request_type_name || i.advance_type || i.type || null,
         amount: money(i.approved_total ?? i.requested_total ?? i.amount), currency: i.currency || null,

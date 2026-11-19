@@ -593,8 +593,17 @@ export function isCaptureItem(item: any) {
 // deliberately keeps already-captured items visible in the Capture Inbox
 // itself so they can still be found/downloaded, but that would otherwise
 // leave the badge stuck showing them as pending forever).
+// Already-captured advances stay on their (last) capture step, and an admin
+// may act on any step - so "actionable" alone counted every captured and
+// even paid advance as still waiting (PROD Nov 2026: 312 shown, 6 real).
+// Still to capture: not captured yet and not rejected or cancelled (a
+// rejected accommodation booking was showing under Pending).
+export function isCaptureOutstanding(item: any) {
+  return item.capture_done !== true && !["REJECTED", "CANCELLED"].includes(String(item.status || "").toUpperCase());
+}
+
 export function isCapturePendingItem(item: any) {
-  return isCaptureItem(item) && item.current_step_actionable_by_me === true;
+  return isCaptureItem(item) && item.current_step_actionable_by_me === true && isCaptureOutstanding(item);
 }
 
 // Waiting on this user right now: their approval step, or a Change Request
@@ -722,8 +731,8 @@ export default function Inbox(props: {
     if (mode !== "capture") return { pending: 0, captured: 0 };
     const base = divisionFilter === "ALL" ? items : items.filter((it: any) => it.division === divisionFilter);
     return {
-      pending: base.filter((it: any) => it.capture_done !== true).length,
-      captured: base.filter((it: any) => it.capture_done === true).length
+      pending: base.filter((it: any) => isCaptureOutstanding(it)).length,
+      captured: base.filter((it: any) => !isCaptureOutstanding(it)).length
     };
   }, [items, mode, divisionFilter]);
 
@@ -750,7 +759,7 @@ export default function Inbox(props: {
     if (delegationScope === "MINE") result = result.filter((it: any) => !it.is_delegated);
     else if (delegationScope === "DELEGATED") result = result.filter((it: any) => it.is_delegated);
     if (mode === "capture" && divisionFilter !== "ALL") result = result.filter((it: any) => it.division === divisionFilter);
-    if (mode === "capture") result = result.filter((it: any) => (captureStatusFilter === "CAPTURED") === (it.capture_done === true));
+    if (mode === "capture") result = result.filter((it: any) => (captureStatusFilter === "CAPTURED") === !isCaptureOutstanding(it));
     // Advances only ever land in `items` here once they've reached their own
     // DEPT_CAPTURE step (loadCaptureHistoryItems gates on that server-side),
     // but claims have no such dedicated capture-stage loader - the ADMIN
@@ -808,8 +817,10 @@ export default function Inbox(props: {
   // mode - otherwise already-resolved items keep inflating every count on
   // this page even after they're done.
   const pendingItems = useMemo(
-    () => items.filter((it) => it.current_step_actionable_by_me === true),
-    [items]
+    // Capture: an item already captured isn't waiting any more, even while
+    // it still sits on its capture step (see isCapturePendingItem).
+    () => items.filter((it) => it.current_step_actionable_by_me === true && !(mode === "capture" && !isCaptureOutstanding(it))),
+    [items, mode]
   );
 
   const metrics = useMemo(
@@ -943,7 +954,7 @@ export default function Inbox(props: {
                   onChange={setCaptureStatusFilter}
                   tabs={[
                     { key: "PENDING", label: "Pending", count: captureStatusCounts.pending, icon: Hourglass },
-                    { key: "CAPTURED", label: "Captured", count: captureStatusCounts.captured, icon: CheckCircle2 }
+                    { key: "CAPTURED", label: "Done", count: captureStatusCounts.captured, icon: CheckCircle2 }
                   ]}
                 />
               )}
