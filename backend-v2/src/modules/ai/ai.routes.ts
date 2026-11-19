@@ -6,6 +6,7 @@ import { badRequest } from "../../lib/errors.js";
 import { query } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { conversationForDisplay, streamChat, usedToday } from "./assistant.js";
+import { aiPerformance, rateTurn, recordTurn } from "./ai-metrics.js";
 import {
   AI_SERVICES, AiModelsSchema, AiServiceSchema, AiSettingsSchema, addAiKey, aiConfigured, listAiModels, loadAiConfig, modelChoices,
   publicAiConfig, removeAiKey, resolveTarget, saveAiSettings, setUserModelPick, testAiModel, userModelPick
@@ -301,13 +302,36 @@ aiRouter.delete("/assistant/conversations/:id", requireAssistant, async (req: Au
   } catch (err) { return next(err); }
 });
 
+// Thumbs up / down on one of the person's own answers (the "turn" id the
+// chat stream sends at the end), with an optional note when it's down.
+aiRouter.post("/assistant/feedback", requireAssistant, async (req: AuthedRequest, res, next) => {
+  try {
+    const p = z.object({ turn_id: z.coerce.number().int().positive(), rating: z.union([z.literal(1), z.literal(-1)]), comment: z.string().trim().max(500).nullish() }).safeParse(req.body);
+    if (!p.success) throw badRequest("Invalid feedback");
+    const ok = await rateTurn(req.user!.userId, p.data.turn_id, p.data.rating, p.data.comment || null);
+    return res.json({ ok });
+  } catch (err) { return next(err); }
+});
+
+// Settings > AI Assistant > Performance (administrators).
+aiRouter.get("/assistant/performance", requireRole(["ADMIN"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const days = Math.max(1, Math.min(365, Number(req.query.days) || 30));
+    return res.json(await aiPerformance(days));
+  } catch (err) { return next(err); }
+});
+
 aiRouter.post("/assistant/chat", requireAssistant, async (req: AuthedRequest, res, next) => {
   try {
     const parsed = z.object({ message: z.string().trim().min(1).max(4000), conversation_id: z.string().uuid().nullish() }).safeParse(req.body);
     if (!parsed.success) throw badRequest("Type a question first");
     const cfg = await loadAiConfig();
-    if (!aiConfigured(cfg)) return res.status(503).json({ error: cfg.settings.enabled ? "The AI assistant hasn't been set up yet." : "The AI assistant is switched off." });
+    if (!aiConfigured(cfg)) {
+      void recordTurn({ userId: req.user!.userId, outcome: "not_set_up" });
+      return res.status(503).json({ error: cfg.settings.enabled ? "The AI assistant hasn't been set up yet." : "The AI assistant is switched off." });
+    }
     if ((await usedToday(req.user!.userId)) >= cfg.settings.daily_limit) {
+      void recordTurn({ userId: req.user!.userId, outcome: "limit_reached" });
       return res.status(429).json({ error: `You've reached today's limit of ${cfg.settings.daily_limit} questions - it resets at midnight.` });
     }
     await streamChat({

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlarmClock, ArrowUp, CircleHelp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X, Wallet, Users, Wifi, Clock3 } from "lucide-react";
+import { AlarmClock, ArrowUp, CircleHelp, ThumbsDown, ThumbsUp, FileText, History, Inbox, Loader2, MapPin, Smartphone, Sparkles, SquarePen, Trash2, X, Wallet, Users, Wifi, Clock3 } from "lucide-react";
 import { API, getToken, getUserFromToken } from "../api";
 import AssistantChart, { type AssistantChartData } from "./AssistantChart";
 
@@ -9,7 +9,37 @@ import AssistantChart, { type AssistantChartData } from "./AssistantChart";
 // submit) - an "Open draft" button appears when it does. Styles: .fda-* in
 // styles.css.
 
-type Msg = { role: "user" | "assistant"; text: string; notes?: string[]; drafts?: Array<{ kind: string; id: string; label: string }>; charts?: AssistantChartData[]; error?: boolean };
+// "Was this helpful?" under an answer. A thumbs down can carry a short note.
+function AnswerRating({ msg, onRate, onCloseNote }: { msg: Msg; onRate: (rating: 1 | -1, note?: string) => void; onCloseNote: () => void }) {
+  const [note, setNote] = useState("");
+  const btn = (on: boolean): React.CSSProperties => ({
+    border: "1px solid var(--border)", borderRadius: 8, background: on ? "var(--primary, #2563eb)" : "transparent", color: on ? "#fff" : "var(--muted)",
+    padding: "3px 7px", cursor: msg.rating ? "default" : "pointer", display: "inline-flex", alignItems: "center"
+  });
+  return (
+    <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {msg.rating ? <span>{msg.rating === 1 ? "Thanks for the feedback." : msg.noteSent ? "Thanks - that helps us improve it." : "Thanks for the feedback."}</span> : <span>Was this helpful?</span>}
+        <button type="button" style={btn(msg.rating === 1)} disabled={!!msg.rating} aria-label="Helpful" title="Helpful" onClick={() => onRate(1)}><ThumbsUp size={13} /></button>
+        <button type="button" style={btn(msg.rating === -1)} disabled={!!msg.rating} aria-label="Not helpful" title="Not helpful" onClick={() => onRate(-1)}><ThumbsDown size={13} /></button>
+      </div>
+      {msg.noteOpen && (
+        <form style={{ display: "flex", gap: 6, marginTop: 6 }} onSubmit={(e) => { e.preventDefault(); if (note.trim()) onRate(-1, note.trim()); }}>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="What was wrong? (optional)" aria-label="What was wrong"
+            style={{ flex: 1, font: "inherit", fontSize: 12, padding: "5px 8px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", color: "var(--text)" }} />
+          <button type="submit" className="ep-btn" style={{ fontSize: 12, padding: "4px 10px" }} disabled={!note.trim()}>Send note</button>
+          <button type="button" className="ep-btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} onClick={onCloseNote}>Skip</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+type Msg = {
+  role: "user" | "assistant"; text: string; notes?: string[]; drafts?: Array<{ kind: string; id: string; label: string }>; charts?: AssistantChartData[]; error?: boolean;
+  // Thumbs up / down (Settings > AI Assistant > Performance): the answer's id, the rating given, and an optional note on a thumbs down.
+  turnId?: number; rating?: 1 | -1; noteOpen?: boolean; noteSent?: boolean;
+};
 type Conv = { id: string; title: string | null; updated_at: string };
 type DueClearance = { advance_id: string; reference: string; type: string; amount: number; currency: string; due_text: string; due_on_text: string; overdue: boolean; days_left: number; draft_clearance_id: string | null };
 type Suggestion = {
@@ -241,6 +271,19 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
     if (conversationId === id) newChat();
   }
 
+  function patchAt(index: number, fn: (m: Msg) => Msg) {
+    setMessages((all) => all.map((m, i) => (i === index ? fn(m) : m)));
+  }
+  async function rate(index: number, turnId: number, rating: 1 | -1, comment?: string) {
+    patchAt(index, (m) => ({ ...m, rating, noteOpen: rating === -1 && !comment, noteSent: !!comment }));
+    const token = getToken();
+    await fetch(`${API}/ai/assistant/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ turn_id: turnId, rating, ...(comment ? { comment } : {}) })
+    }).catch(() => { /* a lost rating isn't worth bothering the person about */ });
+  }
+
   async function ask(text: string) {
     const question = text.trim();
     if (!question || busy) return;
@@ -286,6 +329,7 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
             onDraftSaved();
           }
           else if (ev.type === "error") patchLast((m) => ({ ...m, text: (m.text ? m.text + "\n\n" : "") + ev.message, error: true }));
+          else if (ev.type === "turn") patchLast((m) => ({ ...m, turnId: ev.id }));
         }
       }
       setStatus((s) => (s ? { ...s, used_today: s.used_today + 1 } : s));
@@ -450,6 +494,9 @@ export default function AiAssistant({ open, onClose, onDraftSaved, onOpenDraft }
                   Open {d.label} →
                 </button>
               ))}
+              {m.turnId && !(busy && i === messages.length - 1) && (
+                <AnswerRating msg={m} onRate={(r, note) => void rate(i, m.turnId!, r, note)} onCloseNote={() => patchAt(i, (x) => ({ ...x, noteOpen: false }))} />
+              )}
             </div>
           )
         ))}

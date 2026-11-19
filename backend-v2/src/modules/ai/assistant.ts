@@ -28,6 +28,7 @@ import { formatRequestNumber } from "../../lib/pdf/pdfHelpers.js";
 import { loadAiConfig, targetsFor, userModelPick, type AiModelTarget } from "./ai-settings.js";
 import { clearancesDue, remindersForAssistant } from "./clearance-reminders.js";
 import { isCaptureActionType } from "../inbox/inbox.routes.js";
+import { ensureAiMetricsSchema, recordTurn, type TurnOutcome } from "./ai-metrics.js";
 import { hasFeatureAccess } from "../../lib/auth.js";
 import { CLEARANCE_STATUS_REPORT_DEFAULT_ROLES } from "../advances/advances.routes.js";
 
@@ -67,6 +68,7 @@ export async function ensureAssistantSchema() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation_id, id)`);
+  await ensureAiMetricsSchema();
 }
 
 // ── The guide and the rules (stable; cached) ──────────────────────────────
@@ -1553,11 +1555,12 @@ async function loadHistory(conversationId: string): Promise<Anthropic.Beta.BetaM
   return rows.map((r) => ({ role: r.role, content: r.content }));
 }
 async function store(conversationId: string, role: "user" | "assistant", kind: string, content: unknown, usage?: Anthropic.Beta.BetaUsage | null) {
-  await query(
-    `INSERT INTO ai_messages (conversation_id, role, kind, content, input_tokens, output_tokens, cache_read_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+  const [row] = await query<{ id: number }>(
+    `INSERT INTO ai_messages (conversation_id, role, kind, content, input_tokens, output_tokens, cache_read_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
     [conversationId, role, kind, JSON.stringify(content), usage?.input_tokens ?? null, usage?.output_tokens ?? null, usage?.cache_read_input_tokens ?? null]
   );
   await query(`UPDATE ai_conversations SET updated_at = now() WHERE id = $1`, [conversationId]);
+  return row?.id ?? null;
 }
 
 // ── Chart safety net ──────────────────────────────────────────────────────
@@ -1657,6 +1660,14 @@ export async function streamChat(args: {
   let aborted = false;
   let current: { abort: () => void } | null = null;
   args.onClose(() => { aborted = true; current?.abort(); });
+  // Performance tracking (ai-metrics.ts): one row per question.
+  const startedAt = Date.now();
+  const metric = {
+    conversationId: null as string | null, userMessageId: null as number | null,
+    service: null as string | null, model: null as string | null, fallbacks: 0, firstTextMs: null as number | null,
+    tools: [] as string[], toolErrors: 0, inputTokens: null as number | null, outputTokens: null as number | null,
+    answerChars: 0, outcome: "answered" as TurnOutcome, errorKind: null as string | null
+  };
 
   try {
     // Conversation (new, or the person's own)
@@ -1671,11 +1682,13 @@ export async function streamChat(args: {
       ))[0].id;
     }
     send({ type: "conversation", id: conversationId });
+    metric.conversationId = conversationId;
 
     const turns = Number((await query<{ n: number }>(
       `SELECT count(*)::int AS n FROM ai_messages WHERE conversation_id = $1 AND role = 'user' AND kind = 'message'`, [conversationId]
     ))[0]?.n ?? 0);
     if (turns >= MAX_TURNS_PER_CONVERSATION) {
+      metric.outcome = "conversation_full";
       send({ type: "error", message: "This conversation is long - please start a new one." });
       return;
     }
@@ -1696,7 +1709,7 @@ export async function streamChat(args: {
     }
 
     const userContent: Anthropic.Beta.BetaContentBlockParam[] = [{ type: "text", text: args.message }];
-    await store(conversationId, "user", "message", userContent);
+    metric.userMessageId = await store(conversationId, "user", "message", userContent);
     const messages = await loadHistory(conversationId);
 
     // Who is asking, and today's date - after the cached prefix.
@@ -1734,7 +1747,14 @@ ${first
       for (;;) {
         const target = targets[model.index];
         let streamed = false;
-        const onText = (delta: string) => { streamed = true; send({ type: "text", delta }); };
+        const onText = (delta: string) => {
+          streamed = true;
+          if (metric.firstTextMs == null) metric.firstTextMs = Date.now() - startedAt;
+          metric.answerChars += delta.length;
+          send({ type: "text", delta });
+        };
+        metric.service = target.service;
+        metric.model = target.model;
         try {
           if (target.provider === "openai") {
             return await openAiCompatibleTurn(target, system.map((b) => b.text).join("\n\n"), messages, onText, (abort) => { current = { abort }; }, access);
@@ -1765,6 +1785,7 @@ ${first
             status: (err as { status?: number }).status ?? null
           });
           model.index++;
+          metric.fallbacks++;
         }
       }
     };
@@ -1773,6 +1794,10 @@ ${first
       try {
         message = await callModel();
         jsonRetries = 0;
+        if (message.usage) {
+          metric.inputTokens = (metric.inputTokens ?? 0) + (message.usage.input_tokens ?? 0);
+          metric.outputTokens = (metric.outputTokens ?? 0) + (message.usage.output_tokens ?? 0);
+        }
       } catch (err) {
         if (aborted) return;
         if (err instanceof Anthropic.APIError || err instanceof ProviderError || jsonRetries++ >= 2) throw err;
@@ -1781,6 +1806,7 @@ ${first
       }
 
       if (message.stop_reason === "refusal") {
+        metric.outcome = "refused";
         send({ type: "text", delta: "\n\nSorry - I can't help with that one." });
         await store(conversationId, "assistant", "message", message.content, message.usage);
         break;
@@ -1793,6 +1819,7 @@ ${first
       if (message.stop_reason === "pause_turn") continue;
       if (!toolUses.length) break; // end_turn (or a text-only max_tokens)
       if (message.stop_reason === "max_tokens") {
+        metric.outcome = "too_long";
         send({ type: "error", message: "The answer was too long - please ask a narrower question." });
         break;
       }
@@ -1807,6 +1834,8 @@ ${first
           logger.warn("ai_assistant_tool_failed", { tool: t.name, error: String(err) });
           r = { content: JSON.stringify({ error: "That lookup failed - try again in a moment." }), isError: true };
         }
+        metric.tools.push(t.name);
+        if (r.isError) metric.toolErrors++;
         results.push({ type: "tool_result", tool_use_id: t.id, content: r.content, ...(r.isError ? { is_error: true } : {}) });
       }
       await store(conversationId, "user", "tool_results", results);
@@ -1832,9 +1861,19 @@ ${first
     else if (err instanceof Anthropic.RateLimitError || status === 429) msg = "The assistant is busy - please try again in a minute.";
     else if (err instanceof Anthropic.APIError || err instanceof ProviderError) msg = `The assistant couldn't answer (error ${(err as { status?: number }).status}). Please try again.`;
     logger.warn("ai_assistant_failed", { error: String(err) });
+    metric.outcome = "error";
+    metric.errorKind = err instanceof Anthropic.AuthenticationError || status === 401 || status === 403 ? "api_key"
+      : err instanceof Anthropic.RateLimitError || status === 429 ? "busy_or_quota"
+      : status === 503 && /No AI model/.test(String((err as Error)?.message)) ? "no_model"
+      : err instanceof Anthropic.APIError || err instanceof ProviderError ? `http_${(err as { status?: number }).status ?? "?"}`
+      : /timed? ?out|abort/i.test(String(err)) ? "timeout" : "other";
     send({ type: "error", message: msg });
   } finally {
     clearInterval(heartbeat);
+    if (aborted && metric.outcome === "answered") metric.outcome = "cancelled";
+    const turnId = await recordTurn({ userId, ...metric, totalMs: Date.now() - startedAt });
+    // The panel's thumbs up / down refer to this id.
+    if (turnId && !aborted) { try { send({ type: "turn", id: turnId }); } catch { /* closed */ } }
     res.end();
   }
 }

@@ -513,6 +513,7 @@ export const api = {
     req("/admin/sla-settings", { method: "PUT", body: JSON.stringify(data) }),
   // Settings > AI Assistant (ADMIN). The key is write-only - never returned.
   aiSettings: () => req("/ai/assistant/settings"),
+  aiPerformance: (days: number) => req(`/ai/assistant/performance?days=${days}`),
   updateAiSettings: (data: Record<string, unknown>) =>
     req("/ai/assistant/settings", { method: "PUT", body: JSON.stringify(data) }),
   // Named keys: saved / deleted on the spot; the settings save picks which one a service uses.

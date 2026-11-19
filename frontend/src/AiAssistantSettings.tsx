@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, CheckCircle2, Loader2, Plus, Sparkles, Trash2, X, XCircle } from "lucide-react";
 import { api } from "./api";
+import AiPerformance from "./components/AiPerformance";
 
 // Settings > AI Assistant (ADMIN): which AI services the FlowDesk Assistant
 // can use (each with its address and one or more named API keys - the one
@@ -37,7 +38,25 @@ const card: React.CSSProperties = { display: "grid", gap: 10, padding: 14, borde
 const chip = (color: string, bg: string): React.CSSProperties => ({ fontSize: 11, fontWeight: 700, color, background: bg, padding: "2px 8px", borderRadius: 999, whiteSpace: "nowrap" });
 const serviceTag: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "var(--muted)", border: "1px solid var(--border)", borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" };
 
+// Settings > AI Assistant: the set-up, and how the assistant is doing.
 export default function AiAssistantSettings() {
+  const [view, setView] = useState<"settings" | "performance">("settings");
+  const tab = (on: boolean): React.CSSProperties => ({
+    padding: "8px 14px", border: "1px solid var(--border)", borderRadius: 9, cursor: "pointer", fontSize: 13, fontWeight: 600,
+    background: on ? "#4f46e5" : "var(--surface)", color: on ? "#fff" : "var(--text)"
+  });
+  return (
+    <>
+      <div role="tablist" aria-label="AI Assistant" style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <button type="button" role="tab" aria-selected={view === "settings"} style={tab(view === "settings")} onClick={() => setView("settings")}>Settings</button>
+        <button type="button" role="tab" aria-selected={view === "performance"} style={tab(view === "performance")} onClick={() => setView("performance")}>Performance</button>
+      </div>
+      {view === "settings" ? <AiAssistantSettingsForm /> : <AiPerformance />}
+    </>
+  );
+}
+
+function AiAssistantSettingsForm() {
   const [saved, setSaved] = useState<Saved | null>(null);
   const [form, setForm] = useState<Form | null>(null);
   // The "Add a key" form under each service: a name and the key itself.
