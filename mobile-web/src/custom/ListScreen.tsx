@@ -1,18 +1,23 @@
 import { useEffect, useState } from "react";
 import { cApi, type Summary, type Task } from "./api";
+import { allMyBrs, BRS_PHASES, type BrsSummary } from "./brs";
 import { CStatus, nextStepText, refOf } from "./shared";
 import { href } from "../router";
 import { appCan, postToApp } from "../bridge";
 import { formatDate } from "../ui";
 
-type Scope = "todo" | "mine" | "assigned" | "cr";
+type Scope = "todo" | "mine" | "assigned" | "cr" | "brs";
+type BrsRow = BrsSummary & { why: "mine" | "assigned" | "shared" };
+const BRS_WHY = { mine: "Yours", assigned: "Your input / review", shared: "Shared with you" } as const;
 const SCOPE_KEY = "flowdesk.custom.scope";
 
 const SCOPES: { key: Scope; label: string }[] = [
   { key: "todo", label: "To do" },
   { key: "mine", label: "My requests" },
   { key: "assigned", label: "Assigned to me" },
-  { key: "cr", label: "Change Requests" }
+  { key: "cr", label: "Change Requests" },
+  // BRS Studio: on the portal it sits under Custom Processes too.
+  { key: "brs", label: "BRS" }
 ];
 
 // Custom Processes: what's waiting on me, my own requests, the ones I'm an
@@ -21,6 +26,7 @@ export default function CustomList() {
   const [scope, setScope] = useState<Scope | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [items, setItems] = useState<Summary[] | null>(null);
+  const [brs, setBrs] = useState<BrsRow[] | null>(null);
   const [error, setError] = useState("");
 
   // Start on "To do" when something's waiting, otherwise my requests - or
@@ -55,6 +61,11 @@ export default function CustomList() {
     if (scope === "todo") {
       setItems(null);
       cApi.tasks().then(setTasks).catch((e) => setError(e.message));
+      return;
+    }
+    if (scope === "brs") {
+      setBrs(null);
+      allMyBrs().then(setBrs).catch((e) => setError(e.message));
       return;
     }
     setItems(null);
@@ -96,7 +107,26 @@ export default function CustomList() {
 
       {error && <p className="error">{error}</p>}
 
-      {scope === "todo" ? (
+      {scope === "brs" ? (
+        !brs ? (!error && <p className="muted center">Loading…</p>)
+        : brs.length === 0 ? <p className="muted center">You&apos;re not on any BRS yet. BRSs are started in BRS Studio on the FlowDesk portal.</p>
+        : (
+          <ul className="list">
+            {brs.map((d) => (
+              <li key={d.id}>
+                <a href={href({ name: "cbrs", id: d.id })} className="row-link">
+                  <span className="grow">
+                    <strong>{d.title}</strong>
+                    <span className="small">{d.reference_no || "BRS"} · {d.brs_type_name}</span>
+                    <span className="muted small">{BRS_WHY[d.why]}{d.owner_name ? ` · ${d.owner_name}` : ""} · {formatDate(d.updated_at || d.created_at)}</span>
+                  </span>
+                  <span className={`pill ${d.phase === "BASELINE" ? "good" : d.phase === "APPROVAL" ? "warn" : "info"}`}>{BRS_PHASES[d.phase] || d.phase}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : scope === "todo" ? (
         !tasks ? <p className="muted center">Loading…</p>
         : tasks.length === 0 ? <p className="muted center">Nothing is waiting on you.</p>
         : (

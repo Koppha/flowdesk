@@ -72,6 +72,7 @@ function TypePicker() {
   return (
     <div className="stack">
       <h1>New request</h1>
+      <p className="muted small">A BRS is started in BRS Studio on the FlowDesk portal; once you&apos;re on one, it&apos;s under the BRS tab here.</p>
       <ul className="list">
         {types.map((t) => (
           <li key={t.id}>

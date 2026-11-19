@@ -20,6 +20,7 @@ export type Route =
   | { name: "clist" }
   | { name: "cnew"; typeId?: string }
   | { name: "creq"; id: string }
+  | { name: "cbrs"; id: string }
   // Account
   | { name: "phone" }
   | { name: "support" }
@@ -37,6 +38,7 @@ export function parse(hash: string): Route {
   if (parts[0] === "c") {
     if (parts[1] === "new") return parts[2] ? { name: "cnew", typeId: parts[2] } : { name: "cnew" };
     if (parts[1] === "req" && parts[2]) return { name: "creq", id: parts[2] };
+    if (parts[1] === "brs" && parts[2]) return { name: "cbrs", id: parts[2] };
     return { name: "clist" };
   }
   if (parts[0] === "m") {
@@ -62,6 +64,7 @@ export function href(r: Route) {
     case "clist": return "#/c";
     case "cnew": return r.typeId ? `#/c/new/${r.typeId}` : "#/c/new";
     case "creq": return `#/c/req/${r.id}`;
+    case "cbrs": return `#/c/brs/${r.id}`;
     case "supportInbox": return "#/support/inbox";
     case "supportChat": return `#/support/c/${r.id}`;
     default: return `#/${r.name}`;
@@ -70,7 +73,7 @@ export function href(r: Route) {
 
 export function sectionOf(r: Route): Section {
   if (r.name === "phone" || r.name === "support" || r.name === "supportInbox" || r.name === "supportChat") return "account";
-  if (r.name === "clist" || r.name === "cnew" || r.name === "creq") return "custom";
+  if (r.name === "clist" || r.name === "cnew" || r.name === "creq" || r.name === "cbrs") return "custom";
   return r.name === "mlist" || r.name === "mnew" || r.name === "mreq" ? "maintenance" : "sign";
 }
 

@@ -14,6 +14,7 @@ import MaintenanceRequest from "./maintenance/RequestScreen";
 import CustomList from "./custom/ListScreen";
 import CustomNew from "./custom/NewScreen";
 import CustomRequest from "./custom/RequestScreen";
+import BrsScreen from "./custom/BrsScreen";
 import PhoneScreen from "./screens/PhoneScreen";
 import SupportScreen, { SupportChat, SupportInbox } from "./screens/SupportScreen";
 
@@ -42,6 +43,7 @@ const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
   mreq: { to: { name: "mlist" }, label: "Requests" },
   mnew: { to: { name: "mlist" }, label: "Requests" },
   creq: { to: { name: "clist" }, label: "Requests" },
+  cbrs: { to: { name: "clist" }, label: "Requests" },
   cnew: { to: { name: "clist" }, label: "Requests" },
   supportInbox: { to: { name: "support" }, label: "Help & support" },
   supportChat: { to: { name: "supportInbox" }, label: "Support inbox" }
@@ -58,7 +60,7 @@ const START_ROUTES: Record<string, Route> = {
 // Header titles for the app (capability "title"); others keep the app's own.
 const TITLES: Partial<Record<Route["name"], string>> = {
   phone: "Phone number", signature: "Saved signature", support: "Help & support", supportInbox: "Support inbox", supportChat: "Support chat",
-  clist: "Custom Processes", cnew: "New request", creq: "Request"
+  clist: "Custom Processes", cnew: "New request", creq: "Request", cbrs: "BRS"
 };
 
 export default function App() {
@@ -138,6 +140,7 @@ export default function App() {
         {route.name === "clist" && <CustomList />}
         {route.name === "cnew" && <CustomNew key={route.typeId || "pick"} typeId={route.typeId} />}
         {route.name === "creq" && <CustomRequest key={route.id} id={route.id} />}
+        {route.name === "cbrs" && <BrsScreen key={route.id} id={route.id} />}
         {route.name === "phone" && <PhoneScreen />}
         {route.name === "support" && <SupportScreen />}
         {route.name === "supportInbox" && <SupportInbox />}

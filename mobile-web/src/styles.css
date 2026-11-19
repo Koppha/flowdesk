@@ -273,3 +273,12 @@ input[type="tel"], input[type="date"], input[inputmode] {
 .dialog h3 { margin: 0; }
 .dialog p { margin: 0; line-height: 1.5; }
 .warn-text { color: var(--warn); font-size: 13px; }
+
+/* BRS section text (sanitised HTML from BRS Studio) */
+.rich { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.rich p, .rich ul, .rich ol, .rich table { margin: 0 0 8px; }
+.rich ul, .rich ol { padding-left: 20px; }
+.rich table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; }
+.rich td, .rich th { border: 1px solid var(--border, #ddd); padding: 4px 6px; vertical-align: top; }
+.rich img { max-width: 100%; height: auto; }
+.rich h1, .rich h2, .rich h3, .rich h4 { font-size: 15px; margin: 10px 0 6px; }

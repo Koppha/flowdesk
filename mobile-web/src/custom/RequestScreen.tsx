@@ -4,6 +4,7 @@ import { CStatus, FieldList, Route, refOf } from "./shared";
 import { currentUser, send } from "../api";
 import { appCan, inApp, postToApp } from "../bridge";
 import { formatDate } from "../ui";
+import { href } from "../router";
 
 // The app (1.0.10+, capability "customFiles") downloads a request's PDF or an
 // attachment with the session and opens the share sheet; in a browser it's a
@@ -130,6 +131,9 @@ export default function CustomRequest({ id }: { id: string }) {
       </header>
 
       {notice && <p className="notice">{notice}</p>}
+      {r.request_type_code === "BRS_APPROVAL" && r.data?.brs_document_id && (
+        <a className="secondary center" href={href({ name: "cbrs", id: String(r.data.brs_document_id) })}>Read the BRS</a>
+      )}
       {error && <p className="error">{error}</p>}
 
       {/* ── My move ─────────────────────────────────────────────── */}
