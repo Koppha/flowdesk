@@ -49,7 +49,11 @@ const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
 
 // Screens the app can open by name (/web?go=<name>) - opened that way they
 // stand alone, without another section's tabs.
-const START_ROUTES: Record<string, Route> = { phone: { name: "phone" }, signature: { name: "signature" }, support: { name: "support" } };
+// "custom-processes": app builds before 1.0.10 reach Custom Processes this way
+// (a Home tile from mobile-config.routes.ts).
+const START_ROUTES: Record<string, Route> = {
+  phone: { name: "phone" }, signature: { name: "signature" }, support: { name: "support" }, "custom-processes": { name: "clist" }
+};
 
 // Header titles for the app (capability "title"); others keep the app's own.
 const TITLES: Partial<Record<Route["name"], string>> = {

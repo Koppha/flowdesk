@@ -104,9 +104,29 @@ async function currentWebTiles() {
 
 // Read access is any authenticated user (the mobile app itself needs this on
 // every load); only ADMIN can change it - same split as sla-settings.routes.ts.
-mobileConfigRouter.get("/", async (_req: AuthedRequest, res, next) => {
+// FlowDesk Mobile before 1.0.10 has a Custom Processes tile that opens
+// nothing. Those builds can open server screens by name (/web?go=...), so they
+// get a server tile for it instead (mobile-web START_ROUTES "custom-processes").
+function isPreCustomProcessesApp(req: AuthedRequest) {
+  if (req.headers["x-flowdesk-client"] !== "mobile") return false;
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(req.headers["x-flowdesk-app-version"] || ""));
+  if (!m) return true;
+  const [maj, min, pat] = m.slice(1).map(Number);
+  return maj < 1 || (maj === 1 && (min < 0 || (min === 0 && pat < 10)));
+}
+
+mobileConfigRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
-    return res.json({ modules: await currentModules(), tabs: await currentTabs(), webTiles: await currentWebTiles() });
+    const modules = await currentModules();
+    const webTiles = await currentWebTiles();
+    if (modules.customProcesses && isPreCustomProcessesApp(req)) {
+      return res.json({
+        modules: { ...modules, customProcesses: false },
+        tabs: await currentTabs(),
+        webTiles: [{ go: "custom-processes", label: "Custom Processes", icon: "git-branch", color: "purple" }, ...webTiles.filter((t) => t.go !== "custom-processes")]
+      });
+    }
+    return res.json({ modules, tabs: await currentTabs(), webTiles });
   } catch (err) {
     return next(err);
   }
