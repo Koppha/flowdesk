@@ -102,11 +102,30 @@ async function currentWebTiles() {
   }
 }
 
+// Modules whose screens live on the mobile server page. App builds from
+// before 19 Nov 2026 draw these Home tiles with nowhere to go (greyed, taps do
+// nothing), but every build since 1.0.6 draws server tiles - so while the
+// module is on, the app is also sent a tile that opens the server screen by
+// name. Builds that open these natively hide the duplicate (same `go`).
+const MODULE_WEB_TILES: { module: keyof Modules; tile: z.infer<typeof WebTileSchema> }[] = [
+  { module: "customProcesses", tile: { go: "custom-processes", label: "Custom Processes", icon: "git-branch", color: "purple" } },
+  { module: "overtime", tile: { go: "overtime", label: "Overtime", icon: "clock", color: "warn" } },
+  { module: "standby", tile: { go: "standby", label: "Standby", icon: "radio", color: "info" } }
+];
+
 // Read access is any authenticated user (the mobile app itself needs this on
 // every load); only ADMIN can change it - same split as sla-settings.routes.ts.
-mobileConfigRouter.get("/", async (_req: AuthedRequest, res, next) => {
+mobileConfigRouter.get("/", async (req: AuthedRequest, res, next) => {
   try {
-    return res.json({ modules: await currentModules(), tabs: await currentTabs(), webTiles: await currentWebTiles() });
+    const modules = await currentModules();
+    let webTiles = await currentWebTiles();
+    // Only for the app itself: the portal's admin page edits the saved tiles,
+    // and must not save these back as if an admin had added them.
+    if (req.headers["x-flowdesk-client"] === "mobile") {
+      const extra = MODULE_WEB_TILES.filter((m) => modules[m.module] && !webTiles.some((t) => t.go === m.tile.go)).map((m) => m.tile);
+      webTiles = [...extra, ...webTiles].slice(0, 20);
+    }
+    return res.json({ modules, tabs: await currentTabs(), webTiles });
   } catch (err) {
     return next(err);
   }

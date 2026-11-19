@@ -68,7 +68,9 @@ const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
 // stand alone, without another section's tabs.
 const START_ROUTES: Record<string, Route> = {
   phone: { name: "phone" }, signature: { name: "signature" }, support: { name: "support" },
-  overtime: { name: "olist" }, standby: { name: "slist" }
+  overtime: { name: "olist" }, standby: { name: "slist" },
+  // Older app builds reach Custom Processes only through a server Home tile (/web?go=custom-processes).
+  "custom-processes": { name: "clist" }
 };
 
 // Header titles for the app (capability "title"); others keep the app's own.
