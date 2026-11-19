@@ -175,6 +175,17 @@ export async function downloadBlob(fetcher: () => Promise<Blob>, filename: strin
 
 export const api = {
   login: (email: string, password: string) => req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  // Two-step sign-in (backend lib/mfa.ts, auth/Mfa.tsx). login() may return { mfa, challenge, phoneApproval } instead of a session.
+  mfaVerify: (challenge: string, code: string) => req("/auth/mfa/verify", { method: "POST", body: JSON.stringify({ challenge, code }) }) as Promise<{ token: string; user: any; usedRecoveryCode?: boolean }>,
+  mfaApproval: (challenge: string) => req(`/auth/mfa/approval?challenge=${encodeURIComponent(challenge)}`) as Promise<{ status: "PENDING" | "APPROVED" | "DENIED" | "EXPIRED"; token?: string; user?: any }>,
+  mfaSetupStart: (challenge?: string) => req("/auth/mfa/setup/start", { method: "POST", body: JSON.stringify(challenge ? { challenge } : {}) }) as Promise<{ secret: string; otpauthUrl: string; qr: string }>,
+  mfaSetupConfirm: (code: string, challenge?: string) => req("/auth/mfa/setup/confirm", { method: "POST", body: JSON.stringify(challenge ? { code, challenge } : { code }) }) as Promise<{ recoveryCodes: string[]; token?: string; user?: any }>,
+  mfaStatus: () => req("/auth/mfa/status") as Promise<{ enabled: boolean; enabledAt: string | null; required: boolean; recoveryCodesLeft: number; phoneApproval: boolean }>,
+  mfaRecoveryCodes: (code: string) => req("/auth/mfa/recovery-codes", { method: "POST", body: JSON.stringify({ code }) }) as Promise<{ recoveryCodes: string[] }>,
+  mfaDisable: (code: string) => req("/auth/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
+  mfaPolicy: () => req("/auth/mfa/policy") as Promise<{ policy: { requiredRoles: string[]; financeSections: boolean; everyone: boolean }; enrolled: { user_id: string; full_name: string | null; email: string; role: string; enabled_at: string; recovery_left: number }[] }>,
+  setMfaPolicy: (policy: { requiredRoles: string[]; financeSections: boolean; everyone: boolean }) => req("/auth/mfa/policy", { method: "PUT", body: JSON.stringify(policy) }),
+  mfaAdminReset: (userId: string) => req(`/auth/mfa/admin/reset/${userId}`, { method: "POST" }),
   me: () => req("/auth/me"),
   roles: () => req("/auth/roles"),
   updateFavoritePages: (favorite_pages: string[]) => req("/auth/me/favorites", { method: "PATCH", body: JSON.stringify({ favorite_pages }) }),

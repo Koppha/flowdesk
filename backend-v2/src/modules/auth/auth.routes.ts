@@ -9,6 +9,7 @@ import { query, pool } from "../../lib/db.js";
 import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
+import { completeLogin, createMfaRouter } from "./mfa.routes.js";
 import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentGroupsByCompany, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
 import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
 import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
@@ -477,7 +478,8 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
 
           logger.info("auth_login_success_ad", { login: loginUser, email: maskEmail(user.email), user_id: user.id, role: user.role });
           trackMobileLoginIfNeeded(req, user.id);
-          return res.json(toAuthResponse(user, loginDisplay));
+          // Two-step sign-in (mfa.routes.ts): a session, or the code / phone approval still needed.
+          return res.json(await completeLogin(req, user, loginDisplay, toAuthResponse));
         }
         else {
           logger.warn("auth_login_failed_ad_false", { login: loginUser, login_email: loginEmail ? maskEmail(loginEmail) : null });
@@ -510,11 +512,14 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
 
     logger.info("auth_login_success_local", { login: loginUser, email: maskEmail(user.email), user_id: user.id, role: user.role });
     trackMobileLoginIfNeeded(req, user.id);
-    return res.json(toAuthResponse(user, loginDisplay));
+    return res.json(await completeLogin(req, user, loginDisplay, toAuthResponse));
   } catch (err) {
     return next(err);
   }
 });
+
+// Two-step sign-in: its challenge routes come before the session check below.
+authRouter.use("/mfa", createMfaRouter(toAuthResponse));
 
 authRouter.use(requireAuth);
 

@@ -38,6 +38,7 @@ import PdfDesigner from "./PdfDesigner";
 import MobileAppConfig from "./MobileAppConfig";
 import AiAssistantSettings from "./AiAssistantSettings";
 import GetTheApp from "./GetTheApp";
+import { MfaAdmin, MfaSettings, MfaSignIn, type MfaStep } from "./auth/Mfa";
 import MobileReleaseTip from "./components/MobileReleaseTip";
 import DataCleanup from "./DataCleanup";
 import RequestTypes from "./RequestTypes";
@@ -692,6 +693,10 @@ export default function App() {
   const [newSectionExcoId, setNewSectionExcoId] = useState("");
   const [leadershipUsers, setLeadershipUsers] = useState<{ hods: any[]; managers: any[]; exco: any[] }>({ hods: [], managers: [], exco: [] });
   const [profileAccordionOpen, setProfileAccordionOpen] = useState(true);
+  const [mfaAccordionOpen, setMfaAccordionOpen] = useState(false);
+  const [mfaAdminAccordionOpen, setMfaAdminAccordionOpen] = useState(false);
+  // Two-step sign-in: the step after a correct password (auth/Mfa.tsx).
+  const [mfaStep, setMfaStep] = useState<MfaStep | null>(null);
   const [phoneDraft, setPhoneDraft] = useState("");
   const [savingPhone, setSavingPhone] = useState(false);
   const [displayAccordionOpen, setDisplayAccordionOpen] = useState(true);
@@ -2472,6 +2477,20 @@ export default function App() {
     }
   }
 
+  // A session from the password alone, or after two-step sign-in.
+  function finishSignIn(r: { token: string; user?: any }) {
+    setMfaStep(null);
+    justLoggedIn.current = true;
+    setToken(r.token);
+    setTok(r.token);
+    setProfile(r.user || null);
+    setPage("HOME");
+    // The shared staff directory's first fetch fires on app mount, before
+    // any token exists, so it 401s on every fresh session - force a real
+    // fetch now that we're actually authenticated (see useStaffDirectory.ts).
+    void refreshStaffDirectory();
+  }
+
   async function doLogin() {
     if (loginLoading) return;
     setError(null);
@@ -2480,16 +2499,14 @@ export default function App() {
     try {
       console.log("Attempting login with:", email);
       const r = await api.login(email, password);
+      if (r.mfa) {
+        // Password OK - two-step sign-in still to do (code, phone approval or setup).
+        setMfaStep({ challenge: r.challenge, mode: r.mfa, phoneApproval: Boolean(r.phoneApproval) });
+        setPassword("");
+        return;
+      }
       console.log("Login successful, received token:", r.token ? "✓" : "✗");
-      justLoggedIn.current = true;
-      setToken(r.token);
-      setTok(r.token);
-      setProfile(r.user || null);
-      setPage("HOME");
-      // The shared staff directory's first fetch fires on app mount, before
-      // any token exists, so it 401s on every fresh session - force a real
-      // fetch now that we're actually authenticated (see useStaffDirectory.ts).
-      void refreshStaffDirectory();
+      finishSignIn(r);
     } catch (e: any) {
       console.error("Login error:", e);
       const errorMsg = e?.message || "Login failed. Please try again.";
@@ -4871,6 +4888,9 @@ export default function App() {
             <h2>Welcome Back</h2>
             <p className="subtitle">Sign in to continue to FlowDesk</p>
 
+            {mfaStep ? (
+              <MfaSignIn step={mfaStep} onSignedIn={finishSignIn} onCancel={() => { setMfaStep(null); setError(null); }} />
+            ) : (
             <form onSubmit={(e) => {
               e.preventDefault();
               void doLogin();
@@ -4930,9 +4950,10 @@ export default function App() {
                 )}
               </button>
             </form>
+            )}
 
-            {error && <pre className="error-text">{error}</pre>}
-            {showLoginLockoutWarning && (
+            {error && !mfaStep && <pre className="error-text">{error}</pre>}
+            {showLoginLockoutWarning && !mfaStep && (
               <div className="login-security-note login-lockout-warning">
                 <AlertTriangle size={18} aria-hidden />
                 <span>Warning: entering the wrong password 3 times will lock your account. Contact IT if you're unsure of your password.</span>
@@ -9504,6 +9525,26 @@ export default function App() {
                     <span style={{ fontSize: 11, color: "var(--muted)" }}>Used to send you FlowDesk notifications by SMS, and for standby rosters.</span>
                   </div>
                 </SettingsAccordion>
+
+                <SettingsAccordion
+                  title="Two-step sign-in"
+                  subtitle="A code from an authenticator app (or Approve in FlowDesk Mobile) as well as your password."
+                  open={mfaAccordionOpen}
+                  onToggle={() => setMfaAccordionOpen((current) => !current)}
+                >
+                  <MfaSettings />
+                </SettingsAccordion>
+
+              {isAdminRole && (
+                <SettingsAccordion
+                  title="Two-step sign-in policy"
+                  subtitle="Who must use two-step sign-in, and resetting it for someone who lost their phone."
+                  open={mfaAdminAccordionOpen}
+                  onToggle={() => setMfaAdminAccordionOpen((current) => !current)}
+                >
+                  <MfaAdmin />
+                </SettingsAccordion>
+              )}
 
               {isAdminRole && (
                 <SettingsAccordion
