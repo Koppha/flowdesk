@@ -1,3 +1,4 @@
+import { formatMoney } from "./constants";
 import TreasuryReportPage, { type ReportColumn, AMOUNT_TO_BE_EXPENSED_COLUMN, CLEARANCE_ORG_COLUMNS, CLEARANCE_TRIP_COLUMNS } from "./TreasuryReportPage";
 
 function fmtDate(s: string | null | undefined) {
@@ -13,7 +14,8 @@ const columns: ReportColumn[] = [
   ...CLEARANCE_ORG_COLUMNS,
   ...CLEARANCE_TRIP_COLUMNS,
   { key: "financial_outcome", label: "Original Outcome", format: (v) => OUTCOME_LABEL[v] || v },
-  { key: "advance_amount", label: "Advance", money: true },
+  // A claim (trip with no advance) says so instead of showing 0.00 on screen (the CSV keeps 0.00).
+  { key: "advance_amount", label: "Advance", money: true, format: (v, row) => (row?.claim_kind === "CLAIM" ? "No advance (claim)" : formatMoney(Number(v || 0), row?.currency)) },
   { key: "verified_expenses", label: "Verified Expenses", money: true },
   AMOUNT_TO_BE_EXPENSED_COLUMN,
   { key: "balance_amount", label: "Refund/Payback", money: true },

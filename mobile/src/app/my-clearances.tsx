@@ -10,6 +10,7 @@ type Claim = {
   status: string;
   claim_total: number;
   closed_at: string | null;
+  kind?: string;
 };
 
 function toneFor(status: string): StatusPillProps["tone"] {
@@ -48,7 +49,8 @@ export default function MyClearancesScreen() {
       {items.map((c) => (
         <View key={c.id} style={styles.card}>
           <View style={styles.row}>
-            <Text style={styles.title}>{c.month ? `${c.month} Travel Clearance` : "Travel Clearance"}</Text>
+            {/* kind CLAIM = a trip claimed with no advance (Advances > Claims on the web). */}
+            <Text style={styles.title}>{`${c.month ? `${c.month} ` : ""}${c.kind === "CLAIM" ? "Travel Claim (no advance)" : "Travel Clearance"}`}</Text>
             <Text style={styles.amount}>M{Number(c.claim_total).toFixed(2)}</Text>
           </View>
           <View style={styles.pillRow}>

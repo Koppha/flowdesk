@@ -598,7 +598,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
       }
 
       const claimRows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency,
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency, c.kind AS claim_kind,
                 u.full_name AS claimant_name
            FROM clearance_claims c
            JOIN users u ON u.id = c.claimant_id
@@ -623,6 +623,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           id: c.id,
           status: c.status,
           claim_total: Number(c.claim_total),
+          claim_kind: c.claim_kind ?? "CLEARANCE",
           advance_amount: Number(c.advance_amount),
           balance_amount: Number(c.balance_amount),
           currency: c.currency,
@@ -843,7 +844,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
     // act. Mirrors loadWorkflowAdvancesForUser, but for clearance_claims.
     const loadWorkflowClaimsForUser = async () => {
       const rows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency,
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency, c.kind AS claim_kind,
                 c.workflow_step_order, c.approval_chain,
                 u.full_name AS claimant_name
            FROM clearance_claims c
@@ -867,6 +868,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
             id: c.id,
             status: c.status,
             claim_total: Number(c.claim_total),
+            claim_kind: c.claim_kind ?? "CLEARANCE",
             advance_amount: Number(c.advance_amount),
             balance_amount: Number(c.balance_amount),
             currency: c.currency,
@@ -903,6 +905,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           id: c.id,
           status: c.status,
           claim_total: Number(c.claim_total),
+          claim_kind: c.claim_kind ?? "CLEARANCE",
           advance_amount: Number(c.advance_amount),
           balance_amount: Number(c.balance_amount),
           currency: c.currency,
@@ -990,7 +993,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
 
     const loadAllWorkflowClaimsForAdmin = async () => {
       const rows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency,
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency, c.kind AS claim_kind,
                 c.workflow_step_order, c.approval_chain, u.full_name AS claimant_name
            FROM clearance_claims c
            JOIN users u ON u.id = c.claimant_id
@@ -1013,6 +1016,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           id: c.id,
           status: c.status,
           claim_total: Number(c.claim_total),
+          claim_kind: c.claim_kind ?? "CLEARANCE",
           advance_amount: Number(c.advance_amount),
           balance_amount: Number(c.balance_amount),
           currency: c.currency,
@@ -1378,7 +1382,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
         ownershipFilter += " AND c.approval_chain IS NULL";
       }
       const rows = await query<any>(
-        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency, u.full_name AS claimant_name
+        `SELECT c.id, c.status, c.claim_total, c.advance_amount, c.balance_amount, c.currency, c.kind AS claim_kind, u.full_name AS claimant_name
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
          LEFT JOIN departments d ON lower(trim(d.name)) = lower(trim(u.department))
@@ -1392,6 +1396,7 @@ inboxRouter.get("/", async (req: AuthedRequest, res, next) => {
           id: c.id,
           status: c.status,
           claim_total: Number(c.claim_total),
+          claim_kind: c.claim_kind ?? "CLEARANCE",
           advance_amount: Number(c.advance_amount),
           balance_amount: Number(c.balance_amount),
           currency: c.currency,

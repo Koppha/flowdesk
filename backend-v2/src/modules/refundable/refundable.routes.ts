@@ -87,7 +87,7 @@ const LIST_QUERY = `
          c.submitted_at AS clearance_submitted_at,
          EXISTS (SELECT 1 FROM receipts r WHERE r.clearance_claim_id = c.id) AS has_receipts,
          COALESCE(c.currency, 'LSL') AS currency,
-         c.advance_amount,
+         c.advance_amount, c.kind AS claim_kind,
          c.claim_total AS cleared_amount,
          -- Zero balance: the whole advance was spent. Otherwise what was
          -- actually cleared (spent) is what gets expensed.

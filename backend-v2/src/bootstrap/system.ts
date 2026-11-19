@@ -187,6 +187,13 @@ async function ensureUserSchema() {
   // the linked advance was requested in (resolved from travel_types via
   // advance_requests.type), never a hardcoded default.
   await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS currency text`);
+  // Claims (Nov 2026): a trip already taken, paid back with no advance first.
+  // Same table and flow as a clearance, marked kind='CLAIM' - never inferred
+  // from a missing linked_advance_id (Data Cleanup can clear that on a real
+  // clearance). A claim picks its own travel type (currency, rates, routing).
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'CLEARANCE'`);
+  await query(`ALTER TABLE clearance_claims ADD COLUMN IF NOT EXISTS travel_type text`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_cc_kind ON clearance_claims(kind)`);
   // travel_types.currency is normally added by ensureTravelSchema(), which runs
   // later in bootstrapSystem() — ensure it here too since this backfill needs
   // it on a fresh database, before that later step has had a chance to run.

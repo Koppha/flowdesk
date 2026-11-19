@@ -336,6 +336,7 @@ function statusTone(value: string | null | undefined) {
 // "Computer Request"), never the generic doc_type label.
 function itemTypeLabel(item: { doc_type?: string | null; request_type_name?: string | null } | null | undefined) {
   if (item?.doc_type === "CUSTOM_REQUEST" && item.request_type_name) return item.request_type_name;
+  if (item?.doc_type === "CLAIM" && (item as any).claim_kind === "CLAIM") return "Claim";
   return docTypeLabel(item?.doc_type);
 }
 
@@ -347,6 +348,8 @@ function docTypeLabel(value: InboxItem["doc_type"] | string | null | undefined) 
     case "SALARY_ADVANCE":   return "Salary Advance";
     case "ACCOMMODATION":    return "Travel Accommodation";
     case "CLAIM":            return "Clearance";
+    // Synthetic tab: claims (a trip with no advance) split out of Clearance.
+    case "TRAVEL_CLAIM":     return "Claim";
     case "CUSTOM_REQUEST":   return "Custom Request";
     case "CHANGE_REQUEST":   return "Change Request";
     case "BRS_APPROVAL":     return "BRS Approval";
@@ -788,6 +791,7 @@ export default function Inbox(props: {
       // from) an actual Change Request, easy to miss entirely. Split by the
       // request type's own code instead, same synthetic-key approach.
       const key = it.doc_type === "ADVANCE" && (it as any).advance_type === "SALARY" ? "SALARY_ADVANCE"
+        : it.doc_type === "CLAIM" && (it as any).claim_kind === "CLAIM" ? "TRAVEL_CLAIM"
         : it.doc_type === "CUSTOM_REQUEST" && (it as any).request_type_code ? (it as any).request_type_code
         : it.doc_type;
       g[key] = g[key] || [];
@@ -1951,8 +1955,9 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
     }
   }
 
-  const referenceCode = `${item.doc_type === "CLAIM" ? "CLR" : item.doc_type === "ACCOMMODATION" ? "ACC" : "ADV"}-${item.id.slice(0, 8).toUpperCase()}`;
-  const pageTitle = item.doc_type === "CLAIM" ? "Travel Advance Clearance Review" : item.doc_type === "ACCOMMODATION" ? "Travel Advance Request Review" : "Advance Request Review";
+  const isTravelClaim = item.doc_type === "CLAIM" && (item as any).claim_kind === "CLAIM";
+  const referenceCode = `${isTravelClaim ? "CLM" : item.doc_type === "CLAIM" ? "CLR" : item.doc_type === "ACCOMMODATION" ? "ACC" : "ADV"}-${item.id.slice(0, 8).toUpperCase()}`;
+  const pageTitle = isTravelClaim ? "Travel Claim Review (no advance)" : item.doc_type === "CLAIM" ? "Travel Advance Clearance Review" : item.doc_type === "ACCOMMODATION" ? "Travel Advance Request Review" : "Advance Request Review";
 
   return (
     <div className="review-page">
@@ -2040,7 +2045,7 @@ function ReviewModal(props: { item: InboxItem; role: string; onClose: () => void
                   <div className="review-card-title">Reconciliation Summary</div>
                   <div className="recon-summary">
                     <div className="recon-stat">
-                      <small>Advance Paid</small>
+                      <small>{isTravelClaim ? "Amount Paid (no advance)" : "Advance Paid"}</small>
                       <strong>{fmt(detail.advance_amount, detail.currency)}</strong>
                     </div>
                     <div className="recon-stat">

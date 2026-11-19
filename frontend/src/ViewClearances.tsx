@@ -304,7 +304,7 @@ export default function ViewClearances() {
       ["vrDate", "VR Date", (i) => String(fmtDate(i.vr_date))],
       ["submitted", "Clearance Submitted", (i) => String(i.clearance_submitted_at ? fmtDate(i.clearance_submitted_at) : "")],
       ["receipts", "Receipts", (i) => String(i.has_receipts ? "Yes" : "No")],
-      ["advAmount", "Adv Amount", (i) => String(Number(i.advance_amount || 0).toFixed(2))],
+      ["advAmount", "Adv Amount", (i) => ((i as any).claim_kind === "CLAIM" ? "No advance (claim)" : String(Number(i.advance_amount || 0).toFixed(2)))],
       ["clearedAmount", "Cleared Amount", (i) => String(Number(i.cleared_amount || 0).toFixed(2))],
       ["toBeExpensed", "Amount To Be Expensed", (i) => String(Number(i.amount_to_be_expensed || 0).toFixed(2))],
       ["paidBack", "Paid Back", (i) => String(Number(i.paid_back || 0).toFixed(2))],
@@ -430,7 +430,7 @@ export default function ViewClearances() {
                       ? <span style={{ color: "#065f46", fontWeight: 600, fontSize: 12 }}>Yes</span>
                       : <span style={{ color: "var(--muted)", fontSize: 12 }}>No</span>}
                     </td>}
-                    {show("advAmount") && <td style={{ fontWeight: 600 }}>{formatMoney(item.advance_amount, item.currency)}</td>}
+                    {show("advAmount") && <td style={{ fontWeight: 600 }}>{(item as any).claim_kind === "CLAIM" ? <span title="A claim: trip with no advance" style={{ color: "var(--muted)", fontWeight: 500 }}>No advance (claim)</span> : formatMoney(item.advance_amount, item.currency)}</td>}
                     {show("clearedAmount") && <td style={{ fontWeight: 600 }}>{formatMoney(item.cleared_amount, item.currency)}</td>}
                     {show("toBeExpensed") && <td>{formatMoney(item.amount_to_be_expensed, item.currency)}</td>}
                     {show("paidBack") && (

@@ -149,6 +149,9 @@ const ALL_REQUEST_TYPES = [
 const BUILTIN_REQUEST_TYPES = [
   { value: "ADVANCE_REQUEST", label: "Advance Request" },
   { value: "CLEARANCE_REQUEST", label: "Clearance Request" },
+  // Claims: a trip already taken with no advance. Until a Claim Request
+  // workflow exists, claims follow the Clearance Request route.
+  { value: "CLAIM_REQUEST", label: "Claim Request (trip with no advance)" },
   { value: "OVERTIME_REQUEST", label: "Overtime Request" },
   // Step 1 is the Admin Office (reviews, assigns, verifies); any later
   // steps approve spend, only when a job needs approval.

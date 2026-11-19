@@ -340,6 +340,7 @@ async function reassignClaims(
     claimant_team: string | null;
     claimant_role: string | null;
     linked_advance_type: string | null;
+    kind: string;
     claimant_name: string | null;
     claimant_employee_no: string | null;
   }>(
@@ -347,7 +348,7 @@ async function reassignClaims(
             u.department AS claimant_department, dv.name AS claimant_division,
             s.name AS claimant_section, tm.name AS claimant_team,
             u.role AS claimant_role,
-            ar.type AS linked_advance_type,
+            COALESCE(ar.type, c.travel_type) AS linked_advance_type, c.kind,
             u.full_name AS claimant_name, u.employee_no AS claimant_employee_no
        FROM clearance_claims c
        JOIN users u ON u.id = c.claimant_id
@@ -394,7 +395,7 @@ async function reassignClaims(
 
       const before = { approver_id: step.approver_id, approver_name: step.approver_name, position_type: step.position_type_code };
       reassignments.push({
-        module: "claim", requestId: row.id, requestType: "CLEARANCE_REQUEST", positionType: positionCode,
+        module: "claim", requestId: row.id, requestType: row.kind === "CLAIM" ? "CLAIM_REQUEST" : "CLEARANCE_REQUEST", positionType: positionCode,
         oldApproverId: step.approver_id, oldApproverName: step.approver_name,
         newApproverId: resolved.id, newApproverName: resolved.full_name
       });
@@ -408,8 +409,8 @@ async function reassignClaims(
 
     if (!changed) continue;
 
-    const probe = await resolveWorkflowChain({
-      requestType: "CLEARANCE_REQUEST",
+    const probeFor = (requestType: string) => resolveWorkflowChain({
+      requestType,
       department: row.claimant_department || "",
       division: row.claimant_division || "",
       section: row.claimant_section || "",
@@ -418,6 +419,9 @@ async function reassignClaims(
       requesterRole: row.claimant_role || "",
       requesterId: row.claimant_id
     });
+    // A claim is routed by Claim Request first, falling back to the clearance route (claims.routes.ts submit).
+    let probe = row.kind === "CLAIM" ? await probeFor("CLAIM_REQUEST") : null;
+    if (!probe || !probe.chain.length) probe = await probeFor("CLEARANCE_REQUEST");
     if (!probe || probe.workflowId !== row.workflow_id) {
       warnings.push({ module: "claim", requestId: row.id, reason: "This request's current placement now matches a different workflow entirely — review manually" });
     }

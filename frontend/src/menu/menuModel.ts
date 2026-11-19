@@ -48,7 +48,7 @@ export const DEFAULT_LAYOUT: MenuLayout = {
   nodes: [
     item("dashboard"),
     item("ai_assistant"),
-    group("advances", "Advances", "ClipboardList", ["advance_requests", "clearances"]),
+    group("advances", "Advances", "ClipboardList", ["advance_requests", "clearances", "claims"]),
     group("salaries", "Allowances", "Banknote", [
       "salaries_dashboard", "salary_registers", "salaries_attendance", "salaries_ready", "salaries_history",
       "overtime", "standby", "call_out"

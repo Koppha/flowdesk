@@ -89,10 +89,14 @@ const upload = multer({
   fileFilter: fileExtensionFilter(["pdf", "jpg", "jpeg", "png"])
 });
 
+// Delegations for clearances or for claims both cover both (the Approval
+// Inbox already lists every delegated item whatever its type).
+const CLEARANCE_DELEGATION_TYPES = ["CLEARANCE_REQUEST", "CLAIM_REQUEST"];
+
 export async function getClaimNotificationContext(claimId: string) {
   return (
-    await query<{ full_name: string | null; email: string | null; department: string | null; claim_total: string; status: ClaimStatus; claim_type: string | null; currency: string | null }>(
-      `SELECT u.full_name, u.email, u.department, c.claim_total, c.status, ar.type AS claim_type, c.currency
+    await query<{ full_name: string | null; email: string | null; department: string | null; claim_total: string; status: ClaimStatus; claim_type: string | null; currency: string | null; kind: string }>(
+      `SELECT u.full_name, u.email, u.department, c.claim_total, c.status, COALESCE(ar.type, c.travel_type) AS claim_type, c.currency, c.kind
          FROM clearance_claims c
          JOIN users u ON u.id = c.claimant_id
          LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
@@ -139,6 +143,17 @@ async function getLinkedAdvance(linkedAdvanceId: string, claimantId: string, exc
     extraCostAmount: Number(adv.extra_cost_amount || 0),
     extraCostDescription: adv.extra_cost_description || null
   };
+}
+
+// Claims (kind CLAIM): a trip already taken with no advance - the person
+// picks the travel type, which sets the currency (and the route, rates).
+async function claimTravelType(code: string | null | undefined) {
+  if (!code) throw badRequest("Choose the type of travel for this claim");
+  const tt = (await query<{ code: string; currency: string | null; active: boolean }>(
+    `SELECT code, currency, active FROM travel_types WHERE code = $1`, [code]
+  ))[0];
+  if (!tt || tt.active === false || !(await isTravelAdvanceType(tt.code))) throw badRequest("Choose a valid type of travel for this claim");
+  return { code: tt.code, currency: tt.currency || "LSL" };
 }
 
 async function syncClaimTripsFromAdvance(claimId: string, linkedAdvanceId: string) {
@@ -366,17 +381,27 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
         settlement_bank_name: z.string().optional(),
         settlement_bank_account_number: z.string().optional(),
         settlement_bank_branch: z.string().optional(),
-        reason_for_overspend: z.string().optional()
+        reason_for_overspend: z.string().optional(),
+        // CLAIM = a trip already taken with no advance (amount paid 0).
+        kind: z.enum(["CLEARANCE", "CLAIM"]).optional().default("CLEARANCE"),
+        travel_type: z.string().optional()
       })
       .safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
+    const isClaim = parsed.data.kind === "CLAIM";
+    if (isClaim && parsed.data.linked_advance_id) throw badRequest("A claim is for a trip with no advance - use a clearance to clear an advance");
 
     let advanceAmount = 0;
     let claimTotal = 0;
     let currency: string | null = null;
     let extraCostAmount = 0;
     let extraCostDescription: string | null = null;
-    if (parsed.data.linked_advance_id) {
+    let travelType: string | null = null;
+    if (isClaim) {
+      const tt = await claimTravelType(parsed.data.travel_type);
+      travelType = tt.code;
+      currency = tt.currency;
+    } else if (parsed.data.linked_advance_id) {
       const linkedAdvance = await getLinkedAdvance(parsed.data.linked_advance_id, req.user!.userId);
       advanceAmount = linkedAdvance.approvedTotal;
       currency = linkedAdvance.currency;
@@ -386,8 +411,8 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
 
     const rows = await query<{ id: string }>(
       `INSERT INTO clearance_claims
-        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount, currency, settlement_method_requested, settlement_ecocash_number, settlement_bank_name, settlement_bank_account_number, settlement_bank_branch, reason_for_overspend, extra_cost_amount, extra_cost_description)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+        (claimant_id, month, duty_station, project_number, vehicle_reg, vehicle_type, engine_cc, vehicle_rate, linked_advance_id, advance_amount, claim_total, balance_amount, currency, settlement_method_requested, settlement_ecocash_number, settlement_bank_name, settlement_bank_account_number, settlement_bank_branch, reason_for_overspend, extra_cost_amount, extra_cost_description, kind, travel_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING id`,
       [
         req.user!.userId,
@@ -410,11 +435,13 @@ claimsRouter.post("/", async (req: AuthedRequest, res, next) => {
         parsed.data.settlement_bank_branch ?? null,
         parsed.data.reason_for_overspend ?? null,
         extraCostAmount,
-        extraCostDescription
+        extraCostDescription,
+        isClaim ? "CLAIM" : "CLEARANCE",
+        travelType
       ]
     );
 
-    if (parsed.data.linked_advance_id) {
+    if (!isClaim && parsed.data.linked_advance_id) {
       const synced = await syncClaimTripsFromAdvance(rows[0].id, parsed.data.linked_advance_id);
       claimTotal = Number((synced.claimTotal + extraCostAmount).toFixed(2));
       await query(
@@ -438,17 +465,17 @@ claimsRouter.get("/:id", async (req: AuthedRequest, res, next) => {
     const claim = (
       await query<any>(
         `SELECT c.*, ar.payment_method AS advance_payment_method, ar.payment_account AS advance_payment_account,
-                ar.type AS travel_type_code, tt.rate_kind AS travel_rate_kind
+                COALESCE(ar.type, c.travel_type) AS travel_type_code, tt.rate_kind AS travel_rate_kind
            FROM clearance_claims c
            LEFT JOIN advance_requests ar ON ar.id = c.linked_advance_id
-           LEFT JOIN travel_types tt ON tt.code = ar.type
+           LEFT JOIN travel_types tt ON tt.code = COALESCE(ar.type, c.travel_type)
           WHERE c.id=$1`,
         [req.params.id]
       )
     )[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, CLEARANCE_DELEGATION_TYPES);
     if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
@@ -499,7 +526,7 @@ claimsRouter.get("/:id/receipts/:receiptId/file", async (req: AuthedRequest, res
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, CLEARANCE_DELEGATION_TYPES);
     if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
@@ -532,7 +559,7 @@ claimsRouter.get("/:id/payback-proof/:proofId/file", async (req: AuthedRequest, 
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, CLEARANCE_DELEGATION_TYPES);
     if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
@@ -563,7 +590,7 @@ claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     const claim = (await query<any>(`SELECT * FROM clearance_claims WHERE id=$1`, [req.params.id]))[0];
     if (!claim) throw notFound();
     const managerChainIds = await getManagerChainIds(claim.claimant_id);
-    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+    const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, CLEARANCE_DELEGATION_TYPES);
     if (!(await canViewClaim({ role: req.user!.role, sectionId: req.user!.sectionId, status: claim.status, claimantId: claim.claimant_id, userId: req.user!.userId, approvalChain: claim.approval_chain, workflowStepOrder: claim.workflow_step_order, managerChainIds, delegatedManagerIds }))) {
       throw forbidden();
     }
@@ -576,13 +603,26 @@ claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
     if (!template) throw badRequest("No PDF template configured for clearance claims yet.");
 
     const data = await resolveClaimPdfData(req.params.id);
-    const catalog = await getFieldCatalogFor("CLEARANCE_CLAIM");
+    let catalog = await getFieldCatalogFor("CLEARANCE_CLAIM");
+    let printTemplate = template;
+    // A claim (no advance) prints on the clearance template, in its own words.
+    const isClaim = claim.kind === "CLAIM";
+    if (isClaim) {
+      catalog = catalog.map((f) => (f.key === "advance_amount" ? { ...f, label: "Amount Paid (no advance)" } : f));
+      const title = String(template.header_title || "");
+      printTemplate = {
+        ...template,
+        header_title: /clearance/i.test(title)
+          ? title.replace(/travel advance clearance/gi, (m: string) => (m === m.toUpperCase() ? "TRAVEL CLAIM" : "Travel Claim")).replace(/clearance/gi, (m: string) => (m === m.toUpperCase() ? "CLAIM" : "Claim"))
+          : title || "Travel Claim"
+      };
+    }
     const letterhead = (await query<PdfLetterhead>(`SELECT logo_path, logo_data, company_name, address_lines, contact_line, footer_confidentiality_text FROM pdf_letterhead_settings LIMIT 1`))[0] || {
       logo_path: null, logo_data: null, company_name: null, address_lines: [], contact_line: null, footer_confidentiality_text: null
     };
-    const doc = renderPdfTemplate(template, letterhead, data, catalog);
+    const doc = renderPdfTemplate(printTemplate, letterhead, data, catalog);
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="clearance-${req.params.id}.pdf"`);
+    res.setHeader("Content-Disposition", `inline; filename="${isClaim ? "claim" : "clearance"}-${req.params.id}.pdf"`);
     doc.pipe(res);
     doc.end();
   } catch (err) {
@@ -593,13 +633,14 @@ claimsRouter.get("/:id/pdf", async (req: AuthedRequest, res, next) => {
 claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
   try {
     await assertUserCanRequest(req.user!.userId);
-    const claim = (await query<{ claimant_id: string; status: ClaimStatus; claim_total: string; extra_cost_amount: string }>(
-      `SELECT claimant_id, status, claim_total, extra_cost_amount FROM clearance_claims WHERE id=$1`,
+    const claim = (await query<{ claimant_id: string; status: ClaimStatus; claim_total: string; extra_cost_amount: string; kind: string; travel_type: string | null }>(
+      `SELECT claimant_id, status, claim_total, extra_cost_amount, kind, travel_type FROM clearance_claims WHERE id=$1`,
       [req.params.id]
     ))[0];
     if (!claim) throw notFound();
     if (claim.claimant_id !== req.user!.userId) throw forbidden("Only claimant can edit");
     if (claim.status !== "DRAFT") throw badRequest("Cannot edit after submit");
+    const isClaim = claim.kind === "CLAIM";
 
     const parsed = z
       .object({
@@ -616,7 +657,8 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         settlement_bank_name: z.string().optional(),
         settlement_bank_account_number: z.string().optional(),
         settlement_bank_branch: z.string().optional(),
-        reason_for_overspend: z.string().optional()
+        reason_for_overspend: z.string().optional(),
+        travel_type: z.string().optional()
       })
       .safeParse(req.body);
     if (!parsed.success) throw badRequest("Invalid payload", parsed.error.flatten());
@@ -624,7 +666,16 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     let advanceAmount = 0;
     let claimTotal = 0;
     let currency: string | null = null;
-    if (parsed.data.linked_advance_id) {
+    let travelType: string | null = claim.travel_type ?? null;
+    if (isClaim) {
+      // A claim keeps its own trip lines (saved by PUT /:id/trips); only its
+      // travel type (and so its currency) changes here. Amount paid stays 0.
+      if (parsed.data.linked_advance_id) throw badRequest("A claim is for a trip with no advance");
+      const tt = await claimTravelType(parsed.data.travel_type ?? claim.travel_type);
+      travelType = tt.code;
+      currency = tt.currency;
+      claimTotal = Number(claim.claim_total || 0) - Number(claim.extra_cost_amount || 0);
+    } else if (parsed.data.linked_advance_id) {
       const linkedAdvance = await getLinkedAdvance(parsed.data.linked_advance_id, req.user!.userId, req.params.id);
       advanceAmount = linkedAdvance.approvedTotal;
       currency = linkedAdvance.currency;
@@ -659,6 +710,7 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
               settlement_bank_branch=$17,
               reason_for_overspend=$18,
               claim_total=$19,
+              travel_type=$20,
               updated_at=now()
         WHERE id=$1`,
       [
@@ -680,7 +732,8 @@ claimsRouter.put("/:id", async (req: AuthedRequest, res, next) => {
         parsed.data.settlement_bank_account_number ?? null,
         parsed.data.settlement_bank_branch ?? null,
         parsed.data.reason_for_overspend ?? null,
-        claimTotal
+        claimTotal,
+        isClaim ? travelType : null
       ]
     );
 
@@ -867,12 +920,29 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     if (!claim) throw notFound();
     if (claim.claimant_id !== req.user!.userId) throw forbidden("Only claimant can submit");
     if (claim.status !== "DRAFT") throw badRequest("Already submitted");
-    if (!claim.linked_advance_id) throw badRequest("Select the approved advance being cleared");
-    if (Number(claim.claim_total) <= 0) throw badRequest("Clearance total must be > 0");
+    const isClaim = claim.kind === "CLAIM";
+    if (!isClaim && !claim.linked_advance_id) throw badRequest("Select the approved advance being cleared");
+    if (Number(claim.claim_total) <= 0) throw badRequest(isClaim ? "Add the trip and what you spent before submitting" : "Clearance total must be > 0");
     // balance_amount < 0 means actual expenditure exceeded the advance (the
     // company owes the employee) — require an explanation before submitting.
-    if (Number(claim.balance_amount || 0) < 0 && !String(claim.reason_for_overspend || "").trim()) {
+    // A claim has no advance, so the whole amount is owed by design.
+    if (!isClaim && Number(claim.balance_amount || 0) < 0 && !String(claim.reason_for_overspend || "").trim()) {
       throw badRequest("Please provide a reason for the overspend before submitting.");
+    }
+    if (isClaim) {
+      if (!claim.travel_type) throw badRequest("Choose the type of travel for this claim");
+      // Same time limit as a clearance: within clearance_duration_days of the
+      // trip's last day (Travel Setup > advance recovery settings).
+      const limit = (await query<{ days: number | null; last_day: string | null; ok: boolean | null }>(
+        `SELECT s.days, t.last_day::text AS last_day,
+                (t.last_day IS NULL OR s.days IS NULL OR t.last_day + s.days >= (now() AT TIME ZONE 'Africa/Maseru')::date) AS ok
+           FROM (SELECT max(trip_date) AS last_day FROM claim_trips WHERE clearance_claim_id = $1) t
+           LEFT JOIN LATERAL (SELECT clearance_duration_days AS days FROM advance_recovery_settings ORDER BY 1 LIMIT 1) s ON true`,
+        [req.params.id]
+      ))[0];
+      if (limit && limit.ok === false) {
+        throw badRequest(`Claims must be submitted within ${limit.days} days of the trip's last day (${limit.last_day}).`);
+      }
     }
 
     // Resolve the workflow for clearance requests in the claimant's department/section.
@@ -881,20 +951,24 @@ claimsRouter.post("/:id/submit", async (req: AuthedRequest, res, next) => {
     // (e.g. an "International Clearance" workflow for TRAVEL_TO_EUROPE/USA/etc.)
     // outranks the generic "TRAVEL" clearance bucket, mirroring how advance
     // requests themselves are routed.
-    const linkedAdvance = (await query<{ type: string }>(
+    const linkedAdvance = claim.linked_advance_id ? (await query<{ type: string }>(
       `SELECT type FROM advance_requests WHERE id = $1`,
       [claim.linked_advance_id]
-    ))[0];
-    const workflowResult = await resolveWorkflowChain({
-      requestType: "CLEARANCE_REQUEST",
+    ))[0] : undefined;
+    const routeFor = (requestType: string) => resolveWorkflowChain({
+      requestType,
       department: claim.claimant_department || "",
       division: claim.claimant_division || "",
       section: claim.claimant_section || "",
       team: claim.claimant_team || "",
-      advanceSubType: linkedAdvance?.type,
+      advanceSubType: isClaim ? claim.travel_type ?? undefined : linkedAdvance?.type,
       requesterRole: claim.claimant_role || "",
       requesterId: claim.claimant_id
     });
+    // A claim uses its own route (Workflow Builder > Claim Request); until
+    // one is set up it follows the clearance route.
+    let workflowResult = isClaim ? await routeFor("CLAIM_REQUEST") : null;
+    if (!workflowResult || !workflowResult.chain.length) workflowResult = await routeFor("CLEARANCE_REQUEST");
 
     let status: ClaimStatus = "SUBMITTED";
     let firstStepApprovers: Array<{ id: string | null; name: string | null; email: string | null; title: string | null }> = [];
@@ -975,7 +1049,7 @@ export async function performClaimApprove(
   }
 
   const { role, userId, sectionId } = actor;
-  const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
+  const delegatedManagerIds = await getDelegatedManagerIds(userId, CLEARANCE_DELEGATION_TYPES);
 
   const result = await advanceClaimWorkflowStep({
     claim,
@@ -1074,7 +1148,7 @@ export async function performClaimReject(
   if (!group.indices.length) throw badRequest("No active workflow step to reject");
 
   const { role, userId, sectionId } = actor;
-  const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
+  const delegatedManagerIds = await getDelegatedManagerIds(userId, CLEARANCE_DELEGATION_TYPES);
   if (role !== "ADMIN") {
     let currentStep: ChainStep | undefined;
     for (const idx of group.indices) {
@@ -1203,7 +1277,7 @@ claimsRouter.post("/:id/rollback", requireAuth, async (req: AuthedRequest, res, 
       const group = getPendingGroup(chain, stepIdx);
       if (!group.indices.length) throw badRequest("No active workflow step to roll back");
 
-      const delegatedManagerIds = await getDelegatedManagerIds(userId, "CLEARANCE_REQUEST");
+      const delegatedManagerIds = await getDelegatedManagerIds(userId, CLEARANCE_DELEGATION_TYPES);
       if (role !== "ADMIN") {
         let currentStep: ChainStep | undefined;
         for (const idx of group.indices) {
@@ -1315,7 +1389,7 @@ async function requirePaybackReviewer(claim: NonNullable<Awaited<ReturnType<type
   if (req.user!.role === "ADMIN") return;
   if (!claim.approval_chain?.length) throw forbidden("This clearance has no configured approval workflow.");
   const lastStep = paybackReviewStep(claim.approval_chain as ChainStep[]);
-  const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, "CLEARANCE_REQUEST");
+  const delegatedManagerIds = await getDelegatedManagerIds(req.user!.userId, CLEARANCE_DELEGATION_TYPES);
   const eligible = await canApproveStep(lastStep, req.user!.userId, req.user!.role, delegatedManagerIds, req.user!.sectionId);
   if (!eligible) throw forbidden("You are not the assigned HR Operations reviewer for this clearance.");
 }

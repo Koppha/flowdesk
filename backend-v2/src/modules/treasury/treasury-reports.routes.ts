@@ -81,7 +81,7 @@ treasuryReportsRouter.get("/clearance-summary", async (req: AuthedRequest, res, 
     const { whereSql, params } = buildWhere(req.query as Filters, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
       `SELECT c.id, c.financial_outcome, c.status, c.employee_clearance_status, ${ORG_TRIP_COLUMNS}
-              c.advance_amount, c.claim_total AS verified_expenses, c.balance_amount, COALESCE(c.currency, 'LSL') AS currency,
+              c.advance_amount, c.kind AS claim_kind, c.claim_total AS verified_expenses, c.balance_amount, COALESCE(c.currency, 'LSL') AS currency,
               to_char(date_trunc('month', c.submitted_at), 'YYYY-MM') AS month,
               u.full_name AS employee_name, u.employee_no
          FROM clearance_claims c
@@ -121,7 +121,7 @@ treasuryReportsRouter.get("/refunds-due", async (req: AuthedRequest, res, next) 
     const rows = await query<any>(
       `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
               c.submitted_at, c.closed_at,
-              c.advance_amount, c.claim_total AS verified_expenses,
+              c.advance_amount, c.kind AS claim_kind, c.claim_total AS verified_expenses,
               -c.balance_amount AS refund_amount,
               c.status, c.treasury_settlement_status, c.treasury_officer_id, off.full_name AS treasury_officer_name,
               c.settled_at AS payment_date, c.settled_reference AS payment_reference, c.treasury_completed_at AS completion_date,
@@ -149,7 +149,7 @@ treasuryReportsRouter.get("/employee-paybacks", async (req: AuthedRequest, res, 
     const { whereSql, params } = buildWhere(f, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
       `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
-              c.advance_amount, c.claim_total AS verified_expenses, c.balance_amount AS payback_amount,
+              c.advance_amount, c.kind AS claim_kind, c.claim_total AS verified_expenses, c.balance_amount AS payback_amount,
               c.payback_verified_at, c.payback_verified_by_id, verifier.full_name AS verified_by_name,
               c.treasury_settlement_status, c.treasury_reconciliation_date,
               c.settled_reference AS transaction_reference, c.treasury_posting_reference,
@@ -182,7 +182,7 @@ treasuryReportsRouter.get("/fully-cleared", async (req: AuthedRequest, res, next
     const rows = await query<any>(
       `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
               c.submitted_at, c.closed_at,
-              c.financial_outcome, c.advance_amount, c.claim_total AS verified_expenses, c.balance_amount,
+              c.financial_outcome, c.advance_amount, c.kind AS claim_kind, c.claim_total AS verified_expenses, c.balance_amount,
               c.payback_verified_at AS hr_completion_date, c.treasury_completed_at AS treasury_completion_date,
               COALESCE(c.treasury_completed_at, c.closed_at) AS final_completion_date,
               EXTRACT(DAY FROM COALESCE(c.treasury_completed_at, now()) - c.submitted_at)::int AS processing_days,
@@ -207,7 +207,7 @@ treasuryReportsRouter.get("/outstanding", async (req: AuthedRequest, res, next) 
     const { whereSql, params } = buildWhere({ ...(req.query as Filters) }, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
       `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
-              c.financial_outcome, c.status, c.balance_amount, c.advance_amount, c.claim_total AS verified_expenses,
+              c.financial_outcome, c.status, c.balance_amount, c.advance_amount, c.kind AS claim_kind, c.claim_total AS verified_expenses,
               CASE
                 WHEN c.status IN ('PAYBACK_DUE','REFUND_DUE') THEN 'Employee'
                 WHEN c.status IN ('PAYBACK_PROOF_SUBMITTED','PAYBACK_PROOF_REJECTED') THEN 'HR Operations'
@@ -279,7 +279,7 @@ treasuryReportsRouter.get("/audit-reconciliation", async (req: AuthedRequest, re
     const { whereSql, params } = buildWhere({ ...(req.query as Filters) }, "c", await getReportDivisionScope(req));
     const rows = await query<any>(
       `SELECT c.id, u.full_name AS employee_name, u.employee_no, ${ORG_TRIP_COLUMNS}
-              c.advance_amount, c.claim_total AS verified_expenses, COALESCE(c.currency, 'LSL') AS currency,
+              c.advance_amount, c.kind AS claim_kind, c.claim_total AS verified_expenses, COALESCE(c.currency, 'LSL') AS currency,
               c.financial_outcome, c.status,
               c.balance_amount AS required_settlement_amount, c.settlement_amount AS actual_settlement_amount,
               c.settled_reference AS payment_reference, c.treasury_posting_reference AS posting_reference,

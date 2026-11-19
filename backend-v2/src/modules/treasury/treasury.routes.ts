@@ -130,7 +130,7 @@ treasuryRouter.get("/", async (req: AuthedRequest, res, next) => {
       `SELECT c.id, c.claimant_id, u.full_name AS employee_name, u.employee_no,
               dv.name AS division_name, u.department, c.duty_station AS destination,
               c.submitted_at, c.closed_at,
-              c.advance_amount, c.claim_total AS verified_expenses,
+              c.advance_amount, c.kind AS claim_kind, c.claim_total AS verified_expenses,
               c.financial_outcome,
               CASE WHEN c.balance_amount < 0 THEN -c.balance_amount ELSE 0 END AS refund_amount,
               CASE WHEN c.balance_amount > 0 THEN c.balance_amount ELSE 0 END AS payback_amount,

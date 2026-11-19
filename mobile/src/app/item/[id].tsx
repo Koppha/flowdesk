@@ -69,7 +69,7 @@ export default function ItemDetailScreen() {
   const isClaim = docType === "CLAIM";
   const title = isClaim ? detail?.claimant_name || detail?.full_name : detail?.requester_name || detail?.full_name;
   const amount = isClaim ? detail?.claim_total : detail?.requested_total;
-  const kind = isClaim ? "Clearance Claim" : (detail?.type || "Advance").replace(/_/g, " ");
+  const kind = isClaim ? (detail?.kind === "CLAIM" ? "Travel Claim (no advance)" : "Clearance Claim") : (detail?.type || "Advance").replace(/_/g, " ");
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>

@@ -145,7 +145,8 @@ import {
   Zap,
   Laptop,
   GitPullRequest,
-  Sparkles
+  Sparkles,
+  Receipt
 } from "lucide-react";
 
 type ClearanceTripRow = {
@@ -412,7 +413,7 @@ function UserSearchSelect(props: {
 // backend-v2/src/lib/delegations.ts - so a checked box always does something.
 const DELEGATION_REQUEST_TYPE_OPTIONS = [
   { value: "ADVANCE_REQUEST", label: "Advance Requests (Salary / Loan / Travel)" },
-  { value: "CLEARANCE_REQUEST", label: "Travel Clearances" },
+  { value: "CLEARANCE_REQUEST", label: "Travel Clearances and Claims" },
   { value: "CUSTOM_WORKFLOW", label: "Custom Processes (All Types)" },
   { value: "STANDBY_CLAIM", label: "Standby Claim Approvals" }
 ];
@@ -513,7 +514,7 @@ function isAuthOrTimeoutError(error: unknown) {
   );
 }
 
-type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "SALARY_ADVANCES_REPORT" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "AI_ASSISTANT_CONFIG" | "MENU_EDITOR" | "GET_THE_APP" | "ORG_GAPS" | "MAINTENANCE";
+type AppPage = "HOME" | "INBOX" | "CAPTURE" | "PAYMENTS" | "DEDUCTIONS" | "VIEW_CLEARANCES" | "SALARY_ADVANCES_REPORT" | "REFUNDABLE" | "ACCOMMODATION" | "PAYBACK_REVIEW" | "TREASURY_PROCESSING" | "REPORT_CLEARANCE_SUMMARY" | "REPORT_REFUNDS_DUE" | "REPORT_EMPLOYEE_PAYBACKS" | "REPORT_FULLY_CLEARED" | "REPORT_OUTSTANDING" | "REPORT_AGEING" | "REPORT_TREASURY_AUDIT" | "REPORT_DEPT_DIVISION" | "REPORT_OVERTIME" | "REPORT_STANDBY" | "IT_PROVISIONING" | "ADVANCE" | "CLEARANCE" | "MY_ADVANCES" | "MY_CLEARANCES" | "MY_CLAIMS" | "MY_CLEARANCE_STATUS" | "MY_TEAM" | "REPORTS" | "SLA_REPORTS" | "REPORT_ADVANCES" | "REPORT_APPROVAL" | "REPORT_PROCESS_PERFORMANCE" | "REPORT_WORKFLOW" | "REPORT_AUDIT" | "REPORT_RECONCILIATION" | "REPORT_TOUR_ENGAGEMENT" | "REPORT_CLEARANCE_STATUS" | "SETTINGS" | "OVERTIME" | "STANDBY" | "CALL_OUT" | "SALARIES_DASHBOARD" | "SALARY_REGISTERS" | "SALARIES_ATTENDANCE" | "SALARIES_READY_FOR_PAYMENT" | "SALARIES_HISTORY" | "EMPLOYEE_CONTRACTS" | "CHANGE_REQUEST" | "EXCO" | "MANAGERS" | "EMPLOYEES" | "LEADERSHIP" | "WORKFLOW_BUILDER" | "REPORTING_LINES" | "USER_MANAGEMENT" | "ROLES_PERMISSIONS" | "MANAGER_DELEGATIONS" | "EXTERNAL_PAYEES" | "TRAVEL_SETUP" | "REQUEST_TYPES" | "CEO_MANAGEMENT" | "ORG_STRUCTURE" | "TEAM_ROSTER" | "PDF_DESIGNER" | "DATA_CLEANUP" | "VENDOR_CONTRACTS" | "SERVICE_CONTRACTS" | "BRS" | "BRS_ADMIN" | "SIGNATURES" | "MOBILE_APP_CONFIG" | "AI_ASSISTANT_CONFIG" | "MENU_EDITOR" | "GET_THE_APP" | "ORG_GAPS" | "MAINTENANCE";
 
 // Native <input type="month"> has no calendar UI in Firefox (just a plain text
 // box expecting "YYYY-MM"), so the clearance form uses explicit Month/Year
@@ -1165,6 +1166,12 @@ export default function App() {
   const [clearanceReasonForOverspend, setClearanceReasonForOverspend] = useState("");
   const [clearanceExtraCostAmount, setClearanceExtraCostAmount] = useState("");
   const [clearanceExtraCostDescription, setClearanceExtraCostDescription] = useState("");
+  // The same form, two processes: a CLEARANCE accounts for a paid advance; a
+  // CLAIM (Nov 2026) is a trip already taken with no advance - the person
+  // picks the travel type, amount paid is 0 and the whole amount is owed to them.
+  const [clearanceKind, setClearanceKind] = useState<"CLEARANCE" | "CLAIM">("CLEARANCE");
+  const [claimTravelType, setClaimTravelType] = useState("");
+  const isClaimForm = clearanceKind === "CLAIM";
 
   function emptyTravelRow(date?: string, startDistrict = ""): TravelRow {
     return {
@@ -1349,8 +1356,8 @@ export default function App() {
   );
   const newClearanceAdvanceOptions = clearableTravelAdvances.filter((a) => !claimedAdvanceIds.has(a.id));
   const selectedClearanceAdvance = clearableTravelAdvances.find((a) => a.id === clearanceLinkedAdvanceId) || null;
-  const clearanceAdvanceAmount = Number(selectedClearanceAdvance?.approved_total || 0);
-  const clearanceCurrency = travelTypeCurrency(selectedClearanceAdvance?.type, travelTypes);
+  const clearanceAdvanceAmount = isClaimForm ? 0 : Number(selectedClearanceAdvance?.approved_total || 0);
+  const clearanceCurrency = travelTypeCurrency(isClaimForm ? claimTravelType : selectedClearanceAdvance?.type, travelTypes);
   // Actual expenditure is captured per trip line by the employee (Meals /
   // Transport / Other) so it can exceed the advance — the variance against the
   // advance drives the overspend / underspend settlement below.
@@ -3179,6 +3186,12 @@ export default function App() {
     setPage("CLEARANCE");
   }
 
+  function startNewClaim() {
+    resetClearanceForm();
+    setClearanceKind("CLAIM");
+    setPage("CLEARANCE");
+  }
+
   function startNewClearance() {
     if (newClearanceAdvanceOptions.length === 0) {
       alert("No paid travel advance is available to clear yet.");
@@ -3767,10 +3780,14 @@ export default function App() {
     setClearanceReasonForOverspend("");
     setClearanceExtraCostAmount("");
     setClearanceExtraCostDescription("");
+    setClearanceKind("CLEARANCE");
+    setClaimTravelType("");
   }
 
   function populateClearanceForm(detail: any) {
     setEditingClaimId(detail.id);
+    setClearanceKind(detail.kind === "CLAIM" ? "CLAIM" : "CLEARANCE");
+    setClaimTravelType(detail.kind === "CLAIM" ? detail.travel_type || "" : "");
     setClearanceMonth(detail.month || "");
     setClearanceDutyStation(detail.duty_station || "");
     setClearanceProjectNumber(detail.project_number || "");
@@ -3826,11 +3843,15 @@ export default function App() {
     const vehicleTypeValue = clearanceVehicleType.trim();
     const engineCcValue = clearanceEngineCc.trim();
 
-    if (!clearanceLinkedAdvanceId) {
+    if (isClaimForm) {
+      if (!claimTravelType) {
+        alert("Choose the type of travel for this claim.");
+        return null;
+      }
+    } else if (!clearanceLinkedAdvanceId) {
       alert("Select the paid travel advance being cleared.");
       return null;
-    }
-    if (!selectedClearanceAdvance) {
+    } else if (!selectedClearanceAdvance) {
       alert("The selected advance is not available for clearance.");
       return null;
     }
@@ -3848,7 +3869,7 @@ export default function App() {
     }
     // Negative balance means actual expenditure exceeded the advance (the
     // company owes the employee) — an explanation is required before submit.
-    if (requireSettlementDetails && clearanceBalance < 0 && !clearanceReasonForOverspend.trim()) {
+    if (requireSettlementDetails && !isClaimForm && clearanceBalance < 0 && !clearanceReasonForOverspend.trim()) {
       alert("Please provide a reason for the overspend before submitting.");
       return null;
     }
@@ -3861,8 +3882,9 @@ export default function App() {
       vehicle_type: vehicleTypeValue || undefined,
       engine_cc: engineCcValue || undefined,
       vehicle_rate: clearanceVehicleRate ? Number(clearanceVehicleRate) || 0 : undefined,
-      linked_advance_id: clearanceLinkedAdvanceId,
-      reason_for_overspend: clearanceBalance < 0 ? (clearanceReasonForOverspend.trim() || undefined) : undefined
+      ...(isClaimForm
+        ? { kind: "CLAIM" as const, travel_type: claimTravelType }
+        : { linked_advance_id: clearanceLinkedAdvanceId, reason_for_overspend: clearanceBalance < 0 ? (clearanceReasonForOverspend.trim() || undefined) : undefined })
     };
   }
 
@@ -3910,10 +3932,11 @@ export default function App() {
 
       if (submitAfterSave) {
         await api.submitClaim(claimId!);
-        if (!silent) void Swal.fire({ icon: "success", title: "Clearance Submitted", text: "Your clearance has been submitted for approval.", timer: 1800, showConfirmButton: false });
+        const wasClaim = isClaimForm;
+        if (!silent) void Swal.fire({ icon: "success", title: wasClaim ? "Claim Submitted" : "Clearance Submitted", text: `Your ${wasClaim ? "claim" : "clearance"} has been submitted for approval.`, timer: 1800, showConfirmButton: false });
         resetClearanceForm();
         if (refreshAfterSave) await refresh();
-        setPage("MY_CLEARANCES");
+        setPage(wasClaim ? "MY_CLAIMS" : "MY_CLEARANCES");
         return claimId;
       }
 
@@ -3921,7 +3944,7 @@ export default function App() {
       if (!silent) void Swal.fire({ icon: "success", title: "Draft Saved", timer: 1200, showConfirmButton: false });
       return claimId;
     } catch (e: any) {
-      alert("Error saving clearance: " + e.message);
+      alert(`Error saving ${isClaimForm ? "claim" : "clearance"}: ` + e.message);
       return null;
     }
   }
@@ -4131,7 +4154,9 @@ export default function App() {
     dashboard: { label: "Dashboard", icon: Home, visible: true, active: page === "HOME", onClick: go("HOME") },
     ai_assistant: { label: "AI Assistant", icon: Sparkles, visible: canAccessFeature("ai_assistant") && aiAssistantModuleEnabled, active: aiAssistantOpen, onClick: () => setAiAssistantOpen((v) => !v) },
     advance_requests: { label: "Advance Requests", icon: FileText, visible: true, active: page === "ADVANCE" || page === "MY_ADVANCES", onClick: go("MY_ADVANCES") },
-    clearances: { label: "Clearances", icon: CheckCircle2, visible: true, active: page === "CLEARANCE" || page === "MY_CLEARANCES", onClick: go("MY_CLEARANCES") },
+    clearances: { label: "Clearances", icon: CheckCircle2, visible: true, active: (page === "CLEARANCE" && !isClaimForm) || page === "MY_CLEARANCES", onClick: go("MY_CLEARANCES") },
+    // A trip already taken with no advance (same form as a clearance).
+    claims: { label: "Claims", icon: Receipt, visible: true, active: (page === "CLEARANCE" && isClaimForm) || page === "MY_CLAIMS", onClick: go("MY_CLAIMS") },
     salaries_dashboard: { label: "Dashboard", icon: LayoutDashboard, visible: hasSalariesAccess, active: page === "SALARIES_DASHBOARD", onClick: go("SALARIES_DASHBOARD"), groupCount: salariesCount },
     salary_registers: { label: "Salary Registers", icon: ClipboardList, visible: hasSalariesAccess, active: page === "SALARY_REGISTERS", onClick: go("SALARY_REGISTERS") },
     salaries_attendance: { label: "Attendance", icon: CalendarCheck, visible: hasSalariesAccess, active: page === "SALARIES_ATTENDANCE", onClick: go("SALARIES_ATTENDANCE") },
@@ -5148,11 +5173,12 @@ export default function App() {
           {canAccessFeature("ai_assistant") && aiAssistantModuleEnabled && (
             <a href="#" className={navItemClass(aiAssistantOpen)} onClick={(e) => { e.preventDefault(); setAiAssistantOpen((v) => !v); }}><span className="sidebar-nav-icon"><Sparkles size={18} aria-hidden /></span>AI Assistant</a>
           )}
-          <div className={`sidebar-group ${groupOpen("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page)) ? "open" : ""}`}>
-            <a href="#" className={navItemClass(["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLEARANCE_STATUS"].includes(page)); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advances <strong><ChevronDown size={14} aria-hidden /></strong></a>
+          <div className={`sidebar-group ${groupOpen("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLAIMS", "MY_CLEARANCE_STATUS"].includes(page)) ? "open" : ""}`}>
+            <a href="#" className={navItemClass(["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLAIMS", "MY_CLEARANCE_STATUS"].includes(page))} onClick={(e) => { e.preventDefault(); toggleGroup("advance", ["ADVANCE", "MY_ADVANCES", "CLEARANCE", "MY_CLEARANCES", "MY_CLAIMS", "MY_CLEARANCE_STATUS"].includes(page)); }}><span className="sidebar-nav-icon"><ClipboardList size={18} aria-hidden /></span>Advances <strong><ChevronDown size={14} aria-hidden /></strong></a>
             <div className="sidebar-subnav">
               <a href="#" className={navItemClass(page === "ADVANCE" || page === "MY_ADVANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_ADVANCES"); }}><FileText size={14} aria-hidden />Advance Requests</a>
-              <a href="#" className={navItemClass(page === "CLEARANCE" || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><CheckCircle2 size={14} aria-hidden />Clearances</a>
+              <a href="#" className={navItemClass((page === "CLEARANCE" && !isClaimForm) || page === "MY_CLEARANCES")} onClick={(e) => { e.preventDefault(); setPage("MY_CLEARANCES"); }}><CheckCircle2 size={14} aria-hidden />Clearances</a>
+              <a href="#" className={navItemClass((page === "CLEARANCE" && isClaimForm) || page === "MY_CLAIMS")} onClick={(e) => { e.preventDefault(); setPage("MY_CLAIMS"); }}><Receipt size={14} aria-hidden />Claims</a>
             </div>
           </div>
           {(hasSalariesAccess || ((canAccessFeature("overtime_request") || canAccessFeature("overtime_claim")) && overtimeModuleEnabled) || standbyModuleEnabled) && (
@@ -9019,8 +9045,10 @@ export default function App() {
                   <BriefcaseBusiness size={22} aria-hidden />
                 </div>
                 <div>
-                  <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>{editingClaimId ? "Edit Clearance" : "Travel Advance Clearance Form"}</h2>
-                  <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>Submit your travel expenses and supporting receipts for reconciliation.</div>
+                  <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>{isClaimForm ? (editingClaimId ? "Edit Claim" : "Travel Claim Form") : editingClaimId ? "Edit Clearance" : "Travel Advance Clearance Form"}</h2>
+                  <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{isClaimForm
+                    ? "For a trip you've already taken without an advance. Add what you spent and attach the receipts - once approved, the whole amount is paid to you."
+                    : "Submit your travel expenses and supporting receipts for reconciliation."}</div>
                 </div>
               </div>
 
@@ -9028,6 +9056,17 @@ export default function App() {
               <div className="card" style={{ padding: 18, marginBottom: 18 }}>
                 <div style={{ fontWeight: 600, color: "#2563eb", marginBottom: 14 }}>Travel Details</div>
                 <div className="form-grid-3">
+                  {isClaimForm ? (
+                  <div className="form-field">
+                    <label>Type of Travel <span style={{ color: "#dc2626" }}>*</span></label>
+                    <select value={claimTravelType} onChange={(e) => setClaimTravelType(e.target.value)}>
+                      <option value="">Select type of travel</option>
+                      {travelTypes.filter((t) => t.active !== false).map((t) => (
+                        <option key={t.code} value={t.code}>{travelTypeLabel(t.code, travelTypes)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  ) : (
                   <div className="form-field">
                     <label>Paid Advance <span style={{ color: "#dc2626" }}>*</span></label>
                     <select value={clearanceLinkedAdvanceId} onChange={(e) => setClearanceLinkedAdvanceId(e.target.value)}>
@@ -9044,6 +9083,7 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                  )}
                   <div className="form-field">
                     <label>Month <span style={{ color: "#dc2626" }}>*</span></label>
                     <select
@@ -9111,10 +9151,10 @@ export default function App() {
 
               {/* Advance Reconciliation Summary */}
               <div className="card" style={{ padding: 18, marginBottom: 18 }}>
-                <div style={{ fontWeight: 600, color: "#2563eb", marginBottom: 14 }}>Advance Reconciliation Summary</div>
+                <div style={{ fontWeight: 600, color: "#2563eb", marginBottom: 14 }}>{isClaimForm ? "Claim Summary" : "Advance Reconciliation Summary"}</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
                   {[
-                    { label: "Advance Received", value: fmtMoney(clearanceAdvanceAmount, clearanceCurrency), sub: "", color: "var(--text)", icon: ArrowRightLeft, iconBg: "#dbeafe", iconColor: "#2563eb" },
+                    { label: isClaimForm ? "Amount Paid" : "Advance Received", value: fmtMoney(clearanceAdvanceAmount, clearanceCurrency), sub: isClaimForm ? "No advance was paid" : "", color: "var(--text)", icon: ArrowRightLeft, iconBg: "#dbeafe", iconColor: "#2563eb" },
                     { label: "Actual Expenditure", value: fmtMoney(clearanceTotals.total, clearanceCurrency), sub: "", color: "var(--text)", icon: Wallet, iconBg: "#ffedd5", iconColor: "#ea580c" },
                     { label: "Variance (Over / Under)", value: `${clearanceBalance < 0 ? "-" : ""}${fmtMoney(Math.abs(clearanceBalance), clearanceCurrency)}`, sub: "", color: clearanceBalance < 0 ? "#1d4ed8" : clearanceBalance > 0 ? "#b45309" : "#15803d", icon: User, iconBg: "#ede9fe", iconColor: "#7c3aed" },
                     {
@@ -9313,7 +9353,7 @@ export default function App() {
                         { icon: UserRoundCheck, title: "Manager", desc: "Review and approve trip and expenses", bg: "#ffedd5", color: "#ea580c" },
                         { icon: Wallet, title: "Finance", desc: "Verify, reconcile and confirm settlement", bg: "#dcfce7", color: "#16a34a" },
                         { icon: DollarSign, title: "Payment", desc: "Process refund or reimbursement", bg: "#ede9fe", color: "#7c3aed" },
-                        { icon: CheckCircle2, title: "Closed", desc: "Advance clearance completed", bg: "#dcfce7", color: "#16a34a" }
+                        { icon: CheckCircle2, title: "Closed", desc: isClaimForm ? "Claim paid" : "Advance clearance completed", bg: "#dcfce7", color: "#16a34a" }
                       ].map((step, i, arr) => {
                         const Icon = step.icon;
                         return (
@@ -9338,7 +9378,7 @@ export default function App() {
                 <div className="card clearance-settlement-card">
                   <div className="clearance-settlement-title">Settlement Details</div>
 
-                  {clearanceBalance < 0 && (
+                  {clearanceBalance < 0 && !isClaimForm && (
                     <div className="form-field" style={{ marginTop: 16 }}>
                       <label>Reason for Overspend <span style={{ color: "#dc2626" }}>*</span></label>
                       <textarea
@@ -9356,7 +9396,9 @@ export default function App() {
                     <div>
                       <strong>Important</strong>
                       <div style={{ marginTop: 2 }}>
-                        {clearanceBalance < 0
+                        {isClaimForm
+                          ? "The whole amount is owed to you. Once approved, HR Operations reviews it and Treasury pays you - please make sure every receipt is attached."
+                          : clearanceBalance < 0
                           ? "Negative variance means the company owes you. You'll be refunded via the same method you chose when requesting the advance - please ensure all receipts are attached."
                           : clearanceBalance > 0
                             ? "Positive variance means you owe the company. If you've already returned the balance, attach proof under Receipts above - otherwise this amount will be deducted from your salary."
@@ -9378,7 +9420,7 @@ export default function App() {
                 <button className="button button-subtle clearance-action-button" type="button" onClick={() => persistClearance(false)}>
                   Save Draft
                 </button>
-                <button className="button clearance-action-button clearance-submit-button" type="button" onClick={() => persistClearance(true)} disabled={clearableTravelAdvances.length === 0}>
+                <button className="button clearance-action-button clearance-submit-button" type="button" onClick={() => persistClearance(true)} disabled={!isClaimForm && clearableTravelAdvances.length === 0}>
                   Submit Clearance
                 </button>
               </div>
@@ -9404,6 +9446,8 @@ export default function App() {
             />
           ) : page === "MY_CLEARANCES" ? (
             <MyClearances claims={claims} onNew={startNewClearance} onEdit={editClearance} onTrack={showClearanceTracking} />
+          ) : page === "MY_CLAIMS" ? (
+            <MyClearances kind="CLAIM" claims={claims} onNew={startNewClaim} onEdit={editClearance} onTrack={showClearanceTracking} />
           ) : page === "MY_CLEARANCE_STATUS" ? (
             <ReportClearanceStatus scope="mine" onBack={() => setPage("MY_ADVANCES")} />
           ) : page === "MY_TEAM" ? (

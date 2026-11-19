@@ -7,6 +7,8 @@ interface Props {
   onNew: () => void;
   onEdit: (claimId: string) => void;
   onTrack: (claimId: string) => void;
+  // CLEARANCE = clearances of advances; CLAIM = trips claimed with no advance.
+  kind?: "CLEARANCE" | "CLAIM";
 }
 
 const PENDING_STATUSES = [
@@ -73,12 +75,12 @@ function claimNumber(claim: any) {
   const year = Number.isNaN(created.getTime()) ? new Date().getFullYear() : created.getFullYear();
   const digits = String(claim?.id || "").replace(/\D/g, "").slice(-5);
   const fallback = String(claim?.id || "00000").replace(/-/g, "").slice(0, 5).toUpperCase();
-  return `CL-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
+  return `${claim?.kind === "CLAIM" ? "CLM" : "CL"}-${year}-${(digits || fallback || "00000").padStart(5, "0")}`;
 }
 
 function clearanceStageLabel(claim: any) {
   switch (claim?.status) {
-    case "DRAFT": return "Draft clearance";
+    case "DRAFT": return claim?.kind === "CLAIM" ? "Draft claim" : "Draft clearance";
     case "SETTLED":
     case "CLOSED": return "Cleared";
     case "REJECTED": return "Rejected";
@@ -99,7 +101,9 @@ function clearanceStageLabel(claim: any) {
 
 const PAGE_SIZE = 10;
 
-export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) {
+export default function MyClearances({ claims: allClaims, onNew, onEdit, onTrack, kind = "CLEARANCE" }: Props) {
+  const isClaims = kind === "CLAIM";
+  const claims = useMemo(() => allClaims.filter((c) => (c.kind === "CLAIM") === isClaims), [allClaims, isClaims]);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -150,12 +154,12 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
     <div className="ep-page">
       <div className="ep-header">
         <div className="ep-header-text">
-          <h1 className="ep-title">My Clearances</h1>
-          <p className="ep-subtitle">View and manage all your clearance records.</p>
+          <h1 className="ep-title">{isClaims ? "My Claims" : "My Clearances"}</h1>
+          <p className="ep-subtitle">{isClaims ? "Trips you've already taken, claimed back with no advance. The whole amount is paid to you once approved." : "View and manage all your clearance records."}</p>
         </div>
         <div className="ep-actions">
           <button className="button button-primary small-button" onClick={onNew}>
-            <Plus size={14} aria-hidden /> New Clearance
+            <Plus size={14} aria-hidden /> {isClaims ? "New Claim" : "New Clearance"}
           </button>
         </div>
       </div>
@@ -163,7 +167,7 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
       <div className="flow-stat-row flow-stat-row-4">
         <div className="flow-stat-card flow-stat-blue">
           <span className="flow-stat-icon"><ShieldCheck size={22} aria-hidden /></span>
-          <div className="flow-stat-body"><strong>{stats.total}</strong><span>Total Clearances</span><small>All time</small></div>
+          <div className="flow-stat-body"><strong>{stats.total}</strong><span>{isClaims ? "Total Claims" : "Total Clearances"}</span><small>All time</small></div>
         </div>
         <div className="flow-stat-card flow-stat-green">
           <span className="flow-stat-icon"><CheckCircle2 size={22} aria-hidden /></span>
@@ -226,7 +230,7 @@ export default function MyClearances({ claims, onNew, onEdit, onTrack }: Props) 
                   <th>Status</th>
                   <th>Stage</th>
                   <th>Total</th>
-                  <th>Advance</th>
+                  <th>{isClaims ? "Amount paid" : "Advance"}</th>
                   <th>Balance</th>
                   <th>Cleared On</th>
                   <th>Actions</th>

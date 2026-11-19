@@ -446,7 +446,7 @@ export async function resolveClaimPdfData(id: string): Promise<ResolvedPdfData> 
 
   return {
     scalars: {
-      claim_id: formatRequestNumber("CL", claim.id, claim.created_at),
+      claim_id: formatRequestNumber(claim.kind === "CLAIM" ? "CLM" : "CL", claim.id, claim.created_at),
       submitted_at: formatDateTime(claim.submitted_at),
       claimant_name: claim.claimant_name || "",
       department: claim.department || "",

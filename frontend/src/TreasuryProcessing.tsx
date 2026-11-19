@@ -217,7 +217,7 @@ export default function TreasuryProcessing({ onBack }: { onBack: () => void }) {
                         <td>{r.employee_name || "—"}{r.employee_no ? <div style={{ fontSize: 11, color: "var(--muted)" }}>{r.employee_no}</div> : null}</td>
                         <td>{r.division_name || "—"} / {r.department || "—"}</td>
                         <td>{r.destination || "—"}</td>
-                        <td>{formatMoney(Number(r.advance_amount || 0), r.currency)}</td>
+                        <td>{(r as any).claim_kind === "CLAIM" ? <span title="A claim: trip with no advance" style={{ color: "var(--muted)", fontWeight: 500 }}>No advance (claim)</span> : formatMoney(Number(r.advance_amount || 0), r.currency)}</td>
                         <td>{formatMoney(Number(r.verified_expenses || 0), r.currency)}</td>
                         <td>{OUTCOME_LABEL[r.financial_outcome] || r.financial_outcome}</td>
                         <td>{amount ? formatMoney(Number(amount), r.currency) : "—"}</td>

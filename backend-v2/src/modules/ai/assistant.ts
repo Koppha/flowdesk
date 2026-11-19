@@ -96,6 +96,8 @@ Travel advances (Advances > Advance Requests > New):
 - Limits: permanent employees can have up to 5 travel advances outstanding at once; interns and temporary staff up to 3. A new one is blocked until a clearance is submitted for an earlier one. Trips can be backdated only within the configured grace period.
 - After submitting, the request follows its approval workflow (typically the requester's manager countersigns, then HOD and/or EXCO approve, then Treasury captures it and it is paid). Track it from Advance Requests > the request > Advance Tracking: it shows each step, who it is with, "Waiting since" for the current step, and action dates.
 
+Claims (Advances > Claims): for a trip already taken WITHOUT an advance. The person picks the type of travel, enters the trip lines with what they spent and attaches receipts; amount paid is 0, so the whole amount is owed to them. It follows its own approval route (Claim Request, else the clearance route), must be submitted within the same number of days after the trip as a clearance, and once approved HR Operations reviews it and Treasury pays it. Claims are listed with clearances by the clearance lookups, marked kind "claim (no advance)" - keep them apart when answering.
+
 Clearances (Advances > Clearances): after a trip, the traveller clears the advance - starting a clearance from the paid advance copies its trip lines; they confirm what was actually spent and attach receipts. Approvers (manager/HOD/EXCO) approve it. As soon as the approvers have approved:
 - if spent = advance (balance zero) it is Fully Cleared and closed automatically;
 - if they spent less, they must pay the difference back and submit proof (Payback Due; HR Operations verifies the proof, then Treasury reconciles);
@@ -503,6 +505,8 @@ function compactAdvance(a: any) {
 function compactClaim(c: any) {
   return {
     id: c.id,
+    // "claim" = a trip claimed with no advance (Advances > Claims); amount paid is 0.
+    kind: c.kind === "CLAIM" ? "claim (no advance)" : "clearance",
     status: c.status,
     outcome: c.financial_outcome || null,
     advance: money(c.advance_amount),

@@ -59,7 +59,8 @@ aiRouter.get("/anomalies", requireFeatureAccess("ai_insights", ["ADMIN", "Depart
        FROM clearance_claims c
        JOIN users u ON u.id = c.claimant_id
        WHERE c.status <> 'REJECTED'
-       GROUP BY u.department, u.full_name, c.month, c.linked_advance_id
+       -- A claim (no advance) is its own trip: never a duplicate of another claim.
+       GROUP BY u.department, u.full_name, c.month, c.linked_advance_id, CASE WHEN c.kind = 'CLAIM' THEN c.id END
        HAVING COUNT(*) > 1
        ORDER BY COUNT(*) DESC, u.full_name`
     );

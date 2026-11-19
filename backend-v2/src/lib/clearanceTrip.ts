@@ -93,9 +93,31 @@ export async function tripDetailsForAdvances(advanceIds: string[]): Promise<Map<
   return out;
 }
 
+// A claim (no advance): its trip is its own trip lines.
+async function tripDetailsForClaims(claimIds: string[]): Promise<Map<string, TripDetails>> {
+  const ids = Array.from(new Set(claimIds.filter(Boolean)));
+  const out = new Map<string, TripDetails>();
+  if (!ids.length) return out;
+  const lines = await query<{ clearance_claim_id: string; from_place: string | null; to_place: string | null; trip_date: string }>(
+    `SELECT clearance_claim_id, from_place, to_place, to_char(trip_date, 'YYYY-MM-DD') AS trip_date
+       FROM claim_trips WHERE clearance_claim_id = ANY($1::uuid[]) ORDER BY clearance_claim_id, trip_date, id`,
+    [ids]
+  );
+  for (const id of ids) {
+    const own = lines.filter((l) => l.clearance_claim_id === id);
+    if (!own.length) continue;
+    const dates = own.map((l) => l.trip_date).filter(Boolean).sort();
+    const stops = own.map((l) => [l.from_place, l.to_place].filter(Boolean).join(" → "));
+    out.set(id, { origin: own[0].from_place || originFromLines(stops), destination: destinationFromLines(stops), departure_date: dates[0] ?? null, return_date: dates[dates.length - 1] ?? null });
+  }
+  return out;
+}
+
 // Adds destination / departure_date / return_date to clearance rows that
-// carry linked_advance_id.
+// carry linked_advance_id - or, for a claim (no advance), from its own trip lines.
 export async function withTripDetails<T extends { linked_advance_id: string | null }>(rows: T[]): Promise<Array<T & TripDetails>> {
   const trips = await tripDetailsForAdvances(rows.map((r) => r.linked_advance_id).filter((x): x is string => !!x));
-  return rows.map((r) => ({ ...r, ...(trips.get(r.linked_advance_id || "") ?? { origin: null, destination: null, departure_date: null, return_date: null }) }));
+  const claimTrips = await tripDetailsForClaims(rows.filter((r) => !r.linked_advance_id).map((r) => String((r as { id?: unknown }).id ?? "")));
+  const none = { origin: null, destination: null, departure_date: null, return_date: null };
+  return rows.map((r) => ({ ...r, ...(r.linked_advance_id ? trips.get(r.linked_advance_id) ?? none : claimTrips.get(String((r as { id?: unknown }).id ?? "")) ?? none) }));
 }

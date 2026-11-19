@@ -838,6 +838,17 @@ export async function notifyAdvanceCancelled(args: {
 
 // Returns true when the claim is workflow-routed (so the legacy role lookup
 // must not run), having emailed the current group step's people if any.
+// Claims (a trip with no advance) share the clearance emails, under their
+// own name: "Travel claim" wherever a clearance email says "Clearance claim".
+async function sendClaimMail(claimId: string, mail: { to: string[]; subject: string; text: string }) {
+  let kind = "CLEARANCE";
+  try { kind = (await query<{ kind: string }>(`SELECT kind FROM clearance_claims WHERE id = $1`, [claimId]))[0]?.kind ?? "CLEARANCE"; } catch { /* keep the clearance wording */ }
+  if (kind !== "CLAIM") return sendMail(mail);
+  const r = (t: string) => t.replace(/CLEARANCE CLAIM/g, "TRAVEL CLAIM").replace(/Clearance Claim/g, "Travel Claim")
+    .replace(/Clearance claim/g, "Travel claim").replace(/clearance claim/g, "travel claim").replace(/Trip clearance/g, "Travel claim");
+  return sendMail({ ...mail, subject: r(mail.subject), text: r(mail.text) });
+}
+
 async function notifyWorkflowClaimGroupStep(
   args: { claimId: string; status: string; claimantName: string | null; isReminder?: boolean },
   details: string
@@ -875,7 +886,7 @@ async function notifyWorkflowClaimGroupStep(
       ``,
       footer()
     ].join("\n");
-    await sendMail({
+    await sendClaimMail(args.claimId, {
       to: recipients.map((r) => r.email),
       subject: `[${args.isReminder ? "Reminder" : "Action Required"}] Clearance claim — ${label}`,
       text: body
@@ -934,7 +945,7 @@ export async function notifyClaimTask(args: {
         footer()
       ].join("\n");
 
-      await sendMail({
+      await sendClaimMail(args.claimId, {
         to: [args.claimantEmail],
         subject: `[Settled] Your ${claimTypeLabel} has been settled`,
         text: body
@@ -992,7 +1003,7 @@ export async function notifyClaimTask(args: {
         footer()
       ].join("\n");
 
-      await sendMail({
+      await sendClaimMail(args.claimId, {
         to: [args.nextApprover.email],
         subject: `${args.isReminder ? "[Reminder]" : "[Action Required]"} ${claimTypeLabel} awaiting ${roleLabel} action`,
         text: body
@@ -1082,7 +1093,7 @@ export async function notifyClaimTask(args: {
           footer()
         ].join("\n");
 
-        await sendMail({
+        await sendClaimMail(args.claimId, {
           to: unique.map((r) => r.email),
           subject: `[Action Required] ${claimTypeLabel} awaiting ${roleLabel} action`,
           text: body
@@ -1145,7 +1156,7 @@ export async function notifyClaimTask(args: {
         footer()
       ].join("\n");
 
-      await sendMail({
+      await sendClaimMail(args.claimId, {
         to: [args.claimantEmail],
         subject: `[Update] ${claimTypeLabel} — ${statusLabel(args.status)}`,
         text: body
