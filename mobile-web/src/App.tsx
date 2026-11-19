@@ -14,6 +14,14 @@ import MaintenanceRequest from "./maintenance/RequestScreen";
 import CustomList from "./custom/ListScreen";
 import CustomNew from "./custom/NewScreen";
 import CustomRequest from "./custom/RequestScreen";
+import OvertimeList from "./overtime/ListScreen";
+import OvertimeNew from "./overtime/NewScreen";
+import OvertimeRequest from "./overtime/RequestScreen";
+import OvertimeClaim from "./overtime/ClaimScreen";
+import StandbyList from "./standby/ListScreen";
+import StandbyCalloutNew from "./standby/CalloutNewScreen";
+import StandbyClaim from "./standby/ClaimScreen";
+import StandbyCallout from "./standby/CalloutScreen";
 import PhoneScreen from "./screens/PhoneScreen";
 import SupportScreen, { SupportChat, SupportInbox } from "./screens/SupportScreen";
 
@@ -33,6 +41,9 @@ const TABS: Record<Section, Tab[]> = {
   maintenance: [],
   // Custom Processes: one list with To do / My requests / ... chips and "+ New".
   custom: [],
+  // Overtime / Standby: one list each with scope chips, no tab bar.
+  overtime: [],
+  standby: [],
   account: []
 };
 
@@ -43,18 +54,29 @@ const BACK: Partial<Record<Route["name"], { to: Route; label: string }>> = {
   mnew: { to: { name: "mlist" }, label: "Requests" },
   creq: { to: { name: "clist" }, label: "Requests" },
   cnew: { to: { name: "clist" }, label: "Requests" },
+  onew: { to: { name: "olist" }, label: "Overtime" },
+  oreq: { to: { name: "olist" }, label: "Overtime" },
+  oclaim: { to: { name: "olist" }, label: "Overtime" },
+  snew: { to: { name: "slist" }, label: "Standby" },
+  sclaim: { to: { name: "slist" }, label: "Standby" },
+  scall: { to: { name: "slist" }, label: "Standby" },
   supportInbox: { to: { name: "support" }, label: "Help & support" },
   supportChat: { to: { name: "supportInbox" }, label: "Support inbox" }
 };
 
 // Screens the app can open by name (/web?go=<name>) - opened that way they
 // stand alone, without another section's tabs.
-const START_ROUTES: Record<string, Route> = { phone: { name: "phone" }, signature: { name: "signature" }, support: { name: "support" } };
+const START_ROUTES: Record<string, Route> = {
+  phone: { name: "phone" }, signature: { name: "signature" }, support: { name: "support" },
+  overtime: { name: "olist" }, standby: { name: "slist" }
+};
 
 // Header titles for the app (capability "title"); others keep the app's own.
 const TITLES: Partial<Record<Route["name"], string>> = {
   phone: "Phone number", signature: "Saved signature", support: "Help & support", supportInbox: "Support inbox", supportChat: "Support chat",
-  clist: "Custom Processes", cnew: "New request", creq: "Request"
+  clist: "Custom Processes", cnew: "New request", creq: "Request",
+  olist: "Overtime", onew: "New overtime request", oreq: "Overtime request", oclaim: "Overtime claim",
+  slist: "Standby", snew: "Log a call-out", sclaim: "Standby claim", scall: "Call-out"
 };
 
 export default function App() {
@@ -83,7 +105,8 @@ export default function App() {
       if (location.hash.length <= 2) {
         // Opened for a specific item (app inbox / push): land on it, with
         // the list one step back. (A reload mid-way keeps its place.)
-        const start = START_ROUTES[initialStart() || ""];
+        // Overtime / Standby also open by section, same as by name.
+        const start = START_ROUTES[initialStart() || ""] || (["overtime", "standby"].includes(initialSection()) ? START_ROUTES[initialSection()] : undefined);
         if (start) {
           location.replace(href(start));
         } else if (initialSection() === "custom") {
@@ -134,6 +157,14 @@ export default function App() {
         {route.name === "clist" && <CustomList />}
         {route.name === "cnew" && <CustomNew key={route.typeId || "pick"} typeId={route.typeId} />}
         {route.name === "creq" && <CustomRequest key={route.id} id={route.id} />}
+        {route.name === "olist" && <OvertimeList />}
+        {route.name === "onew" && <OvertimeNew />}
+        {route.name === "oreq" && <OvertimeRequest key={route.id} id={route.id} />}
+        {route.name === "oclaim" && <OvertimeClaim key={route.id} id={route.id} />}
+        {route.name === "slist" && <StandbyList />}
+        {route.name === "snew" && <StandbyCalloutNew />}
+        {route.name === "sclaim" && <StandbyClaim key={route.id} id={route.id} />}
+        {route.name === "scall" && <StandbyCallout key={route.id} id={route.id} />}
         {route.name === "phone" && <PhoneScreen />}
         {route.name === "support" && <SupportScreen />}
         {route.name === "supportInbox" && <SupportInbox />}

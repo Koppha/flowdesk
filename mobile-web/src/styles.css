@@ -273,3 +273,15 @@ input[type="tel"], input[type="date"], input[inputmode] {
 .dialog h3 { margin: 0; }
 .dialog p { margin: 0; line-height: 1.5; }
 .warn-text { color: var(--warn); font-size: 13px; }
+
+/* Overtime / Standby */
+a.primary, a.secondary { display: flex; align-items: center; justify-content: center; }
+input[type="time"], input[type="number"] {
+  width: 100%; font: inherit; font-size: 16px; padding: 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+}
+.month-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.month-nav strong { font-size: 16px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+.stat strong { font-size: 18px; }

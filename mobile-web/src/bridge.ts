@@ -3,7 +3,7 @@
 // injectedJavaScriptBeforeContentLoaded) - see the app's
 // src/components/ServerPage.tsx.
 
-export type Section = "sign" | "maintenance" | "account" | "custom";
+export type Section = "sign" | "maintenance" | "account" | "custom" | "overtime" | "standby";
 
 type Injected = {
   token?: string;
@@ -122,7 +122,7 @@ export function waitForAppHandover(timeoutMs = 4000): Promise<boolean> {
 /** Which part of the page the app opened (?section= for browser testing). */
 export function initialSection(): Section {
   const s = injectedNow().section || query.get("section");
-  return s === "maintenance" || s === "account" || s === "custom" ? s : "sign";
+  return s === "maintenance" || s === "account" || s === "custom" || s === "overtime" || s === "standby" ? s : "sign";
 }
 
 /** A document to open straight away (from the app's inbox or a push). */
