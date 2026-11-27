@@ -30,3 +30,15 @@ export const signatureVerifyLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many attempts. Please try again later." }
 });
+
+// FlowDesk Mobile renewing its session (POST /auth/refresh). Every phone
+// does this about twice a day and many share an outgoing address, so it
+// doesn't share the password limit; the keys are 256-bit random, so this
+// only caps a misbehaving client, not guessing.
+export const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Please try again later." }
+});

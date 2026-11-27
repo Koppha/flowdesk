@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { comparePassword, hashPassword, signToken, type AuthedRequest, requireAuth, requireRole } from "../../lib/auth.js";
-import { loginLimiter } from "../../middleware/rateLimit.js";
+import { loginLimiter, refreshLimiter } from "../../middleware/rateLimit.js";
 import { env } from "../../config/env.js";
 import { badRequest, forbidden, notFound, unauthorized } from "../../lib/errors.js";
 import { query, pool } from "../../lib/db.js";
@@ -10,6 +10,7 @@ import { authenticateAgainstAd } from "../../lib/ad.js";
 import { logger, serializeError } from "../../lib/logger.js";
 import { isProfileComplete } from "../../lib/userProfile.js";
 import { completeLogin, createMfaRouter } from "./mfa.routes.js";
+import { endMobileSession, rotateMobileSession } from "../../lib/mobileSessions.js";
 import { createDepartmentGroup, createDivision, createManagerType, createSectionGroup, createTeam, deleteDepartmentGroup, deleteDivision, deleteManagerType, deleteSectionGroup, deleteTeam, ensureUserOrgColumns, listDepartmentGroups, listDepartmentGroupsByCompany, listDepartmentsWithSections, listDivisions, listEligibleLeadershipUsers, listManagerTypes, listOrgStructure, listSectionGroups, listTeams, resolveDepartmentGroup, setSectionOwner, updateDepartmentGroup, updateDivision, updateManagerType, updateSectionGroup, updateTeam } from "../../lib/departments.js";
 import { notifyProfileCompleted, notifyUserOnboarded, notifyUserReactivated, notifyUserRoleChanged, notifyDelegationAssigned, notifyDelegationEnded, notifyPositionAssigned } from "../../lib/notifications.js";
 import { addGroupMember, createPermissionGroup, deletePermissionGroup, ensurePermissionGroupTables, getUserGroups, isOrgStructureGroupName, listGroupMembers, listPermissionGroups, removeGroupMember, setGroupVisibility, setUserGroups } from "../../lib/permissionGroups.js";
@@ -513,6 +514,38 @@ authRouter.post("/login", loginLimiter, async (req, res, next) => {
     logger.info("auth_login_success_local", { login: loginUser, email: maskEmail(user.email), user_id: user.id, role: user.role });
     trackMobileLoginIfNeeded(req, user.id);
     return res.json(await completeLogin(req, user, loginDisplay, toAuthResponse));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// FlowDesk Mobile: swap the phone's refresh key for a fresh session, so the
+// app stays signed in past the 12-hour token (lib/mobileSessions.ts). No
+// bearer token here - the access token has usually just run out.
+authRouter.post("/refresh", refreshLimiter, async (req, res, next) => {
+  try {
+    const key = typeof req.body?.refresh_token === "string" ? req.body.refresh_token : "";
+    if (key.length < 20 || key.length > 200) throw unauthorized("Sign in again");
+    const rotated = await rotateMobileSession(req, key);
+    if (!rotated) throw unauthorized("Your session has ended. Sign in again.");
+    const user = (await query<any>(
+      `SELECT id, role, full_name, employee_no, department, division_id, section_id, team_id, employment_type, profile_completed
+         FROM users WHERE id = $1 AND is_active = true`,
+      [rotated.userId]
+    ))[0];
+    if (!user) throw unauthorized("Your session has ended. Sign in again.");
+    return res.json({ ...toAuthResponse(user, rotated.username), refresh_token: rotated.refreshKey });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Logging out on the phone ends its refresh key too.
+authRouter.post("/refresh/end", async (req, res, next) => {
+  try {
+    const key = typeof req.body?.refresh_token === "string" ? req.body.refresh_token : "";
+    if (key) await endMobileSession(key);
+    return res.json({ ok: true });
   } catch (err) {
     return next(err);
   }

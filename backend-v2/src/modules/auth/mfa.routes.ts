@@ -6,6 +6,7 @@ import { badRequest, forbidden, notFound, unauthorized } from "../../lib/errors.
 import { query } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { loginLimiter } from "../../middleware/rateLimit.js";
+import { startMobileSession, wantsMobileSession } from "../../lib/mobileSessions.js";
 import {
   challengeByToken, challengeStatus, confirmSetup, consumeChallenge, createChallenge, decideApproval, disableMfa, ensureMfaSchema,
   getMfaPolicy, getMfaStatus, isMfaRequired, pendingApprovals, pushApprovalRequest, recordFailedAttempt, regenerateRecoveryCodes,
@@ -50,7 +51,13 @@ export async function completeLogin(req: Request, user: LoginUser, username: str
     logger.info("mfa_setup_required", { user_id: user.id, client });
     return { mfa: "setup" as const, challenge: token };
   }
-  return issue(user, username);
+  return withMobileSession(req, user.id, username, issue(user, username));
+}
+
+/** A finished sign-in from FlowDesk Mobile also gets a refresh key (lib/mobileSessions.ts). */
+async function withMobileSession<T extends object>(req: Request, userId: string, username: string, session: T) {
+  if (!wantsMobileSession(req)) return session;
+  return { ...session, refresh_token: await startMobileSession(req, userId, username) };
 }
 
 async function loadUser(userId: string) {
@@ -77,12 +84,13 @@ export function createMfaRouter(issue: Issue) {
   });
 
   // Finish the session a challenge was for (single use).
-  async function finish(c: Challenge) {
+  async function finish(c: Challenge, req: Request) {
     if (!(await consumeChallenge(c.id))) throw unauthorized("This sign-in has already been used. Sign in again.");
     const user = await loadUser(c.user_id);
     if (!user) throw unauthorized("Invalid credentials");
     logger.info("auth_login_success_mfa", { user_id: user.id, client: c.client, purpose: c.purpose });
-    return issue(user, c.username);
+    // Only the phone that signed in keeps a session (not one approving a portal sign-in).
+    return c.client === "mobile" ? withMobileSession(req, user.id, c.username, issue(user, c.username)) : issue(user, c.username);
   }
 
   // ── Sign-in with a code (authenticator or recovery code).
@@ -98,7 +106,7 @@ export function createMfaRouter(issue: Issue) {
         logger.warn("auth_login_failed_mfa_code", { user_id: c.user_id, attempt: c.attempts + 1 });
         throw unauthorized(c.attempts + 1 >= 5 ? "Too many wrong codes. Sign in again." : "That code didn't work. Try the newest code in your authenticator app.");
       }
-      return res.json({ ...(await finish(c)), usedRecoveryCode: how === "recovery" });
+      return res.json({ ...(await finish(c, req)), usedRecoveryCode: how === "recovery" });
     } catch (err) {
       return next(err);
     }
@@ -108,7 +116,7 @@ export function createMfaRouter(issue: Issue) {
   router.get("/approval", async (req, res, next) => {
     try {
       const c = await challengeByToken(req.query.challenge, "LOGIN");
-      if (c?.status === "APPROVED") return res.json({ status: "APPROVED", ...(await finish(c)) });
+      if (c?.status === "APPROVED") return res.json({ status: "APPROVED", ...(await finish(c, req)) });
       if (c) return res.json({ status: "PENDING" });
       // Not live any more: denied on the phone, or expired / used up.
       const s = await challengeStatus(req.query.challenge);
@@ -154,7 +162,7 @@ export function createMfaRouter(issue: Issue) {
         throw badRequest(e?.message || "That code didn't match");
       }
       // During sign-in, setting it up also finishes the sign-in.
-      const session = challenge ? await finish(challenge) : null;
+      const session = challenge ? await finish(challenge, req) : null;
       return res.json({ recoveryCodes, ...(session ?? {}) });
     } catch (err) {
       return next(err);
